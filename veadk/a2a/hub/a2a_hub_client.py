@@ -15,6 +15,10 @@
 import requests
 from a2a.types import AgentCard
 
+from veadk.utils.http_defaults import DEFAULT_CONNECT_TIMEOUT, DEFAULT_HTTP_TIMEOUT
+
+HEALTH_CHECK_TIMEOUT: tuple[float, float] = (DEFAULT_CONNECT_TIMEOUT, 5.0)
+
 
 class A2AHubClient:
     def __init__(self, server_host: str, server_port: int):
@@ -24,7 +28,10 @@ class A2AHubClient:
 
     def health_check(self) -> None:
         """Check the health of the server."""
-        response = requests.get(f"http://{self.server_host}:{self.server_port}/ping")
+        response = requests.get(
+            f"http://{self.server_host}:{self.server_port}/ping",
+            timeout=HEALTH_CHECK_TIMEOUT,
+        )
         assert response.status_code == 200, (
             f"unexpected status code from A2A hub server: {response.status_code}"
         )
@@ -36,7 +43,8 @@ class A2AHubClient:
         ret = []
 
         response = requests.get(
-            f"http://{self.server_host}:{self.server_port}/group/{group_id}/agents"
+            f"http://{self.server_host}:{self.server_port}/group/{group_id}/agents",
+            timeout=DEFAULT_HTTP_TIMEOUT,
         ).json()
         agent_infos = response["agent_infos"]
         for agent_info in agent_infos:
@@ -57,6 +65,7 @@ class A2AHubClient:
                 "agent_id": agent_id,
                 "agent_card": agent_card.model_dump(),
             },
+            timeout=DEFAULT_HTTP_TIMEOUT,
         )
 
         assert response.status_code == 200, (
@@ -69,6 +78,7 @@ class A2AHubClient:
             params={
                 "group_id": group_id,
             },
+            timeout=DEFAULT_HTTP_TIMEOUT,
         )
 
         assert response.status_code == 200, (

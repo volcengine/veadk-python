@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -34,6 +35,14 @@ from veadk.tools.builtin_tools.create_agent.sources.cloud import (
     resolve_cloud_credentials,
 )
 from veadk.utils.cloud_provider import cloud_provider_from_env
+from veadk.utils.http_defaults import (
+    DEFAULT_CONNECT_TIMEOUT,
+    DEFAULT_READ_TIMEOUT,
+)
+
+# Wall-clock ceiling for the whole paginated sweep. A per-request timeout
+# bounds one call; only this bounds a hundred of them.
+_SWEEP_DEADLINE_SECONDS = 120.0
 
 
 @dataclass(frozen=True)
@@ -88,8 +97,29 @@ class AgentKitKnowledgeSource:
                 )
             )
 
+        # Per call, never on `self`: one source object serves every session,
+        # so overlapping sweeps would otherwise reset each other's deadline and
+        # answer for each other's breach.
+        deadline = time.monotonic() + _SWEEP_DEADLINE_SECONDS
         try:
-            resources = await asyncio.to_thread(self._list_all, credentials)
+            resources, deadline_exceeded = await asyncio.to_thread(
+                self._list_all, credentials, deadline
+            )
+            if deadline_exceeded:
+                return SourceCollection(
+                    resources=resources,
+                    status=ResourceSourceStatus(
+                        source=self.name,
+                        status="error",
+                        count=len(resources),
+                        message=(
+                            "Listing gave up after "
+                            f"{_SWEEP_DEADLINE_SECONDS:.0f}s; returning "
+                            f"{len(resources)} knowledge base(s) collected "
+                            "so far."
+                        ),
+                    ),
+                )
             return SourceCollection(
                 resources=resources,
                 status=ResourceSourceStatus(
@@ -103,15 +133,26 @@ class AgentKitKnowledgeSource:
                 )
             )
 
-    def _list_all(self, credentials: CloudCredentials) -> list[StoredResource]:
+    def _list_all(
+        self,
+        credentials: CloudCredentials,
+        deadline: float,
+    ) -> tuple[list[StoredResource], bool]:
+        """Return the pages collected, and whether the deadline cut them short."""
         from agentkit.sdk.knowledge import types as knowledge_types
 
         client = self._client_factory(credentials, self.region)
         resources: list[StoredResource] = []
         next_token = ""
         seen_tokens: set[str] = set()
+        deadline_exceeded = False
 
         for _ in range(100):
+            if time.monotonic() >= deadline:
+                # Abandon the remaining pages; `collect` reports the partial
+                # result rather than blocking the caller any longer.
+                deadline_exceeded = True
+                break
             response = client.list_knowledge_bases(
                 knowledge_types.ListKnowledgeBasesRequest(
                     MaxResults=100,
@@ -130,13 +171,19 @@ class AgentKitKnowledgeSource:
                 if resource is not None:
                     resources.append(resource)
 
+            # A slow final page can cross the sweep deadline even when it has
+            # no continuation token, so re-check before declaring success.
+            if time.monotonic() >= deadline:
+                deadline_exceeded = True
+                break
+
             token = str(response.next_token or "")
             if not token or token in seen_tokens:
                 break
             seen_tokens.add(token)
             next_token = token
 
-        return resources
+        return resources, deadline_exceeded
 
     def _to_resource(self, item: Any) -> StoredResource | None:
         knowledge_id = str(getattr(item, "knowledge_id", "") or "").strip()
@@ -179,12 +226,23 @@ def _default_client_factory(credentials: CloudCredentials, region: str):
     from agentkit.sdk.knowledge.client import AgentkitKnowledgeClient
 
     with default_cloud_provider(cloud_provider_from_env()):
-        return AgentkitKnowledgeClient(
+        client = AgentkitKnowledgeClient(
             access_key=credentials.access_key,
             secret_key=credentials.secret_key,
             session_token=credentials.session_token,
             region=region,
         )
+    # The client takes no timeout argument, but it subclasses the volcengine
+    # `Service`, whose setters are re-read on every request. Guarded so an SDK
+    # shape change degrades to the SDK default instead of raising.
+    for setter, seconds in (
+        ("set_connection_timeout", DEFAULT_CONNECT_TIMEOUT),
+        ("set_socket_timeout", DEFAULT_READ_TIMEOUT),
+    ):
+        apply_timeout = getattr(client, setter, None)
+        if callable(apply_timeout):
+            apply_timeout(int(seconds))
+    return client
 
 
 def agentkit_viking_index(payload: AgentKitKnowledgePayload) -> str:

@@ -84,7 +84,10 @@ class TestRunnerRun:
     def test_defaults(self):
         params = inspect.signature(Runner.run).parameters
         assert params["user_id"].default == ""
-        assert isinstance(params["session_id"].default, str)
+        # `None`, not a string: a string default is evaluated once at import,
+        # so every run omitting `session_id` would share one frozen id. The
+        # per-call fallback is generated in the body instead.
+        assert params["session_id"].default is None
         assert params["run_config"].default is None
         assert params["save_tracing_data"].default is False
         assert params["upload_inline_data_to_tos"].default is False

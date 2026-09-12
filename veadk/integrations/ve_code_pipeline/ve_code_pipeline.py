@@ -25,6 +25,7 @@ from veadk.utils.cloud_provider import (
     default_region,
     normalize_cloud_provider,
 )
+from veadk.utils.http_defaults import DEFAULT_HTTP_TIMEOUT
 from veadk.utils.volcengine_sign import ve_request
 
 logger = get_logger(__name__)
@@ -309,6 +310,7 @@ class VeCodePipeline:
                 url=f"https://api.github.com/repos/{owner}/{repo}/hooks",
                 headers=headers,
                 data=json.dumps(webhook_config),
+                timeout=DEFAULT_HTTP_TIMEOUT,
             )
 
             if response.status_code == 201:

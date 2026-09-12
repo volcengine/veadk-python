@@ -22,8 +22,9 @@ from typing import Optional
 
 
 from veadk.integrations.ve_tos.ve_tos import VeTOS
-from veadk.utils.volcengine_sign import ve_request
 from veadk.utils.logger import get_logger
+from veadk.utils.misc import download_url_to_file
+from veadk.utils.volcengine_sign import ve_request
 
 logger = get_logger(__name__)
 
@@ -41,7 +42,6 @@ def _download_skill_via_vestack(
     zip_path: Path,
 ) -> bool:
     import json
-    import requests
     from veadk.utils.volcengine_sign import ve_request
 
     try:
@@ -96,10 +96,7 @@ def _download_skill_via_vestack(
             return False
         else:
             try:
-                response = requests.get(signed_url)
-                response.raise_for_status()
-                with open(zip_path, "wb") as f:
-                    f.write(response.content)
+                download_url_to_file(signed_url, zip_path)
                 return True
             except Exception as e:
                 logger.warning(

@@ -14,6 +14,7 @@
 
 import functools
 import os
+import uuid
 from types import MethodType
 from typing import Union
 
@@ -39,7 +40,7 @@ from veadk.utils.adk_compat import (
     get_event_function_responses,
 )
 from veadk.utils.logger import get_logger
-from veadk.utils.misc import formatted_timestamp, read_file_to_bytes
+from veadk.utils.misc import read_file_to_bytes
 
 logger = get_logger(__name__)
 
@@ -469,7 +470,7 @@ class Runner(ADKRunner):
         self,
         messages: RunnerMessage,
         user_id: str = "",
-        session_id: str = f"tmp-session-{formatted_timestamp()}",
+        session_id: str | None = None,
         run_config: RunConfig | None = None,
         save_tracing_data: bool = False,
         upload_inline_data_to_tos: bool = False,
@@ -485,7 +486,8 @@ class Runner(ADKRunner):
         Args:
             messages (RunnerMessage): Input messages (``str``, ``MediaMessage`` or a list of them).
             user_id (str): Override default user ID; if empty, uses the constructed ``user_id``.
-            session_id (str): Session ID. Defaults to a timestamp-based temporary ID.
+            session_id (str | None): Session ID. If ``None``, a fresh UUID-based
+                temporary ID (``tmp-session-<uuid>``) is generated for this call.
             run_config (google.adk.agents.RunConfig | None): Run config; if ``None``, a default
                 config is created using the environment var ``MODEL_AGENT_MAX_LLM_CALLS``.
             save_tracing_data (bool): Whether to dump tracing data to disk after the run. Defaults to ``False``.
@@ -501,6 +503,13 @@ class Runner(ADKRunner):
             AssertionError: If a media MIME type is not among ``image/*`` or ``video/*``.
             Exception: Exceptions from the underlying ADK/Agent execution may propagate.
         """
+        # Resolved per call: a default argument would be evaluated once at
+        # import time, so every run omitting `session_id` would share one id.
+        # A UUID also prevents concurrent calls within the same second from
+        # colliding, which the old timestamp format could not guarantee.
+        if session_id is None:
+            session_id = f"tmp-session-{uuid.uuid4().hex}"
+
         if upload_inline_data_to_tos:
             _upload_inline_data_to_tos = self.upload_inline_data_to_tos
             self.upload_inline_data_to_tos = upload_inline_data_to_tos

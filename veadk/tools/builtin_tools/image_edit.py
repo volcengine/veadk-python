@@ -12,11 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import asyncio
 import base64
 import json
 import traceback
 from typing import Dict
 
+import httpx
 from google.adk.tools import ToolContext
 from opentelemetry import trace
 from opentelemetry.trace import Span
@@ -27,10 +29,20 @@ from veadk.consts import (
     DEFAULT_IMAGE_EDIT_MODEL_API_BASE,
     DEFAULT_IMAGE_EDIT_MODEL_NAME,
 )
+from veadk.utils.http_defaults import DEFAULT_CONNECT_TIMEOUT
 from veadk.utils.logger import get_logger
 from veadk.version import VERSION
 
 logger = get_logger(__name__)
+
+# Ark defaults to a 600s read timeout with two retries, so a single hung
+# `images.generate` can hold the tool for ~30 minutes -- and `image_edit`
+# repeats it for every item in `params`. Image generation is slow, but not
+# that slow: three minutes is roughly an order of magnitude above a normal
+# edit, and one retry is enough because failures are already reported
+# per item through `error_list`.
+DEFAULT_IMAGE_EDIT_READ_TIMEOUT: float = 180.0
+DEFAULT_IMAGE_EDIT_MAX_RETRIES: int = 1
 
 
 def _get_api_key() -> str:
@@ -49,6 +61,11 @@ def _get_client() -> Ark:
     return Ark(
         api_key=_get_api_key(),
         base_url=getenv("MODEL_EDIT_API_BASE", DEFAULT_IMAGE_EDIT_MODEL_API_BASE),
+        timeout=httpx.Timeout(
+            timeout=DEFAULT_IMAGE_EDIT_READ_TIMEOUT,
+            connect=DEFAULT_CONNECT_TIMEOUT,
+        ),
+        max_retries=DEFAULT_IMAGE_EDIT_MAX_RETRIES,
     )
 
 
@@ -147,7 +164,10 @@ async def image_edit(
                     "parts.1.image_url.name": "origin_image",
                     "parts.1.image_url.url": origin_image,
                 }
-                response = client.images.generate(
+                # The Ark client is synchronous, so awaiting it inline would
+                # block the event loop for the whole generation.
+                response = await asyncio.to_thread(
+                    client.images.generate,
                     model=getenv("MODEL_EDIT_NAME", DEFAULT_IMAGE_EDIT_MODEL_NAME),
                     **inputs,
                     extra_headers={
@@ -176,7 +196,8 @@ async def image_edit(
                             image = item.b64_json
                             image_bytes = base64.b64decode(image)
 
-                            tos_url = _upload_image_to_tos(
+                            tos_url = await asyncio.to_thread(
+                                _upload_image_to_tos,
                                 image_bytes=image_bytes,
                                 object_key=f"{image_name}.png",
                             )

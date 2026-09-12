@@ -185,6 +185,30 @@ database:
 | | `OBSERVABILITY_PROMETHEUS_USERNAME` | 用户名 |
 | | `OBSERVABILITY_PROMETHEUS_PASSWORD` | 密码 |
 
+## HTTP 超时
+
+`VEADK_HTTP_*` 用于约束 VeADK 内部基于 `requests` 的出站调用（内置工具、知识库后端、部署与集成 SDK）；`VEADK_MAX_DOWNLOAD_BYTES` 另行限制媒体和 Skill 工具下载的远程响应体大小。`requests` 自身没有默认超时：对端接受连接后不再返回数据时，调用会永久挂起。
+
+| 环境变量 | 默认值 | 释义 |
+| :- | :- | :- |
+| `VEADK_HTTP_CONNECT_TIMEOUT` | `10` | 建立 TCP/TLS 连接的秒数上限。对端不可达时快速失败，而不是长时间占用一个 worker。 |
+| `VEADK_HTTP_READ_TIMEOUT` | `60` | **两次相邻 socket 读取之间**允许的最大间隔秒数。它约束的是「静默」而非响应总时长，因此大响应体不会仅因为传输耗时长而被中断。 |
+| `VEADK_HTTP_STREAM_BUDGET` | `300` | 完整消费一个流式响应的**墙钟总时长**上限（秒），用于 TTS、远程媒体及 Skill 下载。这与上面的读超时是两个不同的量：持续吐出合法分片的服务端会无限刷新读间隔，只有总预算能兜住这种情况。 |
+| `VEADK_MAX_DOWNLOAD_BYTES` | `268435456` | 单次远程媒体或 Skill 下载的最大字节数，默认 256 MiB。超限响应会在替换目标文件前终止。 |
+
+超时值最小为 `1.0` 秒，字节上限最小为 1 字节；无法解析时回退到各自默认值。
+
+<Callout type="warn">
+这四个变量在模块导入时求值，因此**必须来自真实的进程环境变量**（`export`、容器或函数计算注入的环境变量等）。写在 `.env` 或 `config.yaml` 中不会生效——VeADK 将它们写入 `os.environ` 的时机晚于这些常量的求值，此处不适用本页开头「环境变量与 `config.yaml` 等价」的约定。
+</Callout>
+
+```bash
+export VEADK_HTTP_CONNECT_TIMEOUT=10
+export VEADK_HTTP_READ_TIMEOUT=60
+export VEADK_HTTP_STREAM_BUDGET=300
+export VEADK_MAX_DOWNLOAD_BYTES=268435456
+```
+
 ## 其他
 
 | 环境变量 | 释义 |

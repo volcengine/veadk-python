@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -38,6 +39,10 @@ from veadk.tools.builtin_tools.create_agent.sources.cloud import (
 )
 from veadk.tools.builtin_tools.create_agent.sources.base import SourceCollection
 from veadk.utils.cloud_provider import cloud_provider_from_env
+from veadk.utils.http_defaults import (
+    DEFAULT_CONNECT_TIMEOUT,
+    DEFAULT_READ_TIMEOUT,
+)
 
 FINDSKILL_SEARCH_URL = os.getenv(
     "FINDSKILL_SEARCH_URL",
@@ -46,6 +51,9 @@ FINDSKILL_SEARCH_URL = os.getenv(
 FindSkillSearcher = Callable[[str], Awaitable[dict[str, Any]]]
 _PAGE_SIZE = 100
 _MAX_PAGES = 100
+# Wall-clock ceiling for one sweep: spaces are paginated, then every space is
+# paginated again. A per-request timeout bounds one call, not the fan-out.
+_SWEEP_DEADLINE_SECONDS = 120.0
 
 
 @dataclass(frozen=True)
@@ -260,12 +268,36 @@ class AgentKitSkillCenterSource:
         if credentials is None:
             return self._status("skipped", "AK/SK or STS credentials are unavailable.")
 
+        # Per call, never on `self`: one source object serves every session,
+        # so overlapping sweeps would otherwise reset each other's deadline and
+        # answer for each other's breach.
+        deadline = time.monotonic() + _SWEEP_DEADLINE_SECONDS
         try:
-            spaces = await asyncio.to_thread(self._list_spaces, credentials)
+            spaces, spaces_exceeded = await asyncio.to_thread(
+                self._list_spaces, credentials, deadline
+            )
             if self.space_ids:
                 allowed = set(self.space_ids)
                 spaces = [space for space in spaces if space.id in allowed]
-            resources = await self._collect_space_skills(credentials, spaces)
+            if spaces_exceeded:
+                # The budget is already spent. Do not instantiate one client
+                # per collected Space merely to have every worker rediscover
+                # the same expired deadline.
+                return self._status(
+                    "error",
+                    f"Sweep gave up after {_SWEEP_DEADLINE_SECONDS:.0f}s; "
+                    "returning 0 Skill(s) collected so far.",
+                )
+            resources, skills_exceeded = await self._collect_space_skills(
+                credentials, spaces, deadline
+            )
+            if skills_exceeded:
+                return self._status(
+                    "error",
+                    f"Sweep gave up after {_SWEEP_DEADLINE_SECONDS:.0f}s; "
+                    f"returning {len(resources)} Skill(s) collected so far.",
+                    resources=resources,
+                )
             return SourceCollection(
                 resources=resources,
                 status=ResourceSourceStatus(
@@ -281,23 +313,37 @@ class AgentKitSkillCenterSource:
         self,
         status: Literal["skipped", "error"],
         message: str,
+        resources: Sequence[StoredResource] = (),
     ) -> SourceCollection:
         return SourceCollection(
+            resources=list(resources),
             status=ResourceSourceStatus(
                 source=self.name,
                 status=status,
+                count=len(resources),
                 message=message,
-            )
+            ),
         )
 
-    def _list_spaces(self, credentials: CloudCredentials) -> list[_AgentKitSkillSpace]:
+    def _list_spaces(
+        self,
+        credentials: CloudCredentials,
+        deadline: float,
+    ) -> tuple[list[_AgentKitSkillSpace], bool]:
+        """Return the Spaces collected, and whether the deadline cut them short."""
         from agentkit.sdk.skills.types import ListSkillSpacesRequest
 
         client = self._client_factory(credentials, self.region)
         spaces: list[_AgentKitSkillSpace] = []
         seen_ids: set[str] = set()
         collected_count = 0
+        deadline_exceeded = False
         for page in range(1, _MAX_PAGES + 1):
+            if time.monotonic() >= deadline:
+                # Abandon the remaining pages; `collect` reports the partial
+                # result rather than passing it off as a complete listing.
+                deadline_exceeded = True
+                break
             response = client.list_skill_spaces(
                 ListSkillSpacesRequest(PageNumber=page, PageSize=_PAGE_SIZE)
             )
@@ -315,6 +361,11 @@ class AgentKitSkillCenterSource:
                         project_name=str(getattr(item, "project_name", "") or ""),
                     )
                 )
+            # The last page can finish after the deadline and still advertise
+            # no successor, so check the clock before reporting a complete list.
+            if time.monotonic() >= deadline:
+                deadline_exceeded = True
+                break
             if not _has_next_page(
                 response,
                 collected_count=collected_count,
@@ -324,38 +375,57 @@ class AgentKitSkillCenterSource:
                 break
         else:
             raise RuntimeError("AgentKit Skill Space pagination exceeded 100 pages.")
-        return spaces
+        return spaces, deadline_exceeded
 
     async def _collect_space_skills(
         self,
         credentials: CloudCredentials,
         spaces: Sequence[_AgentKitSkillSpace],
-    ) -> list[StoredResource]:
+        deadline: float,
+    ) -> tuple[list[StoredResource], bool]:
         semaphore = asyncio.Semaphore(self._max_concurrency)
 
-        async def collect_one(space: _AgentKitSkillSpace) -> list[StoredResource]:
+        async def collect_one(
+            space: _AgentKitSkillSpace,
+        ) -> tuple[list[StoredResource], bool]:
+            if time.monotonic() >= deadline:
+                return [], True
             async with semaphore:
+                if time.monotonic() >= deadline:
+                    return [], True
                 return await asyncio.to_thread(
                     self._list_skills,
                     credentials,
                     space,
+                    deadline,
                 )
 
         results = await asyncio.gather(*(collect_one(space) for space in spaces))
-        return [resource for group in results for resource in group]
+        resources = [resource for group, _ in results for resource in group]
+        return resources, any(exceeded for _, exceeded in results)
 
     def _list_skills(
         self,
         credentials: CloudCredentials,
         space: _AgentKitSkillSpace,
-    ) -> list[StoredResource]:
+        deadline: float,
+    ) -> tuple[list[StoredResource], bool]:
+        """Return the Skills collected, and whether the deadline cut them short."""
         from agentkit.sdk.skills.types import ListSkillsBySkillSpaceRequest
 
+        if time.monotonic() >= deadline:
+            return [], True
         client = self._client_factory(credentials, self.region)
         resources: list[StoredResource] = []
         seen_ids: set[str] = set()
         collected_count = 0
+        deadline_exceeded = False
         for page in range(1, _MAX_PAGES + 1):
+            if time.monotonic() >= deadline:
+                # Abandon the remaining pages; `collect` reports the partial
+                # result rather than passing it off as a complete listing.
+                deadline_exceeded = True
+                break
             response = client.list_skills_by_skill_space(
                 ListSkillsBySkillSpaceRequest(
                     SkillSpaceId=space.id,
@@ -371,6 +441,11 @@ class AgentKitSkillCenterSource:
                     continue
                 seen_ids.add(resource.descriptor.ref)
                 resources.append(resource)
+            # Check after each blocking request as well as before it. Otherwise
+            # a slow final page would be labelled complete after the budget.
+            if time.monotonic() >= deadline:
+                deadline_exceeded = True
+                break
             if not _has_next_page(
                 response,
                 collected_count=collected_count,
@@ -382,7 +457,7 @@ class AgentKitSkillCenterSource:
             raise RuntimeError(
                 f"AgentKit Skill pagination exceeded 100 pages for Space '{space.id}'."
             )
-        return resources
+        return resources, deadline_exceeded
 
     def _to_agentkit_resource(
         self,
@@ -433,12 +508,23 @@ def _default_agentkit_client_factory(
     from agentkit.sdk.skills.client import AgentkitSkillsClient
 
     with default_cloud_provider(cloud_provider_from_env()):
-        return AgentkitSkillsClient(
+        client = AgentkitSkillsClient(
             access_key=credentials.access_key,
             secret_key=credentials.secret_key,
             session_token=credentials.session_token,
             region=region,
         )
+    # The client takes no timeout argument, but it subclasses the volcengine
+    # `Service`, whose setters are re-read on every request. Guarded so an SDK
+    # shape change degrades to the SDK default instead of raising.
+    for setter, seconds in (
+        ("set_connection_timeout", DEFAULT_CONNECT_TIMEOUT),
+        ("set_socket_timeout", DEFAULT_READ_TIMEOUT),
+    ):
+        apply_timeout = getattr(client, setter, None)
+        if callable(apply_timeout):
+            apply_timeout(int(seconds))
+    return client
 
 
 def resolve_agentkit_skill(

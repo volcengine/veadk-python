@@ -13,6 +13,7 @@
 # limitations under the License.
 
 from __future__ import annotations
+import asyncio
 import os
 import shutil
 import tempfile
@@ -29,6 +30,7 @@ from veadk.skills.skill import Skill
 from veadk.tools.skills_tools.session_path import get_session_path
 from veadk.tracing.telemetry.telemetry import set_common_attributes_on_tool_span
 from veadk.utils.logger import get_logger
+from veadk.utils.misc import download_url_to_file
 
 tracer = trace.get_tracer("veadk.skills_tool")
 
@@ -103,7 +105,12 @@ class SkillsTool(BaseTool):
             return "Error: No skill name provided"
 
         with tracer.start_as_current_span(f"execute_skill {skill_name}") as span:
-            result = self._invoke_skill(skill_name, tool_context)
+            # `_invoke_skill` does blocking disk and network I/O (skill
+            # download). Awaiting it inline would stall the event loop for
+            # every other session in the process.
+            result = await asyncio.to_thread(
+                self._invoke_skill, skill_name, tool_context
+            )
             self._add_skill_span_attributes(span, skill_name, result)
             self._upload_skill_metrics(span, skill_name, result)
             return result
@@ -479,7 +486,6 @@ class SkillsTool(BaseTool):
     ) -> bool:
         """Download a skill using the vestack environment GenTempTosObjectDownloadUrl API."""
         import json
-        import requests
         from veadk.utils.volcengine_sign import ve_request
 
         # Extract skill_id and skill_version from TosPath
@@ -550,10 +556,7 @@ class SkillsTool(BaseTool):
                 return False
             else:
                 try:
-                    response = requests.get(signed_url)
-                    response.raise_for_status()
-                    with open(save_path, "wb") as f:
-                        f.write(response.content)
+                    download_url_to_file(signed_url, save_path)
                     return True
                 except Exception as e:
                     logger.error(

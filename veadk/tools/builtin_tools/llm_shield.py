@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import asyncio
 import json
 import os
 import time
@@ -19,6 +20,7 @@ from typing import Optional, List, Dict, Any, Union
 from volcenginesdkllmshield.models.llm_shield_sign import request_sign
 
 from google.adk.plugins import BasePlugin
+from google.adk.agents.base_agent import BaseAgent
 from google.adk.agents.callback_context import CallbackContext
 from google.adk.tools.tool_context import ToolContext
 from google.adk.models import LlmRequest, LlmResponse
@@ -32,6 +34,19 @@ from veadk.auth.veauth.utils import get_credential_from_vefaas_iam
 logger = get_logger(__name__)
 
 
+def _first_not_none(*values: Any) -> Any:
+    """Return the first value that is not None, or None if there is none.
+
+    ADK spells some hook arguments differently on its two wirings (`args` vs
+    `tool_args`, `tool_response` vs `result`), so the hooks below accept both
+    spellings and normalize them through this helper.
+    """
+    for value in values:
+        if value is not None:
+            return value
+    return None
+
+
 class LLMShieldPlugin(BasePlugin):
     """
     LLM Shield Plugin for content moderation and safety.
@@ -41,8 +56,23 @@ class LLMShieldPlugin(BasePlugin):
     It helps detect and block potentially harmful content including sensitive information,
     prompt injection attacks, and policy violations.
 
+    The hooks support both ADK wirings, which call them with different argument
+    names: the plugin API passes `tool_args` / `result` and an extra `agent`,
+    while the agent callback API passes `args` / `tool_response`.
+
     Examples:
-        Basic usage with default settings:
+        As a runner plugin, moderating every agent in the runner:
+        ```python
+        from veadk.tools.builtin_tools.llm_shield import content_safety
+        runner = Runner(
+            agent=agent,
+            app_name=app_name,
+            session_service=session_service,
+            plugins=[content_safety],
+        )
+        ```
+
+        As callbacks on a single agent:
         ```python
         from veadk.tools.builtin_tools.llm_shield import content_safety
         agent = Agent(
@@ -269,18 +299,87 @@ class LLMShieldPlugin(BasePlugin):
 
         return None
 
-    def before_agent_callback(
-        self, callback_context: CallbackContext, **kwargs
+    async def _request_llm_shield_async(
+        self,
+        message: str,
+        role: str,
+        hook_name: Optional[str] = None,
+        session_info: Optional[Dict[str, str]] = None,
+    ) -> Optional[str]:
+        """
+        Run `_request_llm_shield` in a worker thread.
+
+        The moderation call is a blocking `requests.post` with a default 50s
+        timeout and it fires up to four times per agent turn, so it is handed
+        to a thread instead of stalling the event loop.
+
+        Args:
+            message (str): The content to be moderated
+            role (str): The role of the message sender ("user" or "assistant")
+            hook_name (str, optional): Hook name for the Lumen Moderate endpoint
+            session_info (dict, optional): Session and run ids for the Lumen endpoint
+
+        Returns:
+            Optional[str]: A blocking message if content violates policies,
+                         None if content is safe or on error
+        """
+        return await asyncio.to_thread(
+            self._request_llm_shield,
+            message=message,
+            role=role,
+            hook_name=hook_name,
+            session_info=session_info,
+        )
+
+    async def before_agent_callback(
+        self,
+        callback_context: Optional[CallbackContext] = None,
+        *,
+        agent: Optional[BaseAgent] = None,
+        **kwargs,
     ) -> None:
+        """
+        Hook placeholder run before an agent starts.
+
+        Args:
+            callback_context (CallbackContext, optional): The agent invocation context
+            agent (BaseAgent, optional): The agent about to run, supplied by the
+                plugin wiring only
+            **kwargs: Additional keyword arguments
+
+        Returns:
+            None: the agent always proceeds normally
+        """
         # TODO: Implement agent-level input validation and context analysis
         return None
 
-    def after_agent_callback(self, callback_context: CallbackContext, **kwargs) -> None:
+    async def after_agent_callback(
+        self,
+        callback_context: Optional[CallbackContext] = None,
+        *,
+        agent: Optional[BaseAgent] = None,
+        **kwargs,
+    ) -> None:
+        """
+        Hook placeholder run after an agent finishes.
+
+        Args:
+            callback_context (CallbackContext, optional): The agent invocation context
+            agent (BaseAgent, optional): The agent that has just run, supplied by
+                the plugin wiring only
+            **kwargs: Additional keyword arguments
+
+        Returns:
+            None: the original agent output is always used
+        """
         # TODO: Implement post-agent analysis and context analysis
         return None
 
-    def before_model_callback(
-        self, callback_context: CallbackContext, llm_request: LlmRequest, **kwargs
+    async def before_model_callback(
+        self,
+        callback_context: Optional[CallbackContext] = None,
+        llm_request: Optional[LlmRequest] = None,
+        **kwargs,
     ) -> Optional[LlmResponse]:
         """
         Moderate user input before sending to the language model.
@@ -290,8 +389,8 @@ class LLMShieldPlugin(BasePlugin):
         returns a blocking response instead of allowing the request to proceed.
 
         Args:
-            callback_context (CallbackContext): The callback execution context
-            llm_request (LlmRequest): The incoming LLM request to moderate
+            callback_context (CallbackContext, optional): The callback execution context
+            llm_request (LlmRequest, optional): The incoming LLM request to moderate
             **kwargs: Additional keyword arguments
 
         Returns:
@@ -314,7 +413,7 @@ class LLMShieldPlugin(BasePlugin):
         if not last_user_message:
             return None
 
-        response = self._request_llm_shield(
+        response = await self._request_llm_shield_async(
             message=last_user_message, role="user", hook_name="before_model"
         )
         if response:
@@ -328,8 +427,11 @@ class LLMShieldPlugin(BasePlugin):
             )
         return None
 
-    def after_model_callback(
-        self, callback_context: CallbackContext, llm_response: LlmResponse, **kwargs
+    async def after_model_callback(
+        self,
+        callback_context: Optional[CallbackContext] = None,
+        llm_response: Optional[LlmResponse] = None,
+        **kwargs,
     ) -> Optional[LlmResponse]:
         """
         Moderate model output before returning to the user.
@@ -339,8 +441,8 @@ class LLMShieldPlugin(BasePlugin):
         instead of the original model output.
 
         Args:
-            callback_context (CallbackContext): The callback execution context
-            llm_response (LlmResponse): The model's response to moderate
+            callback_context (CallbackContext, optional): The callback execution context
+            llm_response (LlmResponse, optional): The model's response to moderate
             **kwargs: Additional keyword arguments
 
         Returns:
@@ -362,7 +464,7 @@ class LLMShieldPlugin(BasePlugin):
         if not last_model_message:
             return None
 
-        response = self._request_llm_shield(
+        response = await self._request_llm_shield_async(
             message=last_model_message, role="assistant", hook_name="after_model"
         )
         if response:
@@ -376,8 +478,14 @@ class LLMShieldPlugin(BasePlugin):
             )
         return None
 
-    def before_tool_callback(
-        self, tool: BaseTool, args: Dict[str, Any], tool_context: ToolContext, **kwargs
+    async def before_tool_callback(
+        self,
+        tool: Optional[BaseTool] = None,
+        args: Optional[Dict[str, Any]] = None,
+        tool_context: Optional[ToolContext] = None,
+        *,
+        tool_args: Optional[Dict[str, Any]] = None,
+        **kwargs,
     ) -> Optional[Dict]:
         """
         Moderate tool arguments before tool execution.
@@ -387,22 +495,27 @@ class LLMShieldPlugin(BasePlugin):
         returns a blocking result instead of allowing tool execution.
 
         Args:
-            tool (BaseTool): The tool to be executed
-            args (Dict[str, Any]): The arguments passed to the tool
-            tool_context (ToolContext): The tool execution context
+            tool (BaseTool, optional): The tool to be executed
+            args (Dict[str, Any], optional): The arguments passed to the tool,
+                as named by the agent callback wiring
+            tool_context (ToolContext, optional): The tool execution context
+            tool_args (Dict[str, Any], optional): The same arguments, as named
+                by the plugin wiring
             **kwargs: Additional keyword arguments
 
         Returns:
             Optional[Dict]: A blocking result if arguments are unsafe,
                           None if arguments are safe to proceed
         """
+        args = _first_not_none(args, tool_args) or {}
+
         args_list = []
 
         for key, value in args.items():
             args_list.append(f"{key}: {value}")
 
         message = "\n".join(args_list)
-        response = self._request_llm_shield(
+        response = await self._request_llm_shield_async(
             message=message,
             role="user",
             hook_name="before_tool_call",
@@ -413,12 +526,15 @@ class LLMShieldPlugin(BasePlugin):
             return {"result": response}
         return None
 
-    def after_tool_callback(
+    async def after_tool_callback(
         self,
-        tool: BaseTool,
-        args: Dict[str, Any],
-        tool_context: CallbackContext,
-        tool_response: Union[str, Dict[str, Any], List[Any]],
+        tool: Optional[BaseTool] = None,
+        args: Optional[Dict[str, Any]] = None,
+        tool_context: Optional[ToolContext] = None,
+        tool_response: Optional[Union[str, Dict[str, Any], List[Any]]] = None,
+        *,
+        tool_args: Optional[Dict[str, Any]] = None,
+        result: Optional[Union[str, Dict[str, Any], List[Any]]] = None,
         **kwargs,
     ) -> Optional[Dict]:
         """
@@ -429,16 +545,24 @@ class LLMShieldPlugin(BasePlugin):
         violates safety policies, returns a blocking result.
 
         Args:
-            tool (BaseTool): The tool that was executed
-            args (Dict[str, Any]): The arguments that were passed to the tool
-            tool_context (CallbackContext): The tool execution context
-            tool_response (Union[str, Dict[str, Any], List[Any]]): The tool's response
+            tool (BaseTool, optional): The tool that was executed
+            args (Dict[str, Any], optional): The arguments that were passed to the
+                tool, as named by the agent callback wiring
+            tool_context (ToolContext, optional): The tool execution context
+            tool_response (Union[str, Dict[str, Any], List[Any]], optional): The
+                tool's response, as named by the agent callback wiring
+            tool_args (Dict[str, Any], optional): The same arguments, as named by
+                the plugin wiring
+            result (Union[str, Dict[str, Any], List[Any]], optional): The same tool
+                response, as named by the plugin wiring
             **kwargs: Additional keyword arguments
 
         Returns:
             Optional[Dict]: A blocking result if tool output is unsafe,
                           None if output is safe to return
         """
+        tool_response = _first_not_none(tool_response, result)
+
         message = ""
         if isinstance(tool_response, str):
             message = tool_response
@@ -449,7 +573,7 @@ class LLMShieldPlugin(BasePlugin):
             for item in tool_response:
                 message += f"{item}\n"
 
-        response = self._request_llm_shield(
+        response = await self._request_llm_shield_async(
             message=message,
             role="assistant",
             hook_name="after_tool_call",

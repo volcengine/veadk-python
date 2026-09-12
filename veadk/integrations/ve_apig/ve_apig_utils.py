@@ -23,6 +23,8 @@ from urllib.parse import quote
 
 import requests
 
+from veadk.utils.http_defaults import DEFAULT_HTTP_TIMEOUT
+
 Service = "apig"
 Version = "2021-03-03"
 Region = os.getenv("REGION") or "cn-beijing"
@@ -159,6 +161,7 @@ def request(method, date, query, header, region, ak, sk, token, action, body):
         headers=header,
         params=request_param["query"],
         data=request_param["body"],
+        timeout=DEFAULT_HTTP_TIMEOUT,
     )
     return r.json()
 

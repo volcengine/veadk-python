@@ -14,13 +14,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Iterable
 
 from langgraph.store.base import (
     BaseStore,
     GetOp,
-    ListNamespacesOp,
     Op,
     PutOp,
     Result,
@@ -60,9 +60,11 @@ class VikingMemoryStore(BaseStore):
 
         return results
 
-    def abatch(
-        self, ops: Iterable[GetOp | SearchOp | PutOp | ListNamespacesOp]
-    ) -> list[Result]: ...
+    async def abatch(self, ops: Iterable[Op]) -> list[Result]:
+        # The VikingDB backend client is fully synchronous and performs
+        # blocking HTTP calls, so run `batch` in a worker thread instead of
+        # blocking the running event loop.
+        return await asyncio.to_thread(self.batch, ops)
 
     def _apply_put_op(self, op: PutOp) -> None:
         index, user_id = op.namespace

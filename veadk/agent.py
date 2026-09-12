@@ -254,6 +254,15 @@ class Agent(LlmAgent):
     """
     model_extra_config: dict = Field(default_factory=dict)
     tool_thread_pool_config: Optional[ToolThreadPoolConfig] = None
+    """Thread pool for tool execution. Left unset on purpose.
+
+    ADK's pool only offloads *sync* `FunctionTool`s to a worker thread; every
+    other tool -- async functions, and any `BaseTool` subclass without a `func`
+    attribute (MCP tools, `AgentTool`, `SkillsTool`) -- is instead run via
+    `asyncio.run` on a **new event loop** per call. That breaks `asyncio.Lock`s
+    and MCP sessions held across calls, and the pool is process-global, so
+    nested tool calls can exhaust it and deadlock. Enable it per agent only to
+    hunt blocking I/O inside async tools, which is what ADK built it for."""
 
     tools: list[ToolUnion] = []
 

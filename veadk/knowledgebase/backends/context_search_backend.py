@@ -25,6 +25,9 @@ from typing_extensions import override
 
 import veadk.config  # noqa E401
 from veadk.knowledgebase.backends.base_backend import BaseKnowledgebaseBackend
+from veadk.utils.http_defaults import (
+    DEFAULT_HTTP_TIMEOUT,
+)
 from veadk.utils.logger import get_logger
 from veadk.utils.volcengine_sign import ve_request
 import requests
@@ -412,7 +415,9 @@ class ContextSearchBackend(BaseKnowledgebaseBackend):
         }
         url = f"{self.context_search_engine_endpoint}/v2/search"
         json_data = {"text": query, "size": top_k}
-        response = requests.post(url, json=json_data, headers=headers)
+        response = requests.post(
+            url, json=json_data, headers=headers, timeout=DEFAULT_HTTP_TIMEOUT
+        )
         try:
             result = response.json()
         except ValueError:
@@ -596,7 +601,12 @@ class ContextSearchBackend(BaseKnowledgebaseBackend):
             The file is opened in binary mode and streamed to minimize memory usage.
         """
         with open(file_path, "rb") as file_handle:
-            response = requests.put(upload_url, data=file_handle, headers=headers)
+            response = requests.put(
+                upload_url,
+                data=file_handle,
+                headers=headers,
+                timeout=DEFAULT_HTTP_TIMEOUT,
+            )
         if response.status_code not in (200, 201, 204):
             raise ValueError(
                 f"Upload failed for {file_path}: {response.status_code} {response.text}"
