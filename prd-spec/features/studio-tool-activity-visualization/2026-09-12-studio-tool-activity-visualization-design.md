@@ -1,6 +1,6 @@
 # Studio Tool Activity Visualization Design
 
-- **Status:** Approved for implementation planning
+- **Status:** Implemented and verified
 - **Date:** 2026-09-12
 - **Change type:** Feature
 - **Chinese version:** [2026-09-12-studio-tool-activity-visualization-design.zh.md](2026-09-12-studio-tool-activity-visualization-design.zh.md)
@@ -263,3 +263,14 @@ Using the existing mpa-agent test Runtime:
 - **Visual noise:** successful items collapse and safe read-only work aggregates; failures and active work stay visible.
 - **Loss of debugging detail:** preserve original values on the source block and expose them through the secondary disclosure.
 - **Sensitive data exposure:** preserve backend allowlists and add value-aware masking before display and clipboard operations.
+
+## 10. Implementation and Verification Record
+
+- **Component contract:** [Studio Tool Activity](../../../specs/studio-tool-activity/README.md)
+- **Implemented:** pure tool presentation, bounded/redacted raw data, adaptive disclosure, command alias lifecycle correlation, out-of-order response retention, bounded event deduplication, Codex child flattening, source markers, and adjacent read-only grouping. Existing registered specialized renderers remain unchanged.
+- **Targeted verification (2026-09-12):** the final targeted tool/model and component reruns passed, including signed-URL masking, explicit partial failure, disclosure, and localized grouping cases; `npx tsc --noEmit` passed; `npm run check:i18n` passed.
+- **Full frontend regression (2026-09-12):** `npm --prefix frontend test` passed 1,078 tests; `npm --prefix frontend run build` passed; `npm --prefix frontend run test:webui-assets` verified 102 packaged files and 246 internal references; `uv run --extra dev pre-commit run --all-files` passed.
+- **Repository regression:** `uv run --extra dev pytest -n 2 -m "not codex_smoke and not piagent_smoke"` ran 4,030 tests successfully but ended with 6 failures and 2 collection errors because optional `llama_index` and `anthropic` packages are absent from the local environment. The failures are outside this frontend change.
+- **Live Runtime evidence:** Runtime `r-yeuujrrcowb21078p9jh` produced one in-place running command activity. Replaying its 34 captured frames after the lifecycle fix produced one completed activity with exit code `0` and duration `1601 ms`.
+- **Browser evidence:** the rebuilt Studio was served successfully and `/web/ui-config` returned the expected Studio configuration. A final headless Chrome capture attempt hung and was stopped; previously completed normal-width screenshots and live DOM checks remain the visual evidence.
+- **Known transport limitation:** the tested A2A virtual session persisted only final text, so refresh preserved the final answer but had no tool activity to reconstruct. Studio does not fabricate or resubmit missing activity.

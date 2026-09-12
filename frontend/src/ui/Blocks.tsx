@@ -11,7 +11,7 @@ import {
 import { motion } from "motion/react";
 import { Trans, useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
-import type { Block } from "../blocks";
+import { flattenCodexActivityBlocks, type Block } from "../blocks";
 import { buildSurfaces, SurfaceView } from "../a2ui/Surface";
 import { useStickToBottom } from "./useStickToBottom";
 import { Markdown } from "./Markdown";
@@ -28,6 +28,15 @@ import { AgentKitLogoIcon } from "./icons/AgentKitLogoIcon";
 import { DeliverySourceIcon } from "./icons/DeliverySourceIcon";
 import { DeliveryVerifiedIcon } from "./icons/DeliveryVerifiedIcon";
 import { CodeBrowserDialog } from "./CodeBrowserDialog";
+import {
+  ToolActivityCard,
+  ToolExplorationGroup,
+} from "./tool-activity/ToolActivityCard";
+import {
+  isSafeExploration,
+  presentToolActivity,
+  type ToolActivityInput,
+} from "./tool-activity/model";
 
 const A2UI_TOOL = "send_a2ui_json_to_client";
 const STREAM_FRAME_INTERVAL_MS = 28;
@@ -217,7 +226,11 @@ function CodexSandboxIdentity({
   );
 }
 
-function loadSkillLabel(name: string, args: unknown, t: TFunction): string | undefined {
+function loadSkillLabel(
+  name: string,
+  args: unknown,
+  t: TFunction,
+): string | undefined {
   if (
     name !== "load_skill" ||
     args == null ||
@@ -292,7 +305,9 @@ export function ThinkingBlock({
           />
         </span>
         {done ? (
-          <span className="think-label think-label--done">{t("blocks.thinkingDone")}</span>
+          <span className="think-label think-label--done">
+            {t("blocks.thinkingDone")}
+          </span>
         ) : (
           <TextShimmer className="think-label" duration={2.4} spread={18}>
             {t("blocks.thinking")}
@@ -375,7 +390,9 @@ function DeliveryCard({
     ? t("blocks.justNow")
     : Number.isNaN(validatedAt.getTime())
       ? value.validatedAt
-      : validatedAt.toLocaleString(i18n.resolvedLanguage ?? i18n.language, { hour12: false });
+      : validatedAt.toLocaleString(i18n.resolvedLanguage ?? i18n.language, {
+          hour12: false,
+        });
 
   useEffect(() => {
     if (!downloadStatus) return;
@@ -456,7 +473,11 @@ function DeliveryCard({
     <>
       <section
         className={`delivery-card${value.verified ? " is-verified" : " is-unverified"}`}
-        aria-label={value.verified ? t("blocks.verifiedDelivery") : t("blocks.generatedSource")}
+        aria-label={
+          value.verified
+            ? t("blocks.verifiedDelivery")
+            : t("blocks.generatedSource")
+        }
       >
         <header className="delivery-card-header">
           <span className="delivery-card-icon">
@@ -464,7 +485,9 @@ function DeliveryCard({
           </span>
           <div>
             <strong>
-              {value.verified ? t("blocks.verifiedDelivery") : t("blocks.generatedSource")}
+              {value.verified
+                ? t("blocks.verifiedDelivery")
+                : t("blocks.generatedSource")}
             </strong>
             <span>{value.agentName}</span>
           </div>
@@ -485,7 +508,11 @@ function DeliveryCard({
             <dd>{(value.artifactSize / 1024).toFixed(1)} KiB</dd>
           </div>
           <div>
-            <dt>{value.verified ? t("blocks.validationTime") : t("blocks.generationTime")}</dt>
+            <dt>
+              {value.verified
+                ? t("blocks.validationTime")
+                : t("blocks.generationTime")}
+            </dt>
             <dd>{time}</dd>
           </div>
         </dl>
@@ -496,9 +523,7 @@ function DeliveryCard({
           · <code>{value.artifactSha256.slice(0, 12)}</code>
         </p>
         {!value.verified ? (
-          <p className="delivery-card-guidance">
-            {t("blocks.sourceGuidance")}
-          </p>
+          <p className="delivery-card-guidance">{t("blocks.sourceGuidance")}</p>
         ) : null}
         <div className="delivery-card-actions">
           <button
@@ -522,7 +547,9 @@ function DeliveryCard({
               {busyAction === "compare" ? (
                 <Loader2 className="spin" aria-hidden="true" />
               ) : null}
-              {busyAction === "compare" ? t("blocks.preparing") : t("blocks.viewChanges")}
+              {busyAction === "compare"
+                ? t("blocks.preparing")
+                : t("blocks.viewChanges")}
             </button>
           ) : null}
           <button
@@ -535,7 +562,9 @@ function DeliveryCard({
             {busyAction === "download" ? (
               <Loader2 className="spin" aria-hidden="true" />
             ) : null}
-            {busyAction === "download" ? t("blocks.preparing") : t("blocks.downloadSource")}
+            {busyAction === "download"
+              ? t("blocks.preparing")
+              : t("blocks.downloadSource")}
           </button>
           <button
             type="button"
@@ -726,6 +755,7 @@ function studioToolArtifacts(response: unknown): StudioToolArtifact[] {
  *  treatments share the same header and detail alignment. */
 function ToolBlock({
   name,
+  callId,
   args,
   response,
   done,
@@ -733,10 +763,12 @@ function ToolBlock({
   defaultOpen = false,
   retrying = false,
   codexActivity,
+  source,
   onBranchSelect,
   onAction,
 }: {
   name: string;
+  callId?: string;
   args?: unknown;
   response?: unknown;
   done: boolean;
@@ -744,6 +776,7 @@ function ToolBlock({
   defaultOpen?: boolean;
   retrying?: boolean;
   codexActivity?: Extract<Block, { kind: "tool" }>["codexActivity"];
+  source?: Extract<Block, { kind: "tool" }>["source"];
   onBranchSelect?: (branch: BranchCompareBranch) => void;
   onAction: BlocksProps["onAction"];
 }) {
@@ -776,6 +809,50 @@ function ToolBlock({
   };
   const label = name === A2UI_TOOL ? t("blocks.renderUi") : name;
   const studioArtifacts = studioToolArtifacts(response);
+  if ((!builtinTool || !DetailRenderer) && !codexActivity) {
+    const activityTitle = builtinTool
+      ? toolStatus === "failed"
+        ? t(`blocks.tools.${builtinTool.name}.failed`, {
+            defaultValue: builtinTool.failedLabel ?? builtinTool.doneLabel,
+          })
+        : toolStatus === "running"
+          ? t(`blocks.tools.${builtinTool.name}.running`, {
+              defaultValue: builtinTool.runningLabel,
+            })
+          : t(`blocks.tools.${builtinTool.name}.done`, {
+              defaultValue: builtinTool.doneLabel,
+            })
+      : undefined;
+    return (
+      <ToolActivityCard
+        input={{
+          name,
+          title: loadSkillLabel(name, args, t) ?? activityTitle,
+          callId,
+          args,
+          response,
+          done,
+          status: toolStatus,
+          defaultOpen,
+          source,
+        }}
+      >
+        {studioArtifacts.length > 0 ? (
+          <div className="studio-tool-artifacts">
+            {studioArtifacts.map((artifact) => (
+              <a
+                key={`${artifact.contentUrl}:${artifact.name}`}
+                href={artifact.contentUrl}
+                download={artifact.name}
+              >
+                {t("blocks.downloadNamed", { name: artifact.name })}
+              </a>
+            ))}
+          </div>
+        ) : null}
+      </ToolActivityCard>
+    );
+  }
   const respText =
     response == null
       ? null
@@ -802,7 +879,8 @@ function ToolBlock({
               ? t("blocks.agentAdjusting")
               : toolStatus === "failed"
                 ? t(`blocks.tools.${builtinTool.name}.failed`, {
-                    defaultValue: builtinTool.failedLabel ?? builtinTool.doneLabel,
+                    defaultValue:
+                      builtinTool.failedLabel ?? builtinTool.doneLabel,
                   })
                 : loadSkillLabel(name, args, t)
           }
@@ -877,7 +955,9 @@ function ToolBlock({
             <div className="tool-detail">
               {args != null && (
                 <div className="tool-section">
-                  <div className="tool-section-label">{t("blocks.arguments")}</div>
+                  <div className="tool-section-label">
+                    {t("blocks.arguments")}
+                  </div>
                   <pre className="tool-args">
                     {JSON.stringify(args, null, 2)}
                   </pre>
@@ -891,7 +971,9 @@ function ToolBlock({
               )}
               {studioArtifacts.length > 0 && (
                 <div className="tool-section">
-                  <div className="tool-section-label">{t("blocks.artifacts")}</div>
+                  <div className="tool-section-label">
+                    {t("blocks.artifacts")}
+                  </div>
                   <div className="studio-tool-artifacts">
                     {studioArtifacts.map((artifact) => (
                       <a
@@ -988,7 +1070,9 @@ function ArtifactCard({
             </span>
             <span className="artifact-card__copy">
               <span className="artifact-card__name">{file.filename}</span>
-              <span className="artifact-card__hint">{t("blocks.powerpoint")}</span>
+              <span className="artifact-card__hint">
+                {t("blocks.powerpoint")}
+              </span>
             </span>
             <span className="artifact-card__actions">
               {previewFile && (
@@ -1055,7 +1139,10 @@ function ArtifactCard({
               </button>
             </div>
             <div className="artifact-preview__canvas">
-              <img src={preview.url} alt={t("blocks.slidePreview", { name: preview.name })} />
+              <img
+                src={preview.url}
+                alt={t("blocks.slidePreview", { name: preview.name })}
+              />
             </div>
           </div>
         </div>
@@ -1128,7 +1215,9 @@ function AuthCard({
     >
       <div className="auth-card-head">
         <ShieldCheck className="auth-card-icon" />
-        <span className="auth-card-title">{t("blocks.authorizationRequired", { tool: toolLabel })}</span>
+        <span className="auth-card-title">
+          {t("blocks.authorizationRequired", { tool: toolLabel })}
+        </span>
       </div>
       <p className="auth-card-desc">
         <Trans
@@ -1164,7 +1253,9 @@ function AuthCard({
         )}
       </button>
       {!block.authUri && (
-        <div className="auth-card-err">{t("blocks.missingAuthorizationUrl")}</div>
+        <div className="auth-card-err">
+          {t("blocks.missingAuthorizationUrl")}
+        </div>
       )}
       {err && <div className="auth-card-err">{err}</div>}
     </motion.div>
@@ -1200,6 +1291,90 @@ export interface BlocksProps {
   onBranchSelect?: (branch: BranchCompareBranch) => void;
 }
 
+type DisplayBlock =
+  Block | { kind: "tool-exploration"; items: ToolActivityInput[] };
+
+function toolActivityTitle(
+  block: Extract<Block, { kind: "tool" }>,
+  status: "running" | "completed" | "failed",
+  t: TFunction,
+): string | undefined {
+  const definition = getBuiltinToolDefinition(block.name);
+  const skillLabel = loadSkillLabel(block.name, block.args, t);
+  if (skillLabel || !definition) return skillLabel;
+  const key =
+    status === "failed"
+      ? "failed"
+      : status === "running"
+        ? "running"
+        : "done";
+  const fallback =
+    status === "failed"
+      ? (definition.failedLabel ?? definition.doneLabel)
+      : status === "running"
+        ? definition.runningLabel
+        : definition.doneLabel;
+  return t(`blocks.tools.${definition.name}.${key}`, { defaultValue: fallback });
+}
+
+function toolInput(
+  block: Extract<Block, { kind: "tool" }>,
+  t?: TFunction,
+): ToolActivityInput {
+  const status = block.status ?? (block.done ? "completed" : "running");
+  return {
+    name: block.name,
+    title: t ? toolActivityTitle(block, status, t) : undefined,
+    callId: block.callId,
+    args: block.args,
+    response: block.response,
+    done: block.done,
+    status: block.status,
+    defaultOpen: block.defaultOpen,
+    source: block.source,
+  };
+}
+
+function groupDisplayBlocks(blocks: Block[], t: TFunction): DisplayBlock[] {
+  const output: DisplayBlock[] = [];
+  let candidates: Extract<Block, { kind: "tool" }>[] = [];
+  const flush = () => {
+    if (!candidates.length) return;
+    output.push(
+      candidates.length > 1
+        ? {
+            kind: "tool-exploration",
+            items: candidates.map((item) => toolInput(item, t)),
+          }
+        : candidates[0],
+    );
+    candidates = [];
+  };
+  for (const block of blocks) {
+    if (
+      block.kind !== "tool" ||
+      getBuiltinToolDefinition(block.name)?.detailRenderer
+    ) {
+      flush();
+      output.push(block);
+      continue;
+    }
+    const presentation = presentToolActivity(toolInput(block));
+    const sameSource =
+      !candidates.length ||
+      candidates[candidates.length - 1].source === block.source;
+    if (isSafeExploration(presentation) && sameSource) {
+      candidates.push(block);
+      continue;
+    }
+    flush();
+    if (isSafeExploration(presentation)) candidates.push(block);
+    else output.push(block);
+  }
+  flush();
+  return output;
+}
+
 export function Blocks({
   blocks,
   appName = "",
@@ -1216,18 +1391,33 @@ export function Blocks({
   onDeployDelivery,
   onBranchSelect,
 }: BlocksProps) {
-  const lastTextBlockIndex = blocks.reduce(
+  const { t } = useTranslation("conversation");
+  const displayBlocks = groupDisplayBlocks(
+    flattenCodexActivityBlocks(blocks),
+    t,
+  );
+  const lastTextBlockIndex = displayBlocks.reduce(
     (lastIndex, block, index) => (block.kind === "text" ? index : lastIndex),
     -1,
   );
   return (
     <>
-      {blocks.map((b, i) => {
+      {displayBlocks.map((b, i) => {
         switch (b.kind) {
           case "progress":
             return <BuildProgressBlock key="build-progress" text={b.text} />;
+          case "activity-source":
+            return (
+              <div className="tool-activity-source" key={`${i}:${b.label}`}>
+                {b.label}
+              </div>
+            );
+          case "tool-exploration":
+            return (
+              <ToolExplorationGroup key={`exploration:${i}`} items={b.items} />
+            );
           case "thinking": {
-            const answerStarted = blocks
+            const answerStarted = displayBlocks
               .slice(i + 1)
               .some(
                 (block) => block.kind === "text" && Boolean(block.text.trim()),
@@ -1295,7 +1485,7 @@ export function Blocks({
             if (b.name === A2UI_TOOL && b.done) return null;
             const hasLaterCreateAgentAttempt =
               b.name === "create_agents" &&
-              blocks
+              displayBlocks
                 .slice(i + 1)
                 .some(
                   (block) =>
@@ -1305,6 +1495,7 @@ export function Blocks({
               <ToolBlock
                 key={i}
                 name={b.name}
+                callId={b.callId}
                 args={b.args}
                 response={b.response}
                 done={b.done}
@@ -1315,6 +1506,7 @@ export function Blocks({
                   (streaming || hasLaterCreateAgentAttempt)
                 }
                 codexActivity={b.codexActivity}
+                source={b.source}
                 onBranchSelect={onBranchSelect}
                 onAction={onAction}
               />

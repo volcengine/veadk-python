@@ -591,30 +591,30 @@ test("parses native Codex item events using the repository activity convention",
   assert.equal(plan.event.block.summary, "1/2 completed");
 });
 
-test("wires Codex progress into the active outer tool and renders the nested card", () => {
-  const blocksSource = readFileSync(new URL("../src/blocks.ts", import.meta.url), "utf8");
-  const rendererSource = readFileSync(new URL("../src/ui/Blocks.tsx", import.meta.url), "utf8");
-  const stylesSource = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
+test("wires Codex progress and renders flattened activity cards", () => {
+  const blocksSource = readFileSync(
+    new URL("../src/blocks.ts", import.meta.url),
+    "utf8",
+  );
+  const rendererSource = readFileSync(
+    new URL("../src/ui/Blocks.tsx", import.meta.url),
+    "utf8",
+  );
 
   assert.match(blocksSource, /parseCodexSandboxProgress/);
-  assert.match(blocksSource, /block\.codexActivity = applyCodexSandboxProgress/);
-  assert.match(rendererSource, /className="codex-sandbox-run"/);
-  assert.match(rendererSource, /<span>Codex Sandbox<\/span>/);
-  assert.match(rendererSource, /Agent Session/);
-  assert.match(rendererSource, /Sandbox Session/);
-  assert.match(rendererSource, /Codex Thread/);
   assert.match(
-    rendererSource,
-    /codexActivity\.items\.map\(\(item\)\s*=>\s*item\.block\)/,
+    blocksSource,
+    /block\.codexActivity = applyCodexSandboxProgress/,
   );
-  assert.match(
-    rendererSource,
-    /:\s*!codexActivity\s*\?\s*\(\s*<div className="tool-detail">/,
+  assert.match(blocksSource, /flattenCodexActivityBlocks/);
+  assert.match(rendererSource, /<ToolActivityCard/);
+  assert.match(rendererSource, /className="tool-activity-source"/);
+  const activityStyles = readFileSync(
+    new URL("../src/ui/tool-activity/tool-activity.css", import.meta.url),
+    "utf8",
   );
-  assert.match(stylesSource, /\.codex-sandbox-run\s*\{/);
-  assert.match(stylesSource, /\.codex-sandbox-run__label\s*\{[^}]*position:\s*absolute/s);
-  assert.match(stylesSource, /\.codex-sandbox-run__identity\s*\{/);
-  assert.match(stylesSource, /@media \(max-width: 700px\)[\s\S]*?\.codex-sandbox-run/);
+  assert.match(activityStyles, /\.tool-activity__head\s*\{/);
+  assert.match(activityStyles, /@media \(max-width: 700px\)/);
 });
 
 test("applies progress to the matching ADK function call id", () => {
