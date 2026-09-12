@@ -120,7 +120,7 @@ class DynamicConfigManager:
 
         await config_client.add_listener(
             data_id="veadk",
-            group="VEADK_GROUP",
+            group=group_id,
             listener=self.handle_config_update,
         )
         logger.info("Add config listener to nacos success")
