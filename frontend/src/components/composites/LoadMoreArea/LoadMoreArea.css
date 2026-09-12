@@ -1,0 +1,13 @@
+.studio-load-more {
+  width: 100%;
+  padding: 16px;
+  border: 1px solid var(--studio-border-subtle);
+  border-radius: 16px;
+  background: var(--studio-bg-canvas);
+  color: var(--studio-text-primary);
+}
+.studio-load-more__items > * { animation: studio-load-more-enter 180ms ease-out; }
+@keyframes studio-load-more-enter { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+@media (prefers-reduced-motion: reduce) {
+  .studio-load-more__items > * { animation: none; }
+}

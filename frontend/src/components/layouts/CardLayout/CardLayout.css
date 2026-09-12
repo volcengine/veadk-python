@@ -1,0 +1,61 @@
+/* Figma 889:465733 */
+.studio-card-layout {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  width: 420px;
+  height: 828px;
+  overflow: hidden;
+  border-radius: 12px;
+  background: var(--studio-bg-elevated, #1c1c1e);
+}
+.studio-card-layout__header {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  flex: 0 0 60px;
+  height: 60px;
+  padding: 14px 24px;
+}
+.studio-card-layout__icon {
+  display: flex;
+  flex: 0 0 24px;
+  width: 24px;
+  height: 24px;
+  margin-right: 16px;
+}
+.studio-card-layout__icon > * { width: 24px; height: 24px; }
+.studio-card-layout__title {
+  min-width: 0;
+  margin: 0;
+  color: var(--studio-text-primary, #dbdee7);
+  font-family: "Century Gothic", sans-serif;
+  font-size: 18px;
+  font-weight: 700;
+  font-synthesis: none;
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.studio-card-layout__close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 20px;
+  width: 20px;
+  height: 20px;
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  opacity: .5;
+  cursor: pointer;
+  transition: opacity var(--studio-motion-duration-fast, 140ms) ease-out;
+}
+.studio-card-layout__close img { width: 20px; height: 20px; }
+.studio-card-layout__content { flex: 1; min-height: 0; min-width: 0; }
+@media (hover: hover) {
+  .studio-card-layout__close:not(:disabled):hover { opacity: .8; }
+}
+@media (prefers-reduced-motion: reduce) { .studio-card-layout__close { transition: none; } }

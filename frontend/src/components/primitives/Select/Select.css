@@ -1,0 +1,69 @@
+/* Figma 632:252869: closed select; custom popup follows the component library theme */
+.studio-select {
+  position: relative;
+  box-sizing: border-box;
+  display: inline-flex;
+  width: 372px;
+  max-width: 100%;
+  height: 32px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, .4);
+  color: var(--studio-text-primary, #dbdee7);
+  font-family: "Century Gothic", sans-serif;
+  font-size: 13px;
+  font-weight: 400;
+  font-synthesis: none;
+  line-height: 22px;
+}
+.studio-select__display { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; padding: 5px 12px; }
+.studio-select__content { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.studio-select__icon { display: flex; align-items: center; justify-content: center; flex: 0 0 16px; width: 16px; height: 16px; }
+.studio-select__icon > * { width: 16px; height: 16px; }
+.studio-select__label { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.studio-select__arrow { flex: 0 0 12px; width: 12px; height: 12px; }
+.studio-select__native { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; padding: 0; border: 0; opacity: 0; cursor: pointer; font: inherit; }
+.studio-select[data-disabled] .studio-select__native { cursor: not-allowed; }
+
+/* Custom popup follows the library's surfaces, spacing and motion tokens */
+.studio-select__display { border: 0; border-radius: inherit; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.studio-select__display:focus-visible { outline: 1px solid var(--studio-border-emphasis, rgba(219,222,231,.7)); outline-offset: 2px; }
+.studio-select__display:disabled { cursor: not-allowed; }
+.studio-select__display { transition: background-color var(--studio-motion-duration-fast, 140ms) ease-out; }
+@media (hover: hover) {
+  .studio-select__display:not(:disabled):hover { background-color: var(--studio-fill-subtle, rgba(219, 222, 231, .05)); }
+}
+.studio-select__native { display: none; }
+.studio-select__arrow { transition: transform var(--studio-motion-duration-normal, 160ms) ease; }
+.studio-select__arrow[data-open="true"] { transform: rotate(180deg); }
+.studio-select-menu {
+  position: fixed;
+  z-index: 1000;
+  box-sizing: border-box;
+  padding: 4px;
+  border: 1px solid var(--studio-border-subtle, rgba(219,222,231,.15));
+  border-radius: 8px;
+  background: var(--studio-bg-panel, #111111);
+  color: var(--studio-text-primary, #dbdee7);
+  box-shadow: 0 2px 6px rgba(0,0,0,.06);
+  font-family: var(--studio-font-family-ui, "Century Gothic", sans-serif);
+  font-size: 13px;
+  line-height: 22px;
+  font-weight: 400;
+  transform-origin: top center;
+  animation: studio-select-open var(--studio-motion-duration-normal, 160ms) var(--studio-motion-easing-standard, ease-out);
+}
+.studio-select-menu__option {
+  display: flex; align-items: center; gap: 8px; box-sizing: border-box; height: 28px; min-height: 28px; flex-shrink: 0; padding: 3px 8px; border-radius: 6px; cursor: pointer;
+  transition: background-color var(--studio-motion-duration-fast, 140ms) ease;
+}
+.studio-select-menu__option[data-description] { height: 48px; min-height: 48px; padding-block: 4px; }
+.studio-select-menu__text { display: flex; flex-direction: column; flex: 1; gap: 2px; min-width: 0; }
+.studio-select-menu__description { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--studio-text-secondary); font-size: 12px; line-height: 16px; }
+.studio-select-menu__option[data-active="true"] { background: var(--studio-fill-hover, rgba(255,255,255,.06)); }
+.studio-select-menu__option[aria-selected="true"] { background: var(--studio-fill-selected, rgba(170,163,225,.1)); }
+.studio-select-menu__option[aria-disabled="true"] { opacity: .4; cursor: not-allowed; }
+.studio-select-menu__check { flex: 0 0 16px; width: 16px; height: 16px; margin-left: auto; }
+@keyframes studio-select-open { from { opacity: 0; transform: translateY(-4px) scaleY(.96); } to { opacity: 1; transform: translateY(0) scaleY(1); } }
+@media (prefers-reduced-motion: reduce) { .studio-select-menu { animation: none; } .studio-select__display, .studio-select__arrow, .studio-select-menu__option { transition: none; } }
+
+.studio-select-menu__items { display: flex; flex-direction: column; gap: 4px; }

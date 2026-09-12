@@ -1,0 +1,63 @@
+/* Figma: 788:392490 / 788:392498, checked state */
+.studio-switch {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 440px;
+  height: 22px;
+  font-family: "Century Gothic", sans-serif;
+  font-size: 13px;
+  font-style: normal;
+  font-weight: 400;
+  font-synthesis: none;
+  line-height: 22px;
+  letter-spacing: 0;
+  color: var(--studio-text-secondary, rgba(219, 222, 231, 0.6));
+  cursor: pointer;
+}
+.studio-switch__label { white-space: nowrap; }
+.studio-switch__control {
+  position: relative;
+  display: block;
+  flex: 0 0 32px;
+  width: 32px;
+  height: 18px;
+}
+.studio-switch__input {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: inherit;
+}
+.studio-switch__track {
+  position: absolute;
+  inset: 0;
+  border-radius: 9px;
+  background: #101013;
+  pointer-events: none;
+  transition: background-color var(--studio-motion-duration-normal, 160ms) ease;
+}
+.studio-switch__thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  transform: translateX(0);
+  transition: transform var(--studio-motion-duration-normal, 160ms) var(--studio-motion-easing-standard, ease);
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(15.3, 15.3, 19.125, 0.12);
+}
+.studio-switch__input:checked + .studio-switch__track .studio-switch__thumb { transform: translateX(14px); }
+/* The supplied frame defines on only; off reuses its geometry */
+.studio-switch__input:focus-visible + .studio-switch__track { outline: auto; }
+.studio-switch:has(.studio-switch__input:disabled) { cursor: not-allowed; }
+
+@media (prefers-reduced-motion: reduce) {
+  .studio-switch__track, .studio-switch__thumb { transition: none; }
+}

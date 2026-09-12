@@ -1,0 +1,161 @@
+/* Figma 740:296861 / 740:296871: 16px radio with a 6px selected dot */
+.studio-radio {
+  --radio-background: #fff;
+  --radio-border: #b8b7c3;
+  --radio-selected-background: #101013;
+  --radio-selected-border: transparent;
+  --radio-dot: #fff;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 16px;
+  color: var(--studio-text-primary, #dbdee7);
+  font-family: "Century Gothic", sans-serif;
+  font-size: 13px;
+  font-style: normal;
+  font-weight: 400;
+  font-synthesis: none;
+  line-height: normal;
+  letter-spacing: 0;
+  cursor: pointer;
+}
+
+.studio-radio__control {
+  position: relative;
+  display: block;
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+}
+
+.studio-radio__input {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: inherit;
+}
+
+.studio-radio__box {
+  position: absolute;
+  inset: 0;
+  box-sizing: border-box;
+  display: grid;
+  place-items: center;
+  border: 0.5px solid var(--radio-border);
+  border-radius: 99px;
+  background: var(--radio-background);
+  pointer-events: none;
+  transition: background-color var(--studio-motion-duration-fast, 140ms) ease, border-color var(--studio-motion-duration-fast, 140ms) ease;
+}
+
+.studio-radio__dot {
+  display: block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--radio-dot);
+  opacity: 0;
+  transition: opacity var(--studio-motion-duration-fast, 140ms) ease;
+}
+
+.studio-radio__input:checked + .studio-radio__box {
+  border-color: var(--radio-selected-border);
+  background: var(--radio-selected-background);
+}
+
+.studio-radio__input:checked + .studio-radio__box .studio-radio__dot {
+  opacity: 1;
+}
+
+.studio-radio__input:focus-visible + .studio-radio__box {
+  outline: 2px solid var(--studio-focus-ring, #fff);
+  outline-offset: 2px;
+}
+
+.studio-radio__label { white-space: nowrap; }
+.studio-radio:has(.studio-radio__input:disabled) { cursor: not-allowed; opacity: .45; }
+
+[data-theme="light"] .studio-radio {
+  --radio-background: var(--studio-surface-checkbox, #fff);
+  --radio-border: var(--studio-border-control, rgba(91, 80, 119, .24));
+  --radio-selected-background: var(--studio-surface-checkbox, #fff);
+  --radio-selected-border: var(--studio-border-control, rgba(91, 80, 119, .24));
+  --radio-dot: var(--studio-text-primary, #24242b);
+}
+
+/* Figma 740:296852: 472 × 68 cards, with 12px between the cards */
+.studio-radio-card {
+  box-sizing: border-box;
+  display: flex;
+  gap: 12px;
+  width: 472px;
+  max-width: 100%;
+  min-height: 68px;
+  padding: 12px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--studio-surface-item, rgba(229, 229, 229, .06));
+  transition: background-color var(--studio-motion-duration-fast, 140ms) ease;
+}
+
+@media (hover: hover) {
+  .studio-radio-card:hover:has(.studio-radio__input:not(:disabled)) {
+    background: color-mix(in srgb, var(--studio-surface-item, rgba(229, 229, 229, .06)) 97%, var(--studio-text-primary, #dbdee7));
+  }
+}
+
+.studio-radio-card__icon {
+  box-sizing: border-box;
+  display: inline-flex;
+  flex: 0 0 44px;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  padding: 12px;
+  border-radius: 8px;
+  background: var(--studio-surface-item-icon, rgba(0, 0, 0, .31));
+  color: var(--studio-text-tertiary, #7a7880);
+}
+
+.studio-radio-card__icon > :is(svg, img) {
+  display: block;
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+}
+
+.studio-radio-card__content {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  min-height: 44px;
+}
+
+.studio-radio-card__title {
+  color: var(--studio-text-primary, #dbdee7);
+  font-size: 14px;
+  line-height: 22px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.studio-radio-card__description {
+  color: color-mix(in srgb, var(--studio-text-primary, #dbdee7) 70%, transparent);
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: break-word;
+}
+
+[data-theme="light"] .studio-radio-card__description { color: var(--studio-text-secondary); }
+
+@media (prefers-reduced-motion: reduce) {
+  .studio-radio-card, .studio-radio__box, .studio-radio__dot { transition: none; }
+}

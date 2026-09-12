@@ -1,0 +1,16 @@
+.component-api { margin-top: 32px; width: min(100%, 1100px); color: var(--studio-text-primary); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+.component-api section + section { margin-top: 24px; }
+.component-api h3 { margin: 0 0 12px; font-size: 14px; font-weight: 500; }
+.component-api p, .component-api summary { font-size: 13px; color: var(--studio-text-secondary); }
+.component-api__scroll { max-width: 100%; overflow-x: auto; border: 1px solid var(--studio-border-subtle); border-radius: 8px; background: var(--studio-bg-panel); }
+.component-api table { width: 100%; border-collapse: collapse; font-size: 13px; line-height: 20px; text-align: left; table-layout: fixed; min-width: 640px; }
+.component-api th, .component-api td { padding: 10px 12px; vertical-align: top; overflow-wrap: anywhere; border-bottom: 1px solid var(--studio-border-subtle); }
+.component-api thead th { background: var(--studio-fill-subtle); font-weight: 500; }
+.component-api tbody th { font-weight: 400; }
+.component-api th:nth-child(1) { width: 18%; }
+.component-api th:nth-child(2) { width: 28%; }
+.component-api th:nth-child(3) { width: 6%; }
+.component-api th:nth-child(4) { width: 16%; }
+.component-api tr:last-child td, .component-api tr:last-child th { border-bottom: 0; }
+.component-api details { margin-top: 12px; }
+.component-api summary { cursor: pointer; padding: 8px 0; }

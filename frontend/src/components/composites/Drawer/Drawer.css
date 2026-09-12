@@ -1,0 +1,151 @@
+.studio-drawer__backdrop {
+  position: fixed;
+  z-index: 900;
+  inset: 0;
+  background: rgba(0, 0, 0, .32);
+  opacity: 1;
+  transition: opacity 220ms ease-out;
+}
+
+.studio-drawer__backdrop[data-starting-style],
+.studio-drawer__backdrop[data-ending-style] { opacity: 0; }
+
+.studio-drawer__backdrop[data-surface="glass"] { background: rgba(0, 0, 0, .14); }
+
+.studio-drawer__viewport {
+  position: fixed;
+  z-index: 901;
+  inset: 0;
+  overflow: clip;
+  pointer-events: none;
+}
+
+.studio-drawer {
+  position: absolute;
+  z-index: 901;
+  inset: 16px 16px 16px auto;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  max-width: calc(100% - 32px);
+  max-height: calc(100dvh - 32px);
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--studio-border-subtle, rgba(219, 222, 231, .15));
+  border-radius: var(--studio-radius-xl, 16px);
+  outline: none;
+  background: var(--studio-bg-elevated, #1c1c1e);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, .18);
+  color: var(--studio-text-primary, #dbdee7);
+  font-family: var(--studio-font-family-ui, "Century Gothic", sans-serif);
+  font-size: var(--studio-font-size-md, 14px);
+  font-weight: 400;
+  font-synthesis: none;
+  line-height: var(--studio-line-height-md, 22px);
+  opacity: 1;
+  transform: translateX(0);
+  transition: transform 240ms cubic-bezier(.22, 1, .36, 1), opacity 200ms ease-out;
+  pointer-events: auto;
+}
+
+.studio-drawer[data-surface="glass"] {
+  border-color: rgba(255, 255, 255, .2);
+  border-top-color: rgba(255, 255, 255, .48);
+  border-bottom-color: rgba(255, 255, 255, .1);
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, .14), rgba(255, 255, 255, .045) 28%, rgba(255, 255, 255, .012) 68%, rgba(255, 255, 255, .05)),
+    color-mix(in srgb, var(--studio-bg-elevated, #1c1c1e) 38%, transparent);
+  -webkit-backdrop-filter: blur(18px) saturate(1.35);
+  backdrop-filter: blur(18px) saturate(1.35);
+  box-shadow:
+    inset 1px 1px 0 rgba(255, 255, 255, .08),
+    inset -1px -1px 0 rgba(255, 255, 255, .025),
+    0 12px 36px rgba(0, 0, 0, .2),
+    0 2px 8px rgba(0, 0, 0, .08);
+}
+
+[data-theme="light"] .studio-drawer__backdrop[data-surface="glass"] { background: rgba(0, 0, 0, .08); }
+
+[data-theme="light"] .studio-drawer[data-surface="glass"] {
+  border-color: rgba(255, 255, 255, .62);
+  border-top-color: rgba(255, 255, 255, .9);
+  border-bottom-color: rgba(255, 255, 255, .35);
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, .3), rgba(255, 255, 255, .12) 28%, rgba(255, 255, 255, .035) 68%, rgba(255, 255, 255, .16)),
+    color-mix(in srgb, var(--studio-bg-elevated, #ffffff) 48%, transparent);
+  box-shadow:
+    inset 1px 1px 0 rgba(255, 255, 255, .5),
+    inset -1px -1px 0 rgba(255, 255, 255, .12),
+    0 12px 36px rgba(0, 0, 0, .1),
+    0 2px 6px rgba(0, 0, 0, .05);
+}
+
+.studio-drawer[data-starting-style],
+.studio-drawer[data-ending-style] {
+  opacity: 0;
+  transform: translateX(calc(100% + 16px));
+}
+
+.studio-drawer__header {
+  display: flex;
+  flex: none;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px 20px 16px 24px;
+}
+
+.studio-drawer__heading {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.studio-drawer__title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 400;
+  line-height: 28px;
+  overflow-wrap: anywhere;
+}
+
+.studio-drawer__description {
+  margin: 0;
+  color: var(--studio-text-secondary, rgba(219, 222, 231, .6));
+  font-size: 13px;
+  line-height: 20px;
+  overflow-wrap: anywhere;
+}
+
+.studio-drawer__close { flex: none; }
+
+.studio-drawer__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0 4px 0 0;
+}
+
+.studio-drawer__body-content { padding: 0 20px 24px 24px; }
+
+.studio-drawer__footer {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 16px 24px 20px;
+  border-top: 1px solid var(--studio-border-subtle, rgba(219, 222, 231, .15));
+}
+
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .studio-drawer[data-surface="glass"],
+  [data-theme="light"] .studio-drawer[data-surface="glass"] { background: var(--studio-bg-elevated, #1c1c1e); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .studio-drawer,
+  .studio-drawer__backdrop { transition: none; }
+}

@@ -1,0 +1,67 @@
+.studio-file-upload {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  color: var(--studio-text-primary, #dbdee7);
+  font-family: var(--studio-font-family-ui, "Century Gothic", sans-serif);
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 22px;
+}
+
+.studio-file-upload__field {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.studio-file-upload__zone { width: 100%; }
+.studio-file-upload__zone[data-drag-active] { background: var(--studio-fill-selected, rgba(170, 163, 225, .1)); }
+.studio-file-upload__zone[data-drag-active] .studio-dashed-zone__border rect { stroke: var(--studio-text-secondary, rgba(219, 222, 231, .6)); }
+
+.studio-file-upload__hint,
+.studio-file-upload__errors {
+  margin: 0;
+  color: var(--studio-text-tertiary, rgba(219, 222, 231, .5));
+  font-size: 12px;
+  line-height: 20px;
+  overflow-wrap: anywhere;
+}
+
+.studio-file-upload__errors {
+  padding: 0;
+  list-style: none;
+  color: var(--studio-danger, #ed9696);
+}
+
+.studio-file-upload__files {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.studio-file-upload__file {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--studio-fill-hover, rgba(255, 255, 255, .06));
+}
+
+.studio-file-upload__name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.studio-file-upload__size { flex: none; color: var(--studio-text-tertiary, rgba(219, 222, 231, .5)); font-size: 12px; line-height: 20px; white-space: nowrap; }
+.studio-file-upload__file > .studio-button { flex: none; }
+.studio-file-upload[data-disabled] { opacity: .45; }
+.studio-file-upload[data-disabled] .studio-file-upload__zone,
+.studio-file-upload[data-disabled] .studio-dashed-zone__button { cursor: not-allowed; }
+.studio-file-upload[data-disabled] .studio-file-upload__zone { background: var(--studio-surface-dashed, rgba(255, 255, 255, .03)); }
+.studio-file-upload[data-disabled] .studio-dashed-zone__border rect { stroke: var(--studio-border-dashed, rgba(255, 255, 255, .15)); }

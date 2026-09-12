@@ -1,0 +1,31 @@
+/* Figma 855:464896 — animation applies only to the requested disclosure */
+.studio-dropdown { width: 394px; }
+.studio-dropdown__trigger {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 28px;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  background: transparent;
+  color: var(--studio-text-primary, #dbdee7);
+  font: 400 14px/28px "Century Gothic", sans-serif;
+  font-synthesis: none;
+  letter-spacing: 0;
+  text-align: left;
+  cursor: pointer;
+}
+.studio-dropdown__trigger > span { flex: none; white-space: nowrap; }
+.studio-dropdown__trigger:disabled { cursor: default; }
+.studio-dropdown__trigger:focus-visible { outline: 1px solid var(--studio-focus-ring); outline-offset: 2px; }
+.studio-dropdown__arrow { display: block; flex: none; opacity: .4; transform: rotate(-90deg); transition: transform 160ms ease; }
+.studio-dropdown[data-open="true"] .studio-dropdown__arrow { transform: rotate(0deg); }
+.studio-dropdown__content { display: grid; grid-template-rows: 0fr; visibility: hidden; transition: grid-template-rows 160ms ease; }
+.studio-dropdown__inner { min-height: 0; overflow: hidden; }
+.studio-dropdown[data-open="true"] .studio-dropdown__content { grid-template-rows: 1fr; visibility: visible; }
+@media (prefers-reduced-motion: reduce) {
+  .studio-dropdown__arrow, .studio-dropdown__content { transition: none; }
+}

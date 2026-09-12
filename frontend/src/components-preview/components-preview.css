@@ -1,0 +1,173 @@
+@font-face { font-family: "JetBrains Mono"; src: url("./fonts/jetbrains-mono.ttf") format("truetype"); font-weight: 400; font-style: normal; font-display: swap; }
+@font-face { font-family: "Noto Sans SC"; src: url("./fonts/noto-sans-sc-sample.ttf") format("truetype"); font-weight: 400; font-style: normal; font-display: swap; }
+@font-face {
+  font-family: "Geist Mono";
+  src: url("./fonts/geist-mono.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Century Gothic";
+  src: local("Century Gothic Bold"), url("/.local-fonts/gothic-bold.ttf") format("truetype");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* Local preview font only, outside the distributed component library */
+@font-face {
+  font-family: "Century Gothic";
+  src: local("Century Gothic"), url("/.local-fonts/gothic.woff") format("woff");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  color: var(--studio-text-primary, #dbdee7);
+  background: var(--studio-bg-canvas, #101013);
+  font-synthesis: none;
+}
+
+* { box-sizing: border-box; }
+html, body, #root { width: 100%; height: 100%; overflow: hidden; }
+body { margin: 0; }
+
+.components-preview {
+  display: flex;
+  height: 100dvh;
+  overflow: hidden;
+}
+
+.components-preview-sidebar {
+  flex: 0 0 248px;
+  padding: 24px 12px;
+  overflow-y: auto;
+  background: var(--studio-bg-sidebar, #18181b);
+  border-right: 1px solid var(--studio-border-subtle, #2b2b30);
+}
+
+.components-preview-sidebar h1 {
+  margin: 0 12px 12px;
+  font-size: 15px;
+  line-height: 24px;
+  font-weight: 400;
+}
+
+.components-preview-sidebar nav {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.components-preview-sidebar h2 {
+  margin: 0;
+  height: 32px;
+  padding: 5px 10px;
+  color: var(--studio-text-tertiary, #7a7880);
+  font-family: "Century Gothic", sans-serif;
+  font-size: 13px;
+  line-height: 22px;
+  font-weight: 400;
+  letter-spacing: .039px;
+}
+
+.components-preview-canvas {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 32px;
+  background: var(--studio-bg-canvas, #101013);
+}
+
+.components-preview-item {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  height: 36px;
+  margin: 0;
+  padding: 7px 10px;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--studio-text-secondary, rgba(219, 222, 231, .6));
+  font-family: "Century Gothic", sans-serif;
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 22px;
+  letter-spacing: .182px;
+  text-decoration: none;
+}
+
+.components-preview-item + .components-preview-item {
+  margin-top: 4px;
+}
+
+.components-preview-item:focus-visible {
+  outline: 2px solid var(--studio-focus-ring, #ffffff);
+  outline-offset: 2px;
+}
+
+.component-preview-title {
+  margin: 0 0 24px;
+  font-size: 20px;
+  line-height: 28px;
+  font-weight: 400;
+}
+
+.components-preview-item[aria-current="page"],
+.components-preview-item:hover {
+  background: var(--studio-bg-elevated, #1c1c1e);
+  color: var(--studio-text-primary, #dbdee7);
+  font-weight: 400;
+  letter-spacing: .182px;
+}
+
+.components-preview-theme {
+  display: flex;
+  gap: 4px;
+  margin: 0 10px 24px;
+  padding: 3px;
+  border-radius: 8px;
+  background: var(--studio-bg-track, #0c0c0d);
+}
+.components-preview-theme button {
+  flex: 1;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 6px;
+  color: var(--studio-text-secondary, #a1a1aa);
+  background: transparent;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 20px;
+  cursor: pointer;
+  transition: background-color 150ms ease, color 150ms ease;
+}
+.components-preview-theme button[aria-pressed="true"] {
+  color: var(--studio-text-primary, #dbdee7);
+  background: var(--studio-fill-selected, rgba(170,163,225,.1));
+}
+.components-preview-theme button:focus-visible {
+  outline: 2px solid var(--studio-focus-ring, #fff);
+  outline-offset: 2px;
+}
+[data-theme="light"] .components-preview-item:hover {
+  background: var(--studio-fill-hover);
+}
+[data-theme="light"] .components-preview-item[aria-current="page"] {
+  background: var(--studio-bg-panel);
+  box-shadow: inset 0 0 0 .5px var(--studio-border-default);
+}
+[data-theme="light"] .components-preview-theme button[aria-pressed="true"] {
+  background: var(--studio-bg-panel);
+  box-shadow: 0 1px 2px rgba(46, 57, 78, .08);
+}
+@media (prefers-reduced-motion: reduce) {
+  .components-preview-theme button { transition: none; }
+}

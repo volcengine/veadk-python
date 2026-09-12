@@ -1,0 +1,76 @@
+/* Figma: Ig6wLTUxhfAxb20bKrXqh1 / 740:297255, rendered dark colors */
+.studio-input-with-tail-icon {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  width: 432px;
+  max-width: 100%;
+  height: 32px;
+  padding: 5px 12px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--studio-surface-input, #111112);
+  box-shadow: 0 0 0 1px var(--studio-bg-elevated, #1c1c1e), 0 1px 1px #0000000d;
+  transition: background-color var(--studio-motion-duration-fast, 140ms) ease-out;
+}
+
+.studio-input-with-tail-icon__input {
+  box-sizing: border-box;
+  flex: 1 1 0;
+  min-width: 0;
+  width: 0;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  outline: none;
+  box-shadow: none;
+  background: transparent;
+  color: var(--studio-text-input, #c2c5cc);
+  font-family: "Century Gothic", sans-serif;
+  font-size: 13px;
+  font-style: normal;
+  font-weight: 400;
+  font-synthesis: none;
+  line-height: 22px;
+  letter-spacing: 0;
+}
+
+.studio-input-with-tail-icon__icon {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--studio-text-tertiary, #7a7880);
+  transition: color var(--studio-motion-duration-fast, 140ms) ease-out;
+}
+
+button.studio-input-with-tail-icon__icon:not(:disabled) {
+  cursor: pointer;
+}
+
+.studio-input-with-tail-icon__icon > svg {
+  display: block;
+  width: 16px;
+  height: 16px;
+}
+
+@media (hover: hover) {
+  .studio-input-with-tail-icon:has(> input:not(:disabled):not([readonly]):not([aria-invalid="true"])):hover {
+    background-color: color-mix(in srgb, var(--studio-surface-input, #111112) 96%, var(--studio-text-primary, #dbdee7) 4%);
+  }
+  button.studio-input-with-tail-icon__icon:not(:disabled):hover { color: var(--studio-text-primary, #dbdee7); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .studio-input-with-tail-icon,
+  .studio-input-with-tail-icon__icon { transition: none; }
+}

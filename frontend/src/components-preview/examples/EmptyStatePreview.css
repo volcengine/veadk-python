@@ -1,0 +1,25 @@
+.empty-state-preview__examples {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+  width: 100%;
+  max-width: 720px;
+}
+
+.empty-state-preview__subtitle {
+  margin: 0 0 12px;
+  color: var(--studio-text-secondary, rgba(219, 222, 231, .6));
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 22px;
+}
+
+.empty-state-preview__frame {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  min-height: 288px;
+  border: 1px solid var(--studio-border-subtle, rgba(219, 222, 231, .15));
+  border-radius: var(--studio-radius-lg, 12px);
+  background: var(--studio-bg-panel, #111111);
+}

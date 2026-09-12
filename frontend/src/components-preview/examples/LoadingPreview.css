@@ -1,0 +1,8 @@
+.loading-preview-examples {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 48px;
+}
+
+.loading-preview-examples > section { min-width: 120px; }
