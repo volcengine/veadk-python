@@ -18,6 +18,7 @@ class A2AStreamDecoder:
         self._seen_event_ids: set[tuple[str, str]] = set()
         self._partial_text = {"answer": "", "thought": ""}
         self._heartbeat_states: set[tuple[str, str]] = set()
+        self._terminal_state = ""
 
     def feed(self, chunk: str | bytes) -> list[dict[str, Any]]:
         text = (
@@ -63,6 +64,24 @@ class A2AStreamDecoder:
             else "unknown"
         )
         metadata = event.get("metadata") if isinstance(event, Mapping) else None
+        if (
+            isinstance(event, Mapping)
+            and event.get("kind") == "status-update"
+            and event.get("final") is True
+        ):
+            status = event.get("status")
+            self._terminal_state = (
+                str(status.get("state") or "").lower()
+                if isinstance(status, Mapping)
+                else ""
+            )
+        elif isinstance(event, Mapping) and event.get("kind") == "task":
+            status = event.get("status")
+            self._terminal_state = (
+                str(status.get("state") or "").lower()
+                if isinstance(status, Mapping)
+                else ""
+            )
         cumulative_snapshot = (
             isinstance(event, Mapping)
             and event.get("kind") == "status-update"
@@ -125,7 +144,7 @@ class A2AStreamDecoder:
     def finalize_projection(self, *, author: str) -> list[dict[str, Any]]:
         """Finalize streamed answer deltas when A2A ends without final text."""
         answer = self._partial_text["answer"]
-        if not answer:
+        if not answer or self._terminal_state != "completed":
             return []
         self._partial_text["answer"] = ""
         return [

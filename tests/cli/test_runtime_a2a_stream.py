@@ -252,6 +252,14 @@ def test_decoder_finalizes_received_answer_when_a2a_terminal_has_no_message():
     }
 
     assert decoder.project(event, author="default")[0]["partial"] is True
+    decoder.project(
+        {
+            "kind": "status-update",
+            "final": True,
+            "status": {"state": "completed"},
+        },
+        author="default",
+    )
     terminal = decoder.finalize_projection(author="default")
 
     assert terminal == [
@@ -287,6 +295,31 @@ def test_decoder_does_not_promote_reasoning_to_final_answer():
     }
 
     decoder.project(event, author="default")
+
+    assert decoder.finalize_projection(author="default") == []
+
+
+def test_decoder_does_not_finalize_answer_after_failed_terminal():
+    decoder = A2AStreamDecoder()
+    working = {
+        "kind": "status-update",
+        "metadata": {},
+        "status": {
+            "state": "working",
+            "message": {
+                "role": "agent",
+                "parts": [{"kind": "text", "text": "partial answer"}],
+            },
+        },
+    }
+    failed = {
+        "kind": "status-update",
+        "final": True,
+        "status": {"state": "failed"},
+    }
+
+    decoder.project(working, author="default")
+    decoder.project(failed, author="default")
 
     assert decoder.finalize_projection(author="default") == []
 
