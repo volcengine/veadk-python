@@ -1,4 +1,4 @@
-# A2A First Event Heartbeat
+# A2A First Event Heartbeat and Reasoning Projection
 
 - **Status:** Implemented and verified
 - **Date:** 2026-09-12
@@ -16,6 +16,7 @@ The bridge currently drops A2A `submitted` and message-less `working` status upd
 
 - Convert non-final A2A `submitted` and message-less `working` status updates into a Studio metadata-only heartbeat event.
 - Preserve the existing projection for `working` messages containing visible text.
+- Preserve `metadata.adk_thought=true` message and artifact parts as Studio `thought=true` events instead of dropping them. Keep cumulative-delta tracking independent for reasoning and answer text.
 - Do not render heartbeat text, create a transcript block, complete the turn, or resubmit the request.
 - Do not alter Runtime provisioning, mpa-agent, task semantics, history persistence, or the existing 30-second client deadline.
 
@@ -25,6 +26,7 @@ The bridge currently drops A2A `submitted` and message-less `working` status upd
 
 - Unit-test `submitted` and message-less `working` heartbeat projection.
 - Unit-test that the heartbeat is ignored by transcript projection.
+- Unit-test live and artifact reasoning projection plus independent cumulative-delta suppression.
 - Preserve text-bearing working and terminal status behavior.
 - Run targeted A2A/Studio tests, frontend tests, build, asset verification, and pre-commit.
 - Live Runtime acceptance: the first downstream SSE frame arrives before 30 seconds and the original request is submitted once.
@@ -37,6 +39,8 @@ The bridge currently drops A2A `submitted` and message-less `working` status upd
 
 ## 5. Verification Record
 
-- `uv run --extra dev pytest tests/cli/test_runtime_a2a_stream.py tests/cli/test_frontend_runtime_proxy.py -q`: 85 passed.
+- `uv run --extra dev pytest tests/cli/test_runtime_a2a_stream.py tests/cli/test_frontend_runtime_proxy.py -q`: 87 passed after adding reasoning coverage.
 - Live Runtime `r-yeuujrrcowb21078p9jh`: first metadata-only heartbeat arrived in 0.737 seconds; the final answer arrived in 5.999 seconds; one request produced nine downstream frames.
 - Repeated message-less `working` updates are suppressed per `(taskId, state)` by the request-local decoder.
+- Live reasoning verification: first frame arrived in 0.702 seconds and the bridge emitted 216 `thought=true` deltas, 17 answer-text deltas, and 5 tool events for one request.
+- `npm --prefix frontend test`: 1,079 tests passed, including the heartbeat no-transcript regression.

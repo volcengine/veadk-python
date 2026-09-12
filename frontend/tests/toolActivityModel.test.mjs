@@ -462,6 +462,21 @@ test("ignores duplicate event ids across completed assistant turns", () => {
   assert.equal(duplicate.turn.blocks.length, 0);
 });
 
+test("ignores A2A transport heartbeats without creating a transcript turn", () => {
+  const projector = createAssistantEventProjector("heartbeat");
+  const projection = projector.project({
+    id: "a2a-task-1-working",
+    author: "default",
+    partial: true,
+    content: { role: "model", parts: [] },
+    customMetadata: { a2aStatus: "working" },
+  });
+
+  assert.equal(projection.ignored, true);
+  assert.equal(projection.turn.blocks.length, 0);
+  assert.deepEqual(projector.finish(), []);
+});
+
 test("bounds duplicate event tracking for long-running projector instances", () => {
   const projector = createAssistantEventProjector("bounded-dedupe");
   for (let index = 0; index < 2_100; index += 1) {

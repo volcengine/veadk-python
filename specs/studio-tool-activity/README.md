@@ -111,3 +111,4 @@ Tool payloads are untrusted display data. The component does not use raw HTML in
 
 - **2026-09-12:** Contract introduced by the approved Studio Tool Activity Visualization PRD. Initial implementation covers unified tool cards, command lifecycle correlation, sandbox flattening, read-only grouping, bounded output, raw-data redaction, and history-safe fallbacks.
 - **2026-09-12:** Non-final A2A `submitted` and message-less `working` updates are forwarded as metadata-only heartbeats. They clear the first-event deadline without creating transcript blocks, completing turns, or resubmitting requests.
+- **2026-09-12:** A2A text parts marked `adk_thought` are projected as Studio thinking events. Reasoning and answer cumulative-delta state is isolated so one stream cannot suppress or corrupt the other.
