@@ -675,7 +675,7 @@ export interface ProjectPreviewProps {
   deploymentRuntimeNameCustomized?: boolean;
   /** Updates the explicit Runtime name for a new deployment. */
   onDeploymentRuntimeNameChange?: (runtimeName: string) => void;
-  /** Opens the persistent Agent detail as soon as deployment starts. */
+  /** Persists the deployment task without forcing the active editor to navigate. */
   onDeploymentStarted?: (task: DeploymentTaskUpdate) => void;
   /** Mirrors deployment progress into the app shell so it survives page switches. */
   onDeploymentTaskChange?: (task: DeploymentTaskUpdate) => void;

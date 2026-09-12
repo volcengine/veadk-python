@@ -21,6 +21,7 @@ import {
   DeploymentStatusUnconfirmedError,
   isDeploymentAbortError,
   isDeploymentStatusUnconfirmedError,
+  pollDeploymentRecovery,
 } from "./deploymentStatus";
 import {
   DEFAULT_REQUEST_TIMEOUT_MS,
@@ -30,6 +31,7 @@ import {
 import type { AgentProject } from "../create/project";
 import type {
   AgentDraft,
+  McpCredentialValue,
   NetworkConfig,
   SelectedSkill,
 } from "../create/types";
@@ -3223,6 +3225,16 @@ interface DeployFrame extends Partial<DeployAgentkitResult> {
   phase?: string;
 }
 
+class DeploymentRecoveryHttpError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = "DeploymentRecoveryHttpError";
+  }
+}
+
 const deploymentControllers = new Map<string, AbortController>();
 
 function parseGithubCicdErrorDetail(detail: unknown): GithubCicdPipelineErrorDetail | null {
@@ -3550,8 +3562,60 @@ export async function deployAgentkitProject(
       deploymentControllers.delete(taskId);
     }
   };
+  const recoverFinal = async (cause?: unknown): Promise<DeployFrame> => {
+    if (isDeploymentAbortError(cause)) throw cause;
+    if (
+      !taskId ||
+      !opts?.runtimeId ||
+      typeof opts.baseRuntimeVersion !== "number"
+    ) {
+      throw new DeploymentStatusUnconfirmedError({ taskId, cause });
+    }
+    const recovered = await pollDeploymentRecovery<DeployFrame>({
+      signal: controller?.signal,
+      shouldRetry: (error) =>
+        !(error instanceof DeploymentRecoveryHttpError) ||
+        error.status === 404 ||
+        error.status === 408 ||
+        error.status === 429 ||
+        error.status >= 500,
+      load: async (signal) => {
+        const statusResponse = await apiFetch(
+          "/web/deploy-agentkit/status",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            signal,
+            body: JSON.stringify({
+              taskId,
+              runtimeId: opts.runtimeId,
+              runtimeName: opts.runtimeName,
+              appName: opts.appName ?? name,
+              region: config.region,
+              projectName: config.projectName,
+              baseRuntimeVersion: opts.baseRuntimeVersion,
+            }),
+          },
+          {},
+          30_000,
+        );
+        if (!statusResponse.ok) {
+          throw new DeploymentRecoveryHttpError(
+            statusResponse.status,
+            await httpErrorMessage(statusResponse, adkT("client.deploymentFailed")),
+          );
+        }
+        return statusResponse.json() as Promise<DeployFrame>;
+      },
+    });
+    if (!recovered) {
+      throw new DeploymentStatusUnconfirmedError({ taskId, cause });
+    }
+    return recovered;
+  };
 
-  let res: Response;
+  let res: Response | null = null;
+  let final: DeployFrame | null = null;
   try {
     const migrationSource = Boolean(opts?.migrationTaskId);
     opts?.onStage?.({
@@ -3610,34 +3674,45 @@ export async function deployAgentkitProject(
       pct: 100,
     });
   } catch (error) {
-    clearController();
-    if (isDeploymentAbortError(error)) throw error;
-    throw new DeploymentStatusUnconfirmedError({ taskId, cause: error });
+    try {
+      final = await recoverFinal(error);
+    } finally {
+      clearController();
+    }
   }
-  if (!res.ok) {
+  if (res && !res.ok) {
     const detail = await httpErrorMessage(res, adkT("client.deploymentFailed"));
     clearController();
     throw new Error(detail);
   }
 
-  let final: DeployFrame | null = null;
-  try {
-    for await (const raw of parseSSE(res)) {
-      const ev = raw as DeployFrame & DeployStage;
-      if (ev && ev.done) {
-        final = ev;
-        break;
+  if (res) {
+    try {
+      for await (const raw of parseSSE(res)) {
+        const ev = raw as DeployFrame & DeployStage;
+        if (ev && ev.done) {
+          final = ev;
+          break;
+        }
+        if (ev && ev.message) opts?.onStage?.(ev);
       }
-      if (ev && ev.message) opts?.onStage?.(ev);
+    } catch (error) {
+      try {
+        final = await recoverFinal(error);
+      } finally {
+        clearController();
+      }
     }
-  } catch (error) {
-    clearController();
-    if (isDeploymentAbortError(error)) throw error;
-    throw new DeploymentStatusUnconfirmedError({ taskId, cause: error });
   }
-  clearController();
-
-  if (!final) throw new DeploymentStatusUnconfirmedError({ taskId });
+  if (!final) {
+    try {
+      final = await recoverFinal();
+    } finally {
+      clearController();
+    }
+  } else {
+    clearController();
+  }
   if (!final.success) {
     const error = new Error(final.error || adkT("client.deploymentFailed"));
     if (isDeploymentStatusUnconfirmedError(error)) {
@@ -4586,6 +4661,57 @@ export interface RuntimeUpdateCapability {
   } | null;
 }
 
+/** Fetch the exact MCP credentials for one authorized update snapshot. */
+export async function getRuntimeMcpCredentials({
+  runtimeId,
+  region,
+  appName,
+  etag,
+  signal,
+}: {
+  runtimeId: string;
+  region: string;
+  appName: string;
+  etag: string;
+  signal?: AbortSignal;
+}): Promise<McpCredentialValue[]> {
+  const res = await apiFetch("/web/runtime-mcp-credentials", {
+    method: "POST",
+    cache: "no-store",
+    signal,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ runtimeId, region, appName, etag }),
+  });
+  if (!res.ok) {
+    throw new Error(
+      await httpErrorMessage(res, adkT("client.loadMcpCredentialsFailed")),
+    );
+  }
+  const payload = (await res.json().catch(() => null)) as {
+    credentials?: unknown;
+  } | null;
+  if (!Array.isArray(payload?.credentials)) {
+    throw new Error(adkT("client.invalidMcpCredentials"));
+  }
+  return payload.credentials.map((item) => {
+    if (!item || typeof item !== "object") {
+      throw new Error(adkT("client.invalidMcpCredentials"));
+    }
+    const raw = item as Record<string, unknown>;
+    const credential = {
+      agentName: raw.agentName,
+      name: raw.name,
+      url: raw.url,
+      authTokenEnv: raw.authTokenEnv,
+      value: raw.value,
+    };
+    if (Object.values(credential).some((value) => typeof value !== "string")) {
+      throw new Error(adkT("client.invalidMcpCredentials"));
+    }
+    return credential as McpCredentialValue;
+  });
+}
+
 interface RuntimeUpdateCapabilityRequest {
   runtimeId: string;
   region: string;
@@ -4928,6 +5054,7 @@ export interface GeneratedAgentDraftResult {
 }
 
 const GENERATED_AGENT_DRAFT_TIMEOUT_MS = 190_000;
+const GENERATED_AGENT_TEST_RUN_TIMEOUT_MS = 120_000;
 
 export async function generateAgentDraftFromRequirement(
   requirement: string,
@@ -4961,16 +5088,21 @@ export async function createGeneratedAgentTestRun(
     }>;
   },
 ): Promise<GeneratedAgentTestRun> {
-  const res = await apiFetch("/web/generated-agent-test-runs", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      draft,
-      runtimeId: runtime?.runtimeId,
-      runtimeRegion: runtime?.region,
-      mcpCredentialReuses: runtime?.mcpCredentialReuses,
-    }),
-  });
+  const res = await apiFetch(
+    "/web/generated-agent-test-runs",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        draft,
+        runtimeId: runtime?.runtimeId,
+        runtimeRegion: runtime?.region,
+        mcpCredentialReuses: runtime?.mcpCredentialReuses,
+      }),
+    },
+    {},
+    GENERATED_AGENT_TEST_RUN_TIMEOUT_MS,
+  );
   if (!res.ok) {
     throw new Error(await httpErrorMessage(res, adkT("client.createDebugRunFailed")));
   }

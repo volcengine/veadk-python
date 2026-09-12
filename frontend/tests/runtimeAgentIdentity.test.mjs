@@ -630,5 +630,5 @@ test("Runtime update hydration starts from cloud configuration without local dra
     /hydrateA2aRegistryFromRuntime\([\s\S]*?capability\.runtime\.envs/,
   );
   assert.doesNotMatch(handler, /\bnextDraft\b|draftEnvValues/);
-  assert.match(handler, /setImportedDraft\(classifiedDraft\)/);
+  assert.match(handler, /setImportedDraft\(editorDraft\)/);
 });

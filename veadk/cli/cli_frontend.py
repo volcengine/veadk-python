@@ -30,6 +30,7 @@ import json
 import os
 import queue
 import re
+import shlex
 import shutil
 import sys
 import tempfile
@@ -51,6 +52,10 @@ from pydantic import BaseModel, Field
 from frontend.server.agentkit_clients import create_agentkit_client
 from veadk.cli.agentkit_sandbox_region import is_agentkit_resource_not_found
 from veadk.cli.frontend_branding import normalize_site_title, resolve_site_logo
+from veadk.cli.generated_agent_sidecar_runtime import (
+    GeneratedAgentSidecarRuntimeUnavailable,
+    installed_harness_sidecar_runtime_command,
+)
 from veadk.cli.managed_sidecar_source import (
     ManagedSidecarSourceError,
     stage_managed_sidecar_veadk_source,
@@ -150,6 +155,8 @@ def _mcp_deployment_error_detail(code: str) -> str:
         return "无法沿用原 MCP 凭证，请重新打开详情后重新确认或填写 Key。"
     if code == "legacy_platform_mcp_read_only":
         return "运行版本中的 Skill 或 MCP 配置已变化，请重新打开详情并确认最新配置后再更新。"
+    if code == "legacy_overlay_sidecar_intent_changed":
+        return "Harness Sidecar 组件选择已变化，请重新打开详情并确认后再更新。"
     return "Harness Sidecar MCP 配置无效，请检查名称、地址与认证后重试。"
 
 
@@ -211,6 +218,7 @@ _LOCAL_ADK_RUN_PATHS = frozenset({"/run", "/run_sse"})
 _CP_BUILD_LOG_ERROR_TAIL_CHECK_CHARS = 1024
 _DEPLOY_STREAM_HEARTBEAT_SECONDS = 15.0
 _DEPLOY_STREAM_POLL_SECONDS = 0.1
+_RUNTIME_DEPLOYMENT_TASK_TAG = "veadk:deployment-task-sha256"
 _AGENTKIT_RUNTIME_READY_TIMEOUT_MS = "900000"
 _DEPLOY_PHASE_ORDER = {"build": 0, "deploy": 1, "publish": 2, "update": 3}
 _DEPLOY_PHASE_MARKERS = (
@@ -418,6 +426,34 @@ def _anchor_environment_registry(
             "veadk:build-resource:cr-repository": repository,
         }
     )
+
+
+def _source_preserving_output_repository(
+    *,
+    runtime_id: str,
+    registry: str,
+    namespace: str,
+    source_repository: str,
+    has_build_resource_tags: bool,
+) -> str:
+    """Avoid rebuilding into legacy CR state while preserving the source image.
+
+    Runtimes created before Studio persisted build-resource tags can still use
+    their immutable image as a build input, but their original repository may
+    not be visible to the VeFaaS caller used by AgentKit Platform's BuildKit
+    component. Only that legacy path gets a deterministic Studio-owned output
+    repository in the same Registry/Namespace. Modern tagged Runtimes keep the
+    configured repository unchanged.
+    """
+    normalized = tuple(
+        value.strip() for value in (runtime_id, registry, namespace, source_repository)
+    )
+    if not all(normalized):
+        raise ValueError("Source-preserving repository identity is incomplete")
+    if has_build_resource_tags:
+        return normalized[3]
+    digest = hashlib.sha256("\0".join(normalized).encode("utf-8")).hexdigest()
+    return f"veadk-sp-{digest[:20]}"
 
 
 def _studio_environment_resource_environment(
@@ -916,6 +952,12 @@ def _deployment_target_key(
     )
 
 
+def _deployment_task_fingerprint(task_id: str) -> str:
+    """Return the non-secret Runtime marker used for cross-instance recovery."""
+
+    return hashlib.sha256(task_id.encode("utf-8")).hexdigest()
+
+
 def _has_active_deployment_target(
     tasks: Mapping[str, Mapping[str, Any]],
     target_key: tuple[str, str, str],
@@ -1235,6 +1277,15 @@ class _DeleteFeedbackCasesRequest(BaseModel):
     region: str = Field(default="", min_length=0)
     app_name: str = Field(alias="appName", min_length=1)
     item_ids: list[str] = Field(alias="itemIds", min_length=1, max_length=100)
+
+
+class _RuntimeMcpCredentialsRequest(BaseModel):
+    """Exact update snapshot whose MCP credentials should enter the editor."""
+
+    runtime_id: str = Field(alias="runtimeId", min_length=1, max_length=128)
+    region: str = Field(default="", min_length=0, max_length=64)
+    app_name: str = Field(alias="appName", min_length=1, max_length=128)
+    etag: str = Field(min_length=1, max_length=256)
 
 
 def _mount_session_trace_route(app: Any, memory_exporter: Any) -> None:
@@ -4560,6 +4611,7 @@ def _run_frontend_server(
         ImageReference,
         LegacyRecoveryError,
         merge_mcp_recoveries,
+        mcp_editor_credential_values,
         mcp_editor_draft_without_credentials,
         mcp_reuse_supplied_credentials,
         mcp_secret_values_for_draft_references,
@@ -4585,6 +4637,7 @@ def _run_frontend_server(
         resolve_studio_harness_sidecar_selection,
         studio_harness_deployment_config,
         studio_harness_runtime_env,
+        studio_harness_selectable_intent_signature,
     )
     from veadk.cli.studio_sidecar_prerequisites import (
         SIDECAR_BASE_IMAGE_ENV,
@@ -4641,7 +4694,18 @@ def _run_frontend_server(
                     "当前 Studio Runtime 尚未完成 Harness Sidecar APIG 自调用绑定。"
                 ),
             }
-        return {"available": True, "reason": ""}
+        try:
+            runtime_command = installed_harness_sidecar_runtime_command()
+        except GeneratedAgentSidecarRuntimeUnavailable:
+            return {
+                "available": False,
+                "reason": "当前 Studio 环境未安装 Harness Sidecar 调试运行时。",
+            }
+        return {
+            "available": True,
+            "reason": "",
+            "runtimeCommand": runtime_command,
+        }
 
     def _harness_sidecar_deployment_capability() -> dict[str, Any]:
         from veadk.cli.agentkit_cli import AgentKitCliError, agentkit_cli_artifact
@@ -5179,18 +5243,29 @@ def _run_frontend_server(
                         else _cloud_studio_private_networks
                     ),
                 )
-                if debug_mcp_env_values:
-                    draft = prepare_mcp_auth(draft)
-                    mcp_env_values = dict(draft.deployment.envValues)
-                    for key, value in debug_mcp_env_values.items():
-                        if value and not mcp_env_values.get(key):
-                            mcp_env_values[key] = value
-                    draft = await resolve_debug_mcp_endpoints(
-                        draft,
-                        mcp_env_values,
-                    )
-                else:
-                    draft = await resolve_debug_mcp_endpoints(draft)
+                draft = prepare_mcp_auth(draft)
+                prepared_payload = draft.model_dump(
+                    mode="json",
+                    by_alias=True,
+                    exclude_none=True,
+                )
+                prepared_references = mcp_auth_environment_keys(prepared_payload)
+                mcp_env_values = {
+                    reference: draft.deployment.envValues[reference]
+                    for reference in prepared_references
+                    if draft.deployment.envValues.get(reference)
+                }
+                for key, value in (debug_mcp_env_values or {}).items():
+                    if (
+                        key in prepared_references
+                        and value
+                        and not mcp_env_values.get(key)
+                    ):
+                        mcp_env_values[key] = value
+                draft = await resolve_debug_mcp_endpoints(
+                    draft,
+                    mcp_env_values,
+                )
             else:
                 validate_project_policy(draft)
             project = generate_project_from_draft(draft)
@@ -5755,7 +5830,19 @@ def _run_frontend_server(
                 raise HTTPException(status_code=422, detail=error.errors()) from error
 
             runtime_envs: dict[str, str] = {}
-            debug_mcp_env_values: dict[str, str] = {}
+            edited_draft = test_request.draft.model_dump(
+                mode="json",
+                by_alias=True,
+                exclude_none=True,
+            )
+            requested_references = mcp_auth_environment_keys(edited_draft)
+            requested_env_values = test_request.draft.deployment.envValues
+            submitted_mcp_env_values = {
+                reference: requested_env_values[reference]
+                for reference in requested_references
+                if requested_env_values.get(reference)
+            }
+            debug_mcp_env_values = dict(submitted_mcp_env_values)
             runtime_id = test_request.runtimeId.strip()
             runtime_region = _coerce_cloud_region(test_request.runtimeRegion)
             reuse_requests = tuple(
@@ -5768,13 +5855,6 @@ def _run_frontend_server(
                     detail="MCP credential reuse requires a Runtime update target",
                 )
             if runtime_id:
-                edited_draft = test_request.draft.model_dump(
-                    mode="json",
-                    by_alias=True,
-                    exclude_none=True,
-                )
-                requested_references = mcp_auth_environment_keys(edited_draft)
-                requested_env_values = test_request.draft.deployment.envValues
                 stored_references = tuple(
                     reference
                     for reference in requested_references
@@ -5851,7 +5931,7 @@ def _run_frontend_server(
                                 error.code,
                             )
                     try:
-                        debug_mcp_env_values = retained_mcp_secret_values(
+                        recovered_mcp_env_values = retained_mcp_secret_values(
                             published_draft=published_draft,
                             edited_draft=edited_draft,
                             published_reference_values=(published_reference_values),
@@ -5863,12 +5943,14 @@ def _run_frontend_server(
                                 published_reference_values=(published_reference_values),
                                 reuse_requests=reuse_requests,
                             )
-                            debug_mcp_env_values.update(
+                            recovered_mcp_env_values.update(
                                 mcp_supplied_secret_values_by_reference(
                                     edited_draft=edited_draft,
                                     supplied_credentials=supplied_credentials,
                                 )
                             )
+                        recovered_mcp_env_values.update(submitted_mcp_env_values)
+                        debug_mcp_env_values = recovered_mcp_env_values
                     except LegacyRecoveryError as error:
                         raise HTTPException(
                             status_code=409,
@@ -5892,8 +5974,10 @@ def _run_frontend_server(
                 validated_test_request=test_request,
                 debug_mcp_env_values=debug_mcp_env_values,
             )
+            debug_runtime_env = debug_runtime_env_from_draft(draft)
             sidecar_env: dict[str, str] = {}
             sidecar_plan: dict[str, Any] | None = None
+            sidecar_mcp_references: tuple[str, ...] = ()
             if draft.harnessSidecar and draft.harnessSidecar.enabled:
                 capability = _harness_sidecar_debug_capability()
                 if not capability["available"]:
@@ -5918,6 +6002,15 @@ def _run_frontend_server(
                         ],
                     }
                 )
+                runtime_command = capability.get("runtimeCommand")
+                if not isinstance(runtime_command, tuple) or not runtime_command:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="当前 Studio 环境未安装 Harness Sidecar 调试运行时。",
+                    )
+                sidecar_env["AGENTKIT_HARNESS_RUNTIME_COMMAND"] = shlex.join(
+                    str(item) for item in runtime_command
+                )
                 requested_plan_hash = draft.harnessSidecar.planHash or ""
                 if (
                     requested_plan_hash
@@ -5926,6 +6019,40 @@ def _run_frontend_server(
                     raise HTTPException(
                         status_code=409,
                         detail="Harness Sidecar 配置已更新，请重新解析后再启动调试。",
+                    )
+                effective_components = {
+                    str(item) for item in sidecar_plan.get("effectiveComponents") or []
+                }
+                if "mcp_resilience" in effective_components:
+                    sidecar_mcp_draft = draft.model_dump(
+                        mode="json",
+                        by_alias=True,
+                        exclude_none=True,
+                    )
+                    try:
+                        structured_mcp = build_sidecar_mcp_servers_json(
+                            draft=sidecar_mcp_draft,
+                            secret_values={
+                                **debug_runtime_env,
+                                **debug_mcp_env_values,
+                            },
+                        )
+                    except LegacyRecoveryError as error:
+                        raise HTTPException(
+                            status_code=409,
+                            detail=_mcp_deployment_error_detail(error.code),
+                        ) from error
+                    if not json.loads(structured_mcp):
+                        raise HTTPException(
+                            status_code=409,
+                            detail=(
+                                "已选择 MCP 稳定性治理，请配置至少一个 HTTP MCP "
+                                "服务地址后重新启动调试。"
+                            ),
+                        )
+                    sidecar_env["MCP_SERVERS_JSON"] = structured_mcp
+                    sidecar_mcp_references = mcp_auth_environment_keys(
+                        sidecar_mcp_draft
                     )
             temp_dir = tempfile.mkdtemp(prefix="veadk_generated_agent_test_")
             app_name = _write_generated_project(project, temp_dir)
@@ -5961,7 +6088,9 @@ def _run_frontend_server(
                 if key.startswith("HARNESS_"):
                     runner_env.pop(key)
             runner_env.update(sidecar_env)
-            runner_env.update(debug_runtime_env_from_draft(draft))
+            runner_env.update(debug_runtime_env)
+            for reference in sidecar_mcp_references:
+                runner_env.pop(reference, None)
             selected_api_key_id = draft.deployment.modelApiKeyId.strip()
             selected_api_key_name = draft.deployment.modelApiKeyName.strip()
 
@@ -7116,7 +7245,9 @@ def _run_frontend_server(
                         published_sidecar_intent = normalize_studio_harness_intent(
                             published_draft.get("harnessSidecar")
                         )
-                        if published_sidecar_intent != sidecar_intent:
+                        if studio_harness_selectable_intent_signature(
+                            published_sidecar_intent
+                        ) != studio_harness_selectable_intent_signature(sidecar_intent):
                             raise LegacyRecoveryError(
                                 "legacy_overlay_sidecar_intent_changed"
                             )
@@ -7251,12 +7382,19 @@ def _run_frontend_server(
                                 "暂时无法执行保留源码更新。"
                             ),
                         )
+                    output_repository = _source_preserving_output_repository(
+                        runtime_id=runtime_id,
+                        registry=source_reference.registry_name,
+                        namespace=namespace,
+                        source_repository=repository,
+                        has_build_resource_tags=tagged_resources is not None,
+                    )
                     _anchor_environment_registry(
                         deployment_resource_config,
                         deployment_resource_tag_values,
                         registry=source_reference.registry_name,
                         namespace=namespace,
-                        repository=repository,
+                        repository=output_repository,
                     )
                 elif canonical_requested_draft is not None:
                     try:
@@ -7370,6 +7508,7 @@ def _run_frontend_server(
         runtime_tag_values.update(
             {
                 "veadk:managed": "true",
+                _RUNTIME_DEPLOYMENT_TASK_TAG: _deployment_task_fingerprint(task_id),
                 **({"veadk:author": author} if author else {}),
                 **({"veadk:owner": owner_id} if owner_id else {}),
                 **deployment_resource_tag_values,
@@ -7822,6 +7961,22 @@ def _run_frontend_server(
                 )
             runtime_envs.update(source_preserving_sidecar_env)
             runtime_envs.update(existing_sidecar_binding)
+        if existing_runtime is not None:
+            selected_runtime_role_name = str(
+                getattr(existing_runtime, "role_name", "") or ""
+            ).strip()
+            if not selected_runtime_role_name:
+                shutil.rmtree(temp_dir, ignore_errors=True)
+                raise HTTPException(
+                    status_code=409,
+                    detail="当前 Runtime 缺少可沿用的 IAM 角色，请刷新详情后重试。",
+                )
+        else:
+            # Resolve the new Runtime role inside the deployment lock. This
+            # keeps concurrent Studio deployments from racing to create roles;
+            # both SDK and Sidecar CLI paths inject the resolved value before
+            # their first cloud mutation.
+            selected_runtime_role_name = ""
         # TOS build-artifact buckets are region-scoped. The SDK default template
         # ("agentkit-platform-<account_id>") produces a single global name, which
         # collides once a bucket exists in cn-beijing and the user targets
@@ -7840,6 +7995,8 @@ def _run_frontend_server(
             "runtime_envs": runtime_envs,
             "python_version": "3.12",
         }
+        if selected_runtime_role_name:
+            cloud_config["runtime_role_name"] = selected_runtime_role_name
         cloud_config.update(runtime_authentication)
         if existing_runtime is not None:
             cloud_config.update(
@@ -7932,6 +8089,7 @@ def _run_frontend_server(
                 }
             sidecar_agentkit_config = {
                 "name": deployment_runtime_name,
+                "role_name": selected_runtime_role_name,
                 "description": _normalize_runtime_description(data.get("description")),
                 "cloud_provider": "volcengine",
                 "region": region,
@@ -8509,6 +8667,24 @@ def _run_frontend_server(
                 try:
                     cli_env = os.environ.copy()
                     access_key, secret_key, session_token = _resolve_ve_credentials()
+                    if not runtime_id:
+                        from frontend.server.runtime_iam import ensure_runtime_role
+
+                        selected_role = ensure_runtime_role(
+                            access_key=access_key,
+                            secret_key=secret_key,
+                            session_token=session_token,
+                            provider=provider,
+                        )
+                        sidecar_agentkit_config["role_name"] = selected_role
+                        (base / ".agentkit" / "agentkit.yaml").write_text(
+                            _yaml.safe_dump(
+                                sidecar_agentkit_config,
+                                allow_unicode=True,
+                                sort_keys=False,
+                            ),
+                            encoding="utf-8",
+                        )
                     cli_env["VOLCENGINE_ACCESS_KEY"] = access_key
                     cli_env["VOLCENGINE_SECRET_KEY"] = secret_key
                     cli_env["VOLCENGINE_REGION"] = region
@@ -9474,6 +9650,116 @@ def _run_frontend_server(
             region,
         )
         return runtime
+
+    @app.post("/web/deploy-agentkit/status")
+    async def _deployment_status(request: Request):
+        """Recover an accepted Runtime update through cloud-authoritative state."""
+
+        principal = _require_agent_management(request)
+        data = await request.json()
+        task_id = str(data.get("taskId") or "").strip()
+        runtime_id = str(data.get("runtimeId") or "").strip()
+        runtime_name = str(data.get("runtimeName") or "").strip()
+        app_name = str(data.get("appName") or "").strip()
+        region = _coerce_cloud_region(str(data.get("region") or ""))
+        project_name = str(data.get("projectName") or "default").strip() or "default"
+        base_version = data.get("baseRuntimeVersion")
+        if not task_id:
+            raise HTTPException(status_code=400, detail="taskId is required")
+
+        with _deploy_tasks_lock:
+            local_task = _deploy_tasks.get(task_id)
+            if local_task is not None:
+                local_owner_id = str(local_task.get("owner_id") or "")
+                if _request_role(request) != StudioRole.ADMIN and (
+                    principal is None or local_owner_id != principal.owner_id
+                ):
+                    raise HTTPException(
+                        status_code=404,
+                        detail="Deployment task not found",
+                    )
+                return {
+                    "done": False,
+                    "status": "running",
+                    "runtimeId": str(local_task.get("runtime_id") or runtime_id),
+                    "runtimeName": str(local_task.get("runtime_name") or runtime_name),
+                    "region": str(local_task.get("region") or region),
+                }
+
+        if (
+            not runtime_id
+            or not app_name
+            or isinstance(base_version, bool)
+            or not isinstance(base_version, int)
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="Runtime update recovery metadata is incomplete",
+            )
+
+        runtime = _authorized_runtime(
+            request,
+            runtime_id,
+            region,
+            coded_access_error=True,
+        )
+        tags = _runtime_tags(runtime)
+        current_version = getattr(runtime, "current_version_number", None)
+        current_status = str(getattr(runtime, "status", "") or "")
+        expected_fingerprint = _deployment_task_fingerprint(task_id)
+        actual_fingerprint = tags.get(_RUNTIME_DEPLOYMENT_TASK_TAG, "")
+        if (
+            isinstance(current_version, bool)
+            or not isinstance(current_version, int)
+            or current_version <= base_version
+        ):
+            return {
+                "done": False,
+                "status": "running",
+                "runtimeId": runtime_id,
+                "runtimeName": runtime_name,
+                "region": region,
+            }
+        if not secrets.compare_digest(actual_fingerprint, expected_fingerprint):
+            return {
+                "done": True,
+                "success": False,
+                "error": (
+                    "Runtime 已被其他部署更新，无法确认本次部署结果，"
+                    "请刷新详情核对线上版本。"
+                ),
+                "phase": "publish",
+            }
+        if current_status != "Ready":
+            return {
+                "done": False,
+                "status": "running",
+                "runtimeId": runtime_id,
+                "runtimeName": runtime_name,
+                "region": region,
+            }
+
+        _rt_conn_cache.pop((region, runtime_id), None)
+        endpoint, runtime_api_key, _auth_type, _network_type = _resolve_runtime_conn(
+            runtime_id,
+            region,
+            runtime,
+        )
+        return {
+            "done": True,
+            "success": True,
+            "agentName": app_name,
+            "runtimeName": str(getattr(runtime, "name", "") or runtime_name),
+            "url": endpoint,
+            "apikey": runtime_api_key,
+            "runtimeId": runtime_id,
+            "consoleUrl": (
+                "https://console.volcengine.com/agentkit/"
+                f"region:agentkit+{region}/runtime?projectName={project_name}"
+            ),
+            "region": region,
+            "version": current_version,
+        }
 
     runtime_log_service = RuntimeLogService(
         provider=provider,
@@ -12826,6 +13112,81 @@ def _run_frontend_server(
         return JSONResponse(
             await _runtime_update_editor_payload(result, region=region),
             headers=no_store_headers,
+        )
+
+    @app.post("/web/runtime-mcp-credentials")
+    async def _web_runtime_mcp_credentials(
+        credential_request: _RuntimeMcpCredentialsRequest,
+        request: Request,
+    ) -> Response:
+        """Restore MCP values only for one authorized, immutable edit snapshot."""
+
+        _require_agent_management(request)
+        region = _coerce_cloud_region(credential_request.region)
+        try:
+            payload, runtime = await _runtime_update_capability_details(
+                request,
+                runtime_id=credential_request.runtime_id,
+                region=region,
+                app_name=credential_request.app_name,
+            )
+            if (
+                not payload.get("canUpdate")
+                or payload.get("recoveryStatus") not in {"complete", "draft-only"}
+                or payload.get("etag") != credential_request.etag
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Runtime 更新快照已变化，请重新打开智能体详情。",
+                )
+            agent = payload.get("agent")
+            draft = agent.get("draft") if isinstance(agent, Mapping) else None
+            if not isinstance(draft, Mapping):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Runtime 的 MCP 配置无法恢复，请重新打开智能体详情。",
+                )
+
+            references = mcp_auth_environment_keys(draft)
+            environment = _legacy_runtime_environment(runtime)
+            recovered_values = {
+                reference: environment[reference]
+                for reference in references
+                if environment.get(reference)
+            }
+            if set(references).difference(recovered_values):
+                recovery, legacy_values = _legacy_mcp_state(runtime, region)
+                recovered_values.update(
+                    mcp_secret_values_for_draft_references(
+                        draft=draft,
+                        recovery=recovery,
+                        recovered_values=legacy_values,
+                    )
+                )
+            if set(references).difference(recovered_values):
+                raise LegacyRecoveryError("legacy_mcp_credential_missing")
+            credentials = mcp_editor_credential_values(
+                draft=draft,
+                recovered_values=recovered_values,
+            )
+        except HTTPException:
+            raise
+        except LegacyRecoveryError as error:
+            logger.info(
+                "MCP editor credential recovery unavailable runtime_id=%s "
+                "region=%s code=%s",
+                credential_request.runtime_id,
+                region,
+                error.code,
+            )
+            raise HTTPException(
+                status_code=409,
+                detail="Runtime 的 MCP 认证信息无法恢复，请重新配置 Key 后重试。",
+            ) from error
+
+        return JSONResponse(
+            {"credentials": credentials},
+            headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
         )
 
     @app.post("/web/evaluation/feedback")

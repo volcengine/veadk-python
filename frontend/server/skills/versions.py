@@ -18,11 +18,11 @@ from __future__ import annotations
 
 import re
 import tempfile
-import time
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
+from time import monotonic, sleep
 from typing import TYPE_CHECKING, Any
 
 from .archive import validate_skill_archive
@@ -154,7 +154,7 @@ class SkillVersionRepository:
         *,
         timeout_seconds: float = 90,
     ) -> Any:
-        deadline = time.monotonic() + timeout_seconds
+        deadline = monotonic() + timeout_seconds
         while True:
             new = [
                 item
@@ -172,14 +172,14 @@ class SkillVersionRepository:
                         latest.error_message or "新版本创建失败，请检查文件后重试",
                         status_code=502,
                     )
-            if time.monotonic() >= deadline:
+            if monotonic() >= deadline:
                 raise SkillRepositoryError(
                     "SKILL_VERSION_PENDING",
                     "新版本仍在处理中，请刷新版本列表查看结果",
                     status_code=504,
                     retryable=True,
                 )
-            time.sleep(2)
+            sleep(2)
 
     def upload(
         self,

@@ -19,6 +19,7 @@ import ipaddress
 import io
 import json
 import secrets
+import shlex
 import socket
 import sys
 import zipfile
@@ -1161,7 +1162,8 @@ def test_local_generated_debug_allows_private_mcp(
     monkeypatch.delenv("VEADK_STUDIO_FUNCTION_ID", raising=False)
     monkeypatch.delenv("_FAAS_FUNC_ID", raising=False)
 
-    async def keep_mcp_endpoints(draft):
+    async def keep_mcp_endpoints(draft, env_values=None):
+        assert env_values == {}
         return draft
 
     monkeypatch.setattr(
@@ -1249,8 +1251,9 @@ def test_cloud_generated_debug_preserves_mcp_connection_error(
     monkeypatch.setenv("_FAAS_FUNC_ID", "function-test")
     original_detail = "MCP 工具 `offline` 连接失败：原始连接错误"
 
-    async def fail_mcp_discovery(draft):
+    async def fail_mcp_discovery(draft, env_values=None):
         del draft
+        assert env_values == {}
         raise McpDebugConnectionError(original_detail)
 
     monkeypatch.setattr(
@@ -1291,6 +1294,7 @@ def test_cloud_generated_debug_preserves_mcp_connection_error(
         "expect_credential",
         "explicit_reuse",
         "has_published_draft",
+        "submitted_credential",
     ),
     [
         (
@@ -1302,6 +1306,18 @@ def test_cloud_generated_debug_preserves_mcp_connection_error(
             True,
             False,
             True,
+            False,
+        ),
+        (
+            "reference-env",
+            "jvmdiag",
+            "https://8.8.8.8/mcp",
+            "https://8.8.8.8/mcp",
+            200,
+            True,
+            False,
+            True,
+            True,
         ),
         (
             "reference-env",
@@ -1312,6 +1328,7 @@ def test_cloud_generated_debug_preserves_mcp_connection_error(
             True,
             False,
             True,
+            False,
         ),
         (
             "servers-json",
@@ -1322,6 +1339,7 @@ def test_cloud_generated_debug_preserves_mcp_connection_error(
             True,
             False,
             True,
+            False,
         ),
         (
             "servers-json",
@@ -1332,6 +1350,7 @@ def test_cloud_generated_debug_preserves_mcp_connection_error(
             True,
             False,
             True,
+            False,
         ),
         (
             "servers-json",
@@ -1342,6 +1361,7 @@ def test_cloud_generated_debug_preserves_mcp_connection_error(
             False,
             False,
             True,
+            False,
         ),
         (
             "missing",
@@ -1352,6 +1372,18 @@ def test_cloud_generated_debug_preserves_mcp_connection_error(
             False,
             False,
             True,
+            False,
+        ),
+        (
+            "missing",
+            "",
+            "https://8.8.8.8/mysqldiag",
+            "https://8.8.8.8/mysqldiag",
+            200,
+            True,
+            False,
+            True,
+            True,
         ),
         (
             "servers-json",
@@ -1362,6 +1394,7 @@ def test_cloud_generated_debug_preserves_mcp_connection_error(
             True,
             True,
             True,
+            False,
         ),
         (
             "reference-env",
@@ -1371,6 +1404,7 @@ def test_cloud_generated_debug_preserves_mcp_connection_error(
             409,
             False,
             True,
+            False,
             False,
         ),
         (
@@ -1382,6 +1416,7 @@ def test_cloud_generated_debug_preserves_mcp_connection_error(
             False,
             True,
             True,
+            False,
         ),
     ],
 )
@@ -1396,12 +1431,16 @@ def test_generated_debug_applies_published_mcp_credential_contract_before_discov
     expect_credential: bool,
     explicit_reuse: bool,
     has_published_draft: bool,
+    submitted_credential: bool,
 ) -> None:
     from agentkit.sdk.runtime.client import AgentkitRuntimeClient
     from veadk.cli.generated_agent_mcp import McpDebugConnectionError
 
     credential_reference = "MCP_LEGACY_AGENT_JVMDIAG_AUTH_TOKEN"
     credential_value = "server-retained-debug-secret"
+    submitted_credential_value = "browser-submitted-debug-secret"
+    secondary_credential_reference = "MCP_LEGACY_AGENT_ATHENA_AUTH_TOKEN"
+    secondary_credential_value = "browser-submitted-secondary-secret"
     published_draft = {
         "name": "legacy_agent",
         "description": "Existing Agent",
@@ -1512,6 +1551,22 @@ def test_generated_debug_applies_published_mcp_credential_contract_before_discov
             "runtimeId": runtime.runtime_id,
             "runtimeRegion": "cn-shanghai",
         }
+        if submitted_credential:
+            edited_draft["mcpTools"].append(
+                {
+                    "name": "athena",
+                    "transport": "http",
+                    "url": "https://8.8.4.4/athena-mcp",
+                    "authTokenEnv": secondary_credential_reference,
+                }
+            )
+            edited_draft["deployment"] = {
+                "envValues": {
+                    credential_reference: submitted_credential_value,
+                    secondary_credential_reference: secondary_credential_value,
+                    "UNRELATED_SECRET": "must-not-reach-mcp-discovery",
+                }
+            }
         if explicit_reuse:
             payload["mcpCredentialReuses"] = [
                 {
@@ -1535,12 +1590,23 @@ def test_generated_debug_applies_published_mcp_credential_contract_before_discov
         assert "LegacyRecoveryError" not in response.text
         assert "错误 ID" not in response.text
     if expect_credential:
-        assert captured_discovery_env[credential_reference] == credential_value
+        expected_credential = (
+            submitted_credential_value if submitted_credential else credential_value
+        )
+        assert captured_discovery_env[credential_reference] == expected_credential
+        if submitted_credential:
+            assert (
+                captured_discovery_env[secondary_credential_reference]
+                == secondary_credential_value
+            )
+        assert "UNRELATED_SECRET" not in captured_discovery_env
     else:
         assert credential_reference not in captured_discovery_env
-    if credential_storage == "missing":
+    if credential_storage == "missing" and not submitted_credential:
         assert "缺少可用凭证" in response.json()["detail"]
     assert credential_value not in response.text
+    assert submitted_credential_value not in response.text
+    assert secondary_credential_value not in response.text
 
 
 def test_debug_text_redacts_environment_and_inline_markers(
@@ -2003,6 +2069,15 @@ def test_generated_agent_sidecar_debug_uses_runtime_apig_and_active_plan(
     monkeypatch.setenv("VEADK_STUDIO_HARNESS_SIDECAR_DEBUG_ENABLED", "true")
     monkeypatch.setenv("HARNESS_SIDECAR_APIG_ENDPOINT", runtime_endpoint)
     monkeypatch.setenv("HARNESS_SIDECAR_APIG_API_KEY", runtime_key)
+    monkeypatch.setattr(
+        cli_frontend,
+        "installed_harness_sidecar_runtime_command",
+        lambda: (
+            sys.executable,
+            "-m",
+            "veadk.cli.generated_agent_sidecar_runtime",
+        ),
+    )
     monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setattr("platform.machine", lambda: "x86_64")
     monkeypatch.setattr(
@@ -2026,6 +2101,14 @@ def test_generated_agent_sidecar_debug_uses_runtime_apig_and_active_plan(
     monkeypatch.setattr(
         "uvicorn.run",
         lambda app, **kwargs: captured.setdefault("app", app),
+    )
+
+    async def preserve_debug_mcp_endpoints(draft, env_values=None):
+        return draft
+
+    monkeypatch.setattr(
+        "veadk.cli.generated_agent_mcp.resolve_debug_mcp_endpoints",
+        preserve_debug_mcp_endpoints,
     )
 
     _run_frontend_server(
@@ -2068,8 +2151,28 @@ def test_generated_agent_sidecar_debug_uses_runtime_apig_and_active_plan(
                 "draft": {
                     "name": "sidecar-agent",
                     "instruction": "Answer briefly.",
+                    "mcpTools": [
+                        {
+                            "name": "catalog",
+                            "transport": "http",
+                            "url": "https://mcp.example.test/catalog/mcp",
+                            "authTokenEnv": "MCP_CATALOG_AUTH_TOKEN",
+                        },
+                        {
+                            "name": "fulfillment",
+                            "transport": "http",
+                            "url": "https://mcp.example.test/fulfillment/mcp",
+                            "authTokenEnv": "MCP_FULFILLMENT_AUTH_TOKEN",
+                        },
+                    ],
                     "harnessSidecar": {
                         "componentOverrides": {"mcp_resilience": True},
+                    },
+                    "deployment": {
+                        "envValues": {
+                            "MCP_CATALOG_AUTH_TOKEN": "catalog-test-token",
+                            "MCP_FULFILLMENT_AUTH_TOKEN": ("fulfillment-test-token"),
+                        }
                     },
                 }
             },
@@ -2078,9 +2181,28 @@ def test_generated_agent_sidecar_debug_uses_runtime_apig_and_active_plan(
     assert run_response.status_code == 200
     assert run_response.json()["planHash"] == "sha256:test-plan"
     process_env = _FakeProcess.created[-1].env
+    assert shlex.split(process_env["AGENTKIT_HARNESS_RUNTIME_COMMAND"]) == [
+        sys.executable,
+        "-m",
+        "veadk.cli.generated_agent_sidecar_runtime",
+    ]
     assert process_env["HARNESS_SIDECAR_TRANSPORT"] == "apig_runtime_port"
     assert process_env["HARNESS_SIDECAR_APIG_ENDPOINT"] == runtime_endpoint
     assert process_env["HARNESS_SIDECAR_APIG_API_KEY"] == runtime_key
+    assert json.loads(process_env["MCP_SERVERS_JSON"]) == [
+        {
+            "name": "catalog",
+            "url": "https://mcp.example.test/catalog/mcp",
+            "headers": {"Authorization": "Bearer catalog-test-token"},
+        },
+        {
+            "name": "fulfillment",
+            "url": "https://mcp.example.test/fulfillment/mcp",
+            "headers": {"Authorization": "Bearer fulfillment-test-token"},
+        },
+    ]
+    assert "MCP_CATALOG_AUTH_TOKEN" not in process_env
+    assert "MCP_FULFILLMENT_AUTH_TOKEN" not in process_env
     assert runtime_key not in run_response.text
     assert _FakeAsyncClient.gateway_requests == [
         {
@@ -2092,6 +2214,92 @@ def test_generated_agent_sidecar_debug_uses_runtime_apig_and_active_plan(
             "X-Faas-Proxy-Port": "18788",
         },
     ]
+
+
+def test_generated_agent_sidecar_debug_fails_before_runner_without_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    if sys.version_info[:2] != (3, 12):
+        pytest.skip("managed Sidecar debug Runtime requires CPython 3.12")
+
+    from veadk.extensions.harness import sidecar
+
+    captured: dict[str, Any] = {}
+    _FakeProcess.created.clear()
+    monkeypatch.setenv("VEADK_STUDIO_HARNESS_SIDECAR_DEBUG_ENABLED", "true")
+    monkeypatch.setenv(
+        "HARNESS_SIDECAR_APIG_ENDPOINT",
+        "https://runtime.example.com",
+    )
+    monkeypatch.setenv("HARNESS_SIDECAR_APIG_API_KEY", "fixture-runtime-key")
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr("platform.machine", lambda: "x86_64")
+
+    def missing_runtime() -> tuple[str, ...]:
+        raise cli_frontend.GeneratedAgentSidecarRuntimeUnavailable
+
+    monkeypatch.setattr(
+        cli_frontend,
+        "installed_harness_sidecar_runtime_command",
+        missing_runtime,
+    )
+    monkeypatch.setattr(
+        sidecar,
+        "studio_harness_runtime_env",
+        lambda *_args, **_kwargs: pytest.fail(
+            "missing runtime must fail before Sidecar environment generation"
+        ),
+    )
+    monkeypatch.setenv("VOLCENGINE_ACCESS_KEY", "test-ak")
+    monkeypatch.setenv("VOLCENGINE_SECRET_KEY", "test-sk")
+    monkeypatch.setattr("dotenv.find_dotenv", lambda *args, **kwargs: "")
+    monkeypatch.setattr(
+        "uvicorn.run",
+        lambda app, **kwargs: captured.setdefault("app", app),
+    )
+
+    _run_frontend_server(
+        agents_dir=str(tmp_path),
+        frontend_dir=None,
+        site_logo=None,
+        site_title=None,
+        host="127.0.0.1",
+        port=8765,
+        dev=True,
+        vite=True,
+        oauth2_user_pool=None,
+        oauth2_user_pool_client=None,
+        oauth2_user_pool_uid=None,
+        oauth2_user_pool_client_uid=None,
+        oauth2_redirect_uri=None,
+        oauth2_provider=None,
+        oauth2_provider_label=None,
+        auth_mode="frontend",
+        generated_agent_test_run_ttl=60,
+        open_browser=False,
+    )
+    monkeypatch.setattr("subprocess.Popen", _FakeProcess)
+
+    with TestClient(captured["app"]) as client:
+        run_response = client.post(
+            "/web/generated-agent-test-runs",
+            json={
+                "draft": {
+                    "name": "sidecar-agent",
+                    "instruction": "Answer briefly.",
+                    "harnessSidecar": {
+                        "componentOverrides": {"mcp_resilience": True},
+                    },
+                }
+            },
+        )
+
+    assert run_response.status_code == 409
+    assert run_response.json() == {
+        "detail": "当前 Studio 环境未安装 Harness Sidecar 调试运行时。"
+    }
+    assert _FakeProcess.created == []
 
 
 def test_generated_agent_debug_allows_large_skill_projects(

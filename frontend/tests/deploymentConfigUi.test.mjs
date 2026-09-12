@@ -61,10 +61,7 @@ test("offers code execution with its sandbox configuration", () => {
     customCreateSource,
     /createGeneratedAgentTestRun\([\s\S]*?debugRuntimeDraft\(variantDraft, transientModelSecretValues\)[\s\S]*?runtimeId: deploymentTarget\.runtimeId[\s\S]*?region: deploymentTarget\.region/,
   );
-  assert.match(
-    customCreateSource,
-    /createGeneratedAgentTestRun\([\s\S]*?debugRuntimeDraft\(variantDraft, transientModelSecretValues\)[\s\S]*?mcpCredentialReuseValues\(variantDraft\)/,
-  );
+  assert.doesNotMatch(customCreateSource, /mcpCredentialReuseValues/);
   assert.match(
     customCreateSource,
     /if \(isImeCompositionEvent\(e\.nativeEvent\)\) return;[\s\S]*?e\.key === "Enter"/,
