@@ -10409,6 +10409,12 @@ def _run_frontend_server(
                                 + json.dumps(event, ensure_ascii=False)
                                 + "\n\n"
                             ).encode("utf-8")
+                    for event in decoder.finalize_projection(
+                        author=str(card.get("name") or _RUNTIME_A2A_VIRTUAL_APP),
+                    ):
+                        yield (
+                            "data: " + json.dumps(event, ensure_ascii=False) + "\n\n"
+                        ).encode("utf-8")
                     return
             body = await _runtime_proxy_buffer(upstream)
             if upstream.status_code >= 400:

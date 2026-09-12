@@ -237,6 +237,92 @@ def test_projection_tracks_cumulative_reasoning_separately_from_answer():
     assert answer[0]["content"]["parts"][0]["text"] == "answer"
 
 
+def test_decoder_finalizes_received_answer_when_a2a_terminal_has_no_message():
+    decoder = A2AStreamDecoder()
+    event = {
+        "kind": "status-update",
+        "metadata": {},
+        "status": {
+            "state": "working",
+            "message": {
+                "role": "agent",
+                "parts": [{"kind": "text", "text": "final answer"}],
+            },
+        },
+    }
+
+    assert decoder.project(event, author="default")[0]["partial"] is True
+    terminal = decoder.finalize_projection(author="default")
+
+    assert terminal == [
+        {
+            "id": "a2a-final-answer",
+            "author": "default",
+            "partial": False,
+            "turnComplete": True,
+            "content": {"role": "model", "parts": [{"text": "final answer"}]},
+        }
+    ]
+    assert decoder.finalize_projection(author="default") == []
+
+
+def test_decoder_does_not_promote_reasoning_to_final_answer():
+    decoder = A2AStreamDecoder()
+    event = {
+        "kind": "status-update",
+        "metadata": {},
+        "status": {
+            "state": "working",
+            "message": {
+                "role": "agent",
+                "parts": [
+                    {
+                        "kind": "text",
+                        "text": "private reasoning",
+                        "metadata": {"adk_thought": True},
+                    }
+                ],
+            },
+        },
+    }
+
+    decoder.project(event, author="default")
+
+    assert decoder.finalize_projection(author="default") == []
+
+
+def test_decoder_does_not_duplicate_an_explicit_final_answer():
+    decoder = A2AStreamDecoder()
+    decoder.project(
+        {
+            "kind": "status-update",
+            "metadata": {},
+            "status": {
+                "state": "working",
+                "message": {
+                    "role": "agent",
+                    "parts": [{"kind": "text", "text": "answer"}],
+                },
+            },
+        },
+        author="default",
+    )
+    explicit_final = decoder.project(
+        {
+            "kind": "artifact-update",
+            "lastChunk": True,
+            "artifact": {
+                "artifactId": "final-1",
+                "parts": [{"kind": "text", "text": "answer"}],
+            },
+        },
+        author="default",
+    )
+
+    assert explicit_final[0]["partial"] is False
+    assert decoder.finalize_projection(author="default") == []
+
+
 @pytest.mark.parametrize("state", ["submitted", "working"])
 def test_maps_non_final_empty_status_to_transport_heartbeat(state):
     event = {
