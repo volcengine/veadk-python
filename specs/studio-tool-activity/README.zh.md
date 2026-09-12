@@ -111,3 +111,4 @@ running 状态允许重复输出 delta。terminal 事件拥有最终状态和权
 
 - **2026-09-12：** 由已批准的 Studio 工具活动可视化 PRD 首次建立契约。初始实现覆盖统一工具卡、命令生命周期关联、沙箱扁平化、只读聚合、有界输出、原始数据脱敏和历史安全回退。
 - **2026-09-12：** 非终态 A2A `submitted` 和不含消息的 `working` 更新会作为仅含 metadata 的 heartbeat 转发，用于解除首事件截止时间，但不创建 transcript block、不结束 turn，也不重新提交请求。
+- **2026-09-12：** 标记为 `adk_thought` 的 A2A 文本 part 投影为 Studio thinking 事件；reasoning 与答案的累计 delta 状态相互隔离，避免一条流抑制或污染另一条流。
