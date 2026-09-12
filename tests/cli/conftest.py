@@ -19,6 +19,19 @@ from unittest.mock import AsyncMock, MagicMock
 
 
 @pytest.fixture(autouse=True)
+def _stub_studio_local_scheduler(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep CLI tests independent of live Cronjob and TOS polling."""
+
+    async def _offline_local_scheduler(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(
+        "frontend.service.studio_scheduler.run_local_scheduler",
+        _offline_local_scheduler,
+    )
+
+
+@pytest.fixture(autouse=True)
 def _stub_skill_score_background_worker(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep CLI route tests independent of live Skill recovery scans"""
     monkeypatch.setattr(

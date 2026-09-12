@@ -227,7 +227,7 @@ def test_wait_does_not_return_old_running_version(setup, monkeypatch):
         calls.append(True)
         cloud.items.append(version("v2"))
 
-    monkeypatch.setattr("frontend.server.skills.versions.time.sleep", delayed)
+    monkeypatch.setattr("frontend.server.skills.versions.sleep", delayed)
     latest = versions._wait_for_new_version(cloud, "skill", {"v1"})
     assert latest.version == "v2"
     assert calls == [True]

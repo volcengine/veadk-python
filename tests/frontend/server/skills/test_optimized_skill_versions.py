@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import io
+import time
 import zipfile
 from types import SimpleNamespace
 from typing import Any
@@ -114,12 +115,14 @@ def test_optimized_skill_waits_through_old_version_readback_before_publishing(
 ):
     service, cloud, publications = setup
     waited = []
+    global_sleep = time.sleep
 
     def reveal_new(_: float):
         waited.append(True)
         cloud.show_new = True
 
-    monkeypatch.setattr("frontend.server.skills.versions.time.sleep", reveal_new)
+    monkeypatch.setattr("frontend.server.skills.versions.sleep", reveal_new)
+    assert time.sleep is global_sleep
     result = service.publish(
         "job",
         "alice",
@@ -141,7 +144,7 @@ def test_failed_optimized_version_does_not_republish_old_successful_version(
     service, cloud, publications = setup
     cloud.new_status = "failed"
     monkeypatch.setattr(
-        "frontend.server.skills.versions.time.sleep",
+        "frontend.server.skills.versions.sleep",
         lambda _: setattr(cloud, "show_new", True),
     )
     with pytest.raises(SkillRepositoryError) as error:
