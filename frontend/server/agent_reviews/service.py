@@ -28,11 +28,14 @@ from uuid import uuid4
 from fastapi import HTTPException
 
 from .tags import (
+    APPLICATION_MESSAGE_LIMIT,
+    REVIEW_TEXT_LIMIT,
     STATUS_TAG,
     decode_record,
     encode_record,
     enterprise_visible,
     runtime_tags,
+    validate_text,
 )
 
 
@@ -152,11 +155,30 @@ class AgentReviewService:
         actual = runtime_tags(self.repository.get(region, runtime_id))
         if any(actual.get(key) != value for key, value in values.items()):
             raise HTTPException(502, "审批标签尚未保存成功，请刷新后重试")
-        return self._present(record)
+        return self._present(record, runtime, region)
 
-    def _present(self, record: dict[str, Any]) -> dict[str, Any]:
-        result = {key: value for key, value in record.items() if key != "fingerprint"}
-        result["submitter"] = self.profiles(record["submitter"])
+    def _present(
+        self, record: dict[str, Any], runtime: Any, region: str
+    ) -> dict[str, Any]:
+        result = {
+            key: value
+            for key, value in record.items()
+            if key not in {"fingerprint", "snapshot", "submitter"}
+        }
+        tags = runtime_tags(runtime)
+        owner = tags.get("veadk:owner", "")
+        result.update(
+            runtimeId=runtime.runtime_id, region=region, agent=summary(runtime)
+        )
+        result["submitter"] = self.profiles(
+            {
+                "id": owner,
+                "name": tags.get("veadk:author") or owner,
+                "identityUid": "",
+                "avatarUrl": "",
+                "email": "",
+            }
+        )
         if record.get("reviewer"):
             result["reviewer"] = self.profiles(record["reviewer"])
         return result
@@ -169,7 +191,7 @@ class AgentReviewService:
         record = decode_record(runtime_tags(runtime))
         if not record:
             return None
-        result = self._present(record)
+        result = self._present(record, runtime, region)
         result["contentChanged"] = record["fingerprint"] != fingerprint(runtime)
         return result
 
@@ -179,7 +201,7 @@ class AgentReviewService:
         for runtime in self.repository.list(region):
             record = decode_record(runtime_tags(runtime))
             if record:
-                results.append(self._present(record))
+                results.append(self._present(record, runtime, region))
         return sorted(results, key=lambda record: record["submittedAt"], reverse=True)
 
     def _new(
@@ -194,9 +216,7 @@ class AgentReviewService:
             "runtimeId": runtime.runtime_id,
             "region": region,
             "status": "pending",
-            "snapshot": summary(runtime),
             "fingerprint": fingerprint(runtime),
-            "submitter": actor.person(),
             "submittedAt": now(),
             "message": message.strip(),
             "reviewer": None,
@@ -210,6 +230,7 @@ class AgentReviewService:
         self, actor: ReviewActor, region: str, runtime_id: str, message: str = ""
     ) -> dict[str, Any]:
         self._manager(actor)
+        message = validate_text(message, APPLICATION_MESSAGE_LIMIT, "申请理由")
         with self._lock:
             runtime = self.repository.get(region, runtime_id)
             self._authorize(actor, runtime)
@@ -218,7 +239,7 @@ class AgentReviewService:
             if enterprise_visible(tags):
                 raise HTTPException(409, "Agent 已公开")
             if previous and previous["status"] == "pending":
-                return self._present(previous)
+                return self._present(previous, runtime, region)
             record = self._new(actor, region, runtime, message)
             return self._save(region, runtime, record)
 
@@ -233,6 +254,8 @@ class AgentReviewService:
         comment: str = "",
     ) -> dict[str, Any]:
         self._manager(actor, admin=True)
+        reason = validate_text(reason, REVIEW_TEXT_LIMIT, "退回理由")
+        comment = validate_text(comment, REVIEW_TEXT_LIMIT, "审批意见")
         if decision not in {"approved", "returned"}:
             raise HTTPException(422, "Invalid review decision")
         if decision == "returned" and not reason.strip():
@@ -243,7 +266,7 @@ class AgentReviewService:
             if not record or record["id"] != application_id:
                 raise HTTPException(409, "申请已变化，请刷新后重试")
             if record["status"] == decision:
-                return self._present(record)
+                return self._present(record, runtime, region)
             if record["status"] != "pending":
                 raise HTTPException(409, "申请已处理")
             if decision == "approved" and record["fingerprint"] != fingerprint(runtime):
@@ -262,11 +285,12 @@ class AgentReviewService:
         self, actor: ReviewActor, region: str, runtime_id: str, comment: str = ""
     ) -> dict[str, Any]:
         self._manager(actor, admin=True)
+        comment = validate_text(comment, REVIEW_TEXT_LIMIT, "审批意见")
         with self._lock:
             runtime = self.repository.get(region, runtime_id)
             record = decode_record(runtime_tags(runtime))
             if enterprise_visible(runtime_tags(runtime)) and record:
-                return self._present(record)
+                return self._present(record, runtime, region)
             if record and record["status"] == "pending":
                 return self.decide(
                     actor, region, runtime_id, record["id"], "approved", "", comment

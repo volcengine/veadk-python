@@ -15,7 +15,7 @@ export interface AgentReviewApplication {
   runtimeId: string;
   region: string;
   status: AgentReviewStatus;
-  snapshot: {
+  agent: {
     name: string;
     description: string;
     version: number | null;

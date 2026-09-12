@@ -3,7 +3,24 @@ import { Dialog } from "@base-ui/react/dialog";
 import { useTranslation } from "react-i18next";
 import { changeAgentReview, readAgentReview, type AgentReviewApplication, type ReviewPerson } from "../adk/agentReviews";
 import { ResourceLoadingState } from "../ui/ResourceCollection";
+import { APPLICATION_MESSAGE_LIMIT, REVIEW_TEXT_LIMIT } from "./limits";
 import "./agentReviews.css";
+
+function ReviewTextField({ label, value, onChange, limit, disabled, required = false }: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  limit: number;
+  disabled: boolean;
+  required?: boolean;
+}) {
+  const { t } = useTranslation("agentReviews");
+  return <label>{label}
+    <textarea aria-label={label} value={value} onChange={(event) => onChange(Array.from(event.target.value).slice(0, limit).join(""))}
+      maxLength={limit * 2} disabled={disabled} required={required} rows={3} />
+    <span className="agent-review-text-count">{t("textCount", { count: Array.from(value).length, limit })}</span>
+  </label>;
+}
 
 export function ReviewPersonLabel({ person }: { person: ReviewPerson }) {
   return <span className="agent-review-person" title={person.email || person.name}>
@@ -84,20 +101,20 @@ export function AgentReviewDialog({ runtimeId, region, name, canPublish, onClose
             <div><dt>{t("statusTitle")}</dt><dd>{t(`status.${application.status}`)}{application.status === "approved" && !published ? ` · ${t("private")}` : ""}</dd></div>
             <div><dt>{t("submitter")}</dt><dd><ReviewPersonLabel person={application.submitter} /></dd></div>
             <div><dt>{t("submittedAt")}</dt><dd>{time(application.submittedAt)}</dd></div>
-            <div><dt>{t("version")}</dt><dd>{application.snapshot.version ?? "—"}</dd></div>
-            <div><dt>{t("model")}</dt><dd>{application.snapshot.model || "—"}</dd></div>
+            <div><dt>{t("version")}</dt><dd>{application.agent.version ?? "—"}</dd></div>
+            <div><dt>{t("model")}</dt><dd>{application.agent.model || "—"}</dd></div>
             {application.reviewer ? <div><dt>{t(application.status === "returned" ? "returnedBy" : "approvedBy")}</dt><dd><ReviewPersonLabel person={application.reviewer} /></dd></div> : null}
             {application.reviewedAt ? <div><dt>{t("reviewedAt")}</dt><dd>{time(application.reviewedAt)}</dd></div> : null}
           </dl>
-          <section><h3>{t("description")}</h3><p>{application.snapshot.description || "—"}</p></section>
+          <section><h3>{t("description")}</h3><p>{application.agent.description || "—"}</p></section>
           {application.message ? <section><h3>{t("message")}</h3><p>{application.message}</p></section> : null}
           {application.reason ? <section><h3>{t("reason")}</h3><p>{application.reason}</p></section> : null}
           {application.comment ? <section><h3>{t("comment")}</h3><p>{application.comment}</p></section> : null}
           {application.contentChanged ? <p role="alert" className="agent-review-warning">{t("contentChanged")}</p> : null}
         </> : null}
-        {!loading && !error && canSubmit && !canPublish ? <label>{t("message")}<textarea value={message} onChange={(event) => setMessage(event.target.value)} maxLength={1000} disabled={busy} rows={3} /></label> : null}
-        {!loading && !error && canPublish && (pending || canSubmit) ? <label>{t("comment")}<textarea value={comment} onChange={(event) => setComment(event.target.value)} maxLength={1000} disabled={busy} rows={3} /></label> : null}
-        {returning ? <label>{t("reasonRequired")}<textarea autoFocus value={reason} onChange={(event) => setReason(event.target.value)} maxLength={1000} disabled={busy} required rows={3} /></label> : null}
+        {!loading && !error && canSubmit && !canPublish ? <ReviewTextField label={t("message")} value={message} onChange={setMessage} limit={APPLICATION_MESSAGE_LIMIT} disabled={busy} /> : null}
+        {!loading && !error && canPublish && (pending || canSubmit) ? <ReviewTextField label={t("comment")} value={comment} onChange={setComment} limit={REVIEW_TEXT_LIMIT} disabled={busy} /> : null}
+        {returning ? <ReviewTextField label={t("reasonRequired")} value={reason} onChange={setReason} limit={REVIEW_TEXT_LIMIT} disabled={busy} required /> : null}
         {confirmAction ? <p role="status">{t(`${confirmAction}Confirm`)}</p> : null}
       </div>
       <footer className="agent-review-dialog-footer">

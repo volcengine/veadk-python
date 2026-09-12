@@ -6,7 +6,7 @@
   "statusTitle": "状态",
   "submitter": "申请人",
   "submittedAt": "申请时间",
-  "version": "提交版本",
+  "version": "当前版本",
   "model": "模型",
   "returnedBy": "退回人",
   "approvedBy": "通过人",
@@ -44,5 +44,6 @@
   "review": "查看并审批",
   "details": "申请详情",
   "noMatches": "没有符合条件的申请",
-  "empty": "暂无智能体审核申请"
+  "empty": "暂无智能体审核申请",
+  "textCount": "{{count}} / {{limit}} 字"
 }

@@ -396,7 +396,7 @@ test('completed reports retain their score and display persistence errors in ful
 
 test('the Agent tab loads real applications and persists an approval independently of Skills', async () => {
   const person = {id:'developer', name:'智能体开发者', avatarUrl:'', email:''};
-  let application = {id:'agent-request', runtimeId:'runtime-agent', region:'cn-beijing', status:'pending', snapshot:{name:'会议助手', description:'整理会议行动项', version:1, model:'demo-model'}, submitter:person, submittedAt:'2026-09-11T08:00:00Z', message:'请审核', reviewer:null, reviewedAt:'', reason:'', comment:'', published:false};
+  let application = {id:'agent-request', runtimeId:'runtime-agent', region:'cn-beijing', status:'pending', agent:{name:'会议助手', description:'整理会议行动项', version:1, model:'demo-model'}, submitter:person, submittedAt:'2026-09-11T08:00:00Z', message:'请审核', reviewer:null, reviewedAt:'', reason:'', comment:'', published:false};
   let calls = 0;
   globalThis.agentReviewApi = {
     list: async () => { calls++; return {items:[application]}; },

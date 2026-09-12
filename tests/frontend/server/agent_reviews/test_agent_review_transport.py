@@ -22,7 +22,7 @@ from frontend.server.agent_reviews.access import authorize_shared_proxy
 from frontend.server.agent_reviews.profiles import resolve_profile
 from frontend.server.agent_reviews.repository import AgentReviewRepository
 from frontend.server.agent_reviews.routes import cloud_error
-from frontend.server.agent_reviews.tags import write_runtime_tags
+from frontend.server.agent_reviews.tags import encode_record, write_runtime_tags
 
 
 def test_cloud_error_preserves_original_body_status_and_log_id():
@@ -53,6 +53,99 @@ def test_tag_resources_uses_runtime_type_and_wire_aliases():
         "ResourceIds": ["runtime-1"],
         "Tags": [{"Key": "veadk:review:status", "Value": "approved"}],
     }
+
+
+def test_long_text_is_written_before_visibility_in_bounded_calls():
+    calls = []
+    client = SimpleNamespace(
+        api_info={}, _invoke_api=lambda **kwargs: calls.append(kwargs)
+    )
+    values = encode_record(
+        {
+            "id": "review",
+            "status": "approved",
+            "comment": "😀" * 256,
+            "reason": "，" * 256,
+        }
+    )
+    write_runtime_tags(client, "runtime-1", values)
+    assert len(calls) == 2
+    sent = [call["request"].model_dump(by_alias=True)["Tags"] for call in calls]
+    assert all(len(batch) <= 20 for batch in sent)
+    assert not any(tag["Key"] == "veadk:visibility" for tag in sent[0])
+    assert {tag["Key"]: tag["Value"] for tag in sent[-1]}[
+        "veadk:visibility"
+    ] == "enterprise"
+    assert {tag["Key"]: tag["Value"] for batch in sent for tag in batch} == values
+
+
+def test_failed_text_write_does_not_publish():
+    calls = []
+
+    def fail(**kwargs):
+        calls.append(kwargs)
+        raise RuntimeError("Cloud failed")
+
+    client = SimpleNamespace(api_info={}, _invoke_api=fail)
+    values = encode_record(
+        {"id": "review", "status": "approved", "comment": "😀" * 256}
+    )
+    with pytest.raises(RuntimeError, match="Cloud failed"):
+        write_runtime_tags(client, "runtime-1", values)
+    assert len(calls) == 1
+    assert all(tag.key != "veadk:visibility" for tag in calls[0]["request"].tags)
+
+
+def test_review_api_enforces_text_boundaries():
+    from pydantic import ValidationError
+    from frontend.server.agent_reviews.routes import DecisionBody, ReviewBody
+
+    ReviewBody(region="cn-beijing", message="字" * 20)
+    DecisionBody(
+        region="cn-beijing",
+        applicationId="request",
+        decision="returned",
+        reason="😀" * 256,
+    )
+    with pytest.raises(ValidationError):
+        ReviewBody(region="cn-beijing", message="字" * 21)
+    with pytest.raises(ValidationError):
+        DecisionBody(
+            region="cn-beijing",
+            applicationId="request",
+            decision="returned",
+            reason="字" * 257,
+        )
+
+
+def test_applicant_profile_resolves_deployment_subject_without_duplicate_tags():
+    calls = []
+    person = {
+        "id": "subject-1",
+        "name": "Author tag",
+        "identityUid": "",
+        "email": "",
+        "avatarUrl": "",
+    }
+
+    def get_user(method, request):
+        calls.append(request.user_uid)
+        return SimpleNamespace(
+            uid="uid-1",
+            name="Owner profile",
+            email="owner@example.test",
+            picture="https://example.test/avatar.png",
+        )
+
+    directory = SimpleNamespace(
+        pool_uid="pool",
+        users=lambda: [SimpleNamespace(uid="uid-1", subject="subject-1")],
+        _call=get_user,
+    )
+    result = resolve_profile(directory, person)
+    assert result["name"] == "Owner profile"
+    assert result["email"] == "owner@example.test"
+    assert calls == ["uid-1"]
 
 
 def test_list_uses_sdk_pagination_and_stops_repeated_tokens():

@@ -17,6 +17,7 @@
 .agent-review-facts dt { color: hsl(var(--muted-foreground)); font-size: 12px; margin-bottom: 4px; }
 .agent-review-facts dd { margin: 0; overflow-wrap: anywhere; }
 .agent-review-dialog-body label { display: flex; flex-direction: column; gap: 6px; margin-top: 16px; font-size: 13px; }
+.agent-review-text-count { align-self: flex-end; color: hsl(var(--muted-foreground)); font-size: 12px; }
 .agent-review-dialog-body textarea { font: inherit; color: inherit; resize: vertical; min-height: 72px; padding: 8px 10px; border: 1px solid hsl(var(--border)); border-radius: 6px; background: hsl(var(--background)); }
 .agent-review-dialog-footer { padding: 16px 24px; display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px; border-top: 1px solid hsl(var(--border)); }
 .agent-review-dialog-footer button, .agent-review-error button { min-height: 34px; padding: 6px 12px; border: 1px solid hsl(var(--border)); border-radius: 6px; font-size: 13px; }
@@ -24,8 +25,4 @@
 .agent-review-dialog button:disabled { opacity: .5; cursor: not-allowed; }
 .agent-review-dialog button:focus-visible, .agent-review-dialog textarea:focus-visible, .agent-review-center button:focus-visible { outline: 2px solid hsl(var(--ring)); outline-offset: 2px; }
 .agent-review-error, .agent-review-warning { color: hsl(var(--destructive)); font-size: 13px; padding: 12px 0; }
-.agent-review-card-action { font-size: 12px; min-height: 28px; padding: 4px 8px; border: 1px solid hsl(var(--border)); border-radius: 6px; }
-.agent-review-card-status { font-size: 12px; color: hsl(var(--muted-foreground)); }
 @media (max-width: 520px) { .agent-review-facts { grid-template-columns: 1fr; } }
-
-.agent-review-card-controls { position: relative; z-index: 2; display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 12px; }

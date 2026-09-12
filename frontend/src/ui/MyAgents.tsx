@@ -419,12 +419,13 @@ function AgentCard({
       : t("myAgents.viewDetails", { name: agent.name });
   return (
     <ResourceCard
-      className={connecting ? "my-agent-card is-connecting" : "my-agent-card"}
+      className={`my-agent-card${connecting ? " is-connecting" : ""}${agent.runtime ? " has-review" : ""}`}
       activateLabel={cardTargetEnabled ? cardTargetLabel : undefined}
       onActivate={cardTargetEnabled ? openCard : undefined}
       onPointerEnter={() => onPrepareUpdate?.(agent)}
       onFocusCapture={() => onPrepareUpdate?.(agent)}
       footer={(
+        <div className="my-agent-card-footer">
         <ResourceCardMetadata
           className="my-agent-meta"
           items={[
@@ -453,6 +454,14 @@ function AgentCard({
             }] : []),
           ]}
         />
+      {agent.runtime ? <div className="agent-review-card-controls">
+        <span className="agent-review-card-status">{t(agent.runtime.visibility === "enterprise" ? "enterprise" : "private", { ns: "agentReviews" })}</span>
+        {agent.runtime.canManage ? <ResourceCardAction className="agent-review-card-action" onClick={(event) => { event.stopPropagation(); onReview?.(agent); }}>
+          {t(agent.runtime.reviewStatus ? "details" : agent.runtime.canPublish ? "publish" : "submit", { ns: "agentReviews" })}
+          {agent.runtime.reviewStatus ? ` · ${t(`status.${agent.runtime.reviewStatus}`, { ns: "agentReviews" })}` : ""}
+        </ResourceCardAction> : null}
+      </div> : null}
+        </div>
       )}
       actions={agent.draft ? (
         <>
@@ -611,13 +620,7 @@ function AgentCard({
       {!agent.sandbox ? (
         <ResourceCardDescription>{agent.description}</ResourceCardDescription>
       ) : null}
-      {agent.runtime ? <div className="agent-review-card-controls">
-        <span className="agent-review-card-status">{t(agent.runtime.visibility === "enterprise" ? "enterprise" : "private", { ns: "agentReviews" })}</span>
-        {agent.runtime.canManage ? <button type="button" className="agent-review-card-action" onClick={(event) => { event.stopPropagation(); onReview?.(agent); }}>
-          {t(agent.runtime.reviewStatus ? "details" : agent.runtime.canPublish ? "publish" : "submit", { ns: "agentReviews" })}
-          {agent.runtime.reviewStatus ? ` · ${t(`status.${agent.runtime.reviewStatus}`, { ns: "agentReviews" })}` : ""}
-        </button> : null}
-      </div> : null}
+
     </ResourceCard>
   );
 }

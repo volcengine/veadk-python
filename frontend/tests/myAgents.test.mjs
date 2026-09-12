@@ -750,7 +750,7 @@ test("shows connecting progress and preserves the connected Runtime state", () =
   );
   assert.match(
     pageSource,
-    /className=\{connecting \? "my-agent-card is-connecting" : "my-agent-card"\}/,
+    /className=\{`my-agent-card\$\{connecting \? " is-connecting" : ""\}/,
   );
   assert.match(
     pageStyles,

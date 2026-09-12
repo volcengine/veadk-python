@@ -32,11 +32,11 @@ export function AgentReviewCenter({ cloudProvider, onPendingCountChange, onChang
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
   }, [region, revision, onPendingCountChange]);
-  const visible = useMemo(() => items.filter((item) => (status === "all" || item.status === status) && `${item.snapshot.name} ${item.submitter.name}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())), [items, query, status]);
+  const visible = useMemo(() => items.filter((item) => (status === "all" || item.status === status) && `${item.agent.name} ${item.submitter.name}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())), [items, query, status]);
   const columns: ResourceDataTableColumn<AgentReviewApplication>[] = [
-    { key: "name", header: t("agent"), className: "review-column-name", render: (item) => <button type="button" className="agent-review-name" onClick={() => setSelected(item)}>{item.snapshot.name}</button> },
+    { key: "name", header: t("agent"), className: "review-column-name", render: (item) => <button type="button" className="agent-review-name" onClick={() => setSelected(item)}>{item.agent.name}</button> },
     { key: "submitter", header: t("submitter"), render: (item) => <ReviewPersonLabel person={item.submitter} /> },
-    { key: "version", header: t("version"), render: (item) => item.snapshot.version ?? "—" },
+    { key: "version", header: t("version"), render: (item) => item.agent.version ?? "—" },
     { key: "submittedAt", header: t("submittedAt"), render: (item) => <time dateTime={item.submittedAt}>{new Date(item.submittedAt).toLocaleString(i18n.language)}</time> },
     { key: "status", header: t("statusTitle"), render: (item) => <div>{t(`status.${item.status}`)}{item.reviewer ? <ReviewPersonLabel person={item.reviewer} /> : null}</div> },
     { key: "actions", header: t("actions"), render: (item) => <button type="button" onClick={() => setSelected(item)}>{t(item.status === "pending" ? "review" : "details")}</button> },
@@ -51,6 +51,6 @@ export function AgentReviewCenter({ cloudProvider, onPendingCountChange, onChang
         <button type="button" disabled={loading} onClick={() => setRevision((value) => value + 1)}>{t("refresh")}</button>
       </>}
       emptyLabel={loading ? <ResourceLoadingState /> : error ? null : <p className="agent-review-empty">{t(query || status !== "all" ? "noMatches" : "empty")}</p>} />
-    {selected ? <AgentReviewDialog key={`${selected.region}:${selected.id}`} runtimeId={selected.runtimeId} region={selected.region} name={selected.snapshot.name} canPublish onClose={() => setSelected(null)} onChanged={() => { onChanged?.(); setRevision((value) => value + 1); }} /> : null}
+    {selected ? <AgentReviewDialog key={`${selected.region}:${selected.id}`} runtimeId={selected.runtimeId} region={selected.region} name={selected.agent.name} canPublish onClose={() => setSelected(null)} onChanged={() => { onChanged?.(); setRevision((value) => value + 1); }} /> : null}
   </div>;
 }

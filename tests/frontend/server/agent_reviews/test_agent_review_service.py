@@ -12,6 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import base64
+import json
+import zlib
 from copy import deepcopy
 from types import SimpleNamespace
 
@@ -38,6 +41,7 @@ class Repository:
             tags=[
                 SimpleNamespace(key="veadk:owner", value="developer"),
                 SimpleNamespace(key="veadk:managed", value="true"),
+                SimpleNamespace(key="veadk:author", value="开发者"),
             ],
         )
         self.writes = []
@@ -161,12 +165,102 @@ def test_pending_can_be_withdrawn_but_not_edited(setup):
     service.require_editable(repo.runtime)
 
 
-def test_tag_payload_round_trip_preserves_unicode_comments():
-    record = {"id": "request", "status": "returned", "comment": "这是审批意见\n" * 50}
+@pytest.mark.parametrize("text", ["同意公开", "中文，标点。\n" * 20, "😀" * 256])
+def test_explicit_tag_fields_round_trip(text):
+    record = {"id": "request", "status": "returned", "comment": text}
     values = encode_record(record)
-    assert len(values) <= 20
-    assert all(len(value.encode()) <= 256 for value in values.values())
-    assert decode_record(values) == record
+    assert "veadk:review:comment" in values
+    assert not any(key.startswith("veadk:review:data") for key in values)
+    assert all(len(value) <= 256 for value in values.values())
+    assert decode_record(values)["comment"] == text
+
+
+def test_review_does_not_persist_runtime_or_applicant_details(setup):
+    repo, service = setup
+    record = service.submit(DEVELOPER, "cn-beijing", "r-demo", "请审核")
+    saved = decode_record(repo.writes[-1])
+    assert not {"snapshot", "agent", "submitter", "runtimeId", "region"} & saved.keys()
+    assert record["submitter"]["id"] == "developer"
+    assert record["submitter"]["name"] == "开发者"
+    repo.runtime.name = "Updated runtime name"
+    assert (
+        service.read(DEVELOPER, "cn-beijing", "r-demo")["agent"]["name"]
+        == repo.runtime.name
+    )
+    assert service.list(ADMIN, "cn-beijing")[0]["agent"]["name"] == repo.runtime.name
+
+
+def test_direct_publication_keeps_runtime_owner_as_applicant(setup):
+    _, service = setup
+    record = service.publish(ADMIN, "cn-beijing", "r-demo")
+    assert record["submitter"]["id"] == "developer"
+    assert record["reviewer"]["id"] == "admin"
+
+
+@pytest.mark.parametrize("region", ["cn-beijing", "ap-southeast-1"])
+def test_review_text_limits_are_checked_before_cloud_write(setup, region):
+    repo, service = setup
+    application = service.submit(DEVELOPER, region, "r-demo", "字" * 20)
+    assert application["message"] == "字" * 20
+    before = len(repo.writes)
+    for callback in [
+        lambda: service.submit(DEVELOPER, region, "r-demo", "字" * 21),
+        lambda: service.decide(
+            ADMIN, region, "r-demo", application["id"], "returned", "字" * 257
+        ),
+        lambda: service.decide(
+            ADMIN, region, "r-demo", application["id"], "approved", comment="字" * 257
+        ),
+        lambda: service.publish(ADMIN, region, "r-demo", "字" * 257),
+    ]:
+        with pytest.raises(HTTPException) as failure:
+            callback()
+        assert failure.value.status_code == 422
+    assert len(repo.writes) == before
+    service.decide(
+        ADMIN,
+        region,
+        "r-demo",
+        application["id"],
+        "returned",
+        "😀" * 256,
+        "意见。" * 85,
+    )
+    saved = service.read(DEVELOPER, region, "r-demo")
+    assert saved["reason"] == "😀" * 256
+    next_application = service.submit(DEVELOPER, region, "r-demo", "已补充")
+    assert next_application["reviewer"] is None
+    saved = service.read(DEVELOPER, region, "r-demo")
+    assert saved["reason"] == saved["comment"] == saved["reviewedAt"] == ""
+    assert saved["reviewer"] is None
+
+
+def test_existing_application_is_readable_and_rewritten_without_snapshot(setup):
+    repo, service = setup
+    record = service.submit(DEVELOPER, "cn-beijing", "r-demo", "请审核")
+    record["snapshot"] = record.pop("agent")
+    record["fingerprint"] = decode_record(repo.writes[-1])["fingerprint"]
+    payload = base64.urlsafe_b64encode(
+        zlib.compress(json.dumps(record).encode())
+    ).decode()
+    parts = [payload[i : i + 240] for i in range(0, len(payload), 240)]
+    repo.runtime.tags = [
+        tag for tag in repo.runtime.tags if not tag.key.startswith("veadk:review:")
+    ]
+    repo.write(
+        "cn-beijing",
+        "r-demo",
+        {
+            "veadk:review:id": record["id"],
+            "veadk:review:status": "pending",
+            "veadk:review:parts": str(len(parts)),
+            **{f"veadk:review:data{i}": part for i, part in enumerate(parts)},
+        },
+    )
+    assert service.read(DEVELOPER, "cn-beijing", "r-demo")["id"] == record["id"]
+    service.decide(ADMIN, "cn-beijing", "r-demo", record["id"], "approved")
+    assert "snapshot" not in decode_record(repo.writes[-1])
+    assert service.read(DEVELOPER, "cn-beijing", "r-demo")["status"] == "approved"
 
 
 def test_tag_quota_failure_does_not_write(setup):

@@ -19,10 +19,12 @@ See [deployment and operation](service/studio_release_notifier/README.md).
   sees the reviewer name/avatar, decision time, comment and return reason
 
   Agent review is independent of SkillSpaces. Runtime `TagResources` writes
-  `veadk:visibility`, `veadk:review:status`, `veadk:review:id` and bounded compressed
-  metadata chunks; each write is read back before reporting success. Identity
-  comes from the authenticated principal, with display profiles resolved through
-  the configured Identity user pool. Cloud error bodies and request IDs are
+  `veadk:visibility` and explicit `veadk:review:*` fields for application ID,
+  status, submission time/message, reviewer ID/name, decision time/reason/comment,
+  and withdrawal/unpublication actors and times. Agent details are read live from
+  the Runtime; applicant identity reuses its `veadk:owner` and `veadk:author` tags
+  instead of storing another snapshot. Display profiles resolve through the
+  configured Identity user pool. Cloud error bodies and request IDs are
   returned intact. The repository uses provider-scoped clients for Volcengine
   and BytePlus
 
@@ -40,8 +42,13 @@ See [deployment and operation](service/studio_release_notifier/README.md).
   upgrades, public-version selection and archived application history are deferred.
   Studio guards do not prevent direct cloud changes; concurrent decisions are
   serialized within one process, without a cross-replica transaction. The record
-  uses at most 16 chunks plus four control tags and rejects submissions exceeding
-  the cloud's tag limits
+  limits application messages to 20 characters and decision reasons/comments to
+  256 characters. Text unsupported by cloud tags is encoded per field, splitting
+  long values into numbered continuations. Every tag value fits within 256 bytes;
+  continuation tags are written first, then field heads and visibility together
+  within the 20-tag call limit. Writes are read back before reporting success
+  and reject exceeding the 50-tag Runtime quota. Existing packed applications
+  remain readable; new writes use explicit fields
 
 - **Skill publication requests**: Each personal Skill version can be submitted
   from its action row. Studio copies its archive into an independent Skill in

@@ -32,7 +32,7 @@ Function('require','module','exports',result.outputFiles[0].text)(require,module
 const {AgentReviewDialog}=module.exports;
 const applicant={id:'developer',name:'开发者',email:'',avatarUrl:''};
 const admin={id:'admin',name:'审核员',email:'admin@example.com',avatarUrl:'https://example.com/avatar.png'};
-const pending={id:'request-1',runtimeId:'runtime-1',region:'cn-beijing',status:'pending',snapshot:{name:'示例智能体',description:'整理工作记录',version:1,model:'demo-model',environmentKeys:[]},submitter:applicant,submittedAt:'2026-09-11T10:00:00Z',message:'请审核',reviewer:null,reviewedAt:'',comment:'',reason:'',published:false};
+const pending={id:'request-1',runtimeId:'runtime-1',region:'cn-beijing',status:'pending',agent:{name:'示例智能体',description:'整理工作记录',version:1,model:'demo-model',environmentKeys:[]},submitter:applicant,submittedAt:'2026-09-11T10:00:00Z',message:'请审核',reviewer:null,reviewedAt:'',comment:'',reason:'',published:false};
 async function mount(api,canPublish=false){
  const dom=new JSDOM('<!doctype html><div id="root"></div>',{url:'http://localhost',pretendToBeVisual:true});
  const globals={window:dom.window,document:dom.window.document,navigator:dom.window.navigator,HTMLElement:dom.window.HTMLElement,Node:dom.window.Node,IS_REACT_ACT_ENVIRONMENT:true,reviewApi:api};

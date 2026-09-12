@@ -28,19 +28,20 @@ from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from .service import AgentReviewService, ReviewActor
+from .tags import APPLICATION_MESSAGE_LIMIT, REVIEW_TEXT_LIMIT
 
 
 class ReviewBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     region: str = Field(min_length=1, max_length=64)
-    message: str = Field(default="", max_length=1000)
-    comment: str = Field(default="", max_length=1000)
+    message: str = Field(default="", max_length=APPLICATION_MESSAGE_LIMIT)
+    comment: str = Field(default="", max_length=REVIEW_TEXT_LIMIT)
 
 
 class DecisionBody(ReviewBody):
     applicationId: str = Field(min_length=1, max_length=64)
     decision: Literal["approved", "returned"]
-    reason: str = Field(default="", max_length=1000)
+    reason: str = Field(default="", max_length=REVIEW_TEXT_LIMIT)
 
 
 def cloud_error(error: Exception) -> Response:

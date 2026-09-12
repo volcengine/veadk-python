@@ -6,7 +6,7 @@
   "statusTitle": "Status",
   "submitter": "Applicant",
   "submittedAt": "Submitted",
-  "version": "Submitted version",
+  "version": "Current version",
   "model": "Model",
   "returnedBy": "Returned by",
   "approvedBy": "Approved by",
@@ -44,5 +44,6 @@
   "review": "Review application",
   "details": "Application details",
   "noMatches": "No matching applications",
-  "empty": "No Agent review requests"
+  "empty": "No Agent review requests",
+  "textCount": "{{count}} / {{limit}} characters"
 }

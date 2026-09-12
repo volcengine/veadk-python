@@ -7387,7 +7387,7 @@ def test_agent_review_flow_enforces_shared_use_and_private_management(
         )
         assert submitted.status_code == 200, submitted.text
         assert "never-in-review-payload" not in submitted.text
-        assert submitted.json()["snapshot"]["version"] == runtime.current_version_number
+        assert submitted.json()["agent"]["version"] == runtime.current_version_number
         assert (
             client.get("/web/agent-reviews", params=query, headers=user).status_code
             == 403

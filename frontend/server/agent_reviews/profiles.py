@@ -22,11 +22,21 @@ from frontend.server.user_management.errors import UserManagementError
 
 def resolve_profile(directory: Any, person: dict[str, str]) -> dict[str, str]:
     uid = person.get("identityUid", "")
-    if not directory or not uid:
+    if not directory:
         return person
     import volcenginesdkid as sdk
 
     try:
+        if not uid:
+            # Deployment tags contain the trusted subject, not necessarily GetUser's UID
+            matches = [
+                user.uid
+                for user in directory.users()
+                if person.get("id") in {user.subject, user.uid}
+            ]
+            if len(matches) != 1:
+                return person
+            uid = matches[0]
         user = directory._call(
             "get_user",
             sdk.GetUserRequest(user_pool_uid=directory.pool_uid, user_uid=uid),
