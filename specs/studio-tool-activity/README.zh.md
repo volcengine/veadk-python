@@ -113,3 +113,4 @@ running 状态允许重复输出 delta。terminal 事件拥有最终状态和权
 - **2026-09-12：** 非终态 A2A `submitted` 和不含消息的 `working` 更新会作为仅含 metadata 的 heartbeat 转发，用于解除首事件截止时间，但不创建 transcript block、不结束 turn，也不重新提交请求。
 - **2026-09-12：** 标记为 `adk_thought` 的 A2A 文本 part 投影为 Studio thinking 事件；reasoning 与答案的累计 delta 状态相互隔离，避免一条流抑制或污染另一条流。
 - **2026-09-12：** A2A 流在已有答案增量但没有显式最终文本时结束，桥接会将累计答案作为一个完成态 Studio 事件输出一次；纯 reasoning 流仍保持未完成。
+- **2026-09-12：** 追加到同一 A2A artifact 的各 part 使用不同的投影 event ID；Studio 去重不得丢弃后续 reasoning part 或最终答案。
