@@ -14,12 +14,14 @@
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 
 import pytest
 from google.adk.models.lite_llm import LiteLlm
 from google.adk.models.llm_request import LlmRequest
 from google.adk.models.llm_response import LlmResponse
+from google.adk.tools.base_tool import BaseTool
 from google.genai import types
 
 from veadk.models.retrying_lite_llm import RetryingLiteLlm
@@ -40,6 +42,48 @@ def _request() -> LlmRequest:
             types.Content(role="user", parts=[types.Part.from_text(text="hello")])
         ],
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("retry", [False, True])
+@pytest.mark.parametrize("stream", [False, True])
+async def test_snapshot_preserves_live_tools_and_isolates_request_data(
+    monkeypatch: pytest.MonkeyPatch, retry: bool, stream: bool
+) -> None:
+    tool = BaseTool(name="live_tool", description="Tool with asynchronous state")
+    tool.pending = asyncio.get_running_loop().create_future()
+    request = _request()
+    request.tools_dict = {tool.name: tool}
+    request.config.temperature = 0.5
+    seen: list[LlmRequest] = []
+
+    async def generate(_self, llm_request, stream=False):
+        seen.append(llm_request)
+        assert llm_request.tools_dict[tool.name] is tool
+        assert llm_request.contents[0].parts[0].text == "hello"
+        assert llm_request.config.temperature == 0.5
+        if retry and len(seen) == 1:
+            llm_request.contents[0].parts[0].text = "mutated"
+            llm_request.config.temperature = 0.1
+            llm_request.tools_dict.clear()
+            raise _RateLimitError()
+        yield LlmResponse(content=types.Content(role="model", parts=[]))
+
+    monkeypatch.setattr(LiteLlm, "generate_content_async", generate)
+    model = RetryingLiteLlm(model="openai/test-model")
+    try:
+        responses = [
+            response
+            async for response in model.generate_content_async(request, stream=stream)
+        ]
+    finally:
+        tool.pending.cancel()
+
+    assert len(responses) == 1
+    assert len(seen) == (2 if retry else 1)
+    if retry:
+        assert seen[1] is not request
+        assert seen[1].tools_dict is not request.tools_dict
 
 
 @pytest.mark.asyncio
