@@ -41,9 +41,10 @@ The bridge currently drops A2A `submitted` and message-less `working` status upd
 
 ## 5. Verification Record
 
-- `uv run --extra dev pytest tests/cli/test_runtime_a2a_stream.py tests/cli/test_frontend_runtime_proxy.py -q`: 90 passed after adding reasoning and terminal-finalization coverage.
+- `uv run --extra dev pytest tests/cli/test_runtime_a2a_stream.py tests/cli/test_frontend_runtime_proxy.py -q`: 93 passed after adding reasoning, terminal-finalization, and repeated-artifact-ID coverage.
 - Live Runtime `r-yeuujrrcowb21078p9jh`: first metadata-only heartbeat arrived in 0.737 seconds; the final answer arrived in 5.999 seconds; one request produced nine downstream frames.
 - Repeated message-less `working` updates are suppressed per `(taskId, state)` by the request-local decoder.
 - Live reasoning verification: first frame arrived in 0.702 seconds and the bridge emitted 216 `thought=true` deltas, 17 answer-text deltas, and 5 tool events for one request.
 - `npm --prefix frontend test`: 1,079 tests passed, including the heartbeat no-transcript regression.
 - Live completion verification after the finalization fix: first frame arrived in 1.001 seconds; the bridge emitted 122 reasoning deltas, 20 answer deltas, 4 tool events, and a non-partial final answer containing `reasoning-check`, so Studio no longer classifies the HTTP 200 stream as empty.
+- Live verification after unique projected event IDs: first frame arrived in 0.587 seconds and the final non-partial answer was preserved after 130 reasoning deltas and 23 answer deltas.

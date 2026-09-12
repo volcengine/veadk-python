@@ -139,7 +139,7 @@ def test_maps_final_function_response_artifact_to_text_once():
 
     assert events == [
         {
-            "id": "final-1",
+            "id": "final-1-0",
             "author": "default",
             "partial": False,
             "turnComplete": True,
@@ -171,6 +171,63 @@ def test_maps_reasoning_artifact_to_thinking_event():
         "text": "inspect the request",
         "thought": True,
     }
+
+
+def test_maps_each_artifact_text_part_with_a_unique_event_id():
+    event = {
+        "kind": "artifact-update",
+        "lastChunk": True,
+        "artifact": {
+            "artifactId": "artifact-1",
+            "parts": [
+                {
+                    "kind": "text",
+                    "text": "thinking",
+                    "metadata": {"adk_thought": True},
+                },
+                {"kind": "text", "text": "final answer"},
+            ],
+        },
+    }
+
+    events = a2a_event_to_studio_events(event, author="default")
+
+    assert [item["id"] for item in events] == [
+        "artifact-1-0",
+        "artifact-1-1",
+    ]
+    assert events[0]["content"]["parts"][0]["thought"] is True
+    assert events[1]["content"]["parts"][0]["text"] == "final answer"
+
+
+def test_decoder_uniquifies_ids_across_appends_to_the_same_artifact():
+    decoder = A2AStreamDecoder()
+
+    def artifact(text, *, thought=False, final=False):
+        return {
+            "kind": "artifact-update",
+            "lastChunk": final,
+            "artifact": {
+                "artifactId": "artifact-1",
+                "parts": [
+                    {
+                        "kind": "text",
+                        "text": text,
+                        **({"metadata": {"adk_thought": True}} if thought else {}),
+                    }
+                ],
+            },
+        }
+
+    first = decoder.project(artifact("thinking", thought=True), author="default")
+    second = decoder.project(artifact("more", thought=True), author="default")
+    final = decoder.project(artifact("answer", final=True), author="default")
+
+    assert [first[0]["id"], second[0]["id"], final[0]["id"]] == [
+        "artifact-1-0",
+        "artifact-1-0-1",
+        "artifact-1-0-2",
+    ]
 
 
 def test_maps_working_status_message_to_partial_text_and_reasoning():
