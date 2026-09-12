@@ -111,33 +111,119 @@ async function renderBlocks(initialBlocks) {
 }
 
 function tool(status, defaultOpen = false) {
-  return [{
+  return [
+    {
     kind: "tool",
-    name: status === "failed" ? "命令执行失败" : "正在执行命令",
+      name: "exec_command",
+      callId: "command-1",
+      args: { command: "npm test" },
     response: status === "failed" ? "exit code 1" : undefined,
     done: status !== "running",
     status,
     ...(defaultOpen ? { defaultOpen: true } : {}),
-  }];
+    },
+  ];
 }
 
 test("opens a newly failed tool while preserving the user's disclosure choice", async () => {
   const view = await renderBlocks(tool("running"));
   try {
-    const button = () => view.container.querySelector(".tool-head");
-    const disclosure = () => view.container.querySelector(".think-collapse");
-    assert.equal(button()?.getAttribute("aria-expanded"), "false");
+    const button = () => view.container.querySelector(".tool-activity__head");
+    const disclosure = () =>
+      view.container.querySelector(".tool-activity__collapse");
+    assert.equal(button()?.getAttribute("aria-expanded"), "true");
 
     await view.render(tool("failed", true));
     assert.equal(button()?.getAttribute("aria-expanded"), "true");
-    assert.match(disclosure()?.className ?? "", /\bopen\b/);
+    assert.match(disclosure()?.className ?? "", /\bis-open\b/);
 
     await view.act(async () => button()?.click());
     assert.equal(button()?.getAttribute("aria-expanded"), "false");
+    assert.equal(disclosure()?.getAttribute("aria-hidden"), "true");
+    assert.ok(disclosure()?.hasAttribute("inert"));
 
     await view.render(tool("running"));
     await view.render(tool("failed", true));
     assert.equal(button()?.getAttribute("aria-expanded"), "false");
+  } finally {
+    await view.cleanup();
+  }
+});
+
+test("reports clipboard failures without an unhandled rejection", async () => {
+  const view = await renderBlocks([
+    {
+      kind: "tool",
+      name: "exec_command",
+      callId: "command-copy",
+      args: { command: "npm test" },
+      response: { output: "done" },
+      done: true,
+      status: "completed",
+      defaultOpen: true,
+    },
+  ]);
+  try {
+    Object.defineProperty(globalThis.navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: async () => {
+          throw new Error("denied");
+        },
+      },
+    });
+    const rawButton = [...view.container.querySelectorAll("button")].find(
+      (button) => button.textContent?.includes("View raw data"),
+    );
+    await view.act(async () => rawButton?.click());
+    const copyButton = view.container.querySelector(
+      ".tool-activity__raw-id button",
+    );
+    assert.ok(copyButton);
+    await view.act(async () => {
+      copyButton?.click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    assert.match(view.container.textContent ?? "", /Copy failed. Try again./);
+    assert.equal(
+      view.container.querySelector('[role="alert"]')?.textContent,
+      "Copy failed. Try again.",
+    );
+  } finally {
+    await view.cleanup();
+  }
+});
+
+test("keeps localized labels when read-only tools are grouped", async () => {
+  const view = await renderBlocks([
+    {
+      kind: "tool",
+      name: "web_search",
+      callId: "search-1",
+      args: { query: "A2A" },
+      response: { count: 2 },
+      done: true,
+      status: "completed",
+    },
+    {
+      kind: "tool",
+      name: "link_reader",
+      callId: "read-1",
+      args: { path: "https://example.test" },
+      response: { ok: true },
+      done: true,
+      status: "completed",
+    },
+  ]);
+  try {
+    const groupButton = view.container.querySelector(
+      ".tool-activity--exploration > .tool-activity__head",
+    );
+    await view.act(async () => groupButton?.click());
+
+    assert.match(view.container.textContent ?? "", /Web search complete/);
+    assert.match(view.container.textContent ?? "", /Webpage read complete/);
   } finally {
     await view.cleanup();
   }

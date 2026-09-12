@@ -1,6 +1,6 @@
 # Studio 工具活动可视化设计文档
 
-- **状态：** 已确认，可进入实施计划
+- **状态：** 已实施并完成验证
 - **日期：** 2026-09-12
 - **变更类型：** 功能
 - **英文版本：** [2026-09-12-studio-tool-activity-visualization-design.md](2026-09-12-studio-tool-activity-visualization-design.md)
@@ -263,3 +263,14 @@ ADK / A2A event
 - **视觉噪音：** 成功项折叠，只读活动安全聚合；失败和运行项保持可见。
 - **调试信息丢失：** 源 Block 保留原始值，通过二级折叠提供访问。
 - **敏感信息泄漏：** 保留后端 allowlist，并在展示和复制前增加基于值的遮罩。
+
+## 10. 实施与验证记录
+
+- **组件契约：** [Studio 工具活动](../../../specs/studio-tool-activity/README.zh.md)
+- **已实现：** 纯工具展示模型、有界且脱敏的原始数据、自适应展开、命令别名生命周期关联、乱序响应保留、有界事件去重、Codex 子活动扁平化、来源标记，以及相邻只读活动聚合。现有已注册专用 renderer 保持不变。
+- **定向验证（2026-09-12）：** 最终工具模型和组件定向复测通过，覆盖签名 URL 遮罩、显式 partial 失败、展开状态和分组后本地化文案；`npx tsc --noEmit` 通过；`npm run check:i18n` 通过。
+- **前端全量回归（2026-09-12）：** `npm --prefix frontend test` 通过 1,078 项测试；`npm --prefix frontend run build` 通过；`npm --prefix frontend run test:webui-assets` 验证 102 个打包文件和 246 个内部引用；`uv run --extra dev pre-commit run --all-files` 通过。
+- **仓库回归：** `uv run --extra dev pytest -n 2 -m "not codex_smoke and not piagent_smoke"` 成功执行 4,030 项测试，但由于本地环境缺少可选的 `llama_index` 和 `anthropic` 包，最终有 6 项失败和 2 项收集错误；这些失败不在本次前端变更范围内。
+- **真实 Runtime 证据：** Runtime `r-yeuujrrcowb21078p9jh` 展示了一个原位更新的运行中命令活动。生命周期修复后重放捕获的 34 帧事件，得到一个完成态活动，退出码为 `0`，耗时为 `1601 ms`。
+- **浏览器证据：** 重建后的 Studio 已成功启动，`/web/ui-config` 返回预期的 Studio 配置。最终一次无头 Chrome 截图尝试卡住并已停止；此前完成的常规宽度截图和实时 DOM 检查仍作为视觉证据。
+- **已知传输限制：** 被测 A2A 虚拟 session 仅持久化最终文本，因此刷新能保留最终回答，但没有可重建的工具活动。Studio 不会伪造或重新提交缺失活动。

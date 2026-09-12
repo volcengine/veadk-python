@@ -94,6 +94,7 @@ export interface CodexSandboxActivity {
 
 export type Block =
   | { kind: "progress"; text: string }
+  | { kind: "activity-source"; label: string }
   | { kind: "thinking"; text: string; done: boolean }
   | { kind: "text"; text: string }
   | {
@@ -105,6 +106,7 @@ export type Block =
       done: boolean;
       status?: "running" | "completed" | "failed";
       defaultOpen?: boolean;
+      source?: "codex-sandbox" | "studio" | "runtime";
       codexActivity?: CodexSandboxActivity;
     }
   | {
@@ -183,6 +185,7 @@ export function emptyAcc(): Acc {
 }
 
 const MAX_PENDING_CODEX_PROGRESS = 64;
+const MAX_SEEN_EVENT_IDS = 2_048;
 
 function applyCodexProgressToTool(
   blocks: Block[],
@@ -198,7 +201,10 @@ function applyCodexProgressToTool(
     if (block.kind !== "tool" || block.name !== progress.toolName) continue;
     if (block.callId === progress.requestId) {
       if (block.done) return "completed";
-      block.codexActivity = applyCodexSandboxProgress(block.codexActivity, progress);
+      block.codexActivity = applyCodexSandboxProgress(
+        block.codexActivity,
+        progress,
+      );
       block.status = progress.terminalStatus ?? "running";
       if (progress.terminalStatus) block.done = true;
       return "applied";
@@ -214,7 +220,10 @@ function applyCodexProgressToTool(
   if (fallbackIndex >= 0) {
     const block = blocks[fallbackIndex];
     if (block.kind !== "tool") return "unmatched";
-    block.codexActivity = applyCodexSandboxProgress(block.codexActivity, progress);
+    block.codexActivity = applyCodexSandboxProgress(
+      block.codexActivity,
+      progress,
+    );
     block.status = progress.terminalStatus ?? "running";
     if (progress.terminalStatus) block.done = true;
     return "applied";
@@ -227,10 +236,13 @@ function codexResponseStatus(response: unknown): "completed" | "failed" {
     return "completed";
   }
   const result = response as Record<string, unknown>;
-  const status = typeof result.status === "string" ? result.status.toLowerCase() : "";
+  const status =
+    typeof result.status === "string" ? result.status.toLowerCase() : "";
   if (
-    result.ok === false
-    || ["error", "failed", "denied", "declined", "cancelled", "timeout"].includes(status)
+    result.ok === false ||
+    ["error", "failed", "denied", "declined", "cancelled", "timeout"].includes(
+      status,
+    )
   ) {
     return "failed";
   }
@@ -238,7 +250,8 @@ function codexResponseStatus(response: unknown): "completed" | "failed" {
 }
 
 function codexDirectAnswer(response: unknown): string {
-  if (!response || typeof response !== "object" || Array.isArray(response)) return "";
+  if (!response || typeof response !== "object" || Array.isArray(response))
+    return "";
   const result = response as Record<string, unknown>;
   if (result.ok !== true || typeof result.message !== "string") return "";
   return result.message.trim();
@@ -259,6 +272,60 @@ export interface AssistantEventProjection {
 const fnCall = (p: AdkPart) => p.functionCall ?? p.function_call;
 const fnResp = (p: AdkPart) => p.functionResponse ?? p.function_response;
 
+function toolNamesMatch(left: string, right: string): boolean {
+  if (left === right) return true;
+  const commandAliases = new Set([
+    "exec_command",
+    "commandExecution",
+    "command_execution",
+    "Run command",
+  ]);
+  return commandAliases.has(left) && commandAliases.has(right);
+}
+
+function toolResponseState(
+  response: unknown,
+  partial = false,
+): { done: boolean; status: "running" | "completed" | "failed" } {
+  const responseStatus =
+    response && typeof response === "object"
+      ? String((response as Record<string, unknown>).status ?? "").toLowerCase()
+      : "";
+  const failed =
+    ["failed", "error", "cancelled", "denied", "timeout"].includes(
+      responseStatus,
+    ) || (response as Record<string, unknown> | undefined)?.ok === false;
+  const running = ["running", "started", "working"].includes(
+    responseStatus,
+  );
+  return {
+    done: failed || !(partial || running),
+    status: failed ? "failed" : partial || running ? "running" : "completed",
+  };
+}
+
+export function flattenCodexActivityBlocks(blocks: Block[]): Block[] {
+  return blocks.flatMap((block) => {
+    if (
+      block.kind !== "tool" ||
+      block.name !== "delegate_to_codex_sandbox" ||
+      !block.codexActivity?.items.length
+    )
+      return [block];
+    return [
+      {
+        kind: "activity-source" as const,
+        label: block.codexActivity.title || "Codex Sandbox",
+      },
+      ...block.codexActivity.items.map(({ block: child }) =>
+        child.kind === "tool"
+          ? { ...child, source: "codex-sandbox" as const }
+          : child,
+      ),
+    ];
+  });
+}
+
 function transferAgentName(args: unknown): string {
   if (!args || typeof args !== "object") return "";
   const record = args as Record<string, unknown>;
@@ -278,18 +345,20 @@ export function attachmentsFromParts(parts: AdkPart[]): AttachmentView[] {
   const files: AttachmentView[] = [];
   for (const [index, p] of parts.entries()) {
     const metadata = (p.partMetadata ?? p.part_metadata) as
-      | Record<string, unknown>
-      | undefined;
-    const transport = metadata?.veadkTransport as Record<string, unknown> | undefined;
+      Record<string, unknown> | undefined;
+    const transport = metadata?.veadkTransport as
+      Record<string, unknown> | undefined;
     if (transport?.hidden === true) continue;
     const stored = metadata?.veadkMedia as Record<string, unknown> | undefined;
     if (typeof stored?.uri === "string") {
       files.push({
         id: String(stored.id ?? stored.uri),
-        mimeType: typeof stored.mimeType === "string" ? stored.mimeType : undefined,
+        mimeType:
+          typeof stored.mimeType === "string" ? stored.mimeType : undefined,
         uri: stored.uri,
         name: typeof stored.name === "string" ? stored.name : undefined,
-        sizeBytes: typeof stored.sizeBytes === "number" ? stored.sizeBytes : undefined,
+        sizeBytes:
+          typeof stored.sizeBytes === "number" ? stored.sizeBytes : undefined,
       });
       continue;
     }
@@ -319,9 +388,9 @@ export function attachmentsFromParts(parts: AdkPart[]): AttachmentView[] {
 
 function visiblePartText(part: AdkPart): string | undefined {
   const metadata = (part.partMetadata ?? part.part_metadata) as
-    | Record<string, unknown>
-    | undefined;
-  const transport = metadata?.veadkTransport as Record<string, unknown> | undefined;
+    Record<string, unknown> | undefined;
+  const transport = metadata?.veadkTransport as
+    Record<string, unknown> | undefined;
   return transport?.hideText === true ? undefined : part.text;
 }
 
@@ -334,7 +403,9 @@ const AGENT_NODE_TYPES = new Set<AgentNodeType>([
 ]);
 
 /** Restore slash-skill and @agent selections persisted in part metadata. */
-export function invocationFromParts(parts: AdkPart[]): FrontendInvocation | undefined {
+export function invocationFromParts(
+  parts: AdkPart[],
+): FrontendInvocation | undefined {
   for (const part of parts) {
     const raw = (part.partMetadata ?? part.part_metadata)?.veadkInvocation;
     if (!raw || typeof raw !== "object") continue;
@@ -344,10 +415,15 @@ export function invocationFromParts(parts: AdkPart[]): FrontendInvocation | unde
           if (!item || typeof item !== "object") return [];
           const skill = item as Record<string, unknown>;
           return typeof skill.name === "string"
-            ? [{
+            ? [
+                {
                 name: skill.name,
-                description: typeof skill.description === "string" ? skill.description : "",
-              }]
+                  description:
+                    typeof skill.description === "string"
+                      ? skill.description
+                      : "",
+                },
+              ]
             : [];
         })
       : [];
@@ -365,9 +441,12 @@ export function invocationFromParts(parts: AdkPart[]): FrontendInvocation | unde
       ) {
         targetAgent = {
           name: target.name,
-          description: typeof target.description === "string" ? target.description : "",
+          description:
+            typeof target.description === "string" ? target.description : "",
           type: type as AgentNodeType,
-          path: target.path.filter((item): item is string => typeof item === "string"),
+          path: target.path.filter(
+            (item): item is string => typeof item === "string",
+          ),
         };
       }
     }
@@ -383,14 +462,21 @@ function appendAttachments(blocks: Block[], files: AttachmentView[]) {
   else blocks.push({ kind: "attachment", files });
 }
 
-function appendArtifacts(blocks: Block[], files: { filename: string; version: number }[]) {
+function appendArtifacts(
+  blocks: Block[],
+  files: { filename: string; version: number }[],
+) {
   if (!files.length) return;
   const last = blocks[blocks.length - 1];
   if (last?.kind === "artifact") {
     for (const file of files) {
-      if (!last.files.some((item) =>
-        item.filename === file.filename && item.version === file.version
-      )) last.files.push(file);
+      if (
+        !last.files.some(
+          (item) =>
+            item.filename === file.filename && item.version === file.version,
+        )
+      )
+        last.files.push(file);
     }
     return;
   }
@@ -400,7 +486,10 @@ function appendArtifacts(blocks: Block[], files: { filename: string; version: nu
 function appendText(blocks: Block[], kind: "thinking" | "text", text: string) {
   const last = blocks[blocks.length - 1];
   if (last && last.kind === kind) last.text += text;
-  else blocks.push(kind === "thinking" ? { kind, text, done: false } : { kind, text });
+  else
+    blocks.push(
+      kind === "thinking" ? { kind, text, done: false } : { kind, text },
+    );
 }
 
 function closeThinking(blocks: Block[]) {
@@ -430,14 +519,20 @@ export function applyEvent(acc: Acc, ev: AdkEvent): Acc {
       for (let index = blocks.length - 1; index >= 0; index -= 1) {
         const block = blocks[index];
         if (
-          block.kind !== "tool"
-          || block.done
-          || block.name !== progress.toolName
-          || (progress.requestId && block.callId && block.callId !== progress.requestId)
+          block.kind !== "tool" ||
+          block.done ||
+          block.name !== progress.toolName ||
+          (progress.requestId &&
+            block.callId &&
+            block.callId !== progress.requestId)
         ) {
           continue;
         }
-        block.response = applyBranchCompareProgress(block.args, block.response, progress);
+        block.response = applyBranchCompareProgress(
+          block.args,
+          block.response,
+          progress,
+        );
         block.status = "running";
         break;
       }
@@ -445,8 +540,9 @@ export function applyEvent(acc: Acc, ev: AdkEvent): Acc {
     for (const progress of codexProgressUpdates) {
       const outcome = applyCodexProgressToTool(blocks, progress);
       if (outcome === "unmatched") {
-        pendingCodexProgress = [...pendingCodexProgress, progress]
-          .slice(-MAX_PENDING_CODEX_PROGRESS);
+        pendingCodexProgress = [...pendingCodexProgress, progress].slice(
+          -MAX_PENDING_CODEX_PROGRESS,
+        );
       }
     }
     return { blocks, liveStart, pendingCodexProgress };
@@ -491,7 +587,9 @@ export function applyEvent(acc: Acc, ev: AdkEvent): Acc {
         const authConfig = args.authConfig ?? args.auth_config ?? args;
         // functionCallId looks like "_adk_toolset_auth_McpToolset"; surface the
         // toolset name so the card can say what is being authorized.
-        const rawId = String(args.functionCallId ?? args.function_call_id ?? "");
+        const rawId = String(
+          args.functionCallId ?? args.function_call_id ?? "",
+        );
         const label = rawId.replace(/^_adk_toolset_auth_/, "") || undefined;
         blocks.push({
           kind: "auth",
@@ -502,6 +600,23 @@ export function applyEvent(acc: Acc, ev: AdkEvent): Acc {
           done: false,
         });
       } else {
+        const existingTool = fc.id
+          ? [...blocks]
+              .reverse()
+              .find(
+                (block: Block) =>
+                  block.kind === "tool" && block.callId === fc.id,
+              )
+          : undefined;
+        if (existingTool?.kind === "tool") {
+          existingTool.name = fc.name ?? existingTool.name;
+          existingTool.args = fc.args ?? existingTool.args;
+          if (existingTool.response === undefined) {
+            existingTool.done = false;
+            existingTool.status = "running";
+          }
+          continue;
+        }
         const toolBlock: Extract<Block, { kind: "tool" }> = {
           kind: "tool",
           name: fc.name ?? "",
@@ -514,8 +629,8 @@ export function applyEvent(acc: Acc, ev: AdkEvent): Acc {
           const stillPending: CodexSandboxProgress[] = [];
           for (const progress of pendingCodexProgress) {
             if (
-              progress.toolName === toolBlock.name
-              && progress.requestId === toolBlock.callId
+              progress.toolName === toolBlock.name &&
+              progress.requestId === toolBlock.callId
             ) {
               applyCodexProgressToTool(blocks, progress);
             } else {
@@ -546,33 +661,63 @@ export function applyEvent(acc: Acc, ev: AdkEvent): Acc {
           }
         }
       }
+      let matchedTool = false;
       for (let i = blocks.length - 1; i >= 0; i--) {
         const b = blocks[i];
-        const isCodexTool = b.kind === "tool" && b.name === "delegate_to_codex_sandbox";
+        const isCodexTool =
+          b.kind === "tool" && b.name === "delegate_to_codex_sandbox";
         if (
-          b.kind === "tool"
-          && (!b.done || isCodexTool)
-          && b.name === fr.name
-          && (!fr.id || !b.callId || b.callId === fr.id)
+          b.kind === "tool" &&
+          (!b.done || isCodexTool || Boolean(fr.id && b.callId === fr.id)) &&
+          ((Boolean(fr.id) && Boolean(b.callId) && b.callId === fr.id) ||
+            ((!fr.id || !b.callId) && toolNamesMatch(b.name, fr.name ?? "")))
         ) {
           const previousAnswer = isCodexTool
             ? codexDirectAnswer(b.response)
             : "";
-          b.done = true;
+          const responseState = toolResponseState(
+            fr.response,
+            ev.partial === true,
+          );
+          b.done = responseState.done;
           b.response = fr.response;
+          b.status = responseState.status;
           if (isCodexTool) {
             b.codexActivity = hydrateCodexSandboxActivity(
               b.codexActivity,
               fr.response,
             );
-            b.status = codexResponseStatus(fr.response);
+            b.status =
+              responseState.status === "running"
+                ? "running"
+                : codexResponseStatus(fr.response);
             const answer = codexDirectAnswer(fr.response);
             if (answer && answer !== previousAnswer) {
               appendText(blocks, "text", answer);
             }
           }
+          matchedTool = true;
           break;
         }
+      }
+      if (
+        !matchedTool &&
+        fr.name !== TRANSFER_AGENT_TOOL &&
+        fr.name !== REQUEST_EUC &&
+        fr.name !== A2UI_TOOL
+      ) {
+        const responseState = toolResponseState(
+          fr.response,
+          ev.partial === true,
+        );
+        blocks.push({
+          kind: "tool",
+          name: fr.name ?? "",
+          callId: fr.id,
+          response: fr.response,
+          done: responseState.done,
+          status: responseState.status,
+        });
       }
       if (fr.name === A2UI_TOOL) {
         const msgs = (fr.response?.[VALIDATED_JSON_KEY] as A2uiMessage[]) ?? [];
@@ -588,7 +733,10 @@ export function applyEvent(acc: Acc, ev: AdkEvent): Acc {
   if (artifactDelta) {
     appendArtifacts(
       blocks,
-      Object.entries(artifactDelta).map(([filename, version]) => ({ filename, version })),
+      Object.entries(artifactDelta).map(([filename, version]) => ({
+        filename,
+        version,
+      })),
     );
   }
   closeThinking(blocks); // a consolidated thinking segment is complete
@@ -608,23 +756,33 @@ function completesAssistantResponse(ev: AdkEvent, blocks: Block[]): boolean {
   });
   const hasA2ui = parts.some((part) => {
     const response = fnResp(part);
-    return response?.name === A2UI_TOOL &&
+    return (
+      response?.name === A2UI_TOOL &&
       Array.isArray(response.response?.[VALIDATED_JSON_KEY]) &&
-      response.response[VALIDATED_JSON_KEY].length > 0;
+      response.response[VALIDATED_JSON_KEY].length > 0
+    );
   });
   const artifactDelta = ev.actions?.artifactDelta ?? ev.actions?.artifact_delta;
-  const hasArtifact = Boolean(artifactDelta && Object.keys(artifactDelta).length > 0);
-  const agentEnded = Boolean(
-    ev.actions?.endOfAgent ?? ev.actions?.end_of_agent ?? ev.actions?.escalate
+  const hasArtifact = Boolean(
+    artifactDelta && Object.keys(artifactDelta).length > 0,
   );
-  const hasAnswerBlock = blocks.some((block) =>
+  const agentEnded = Boolean(
+    ev.actions?.endOfAgent ?? ev.actions?.end_of_agent ?? ev.actions?.escalate,
+  );
+  const hasAnswerBlock = blocks.some(
+    (block) =>
     block.kind === "text" ||
     block.kind === "attachment" ||
     block.kind === "artifact" ||
     block.kind === "a2ui" ||
-    block.kind === "delivery"
+      block.kind === "delivery",
   );
-  return hasFinalAnswerPart || hasA2ui || hasArtifact || (agentEnded && hasAnswerBlock);
+  return (
+    hasFinalAnswerPart ||
+    hasA2ui ||
+    hasArtifact ||
+    (agentEnded && hasAnswerBlock)
+  );
 }
 
 function eventAffectsAssistantTurn(ev: AdkEvent): boolean {
@@ -635,8 +793,8 @@ function eventAffectsAssistantTurn(ev: AdkEvent): boolean {
       visiblePartText(part) ||
       attachmentsFromParts([part]).length > 0 ||
       fnCall(part) ||
-      fnResp(part)
-    )
+      fnResp(part),
+    ),
   );
 }
 
@@ -651,6 +809,8 @@ export function createAssistantEventProjector(
 ) {
   let sequence = 0;
   const active = new Map<string, ActiveAssistantTurn>();
+  const seenEventIds = new Set<string>();
+  const eventIdOrder: string[] = [];
   let seededKey: string | undefined;
 
   const keyFor = (author: string, invocationId: string) =>
@@ -659,7 +819,8 @@ export function createAssistantEventProjector(
   if (initialTurn?.role === "assistant") {
     const author = initialTurn.meta?.author ?? "";
     const invocationId = initialTurn.meta?.invocationId ?? "";
-    const localId = initialTurn.meta?.localId ?? `${localIdPrefix}-${sequence++}`;
+    const localId =
+      initialTurn.meta?.localId ?? `${localIdPrefix}-${sequence++}`;
     const acc = emptyAcc();
     acc.blocks = initialTurn.blocks;
     acc.liveStart = initialTurn.blocks.length;
@@ -678,6 +839,20 @@ export function createAssistantEventProjector(
 
   return {
     project(ev: AdkEvent): AssistantEventProjection {
+      if (ev.id && seenEventIds.has(ev.id)) {
+        return {
+          turn: { role: "assistant", blocks: [] },
+          completed: false,
+          ignored: true,
+        };
+      }
+      if (ev.id) {
+        seenEventIds.add(ev.id);
+        eventIdOrder.push(ev.id);
+        if (eventIdOrder.length > MAX_SEEN_EVENT_IDS) {
+          seenEventIds.delete(eventIdOrder.shift()!);
+        }
+      }
       const author = ev.author && ev.author !== "user" ? ev.author : "";
       const invocationId = ev.invocationId ?? ev.invocation_id ?? "";
       const key = keyFor(author, invocationId);
@@ -702,7 +877,10 @@ export function createAssistantEventProjector(
         state = {
           acc: emptyAcc(),
           localId,
-          meta: { author: author || undefined, invocationId: invocationId || undefined },
+          meta: {
+            author: author || undefined,
+            invocationId: invocationId || undefined,
+          },
         };
       }
 
@@ -745,7 +923,10 @@ export function createAssistantEventProjector(
   };
 }
 
-export function upsertProjectedAssistantTurn(turns: Turn[], projected: Turn): Turn[] {
+export function upsertProjectedAssistantTurn(
+  turns: Turn[],
+  projected: Turn,
+): Turn[] {
   const localId = projected.meta?.localId;
   if (!localId) return [...turns, projected];
   const index = turns.findIndex((turn) => turn.meta?.localId === localId);
@@ -776,7 +957,10 @@ export function eventsToTurns(
           if (turns[i].role !== "assistant") continue;
           for (let j = turns[i].blocks.length - 1; j >= 0; j--) {
             const b = turns[i].blocks[j];
-            if (b.kind === "auth") { b.done = true; break; }
+            if (b.kind === "auth") {
+              b.done = true;
+              break;
+            }
           }
           break;
         }
