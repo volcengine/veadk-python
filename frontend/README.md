@@ -12,6 +12,44 @@ See [deployment and operation](service/studio_release_notifier/README.md).
 
 ## Features
 
+- **Agent publication review**: Developers deploy privately and apply from an
+  Agent card. The review center's Agent tab lets administrators inspect the
+  submitted Runtime metadata, approve with an optional comment, or return with
+  a required reason. Administrators can also publish directly. The applicant
+  sees the reviewer name/avatar, decision time, comment and return reason
+
+  Agent review is independent of SkillSpaces. Runtime `TagResources` writes
+  `veadk:visibility` and explicit `veadk:review:*` fields for application ID,
+  status, submission time/message, reviewer ID/name, decision time/reason/comment,
+  and withdrawal/unpublication actors and times. Agent details are read live from
+  the Runtime; applicant identity reuses its `veadk:owner` and `veadk:author` tags
+  instead of storing another snapshot. Display profiles resolve through the
+  configured Identity user pool. Cloud error bodies and request IDs are
+  returned intact. The repository uses provider-scoped clients for Volcengine
+  and BytePlus
+
+  Only an approved Runtime tagged enterprise-visible is shared. Other users can
+  use it through the server proxy and access their own conversations; management,
+  logs, credentials and other users' sessions remain restricted. Pending Agents
+  must be withdrawn before editing/deleting; published Agents must be unpublished
+  first. Unpublishing revokes subsequent shared proxy requests, including when
+  connection credentials were cached. An already running stream is not terminated
+
+  This first iteration stores the latest application on each Runtime and
+  replaces it on resubmission. Review covers name, description, model and Runtime
+  configuration metadata, not source files or automatic scoring. A configuration
+  fingerprint rejects approval if the submitted Runtime has changed. Version
+  upgrades, public-version selection and archived application history are deferred.
+  Studio guards do not prevent direct cloud changes; concurrent decisions are
+  serialized within one process, without a cross-replica transaction. The record
+  limits application messages to 20 characters and decision reasons/comments to
+  256 characters. Text unsupported by cloud tags is encoded per field, splitting
+  long values into numbered continuations. Every tag value fits within 256 bytes;
+  continuation tags are written first, then field heads and visibility together
+  within the 20-tag call limit. Writes are read back before reporting success
+  and reject exceeding the 50-tag Runtime quota. Existing packed applications
+  remain readable; new writes use explicit fields
+
 - **Skill publication requests**: Each personal Skill version can be submitted
   from its action row. Studio copies its archive into an independent Skill in
   `studio_review_space`, preserving the original name and writing the signed-in

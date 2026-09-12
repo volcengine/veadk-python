@@ -395,3 +395,54 @@
   overflow: auto;
   overflow-wrap: anywhere;
 }
+
+/* Review controls belong to the footer so card content cannot overlap them */
+.my-agent-card.has-review {
+  height: auto;
+  min-height: 192px;
+}
+
+.my-agent-card.has-review .resource-card__content {
+  flex: 1 0 auto;
+}
+
+.my-agent-card.has-review .resource-card__footer {
+  height: auto;
+  flex-basis: auto;
+  align-items: flex-end;
+}
+
+.my-agent-card-footer {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: 100%;
+}
+
+.agent-review-card-controls {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.agent-review-card-status {
+  font-size: 12px;
+  line-height: 20px;
+  color: hsl(var(--muted-foreground));
+}
+
+.agent-review-card-action {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+
+.my-agent-grid:has(.has-review) > .resource-create-card {
+  height: 100%;
+  min-height: 192px;
+}

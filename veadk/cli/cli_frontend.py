@@ -2040,6 +2040,9 @@ def _run_frontend_server(
         runtime_attribution,
         runtime_belongs_to,
     )
+    from frontend.server.agent_reviews.service import AgentReviewService, ReviewActor
+    from frontend.server.agent_reviews.tags import enterprise_visible, STATUS_TAG
+    from frontend.server.agent_reviews.access import authorize_shared_proxy
     from veadk.multimodal.api import mount_media_routes
     from veadk.multimodal.transport import resolve_runtime_media
 
@@ -9405,12 +9408,19 @@ def _run_frontend_server(
         *,
         managed_only: bool = False,
         coded_access_error: bool = False,
+        allow_shared: bool = False,
     ) -> Any:
         principal = _current_principal(request)
         role = _request_role(request)
         runtime = _get_runtime(runtime_id, region)
         tags = _runtime_tags(runtime)
-        if not role.is_admin and not runtime_belongs_to(tags, principal):
+        if (
+            not role.is_admin
+            and not runtime_belongs_to(tags, principal)
+            and not (
+                allow_shared and principal is not None and enterprise_visible(tags)
+            )
+        ):
             raise HTTPException(
                 status_code=404,
                 detail=(
@@ -9434,6 +9444,7 @@ def _run_frontend_server(
                 runtime_id,
                 region,
                 coded_access_error=True,
+                allow_shared=True,
             )
         except HTTPException:
             raise
@@ -9447,7 +9458,11 @@ def _run_frontend_server(
         principal = _current_principal(request)
         role = _request_role(request)
         tags = _runtime_tags(runtime)
-        if not role.is_admin and not runtime_belongs_to(tags, principal):
+        if (
+            not role.is_admin
+            and not runtime_belongs_to(tags, principal)
+            and not (principal is not None and enterprise_visible(tags))
+        ):
             raise HTTPException(
                 status_code=404,
                 detail="runtime_access_denied",
@@ -9474,7 +9489,7 @@ def _run_frontend_server(
     mount_runtime_log_routes(
         app,
         service=runtime_log_service,
-        authorize_runtime=_authorized_runtime_for_connection,
+        authorize_runtime=_authorized_runtime,
         normalize_region=_coerce_cloud_region,
         safe_error=lambda error: _safe_exception_detail(
             error,
@@ -9646,12 +9661,13 @@ def _run_frontend_server(
         if not runtime_id:
             raise HTTPException(status_code=400, detail="runtimeId is required")
         try:
-            _authorized_runtime(
+            runtime = _authorized_runtime(
                 request,
                 runtime_id,
                 region,
                 managed_only=True,
             )
+            AgentReviewService.require_editable(runtime)
             _delete_agentkit_runtime(runtime_id, region)
             return {"success": True}
         except HTTPException:
@@ -9836,15 +9852,15 @@ def _run_frontend_server(
     ):
         """One page of AgentKit runtimes for the agent selector. Lists ALL
         runtimes (server-side paginated); each item is flagged `isMine` when its
-        ownership tags match the trusted current identity. Non-admin users are
-        always restricted to their own runtimes.
+        ownership tags match the trusted current identity. Non-admin users see
+        their own runtimes and approved enterprise-visible runtimes.
         region=all merges runtimes across all supported regions."""
         principal = _current_principal(request)
         role = _request_role(request)
         ak, sk, svc_token = _resolve_ve_credentials()
         regions = _runtime_regions(provider, region)
         page_size = max(1, min(page_size, 100))
-        restrict_to_owner = scope == "mine" or not role.is_admin
+        restrict_to_owner = scope == "mine"
         principal_key = (
             getattr(principal, "owner_id", ""),
             getattr(principal, "display_name", ""),
@@ -9900,7 +9916,13 @@ def _run_frontend_server(
                 for runtime in resp.agent_kit_runtimes or []:
                     tags = _runtime_tags(runtime)
                     is_mine = runtime_belongs_to(tags, principal)
-                    if (scope == "mine" or not role.is_admin) and not is_mine:
+                    if scope == "mine" and not is_mine:
+                        continue
+                    if (
+                        not role.is_admin
+                        and not is_mine
+                        and not (principal is not None and enterprise_visible(tags))
+                    ):
                         continue
                     can_delete = (
                         role != StudioRole.USER
@@ -9922,7 +9944,16 @@ def _run_frontend_server(
                             "region": reg,
                             "author": tags.get("veadk:author", ""),
                             "isMine": is_mine,
-                            "canDelete": can_delete,
+                            "canDelete": can_delete
+                            and tags.get(STATUS_TAG) != "pending"
+                            and not enterprise_visible(tags),
+                            "canManage": role != StudioRole.USER
+                            and (role.is_admin or is_mine),
+                            "canPublish": role.is_admin,
+                            "visibility": "enterprise"
+                            if enterprise_visible(tags)
+                            else "private",
+                            "reviewStatus": tags.get(STATUS_TAG, ""),
                         }
                     )
                     if len(out) >= target_size:
@@ -10533,6 +10564,11 @@ def _run_frontend_server(
                 runtime_id,
                 region,
             )
+            principal = _current_principal(request)
+            if not _request_role(request).is_admin and not runtime_belongs_to(
+                _runtime_tags(runtime), principal
+            ):
+                await authorize_shared_proxy(request, path, upstream_method, principal)
             endpoint, apikey, auth_type, endpoint_network_type = _resolve_runtime_conn(
                 runtime_id,
                 region,
@@ -11292,6 +11328,43 @@ def _run_frontend_server(
             _current_principal,
             public_url=oauth2_redirect_uri,
         )
+
+    from frontend.server.agent_reviews.repository import AgentReviewRepository
+    from frontend.server.agent_reviews.routes import mount_agent_review_routes
+    from frontend.server.agent_reviews.profiles import resolve_profile
+
+    def _agent_review_actor(request: Request) -> ReviewActor:
+        principal = _current_principal(request)
+        role = _request_role(request)
+        return ReviewActor(
+            owner_id=principal.owner_id if principal else "",
+            name=principal.display_name if principal else "",
+            role=role.value,
+            identity_uid=principal.identity_uid if principal else "",
+            identifiers=principal.identifiers if principal else frozenset(),
+        )
+
+    def _agent_review_profile(person: dict[str, str]) -> dict[str, str]:
+        management = getattr(app.state, "studio_user_management", None)
+        return resolve_profile(getattr(management, "directory", None), person)
+
+    def _invalidate_agent_review_access() -> None:
+        _runtime_list_cache.clear()
+        _rt_conn_cache.clear()
+        runtime_update_capability_results.clear()
+
+    agent_review_service = AgentReviewService(
+        AgentReviewRepository(provider, _resolve_ve_credentials),
+        profiles=_agent_review_profile,
+    )
+    app.state.agent_review_service = agent_review_service
+    mount_agent_review_routes(
+        app,
+        agent_review_service,
+        _agent_review_actor,
+        _coerce_cloud_region,
+        _invalidate_agent_review_access,
+    )
 
     # ---- Auth ----------------------------------------------------------------
     # 'gateway' mode: an upstream API gateway (the AgentKit runtime gateway) has
@@ -12359,6 +12432,7 @@ def _run_frontend_server(
                 detail="runtime_lookup_failed",
             ) from error
 
+        AgentReviewService.require_editable(runtime)
         runtime_payload = _runtime_update_payload(runtime, region)
 
         try:
@@ -12775,6 +12849,7 @@ def _run_frontend_server(
             feedback.runtime_id,
             feedback.region,
             coded_access_error=True,
+            allow_shared=True,
         )
         if provider == "byteplus":
             return {

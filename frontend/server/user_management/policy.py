@@ -190,7 +190,7 @@ class StudioAccessPolicy:
                 "createAgents": can_manage,
                 "createPersonalAgents": principal is not None or not self.enabled,
                 "manageAgents": can_manage,
-                "runtimeScope": "all" if role.is_admin else "mine",
+                "runtimeScope": "all",
                 **(
                     {"manageUsers": role == StudioRole.SUPER_ADMIN}
                     if self.identity_roles

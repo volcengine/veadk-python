@@ -1,0 +1,28 @@
+.agent-review-center { min-height: 0; }
+.agent-review-name { font-weight: 500; }
+.agent-review-person { display: flex; align-items: center; gap: 6px; font-size: 12px; overflow-wrap: anywhere; }
+.agent-review-person img { width: 20px; height: 20px; border-radius: 50%; object-fit: cover; }
+.agent-review-empty { padding: 40px 20px; text-align: center; color: hsl(var(--muted-foreground)); font-size: 13px; }
+.agent-review-backdrop { position: fixed; inset: 0; background: hsl(var(--foreground) / .3); z-index: 140; }
+.agent-review-dialog { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(640px, calc(100vw - 32px)); max-height: calc(100dvh - 40px); display: flex; flex-direction: column; background: hsl(var(--panel)); color: hsl(var(--foreground)); border: 1px solid hsl(var(--border)); border-radius: 12px; z-index: 141; box-shadow: 0 16px 48px hsl(var(--foreground) / .12); }
+.agent-review-dialog-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 20px 24px 16px; }
+.agent-review-dialog-header h2 { font-size: 17px; font-weight: 600; margin: 0; overflow-wrap: anywhere; }
+.agent-review-dialog-header p { font-size: 12px; color: hsl(var(--muted-foreground)); margin: 6px 0 0; }
+.agent-review-close { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; flex-shrink: 0; }
+.agent-review-dialog-body { padding: 0 24px 20px; overflow-y: auto; min-height: 0; font-size: 13px; }
+.agent-review-dialog-body section { margin: 16px 0; }
+.agent-review-dialog-body h3 { font-size: 13px; font-weight: 500; margin: 0 0 6px; }
+.agent-review-dialog-body p, .agent-review-error p { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
+.agent-review-facts { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 24px; margin: 8px 0 20px; }
+.agent-review-facts dt { color: hsl(var(--muted-foreground)); font-size: 12px; margin-bottom: 4px; }
+.agent-review-facts dd { margin: 0; overflow-wrap: anywhere; }
+.agent-review-dialog-body label { display: flex; flex-direction: column; gap: 6px; margin-top: 16px; font-size: 13px; }
+.agent-review-text-count { align-self: flex-end; color: hsl(var(--muted-foreground)); font-size: 12px; }
+.agent-review-dialog-body textarea { font: inherit; color: inherit; resize: vertical; min-height: 72px; padding: 8px 10px; border: 1px solid hsl(var(--border)); border-radius: 6px; background: hsl(var(--background)); }
+.agent-review-dialog-footer { padding: 16px 24px; display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px; border-top: 1px solid hsl(var(--border)); }
+.agent-review-dialog-footer button, .agent-review-error button { min-height: 34px; padding: 6px 12px; border: 1px solid hsl(var(--border)); border-radius: 6px; font-size: 13px; }
+.agent-review-dialog-footer button.is-primary { background: hsl(var(--primary)); color: hsl(var(--primary-foreground)); border-color: transparent; }
+.agent-review-dialog button:disabled { opacity: .5; cursor: not-allowed; }
+.agent-review-dialog button:focus-visible, .agent-review-dialog textarea:focus-visible, .agent-review-center button:focus-visible { outline: 2px solid hsl(var(--ring)); outline-offset: 2px; }
+.agent-review-error, .agent-review-warning { color: hsl(var(--destructive)); font-size: 13px; padding: 12px 0; }
+@media (max-width: 520px) { .agent-review-facts { grid-template-columns: 1fr; } }
