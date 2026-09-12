@@ -7,13 +7,14 @@ export interface LabelProps extends HTMLAttributes<HTMLSpanElement> {
   dismissible?: boolean;
   onDismiss?: () => void;
   dismissLabel?: string;
-  variant?: "default" | "status";
+  /** pill 为 Header 使用的描边胶囊标签，可通过 startIcon 传入状态圆点 */
+  variant?: "default" | "status" | "pill";
 }
 
 /** Compact dark label from Figma nodes 788:392339 and 788:392355 */
 export function Label({ startIcon, dismissible = false, onDismiss, dismissLabel = "Remove label", variant = "default", children, className, ...props }: LabelProps) {
   return (
-    <span {...props} className={["studio-label", variant === "status" ? "studio-label--status" : undefined, dismissible ? "studio-label--dismissible" : undefined, startIcon ? "studio-label--with-icon" : undefined, className].filter(Boolean).join(" ")}>
+    <span {...props} className={["studio-label", variant !== "default" ? `studio-label--${variant}` : undefined, dismissible ? "studio-label--dismissible" : undefined, startIcon ? "studio-label--with-icon" : undefined, className].filter(Boolean).join(" ")}>
       {startIcon ? <span className="studio-label__icon" aria-hidden="true">{startIcon}</span> : null}
       <span className="studio-label__text">{children}</span>
       {dismissible ? <button type="button" className="studio-label__dismiss" aria-label={dismissLabel} onClick={onDismiss}>

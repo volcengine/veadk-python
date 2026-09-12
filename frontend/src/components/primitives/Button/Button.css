@@ -30,6 +30,13 @@
   color: #ffffff;
 }
 
+/* Figma 740:296898: translucent outlined secondary action */
+.studio-button--outline {
+  background: var(--studio-surface-node-selected, rgba(38, 38, 46, .45));
+  color: var(--studio-text-primary, #dbdee7);
+  box-shadow: inset 0 0 0 .5px var(--studio-border-control, rgba(219, 222, 231, .2));
+}
+
 .studio-button__icon {
   display: inline-flex;
   align-items: center;
@@ -45,7 +52,8 @@
   height: 10px;
 }
 
-.studio-button__icon > svg {
+.studio-button__icon > svg,
+.studio-button__icon > img {
   display: block;
   width: 100%;
   height: 100%;
@@ -140,6 +148,38 @@
   height: 16px;
 }
 
+.studio-button--size-large {
+  height: 36px;
+  padding: 7px 12px;
+}
+
+.studio-button--size-large .studio-button__icon {
+  flex-basis: 16px;
+  width: 16px;
+  height: 16px;
+}
+
+.studio-button--size-large.studio-button--icon-only {
+  width: 36px;
+  min-width: 36px;
+  padding: 8px;
+}
+
+.studio-button--size-large.studio-button--icon-only .studio-button__icon,
+.studio-button--size-compact.studio-button--icon-only .studio-button__icon {
+  flex-basis: 20px;
+  width: 20px;
+  height: 20px;
+}
+
+.studio-button--size-compact.studio-button--icon-only {
+  width: 20px;
+  min-width: 20px;
+  height: 20px;
+  padding: 0;
+  border-radius: 0;
+}
+
 .studio-button--icon-only:focus-visible {
   outline: 1px solid var(--studio-focus-ring, #ffffff);
   outline-offset: 2px;
@@ -148,6 +188,30 @@
 .studio-button--icon-only:disabled {
   opacity: .45;
   cursor: not-allowed;
+}
+
+.studio-button--loading:disabled {
+  position: relative;
+  opacity: .65;
+  cursor: not-allowed;
+}
+
+/* Keep original dimensions and the accessible name while the ring is visible */
+.studio-button--loading > .studio-button__icon,
+.studio-button--loading > .studio-button__label {
+  opacity: 0;
+}
+
+.studio-button__loading {
+  --studio-loading-track: color-mix(in srgb, currentColor 22%, transparent);
+  --studio-loading-color: currentColor;
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  overflow: hidden;
 }
 
 @media (hover: hover) {

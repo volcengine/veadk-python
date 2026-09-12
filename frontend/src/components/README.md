@@ -21,5 +21,6 @@
 - 预览示例放在 `../components-preview/examples/`，直接引用这里的组件
 
 已实现的组件及 Figma 示例见 Components Preview，Tabs 统一归入基础组件
+基础组件 Menu 支持文字箭头触发、分组、可选图标及多级子菜单，通过 items 接收结构和 onSelect 响应菜单操作
 
 - `nodes/`：画布节点组件，包含普通节点和Agent节点的默认、选中状态

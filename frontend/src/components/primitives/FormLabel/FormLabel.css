@@ -8,10 +8,16 @@
   color: var(--studio-text-secondary, rgba(219, 222, 231, .6));
   font-family: "Century Gothic", sans-serif;
   font-size: 13px;
+  font-style: normal;
   font-weight: 400;
   font-synthesis: none;
   line-height: 22px;
   letter-spacing: 0;
   white-space: nowrap;
+}
+.studio-form-label--field {
+  color: var(--studio-text-primary, #dbdee7);
+  font-size: 14px;
+  white-space: normal;
 }
 .studio-form-label__required { flex: 0 0 6px; width: 6px; height: 6px; }

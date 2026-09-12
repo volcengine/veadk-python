@@ -39,7 +39,8 @@
   height: 16px;
 }
 
-.studio-label__icon > svg {
+.studio-label__icon > svg,
+.studio-label__icon > img {
   display: block;
   width: 100%;
   height: 100%;
@@ -62,6 +63,27 @@
   flex-basis: 14px;
   width: 14px;
   height: 14px;
+}
+
+/* Figma 813:399281: Header status */
+.studio-label--pill {
+  justify-content: flex-start;
+  gap: 8px;
+  min-width: 80px;
+  height: 23px;
+  padding: 2.5px 10.5px;
+  border-radius: 40px;
+  background: transparent;
+  box-shadow: inset 0 0 0 0.5px var(--studio-border-default, rgba(255, 255, 255, 0.2));
+  font-family: "JetBrains Mono", monospace;
+  font-size: 12px;
+  line-height: 18px;
+  letter-spacing: 0;
+}
+.studio-label--pill .studio-label__icon {
+  flex-basis: 7px;
+  width: 7px;
+  height: 7px;
 }
 
 /* Figma 788:392375 */

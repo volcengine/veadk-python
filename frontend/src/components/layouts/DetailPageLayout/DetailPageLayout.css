@@ -1,16 +1,22 @@
 @font-face { font-family: "Fragment Mono"; src: url("./assets/fragment-mono.ttf") format("truetype"); font-style: normal; font-weight: 400; font-display: swap; }
 @font-face { font-family: "Didact Gothic"; src: url("./assets/didact-gothic.ttf") format("truetype"); font-style: normal; font-weight: 400; font-display: swap; }
 
-/* Figma 813:398700 — canvas coordinates in the 1440 × 1080 frame */
-.studio-detail-page-layout { position: relative; isolation: isolate; box-sizing: border-box; width: 1440px; height: 1080px; overflow: hidden; border-radius: 16px; background: var(--studio-surface-page, #0c0c0c); color: var(--studio-text-primary, #dbdee7); font-family: "Century Gothic", sans-serif; font-weight: 400; font-synthesis: none; }
-.studio-detail-page-layout__glow { position: absolute; z-index: -1; left: 280px; top: -159px; width: 579px; height: 192px; border-radius: 50%; background: rgba(232,230,252,.2); filter: blur(72px); pointer-events: none; }
-.studio-detail-page-layout__sidebar { position: absolute; inset: 0 auto 0 0; width: 240px; background: var(--studio-surface-sidebar-overlay, rgba(255,255,255,.02)); }
-.studio-detail-page-layout__back { position: absolute; left: 320px; top: 60px; height: 24px; }
-.studio-detail-page-layout__header { position: absolute; left: 320px; top: 104px; width: 1042px; height: 60px; }
-.studio-detail-page-layout__tabs { position: absolute; left: 324px; top: 196px; width: 1040px; height: 28px; }
-.studio-detail-page-layout__content { position: absolute; left: 320px; top: 252px; width: 1044px; }
-.studio-detail-page-layout__runtime-title { position: absolute; left: 325px; top: 858px; margin: 0; font-family: "Fragment Mono", monospace; font-size: 14px; font-weight: 400; line-height: 21px; color: var(--studio-text-muted, rgba(219,222,231,.4)); }
-.studio-detail-page-layout__runtime { position: absolute; left: 320px; top: 893px; width: 1044px; height: 163px; border-radius: 16px; background: var(--studio-surface-metric, rgba(32,33,36,.39)); }
+/* Figma 813:398700 — detail content without the application sidebar */
+.studio-detail-page-layout { position: relative; isolation: isolate; container-type: inline-size; box-sizing: border-box; display: flex; flex-direction: column; width: 100%; min-width: 0; min-height: 1080px; padding: 60px clamp(24px, 5.556%, 80px) 24px; overflow: hidden; border-radius: 16px; background: var(--studio-surface-page, #0c0c0c); color: var(--studio-text-primary, #dbdee7); font-family: "Century Gothic", sans-serif; font-weight: 400; font-synthesis: none; }
+.studio-detail-page-layout__glow { position: absolute; z-index: -1; left: 40px; top: -159px; width: 579px; height: 192px; border-radius: 50%; background: rgba(232,230,252,.2); filter: blur(72px); pointer-events: none; }
+.studio-detail-page-layout__back { flex: none; min-width: 0; min-height: 24px; margin-bottom: 20px; }
+.studio-detail-page-layout__header { flex: none; min-width: 0; min-height: 60px; margin-bottom: 32px; }
+.studio-detail-page-layout__header > .studio-header { width: 100%; max-width: 100%; height: auto; min-height: 60px; }
+.studio-detail-page-layout__tabs { flex: none; min-width: 0; min-height: 28px; margin-bottom: 28px; }
+.studio-detail-page-layout__content { flex: 1 0 auto; min-width: 0; margin-bottom: 40px; }
+.studio-detail-page-layout__runtime-title { flex: none; margin: 0 0 14px; font-family: "Fragment Mono", monospace; font-size: 14px; font-weight: 400; line-height: 21px; color: var(--studio-text-muted, rgba(219,222,231,.4)); }
+.studio-detail-page-layout__runtime { flex: none; min-width: 0; min-height: 163px; border-radius: 16px; background: var(--studio-surface-metric, rgba(32,33,36,.39)); }
+@container (max-width: 600px) {
+  .studio-detail-page-layout__header > .studio-header { flex-wrap: wrap; }
+  .studio-detail-page-layout__header .studio-header__identity { flex-basis: 100%; }
+  .studio-detail-page-layout__header .studio-header__heading { max-width: 100%; }
+  .studio-detail-page-layout__header .studio-header__title { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+}
 .studio-detail-sidebar { position: relative; width: 240px; height: 1080px; }
 .studio-detail-sidebar__brand { box-sizing: border-box; display: flex; align-items: center; justify-content: space-between; width: 240px; height: 64px; padding: 0 8px 0 16px; }
 .studio-detail-sidebar__brand > span { display: flex; align-items: center; gap: 6px; font-family: "Didact Gothic", sans-serif; font-size: 18px; line-height: 25.2px; color: white; }

@@ -1,3 +1,15 @@
+import { EmptyStatePreview } from "./examples/EmptyStatePreview";
+import { ErrorStatePreview } from "./examples/ErrorStatePreview";
+import { LongRunningStatePreview } from "./examples/LongRunningStatePreview";
+import { ModalButtonPreview } from "./examples/ModalButtonPreview";
+import { DrawerPreview } from "./examples/DrawerPreview";
+import { FileExplorerPreview } from "./examples/FileExplorerPreview";
+import { FileUploadPreview } from "./examples/FileUploadPreview";
+import { SliderPreview } from "./examples/SliderPreview";
+import { IndexLayoutPreview } from "./examples/IndexLayoutPreview";
+import { DatePickerPreview } from "./examples/DatePickerPreview";
+import { LoadingPreview } from "./examples/LoadingPreview";
+import { ToastPreview } from "./examples/ToastPreview";
 import { TablePreview } from "./examples/TablePreview";
 import { RadioPreview } from "./examples/RadioPreview";
 import { InputWithHeaderIconPreview } from "./examples/InputWithHeaderIconPreview";
@@ -6,6 +18,7 @@ import { ScrollArea } from "../components/primitives/ScrollArea";
 import { ScrollAreaPreview } from "./examples/ScrollAreaPreview";
 import { DividerPreview } from "./examples/DividerPreview";
 import { DropdownPreview } from "./examples/DropdownPreview";
+import { MenuPreview } from "./examples/MenuPreview";
 import { PromptInputPreview } from "./examples/PromptInputPreview";
 import { useState, useSyncExternalStore } from "react";
 import { ButtonsPreview, CardsPreview, TabsPreview, InputWithTailIconPreview, ItemPreview, LabelPreview, SidebarPreview, SwitchPreview, CheckboxPreview, FormFieldPreview, DashedZonePreview, CodeBlockPreview, ModalLayoutPreview, HeaderPreview, PillTagPreview, FormLabelPreview, ResourcePageLayoutPreview, DetailPageLayoutPreview, TextareaPreview, SelectPreview, BasicNodePreview, AgentNodePreview, CanvasBackgroundPreview, TokensPreview } from "./examples";
@@ -13,6 +26,18 @@ import { applyPreviewTheme, readPreviewTheme, type PreviewTheme } from "./theme"
 import "./components-preview.css";
 
 const examples = [
+  { id: "date-picker", label: "Date Picker", Preview: DatePickerPreview, group: "primitives" },
+  { id: "index-layout", label: "Index layout", Preview: IndexLayoutPreview, group: "layouts" },
+  { id: "slider", label: "Slider", Preview: SliderPreview, group: "primitives" },
+  { id: "file-upload", label: "File Upload", Preview: FileUploadPreview, group: "composites" },
+  { id: "modal-button", label: "Modal Button", Preview: ModalButtonPreview, group: "composites" },
+  { id: "drawer", label: "Drawer", Preview: DrawerPreview, group: "composites" },
+  { id: "file-explorer", label: "File Explorer", Preview: FileExplorerPreview, group: "composites" },
+  { id: "long-running-state", label: "Long-running State", Preview: LongRunningStatePreview, group: "composites" },
+  { id: "empty-state", label: "Empty State", Preview: EmptyStatePreview, group: "primitives" },
+  { id: "error-state", label: "Error State", Preview: ErrorStatePreview, group: "primitives" },
+  { id: "loading", label: "Loading", Preview: LoadingPreview, group: "primitives" },
+  { id: "toast", label: "Toast", Preview: ToastPreview, group: "primitives" },
   { id: "table", label: "Table", Preview: TablePreview, group: "primitives" },
   { id: "load-more", label: "下拉加载", Preview: LoadMoreAreaPreview, group: "composites" },
   { id: "scroll-area", label: "Scroll Area", Preview: ScrollAreaPreview, group: "primitives" },
@@ -24,6 +49,7 @@ const examples = [
   { id: "agent-node", label: "Agent 节点", Preview: AgentNodePreview, group: "nodes" },
   { id: "basic-node", label: "普通节点", Preview: BasicNodePreview, group: "nodes" },
   { id: "select", label: "Select", Preview: SelectPreview, group: "primitives" },
+  { id: "menu", label: "Menu", Preview: MenuPreview, group: "primitives" },
   { id: "textarea", label: "Textarea", Preview: TextareaPreview, group: "primitives" },
   { id: "detail-page-layout", label: "Detail page", Preview: DetailPageLayoutPreview, group: "layouts" },
   { id: "form-label", label: "Form label", Preview: FormLabelPreview, group: "primitives" },
@@ -41,7 +67,7 @@ const examples = [
   { id: "switch", label: "Switch", Preview: SwitchPreview, group: "primitives" },
   { id: "checkbox", label: "Checkbox", Preview: CheckboxPreview, group: "primitives" },
   { id: "radio", label: "Radio", Preview: RadioPreview, group: "primitives" },
-  { id: "sidebar", label: "Sidebar", Preview: SidebarPreview, group: "composites" },
+  { id: "sidebar", label: "Sidebar / 会话", Preview: SidebarPreview, group: "composites" },
   { id: "form-field", label: "Form field", Preview: FormFieldPreview, group: "composites" },
   { id: "dashed-zone", label: "Dashed zone", Preview: DashedZonePreview, group: "composites" },
   { id: "item", label: "Item", Preview: ItemPreview, group: "composites" },

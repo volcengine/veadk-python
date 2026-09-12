@@ -58,11 +58,7 @@
 .studio-scroll-area__footer button { padding: 2px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--studio-text-secondary); font: inherit; cursor: pointer; transition: background-color 140ms ease; }
 .studio-scroll-area__footer button:hover { background: var(--studio-fill-hover); color: var(--studio-text-primary); }
 .studio-scroll-area__footer button:focus-visible { outline: 1px solid var(--studio-focus-ring); outline-offset: 2px; }
-.studio-scroll-area__spinner { width: 16px; height: 16px; animation: studio-scroll-area-spin 800ms linear infinite; }
-@keyframes studio-scroll-area-spin { to { transform: rotate(360deg); } }
-
 @media (prefers-reduced-motion: reduce) {
   .studio-scroll-area { transition: none; }
-  .studio-scroll-area__spinner { animation: none; }
   .studio-scroll-area__footer button { transition: none; }
 }

@@ -19,13 +19,11 @@ export function ModalLayout({ title, topGlow = true, children, cancelLabel = "Ca
   return <div role="dialog" aria-labelledby={titleId} {...props} className={`studio-modal-layout ${topGlow ? "studio-modal-layout--glow" : ""} ${className}`.trim()}>
     <header className="studio-modal-layout__header">
       <h3 id={titleId}>{title}</h3>
-      <button type="button" className="studio-modal-layout__close" aria-label={closeLabel} onClick={onClose}>
-        <img src={closeIcon} alt="" />
-      </button>
+      <Button variant="ghost" size="compact" iconOnly className="studio-modal-layout__close" aria-label={closeLabel} onClick={onClose} startIcon={<img src={closeIcon} alt="" />} />
     </header>
     <div className="studio-modal-layout__body">{children}</div>
     <footer className="studio-modal-layout__footer">
-      <Button className="studio-modal-layout__cancel" onClick={onCancel}>{cancelLabel}</Button>
+      <Button variant="outline" className="studio-modal-layout__cancel" onClick={onCancel}>{cancelLabel}</Button>
       <Button className="studio-modal-layout__confirm" onClick={onConfirm}>{confirmLabel}</Button>
     </footer>
   </div>;

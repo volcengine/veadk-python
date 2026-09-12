@@ -1,0 +1,3 @@
+.toast-preview__triggers { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.toast-preview__hint { max-width: 728px; margin: 12px 0 24px; color: var(--studio-text-secondary); font-size: 13px; line-height: 20px; }
+.toast-preview__states { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 440px), 1fr)); gap: 12px; max-width: 892px; }

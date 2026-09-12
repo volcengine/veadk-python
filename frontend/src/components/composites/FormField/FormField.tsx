@@ -39,7 +39,7 @@ export function FormField({ label, htmlFor, required = false, tip, error, childr
   const hasMessage = message != null && typeof message !== "boolean" && message !== "";
   return (
     <div {...props} className={`studio-form-field ${className}`.trim()} data-invalid={hasError || undefined}>
-      {required ? <FormLabel htmlFor={htmlFor} required>{label}</FormLabel> : <label className="studio-form-field__label" htmlFor={htmlFor}>{label}</label>}
+      <FormLabel htmlFor={htmlFor} required={required} variant={required ? "default" : "field"}>{label}</FormLabel>
       {describeControl(children, htmlFor, hasMessage ? descriptionId : undefined, hasError)}
       {hasMessage && <p key={hasError ? "error" : "tip"} id={descriptionId} className="studio-form-field__message" role={hasError ? "alert" : undefined}>{message}</p>}
     </div>

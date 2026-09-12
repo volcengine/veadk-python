@@ -1,5 +1,5 @@
 import { ComponentApi } from "../api/ComponentApi";
-import { DetailPageLayout, DetailPageSidebar } from "../../components/layouts/DetailPageLayout";
+import { DetailPageLayout } from "../../components/layouts/DetailPageLayout";
 import { Header } from "../../components/composites/Header";
 import { InfoCard, InfoCardBody } from "../../components/composites/InfoCard";
 import { UnderlineTabs } from "../../components/primitives/UnderlineTabs";
@@ -24,7 +24,6 @@ export function DetailPageLayoutPreview() {
   return <section aria-labelledby="detail-page-layout-preview-title">
     <h2 className="component-preview-title" id="detail-page-layout-preview-title">Detail page layout</h2>
     <DetailPageLayout
-      sidebar={<DetailPageSidebar />}
       back={<button className="detail-page-preview__back" type="button"><span><img src={back} alt="" /></span>Back</button>}
       header={<Header title="DocuMind" description="Parses multi-format docs, extracts key points and to-dos, and skips page-by-page reading." />}
       tabs={<UnderlineTabs aria-label="Agent details" items={[{ value: "overview", label: "OverView" }, { value: "configuration", label: "Configuration" }, { value: "integration", label: "Integration" }, { value: "evaluation", label: "Evaluation" }, { value: "versions", label: "Versions" }]} />}
@@ -34,6 +33,6 @@ export function DetailPageLayoutPreview() {
         <section aria-labelledby="detail-performance-title"><h2 className="detail-page-preview__section-title" id="detail-performance-title">PERFORMANCE OVERVIEW</h2><div className="detail-page-preview__performance"><DetailPerformanceChart /><article className="detail-page-preview__performance-card"><div className="detail-page-preview__chart-heading"><h3>Title</h3></div></article></div></section>
       </div>
     </DetailPageLayout>
-  <ComponentApi names={["DetailPageLayout", "DetailPageSidebar"]} />
+  <ComponentApi names={["DetailPageLayout"]} />
     </section>;
 }

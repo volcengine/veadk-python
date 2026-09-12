@@ -1,5 +1,6 @@
 import type { HTMLAttributes, ReactNode } from "react";
 import { Button } from "../../primitives/Button";
+import { Label } from "../../primitives/Label";
 import avatarBackground from "./assets/avatar-background.png";
 import avatarLetter from "./assets/avatar-letter-d.svg";
 import statusDot from "./assets/status-dot.svg";
@@ -39,10 +40,7 @@ export function Header({
         <div className="studio-header__content">
           <div className="studio-header__heading">
             <h1 className="studio-header__title">{title}</h1>
-            <span className="studio-header__status">
-              <img src={statusDot} alt="" aria-hidden="true" />
-              <span>{status}</span>
-            </span>
+            <Label variant="pill" startIcon={<img src={statusDot} alt="" />}>{status}</Label>
           </div>
           <p className="studio-header__description" title={description}>{description}</p>
         </div>
@@ -51,11 +49,13 @@ export function Header({
         <Button
           className="studio-header__edit"
           variant="secondary"
+          size="large"
           startIcon={<img src={editIcon} alt="" />}
           onClick={onEdit}
         >Edit</Button>
         <Button
           className="studio-header__chat"
+          size="large"
           startIcon={<img src={chatIcon} alt="" />}
           onClick={onChat}
         >Chat</Button>

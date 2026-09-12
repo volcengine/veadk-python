@@ -19,9 +19,9 @@ npm run dev:components
 组件实现在 `src/components/`，预览示例位于本目录的 `examples/`，示例直接使用真实组件
 
 - 设计规范：颜色、字体、尺寸、间距、圆角和动效 Tokens
-- 基础组件：Button、Tabs、Label、FormLabel、InputWithTailIcon、InputWithHeaderIcon、Textarea、Select、Switch、Checkbox、Radio、RadioCard、PillTag、Divider、Dropdown、ScrollArea、Table
-- 复合组件：Sidebar、Item、卡片、Header、FormField、FormLabelRow、DashedZone、CodeBlock 和玻璃按钮组
-- 布局：CardLayout、ModalLayout、ResourcePageLayout、DetailPageLayout
+- 基础组件：Button、Tabs、Label、FormLabel、InputWithTailIcon、InputWithHeaderIcon、Textarea、Select、DatePicker、Menu、Switch、Checkbox、Radio、RadioCard、PillTag、Divider、Dropdown、ScrollArea、Table、Toast、Loading、EmptyState、ErrorState、Slider
+- 复合组件：Sidebar、Item、卡片、Header、FormField、FormLabelRow、DashedZone、CodeBlock、LongRunningState、ModalButton、Drawer、FileExplorer、FileUpload 和玻璃按钮组
+- 布局：CardLayout、ModalLayout、ResourcePageLayout、DetailPageLayout、IndexLayout
 - 节点组件：BasicNode、AgentNode、CanvasBackground
 
 Button、Tabs 和 Card 的变体集中展示，旧预览链接仍可访问
@@ -41,6 +41,42 @@ Textarea 的 counter 为独立插槽，预览保留原稿计数
 Hover 主要调整颜色、背景和细边框，保持尺寸、字重与位置稳定；侧栏长标题保留独立滚动行为
 Select 提供同宽矩形下拉面板，支持方向键、Enter、Escape、输入匹配和原生表单值
 SelectOption 的 description 可提供副标题，仅在下拉列表内显示；单行选项高 28px，双行高 48px，项间距为 4px，选中后的输入框只显示 label
+Menu 使用文字与向下箭头作为触发按钮，点击展开面板，支持可选图标、分组、分割线和多级子菜单，复用 ScrollArea 处理长菜单
+openOnHover 默认 false，开启后悬停入口即可展开，同时保留点击与键盘操作；预览提供独立的悬停展开示例
+菜单根据按钮位置与可用空间自动调整上下方向、左右对齐和子菜单展开方向；align 设置优先对齐方式，滚动及窗口变化时继续跟随按钮
+MenuEntry 由 MenuItem、MenuGroup 和 MenuSeparator 组成；MenuItem.children 继续嵌套菜单，MenuGroup.items 定义组内内容，末级选择通过 onSelect 返回 id 与菜单项
+预览提供基础、分组、多级、禁用及空菜单示例，以及组件参数和菜单数据字段表
+
+Toast 复用中性面板、状态色和 Button，支持提示、成功、警告、错误，以及自定义操作内容
+将调用方置于 ToastProvider 内，通过 useToast().add(options) 显示通知、dismiss(id) 关闭；默认顶部居中显示，宽度 440px 并随窄屏收缩，通知间距 8px，最多 3 条，4 秒后自动关闭，duration 为 0 时保持显示
+悬停或键盘聚焦时暂停计时；F6 可聚焦通知区，Escape 关闭当前聚焦通知，新增通知不抢焦点，支持减少动态效果偏好
+Toast 是独立展示层；ToastProvider、useToast 和 ToastOptions 的参数表见 Toast 预览
+
+Loading 复现提供的 Infinity Path（48 × 24px、2 秒循环）与 Ring Sweep（40 × 40px、1 秒循环），支持 size、无障碍 label 和 decorative 属性，减少动态效果时显示静态图形
+ScrollArea 加载时直接复用 Infinity Path，使用 24 × 12px 画布使路径与行内文字大小协调，仅显示图标；加载状态保留屏幕阅读器提示，颜色随明暗主题切换
+
+EmptyState 默认显示 40px 圆形背景与 18px 空文件夹图标，图标与标题字号一致；icon 仅替换内部图标，传 null 隐藏图标区域，actions 接收任意数量的 Button，横排并在空间不足时换行
+ErrorState 复用信息布局，固定显示红色断链图标，支持 title 与 description，不提供按钮区域
+
+ResourcePageLayout 的 loading 状态在资源区域居中显示 Infinity Path，loadingLabel 只供屏幕阅读器读取；资源页预览首次进入演示加载，也可通过「重新演示加载」重复查看
+
+DetailPageLayout 不包含 Sidebar，内容随容器宽度展开，保留 Header、Tabs、Runtime 与顶部光效
+
+LongRunningState 左侧通过 steps 和 currentStep 展示步骤，当前步骤使用 Infinity Path，右侧展示其 details，其余步骤以圆点和弱化文字展示；切换时详情模糊淡变，左侧位置稳定，窄容器上下排列，支持减少动态效果偏好
+
+ModalButton 的入口复用 Button，弹窗复用 ModalLayout，body 默认留空；提供遮罩、进出动效、焦点管理及 Esc 关闭，异步确认可使用 closeOnConfirm=false 与受控 open
+Drawer 是距屏幕上下与右侧各 16px 的浮动卡片，默认宽 480px，正文复用 ScrollArea；surface 默认 glass，深色使用烟灰玻璃，浅色使用白色磨砂玻璃，真实模糊后方内容并显示柔和高光，也可设为 solid；两者的层级低于 Menu、Select 和 Toast
+FileExplorer 左侧展示可展开目录树，右侧复用 CodeBlock 与 ScrollArea 展示文件；支持受控选择与展开、方向键导航，以及代码、配置、文档、图片、压缩包等常用文件类型的图标
+FileExplorer 默认只读、自动折行，wordWrap=false 时启用双向滚动；autoFormat 默认开启，支持的语言在打开时格式化展示，源数据保持不变；allowEdit=true 时复用代码编辑器，按文件保留草稿，通过 onEdit/onSave 处理修改、保存和重试，复制使用当前展示或编辑的内容
+CodeBlock 的 language 默认为 auto，字符串行自动高亮，已有手动颜色 token 保留，复制保留传入文本；FileExplorer 按文件名识别语言，也支持 file.language 显式覆盖，plaintext 关闭高亮，未知语言按纯文本显示
+
+FileUpload 复用 DashedZone，支持点击或拖拽选择、文件列表和移除，以及 accept、maxSize、maxFiles 校验；通过 onFilesChange 提供文件，业务负责上传，组件不会自行请求接口
+Slider 复用原生 range 的拖动和键盘行为，支持范围、步长、受控值及数值格式化，名称和数值分列显示
+DatePicker 位于基础组件，提供日期和日期时间选择、范围限制、时区与只读/禁用状态，返回当地日期字符串
+Sidebar 的会话示例保留在复合组件的「Sidebar / 会话」入口下，包含长标题渐隐滚动和尾部图标操作
+IndexLayout 位于布局分组，复用 GlassTabs、PromptInput 与 compact Item 组合首页内容，不包含产品 Sidebar；示例共享 PromptInput 的轮播提示词，每 3 秒上滑淡变，输入后隐藏，清空后恢复
+
+Button 的 loading 自动禁用按钮，只显示居中的 Ring 图标；保留原内容占位稳定宽高，并保留原无障碍名称，预览包含静态状态和点击加载示例
 
 ## 字体
 

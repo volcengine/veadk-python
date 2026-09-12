@@ -19,11 +19,13 @@
   width: 138px;
 }
 
-.button-preview-icon-section {
+.button-preview-icon-section,
+.button-preview-loading-section {
   margin-top: 32px;
 }
 
-.button-preview-icon-section > h3 {
+.button-preview-icon-section > h3,
+.button-preview-loading-section > h3 {
   margin: 0 0 16px;
   color: var(--studio-text-primary);
   font-size: 16px;

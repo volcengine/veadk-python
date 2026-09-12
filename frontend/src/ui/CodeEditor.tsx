@@ -15,7 +15,8 @@ interface CodeEditorProps {
   path: string;
   onChange: (value: string) => void;
   readOnly?: boolean;
-  theme?: CodeWorkspaceTheme;
+  theme?: CodeWorkspaceTheme | "none";
+  extensions?: Extension[];
   lineNumberStart?: number;
   height?: string;
   minHeight?: string;
@@ -59,6 +60,7 @@ export default function CodeEditor({
   height = "100%",
   minHeight,
   maxHeight,
+  extensions: additionalExtensions,
 }: CodeEditorProps) {
   const extensions = useMemo(
     () => [
@@ -66,8 +68,9 @@ export default function CodeEditor({
       ...(lineNumberStart === 1
         ? []
         : [lineNumbers({ formatNumber: (lineNumber) => String(lineNumber + lineNumberStart - 1) })]),
+      ...(additionalExtensions ?? []),
     ],
-    [lineNumberStart, path],
+    [lineNumberStart, path, additionalExtensions],
   );
 
   return (

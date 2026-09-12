@@ -1,5 +1,6 @@
 import { ComponentApi } from "../api/ComponentApi";
 import githubIcon from "../../components/primitives/Label/assets/github.svg";
+import statusDot from "../../components/composites/Header/assets/status-dot.svg";
 import { useId, useState } from "react";
 import { Label, LabelAddIcon } from "../../components/primitives/Label";
 import "./LabelPreview.css";
@@ -32,6 +33,10 @@ export function LabelPreview() {
         <section aria-labelledby={`${id}-status-title`}>
           <h3 id={`${id}-status-title`}>Status label</h3>
           <Label className="label-preview-status" variant="status">Control B</Label>
+        </section>
+        <section aria-labelledby={`${id}-pill-title`}>
+          <h3 id={`${id}-pill-title`}>Pill label</h3>
+          <Label variant="pill" startIcon={<img src={statusDot} alt="" />}>ACTIVE</Label>
         </section>
       </div>
     <ComponentApi names={["Label"]} />

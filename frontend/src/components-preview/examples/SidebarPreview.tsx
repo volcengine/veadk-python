@@ -34,9 +34,8 @@ export function SidebarPreview() {
           <SidebarItem icon={<SidebarAgentIcon />} data-state="hover">Agents</SidebarItem>
         </section>
       </div>
-      <ComponentApi names={["SidebarGroupTitle", "SidebarItem"]} />
       <section className="sidebar-preview-with-icon" aria-labelledby="sidebar-preview-with-icon-title">
-        <h3 className="component-preview-title" id="sidebar-preview-with-icon-title">Item with icon</h3>
+        <h3 className="component-preview-title" id="sidebar-preview-with-icon-title">会话 Item with icon</h3>
         <div className="sidebar-preview-icon-specimen">
           <SidebarGroupTitle>Recent</SidebarGroupTitle>
           <SidebarItemWithIcon
@@ -67,8 +66,8 @@ export function SidebarPreview() {
           <SidebarItemWithIcon label="Archived conversation" disabled trailing={<SidebarPreviewIcon name="archive" />} />
         </div>
         <output className="sidebar-preview-action" aria-live="polite">{notice}</output>
-        <ComponentApi names={["SidebarItemWithIcon"]} />
       </section>
+      <ComponentApi names={["SidebarGroupTitle", "SidebarItem", "SidebarItemWithIcon"]} />
     </section>
   );
 }

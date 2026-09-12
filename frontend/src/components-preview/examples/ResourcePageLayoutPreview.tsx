@@ -1,5 +1,5 @@
 import { ComponentApi } from "../api/ComponentApi";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ResourcePageLayout } from "../../components/layouts/ResourcePageLayout";
 import { ResourceCard } from "../../components/composites/ResourceCard";
 import { FilterTabs } from "../../components/primitives/FilterTabs";
@@ -61,13 +61,23 @@ function ResourceBanner() {
 }
 
 export function ResourcePageLayoutPreview() {
+  const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState("all");
   const [query, setQuery] = useState("");
+  useEffect(() => {
+    if (!loading) return;
+    const timer = window.setTimeout(() => setLoading(false), 1600);
+    return () => window.clearTimeout(timer);
+  }, [loading]);
   const matchingResources = resources.filter((resource) => `${resource.title} ${resource.description}`.toLowerCase().includes(query.toLowerCase()));
   return (
     <div>
+    <div className="resource-page-preview-controls">
+      <Button variant="secondary" disabled={loading} onClick={() => setLoading(true)}>重新演示加载</Button>
+    </div>
     <ResourcePageLayout
       title="Agents"
+      loading={loading}
       banner={<ResourceBanner />}
       filters={<FilterTabs aria-label="Resource owner" options={[{ value: "all", label: "All" }, { value: "mine", label: "Created by me" }]} value={filter} onValueChange={setFilter} />}
       actions={<>

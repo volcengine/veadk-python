@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ComponentProps, type CSSProperties } from "react";
+import { Loading } from "../Loading";
 import "./ScrollArea.css";
 
 export type ScrollAreaProps = ComponentProps<"div"> & {
@@ -48,9 +49,9 @@ export function ScrollArea({ orientation = "vertical", maxHeight, hideScrollbar 
     <div className={`studio-scroll-area__content ${contentClassName}`.trim()} aria-busy={onLoadMore ? loading : undefined}>{children}</div>
     {onLoadMore && orientation !== "horizontal" && <>
     <div className="studio-scroll-area__footer">
-      <span role="status" aria-live="polite">
-        {loading ? <><svg className="studio-scroll-area__spinner" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7" fill="none" stroke="currentColor" strokeWidth="1.5" strokeDasharray="32 12" /></svg>加载中</> : failed ? "加载失败" : hasMore ? "向下滚动加载更多" : "已加载全部"}
-      </span>
+      {loading ? <Loading size={24} /> : <span role="status" aria-live="polite">
+        {failed ? "加载失败" : hasMore ? "向下滚动加载更多" : "已加载全部"}
+      </span>}
       {!loading && hasMore && <button type="button" onClick={() => void load()}>{failed ? "重试" : "加载更多"}</button>}
     </div>
     </>}

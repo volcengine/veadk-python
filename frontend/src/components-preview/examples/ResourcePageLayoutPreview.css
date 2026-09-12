@@ -5,6 +5,7 @@
   font-weight: 400;
   font-display: swap;
 }
+.resource-page-preview-controls { display: flex; justify-content: flex-end; width: 1040px; margin-bottom: 16px; }
 .resource-page-preview-banner { position: relative; width: 1040px; height: 160px; overflow: hidden; border-radius: 16px; background: #e9e9e9; }
 .resource-page-preview-banner__background { position: absolute; left: -4px; top: -270px; width: 1044px; height: 585px; }
 .resource-page-preview-banner__background img { width: 100%; height: 100%; object-fit: cover; }
