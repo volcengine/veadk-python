@@ -1,0 +1,40 @@
+/* Figma 547:69175: radius 4 glass effect with -45deg lighting
+   CSS blur and edge lighting approximate its refraction/depth/dispersion */
+.studio-glass-icon-button {
+  position: relative;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 48px;
+  width: 48px;
+  height: 48px;
+  padding: 14px;
+  border: 0;
+  border-radius: 58px;
+  background: var(--studio-surface-glass-button, rgba(45, 45, 45, 0.2));
+  -webkit-backdrop-filter: blur(4px);
+  backdrop-filter: blur(4px);
+  cursor: pointer;
+}
+.studio-glass-icon-button::before {
+  position: absolute;
+  inset: 0;
+  padding: 0.5px;
+  border-radius: inherit;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.45), rgba(255, 255, 255, 0.06) 45%, rgba(255, 255, 255, 0.04) 65%, rgba(255, 255, 255, 0.28));
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  mask-composite: exclude;
+  pointer-events: none;
+  content: "";
+}
+.studio-glass-icon-button__icon,
+.studio-glass-icon-button__icon > img,
+.studio-glass-icon-button__icon > svg {
+  display: block;
+  width: 20px;
+  height: 20px;
+}
+.studio-glass-icon-button:disabled { cursor: not-allowed; }

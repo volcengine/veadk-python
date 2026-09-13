@@ -1,0 +1,40 @@
+.button-preview-examples {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 40px;
+}
+
+.button-preview-examples h3,
+.button-preview-examples h4 {
+  margin: 0 0 16px;
+  color: var(--studio-text-preview, #a1a1aa);
+  font-size: 13px;
+  line-height: 20px;
+  font-weight: 400;
+}
+
+/* Exact frame width of the Figma specimen 631:246580 */
+.button-preview-create {
+  width: 138px;
+}
+
+.button-preview-icon-section,
+.button-preview-loading-section {
+  margin-top: 32px;
+}
+
+.button-preview-icon-section > h3,
+.button-preview-loading-section > h3 {
+  margin: 0 0 16px;
+  color: var(--studio-text-primary);
+  font-size: 16px;
+  line-height: 24px;
+  font-weight: 400;
+}
+
+.button-preview-icon-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}

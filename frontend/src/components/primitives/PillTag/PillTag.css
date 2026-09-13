@@ -1,0 +1,33 @@
+/* Figma 813:428515: selected 813:428516, unselected 813:428528 */
+.studio-pill-tag {
+  position: relative;
+  box-sizing: border-box;
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 36px;
+  padding: 7px 12px;
+  border: 0;
+  border-radius: 58px;
+  background: transparent;
+  color: var(--studio-text-primary, #dbdee7);
+  font-family: "Century Gothic", sans-serif;
+  font-size: 14px;
+  font-weight: 400;
+  font-synthesis: none;
+  line-height: 22px;
+  letter-spacing: 0;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.studio-pill-tag__border { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.studio-pill-tag__border rect { width: calc(100% - .5px); height: calc(100% - .5px); fill: none; stroke: var(--studio-text-dim, rgba(219,222,231,.5)); stroke-width: .5px; stroke-dasharray: 2 3; }
+.studio-pill-tag[aria-pressed="true"] { background: var(--studio-surface-dashed, rgba(255,255,255,.03)); }
+.studio-pill-tag[aria-pressed="true"] .studio-pill-tag__border rect { stroke: var(--studio-border-emphasis, rgba(219,222,231,.7)); stroke-dasharray: none; }
+.studio-pill-tag__icon { display: flex; align-items: center; justify-content: center; flex: 0 0 16px; width: 16px; height: 16px; }
+.studio-pill-tag__icon > img, .studio-pill-tag__icon > svg { width: 16px; height: 16px; }
+.studio-pill-tag__state { display: flex; align-items: center; justify-content: center; flex: 0 0 16.03899px; width: 16.03899px; height: 16.03899px; }
+.studio-pill-tag__state img { width: 16px; height: 16px; transform: rotate(-.14deg); }
+.studio-pill-tag:disabled { cursor: not-allowed; }

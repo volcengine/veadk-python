@@ -1,0 +1,29 @@
+.conversation-flow-preview {
+  width: 100%;
+  max-width: 880px;
+  min-width: 0;
+}
+
+.conversation-flow-preview__toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-bottom: 24px;
+}
+
+.conversation-flow-preview__panel { padding-top: 24px; min-width: 0; }
+
+.conversation-flow-preview__choice {
+  margin: 8px 0 0;
+  color: var(--studio-text-secondary);
+  font-size: 12px;
+  line-height: 20px;
+}
+
+.conversation-flow-preview__file-preview { min-width: 0; }
+.conversation-flow-preview__file-preview .studio-file-explorer { height: 320px; }
+
+@media (max-width: 640px) {
+  .conversation-flow-preview__toolbar { justify-content: flex-start; }
+}

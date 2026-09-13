@@ -1,0 +1,23 @@
+/* Figma 740:296163: 380 × 22 row, action extends 5px above and below */
+.studio-form-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 380px;
+  max-width: 100%;
+  height: 22px;
+}
+.studio-form-label-row__action.studio-button {
+  flex: 0 0 auto;
+  justify-content: center;
+  min-width: 72px;
+  height: 32px;
+  padding: 5px 12px;
+  gap: 4px;
+  border-radius: 8px;
+  color: var(--studio-text-primary, #dbdee7);
+  font-size: 13px;
+  line-height: 16px;
+}
+.studio-form-label-row__action .studio-button__icon { flex-basis: 16px; width: 16px; height: 16px; }
+.studio-form-label-row__action .studio-button__icon > img { display: block; width: 16px; height: 16px; }

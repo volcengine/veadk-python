@@ -1,0 +1,11 @@
+.error-state-preview__frame {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  max-width: 720px;
+  min-width: 0;
+  min-height: 288px;
+  border: 1px solid var(--studio-border-subtle, rgba(219, 222, 231, .15));
+  border-radius: var(--studio-radius-lg, 12px);
+  background: var(--studio-bg-panel, #111111);
+}

@@ -1,0 +1,80 @@
+/* Figma: Ig6wLTUxhfAxb20bKrXqh1 / 631:247491 */
+.studio-sidebar-item {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 224px;
+  max-width: 100%;
+  height: 36px;
+  margin: 0;
+  padding: 7px 10px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--studio-text-secondary, rgb(219 222 231 / 60%));
+  font-family: "Century Gothic", sans-serif;
+  font-size: 14px;
+  font-style: normal;
+  font-weight: 400;
+  font-synthesis: none;
+  line-height: 22px;
+  letter-spacing: 0.182px;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--studio-motion-duration-normal, 160ms) ease-out, color var(--studio-motion-duration-normal, 160ms) ease-out;
+}
+
+.studio-sidebar-item__icon {
+  display: inline-flex;
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+  color: var(--studio-text-secondary, rgb(219 222 231 / 60%));
+}
+
+.studio-sidebar-item__icon > svg {
+  display: block;
+  width: 16px;
+  height: 16px;
+}
+
+.studio-sidebar-item__label {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Figma hover: 849:443165, icon retains its 60% opacity */
+.studio-sidebar-item:not(:disabled):is(:hover, [data-state="hover"]) {
+  background: var(--studio-bg-elevated, #1c1c1e);
+  color: var(--studio-text-primary, #dbdee7);
+  letter-spacing: 0.182px;
+}
+
+/* Figma: 631:247534, 224 × 32, text at (10, 5) */
+.studio-sidebar-group-title {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  width: 224px;
+  max-width: 100%;
+  height: 32px;
+  margin: 0;
+  padding: 0 10px;
+  color: var(--studio-text-tertiary, #7a7880);
+  font-family: "Century Gothic", sans-serif;
+  font-size: 13px;
+  font-style: normal;
+  font-weight: 400;
+  font-synthesis: none;
+  line-height: 22px;
+  letter-spacing: 0.039px;
+  white-space: nowrap;
+}
+@media (prefers-reduced-motion: reduce) {
+  .studio-sidebar-item { transition: none; }
+}
