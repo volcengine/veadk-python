@@ -23,6 +23,12 @@ npm run dev:components
 - 复合组件：Sidebar、Item、卡片、Header、FormField、FormLabelRow、DashedZone、CodeBlock、LongRunningState、ModalButton、Drawer、FileExplorer、FileUpload 和玻璃按钮组
 - 布局：CardLayout、ModalLayout、ResourcePageLayout、DetailPageLayout、IndexLayout
 - 节点组件：BasicNode、AgentNode、CanvasBackground
+- AI APP：PromptInput、ConversationFlow，对话流包含完整分析、富内容、多模态输入、多模态回复、授权与错误五个可交互示例
+
+ConversationFlow 按顺序展示思考、工具输入输出、子智能体移交、最终回复和执行指标
+用户消息靠右，模型回复靠左，不显示头像和名称；复用默认 600px 高的 ScrollArea，通过 height / scrollAreaProps 配置，示例不包含输入框和执行计划
+ECharts / Mermaid 实际渲染，支持源码切换和放大查看；文件预览复用 FileExplorer，交互卡片复用现有组件
+`fromStudioTurns` 可接入现有 Studio 消息；组件行为、数据字段及全部回调见预览下方参数表与 [对话流说明](../components/ai-app/ConversationFlow/README.md)
 
 Button、Tabs 和 Card 的变体集中展示，旧预览链接仍可访问
 Primary 和 Secondary 普通按钮默认同为 32px 高、上下 5px 内边距，图标按钮保持 28px
@@ -55,14 +61,15 @@ Toast 是独立展示层；ToastProvider、useToast 和 ToastOptions 的参数�
 Loading 复现提供的 Infinity Path（48 × 24px、2 秒循环）与 Ring Sweep（40 × 40px、1 秒循环），支持 size、无障碍 label 和 decorative 属性，减少动态效果时显示静态图形
 ScrollArea 加载时直接复用 Infinity Path，使用 24 × 12px 画布使路径与行内文字大小协调，仅显示图标；加载状态保留屏幕阅读器提示，颜色随明暗主题切换
 
-EmptyState 默认显示 40px 圆形背景与 18px 空文件夹图标，图标与标题字号一致；icon 仅替换内部图标，传 null 隐藏图标区域，actions 接收任意数量的 Button，横排并在空间不足时换行
-ErrorState 复用信息布局，固定显示红色断链图标，支持 title 与 description，不提供按钮区域
+EmptyState 默认显示 40px 圆形背景与 24px 空文件夹图标；icon 仅替换内部图标，传 null 隐藏图标区域，actions 接收任意数量的 Button，横排并在空间不足时换行
+ErrorState 复用信息布局与 24px 图标尺寸，固定显示红色断链图标，支持 title 与 description，不提供按钮区域
 
 ResourcePageLayout 的 loading 状态在资源区域居中显示 Infinity Path，loadingLabel 只供屏幕阅读器读取；资源页预览首次进入演示加载，也可通过「重新演示加载」重复查看
 
 DetailPageLayout 不包含 Sidebar，内容随容器宽度展开，保留 Header、Tabs、Runtime 与顶部光效
 
-LongRunningState 左侧通过 steps 和 currentStep 展示步骤，当前步骤使用 Infinity Path，右侧展示其 details，其余步骤以圆点和弱化文字展示；切换时详情模糊淡变，左侧位置稳定，窄容器上下排列，支持减少动态效果偏好
+LongRunningState 使用居中的双栏工作区，左侧通过 steps 和 currentStep 展示任务进度与步骤，当前步骤使用 Infinity Path，已完成步骤显示对勾并支持回看；selectedStep / onSelectedStepChange 可控制历史选择，查看历史不改变执行进度，可返回当前步骤继续跟随
+右侧复用 Drawer 的明暗主题玻璃材质与 ScrollArea 展示 details，detailsMaxHeight 默认 360px，代码日志复用 CodeBlock 高亮并可隐藏行号；切换时详情即时替换并在原位短暂淡入，始终只显示一层正文，左侧位置稳定，窄容器上下排列，支持减少动态效果、减少透明度与高对比度偏好
 
 ModalButton 的入口复用 Button，弹窗复用 ModalLayout，body 默认留空；提供遮罩、进出动效、焦点管理及 Esc 关闭，异步确认可使用 closeOnConfirm=false 与受控 open
 Drawer 是距屏幕上下与右侧各 16px 的浮动卡片，默认宽 480px，正文复用 ScrollArea；surface 默认 glass，深色使用烟灰玻璃，浅色使用白色磨砂玻璃，真实模糊后方内容并显示柔和高光，也可设为 solid；两者的层级低于 Menu、Select 和 Toast

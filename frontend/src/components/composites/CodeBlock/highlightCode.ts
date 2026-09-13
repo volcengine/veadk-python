@@ -68,8 +68,28 @@ class ReactTokenEmitter implements Emitter {
 
 // Use a separate parser instance so other highlight.js consumers keep their renderer
 const highlighter = hljs.newInstance();
+const log: LanguageFn = syntax => ({
+  name: "Log",
+  aliases: ["logs"],
+  disableAutodetect: true,
+  case_insensitive: true,
+  contains: [
+    { scope: "comment", match: /\b(?:\d{4}-\d{2}-\d{2}[T ])?\d{2}:\d{2}:\d{2}(?:[.,]\d+)?(?:Z|[+-]\d{2}:\d{2})?\b/ },
+    syntax.QUOTE_STRING_MODE,
+    syntax.APOS_STRING_MODE,
+    { scope: "comment", match: /\[(?:TRACE|DEBUG)\]|\b(?:TRACE|DEBUG)\b/ },
+    { scope: "deletion", match: /\[(?:ERROR|FATAL|CRITICAL)\]|\b(?:ERROR|FATAL|CRITICAL)\b/ },
+    { scope: "attr", match: /\[(?:WARN|WARNING)\]|\b(?:WARN|WARNING)\b/ },
+    { scope: "addition", match: /\[(?:SUCCESS|DONE|OK)\]|\b(?:SUCCESS|DONE|OK)\b/ },
+    { scope: "title", match: /\[(?:INFO|NOTICE)\]|\b(?:INFO|NOTICE)\b/ },
+    { scope: "meta", match: /\[[A-Za-z_\u3400-\u9fff][\w\u3400-\u9fff-]*\]/ },
+    { scope: "title.function", match: /\b[A-Za-z_][\w.]*(?=\s*\()/ },
+    { scope: "attr", match: /\b[A-Za-z_][\w.-]*(?=\s*[:=])/ },
+    syntax.C_NUMBER_MODE,
+  ],
+});
 const languages: Record<string, LanguageFn> = {
-  bash, css, diff, dockerfile, go, ini, java, javascript, json, makefile,
+  bash, css, diff, dockerfile, go, ini, java, javascript, json, log, makefile,
   markdown, plaintext, python, rust, scss, sql, typescript, xml, yaml,
 };
 for (const [name, definition] of Object.entries(languages)) highlighter.registerLanguage(name, definition);

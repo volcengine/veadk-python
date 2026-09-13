@@ -1,14 +1,19 @@
-import { useId, type HTMLAttributes, type ReactNode } from "react";
+import { useId, type HTMLAttributes, type ReactNode, type Ref } from "react";
 import "./InfoCard.css";
 
 export interface InfoCardProps extends Omit<HTMLAttributes<HTMLElement>, "title"> {
   title: ReactNode;
+  actions?: ReactNode;
+  ref?: Ref<HTMLElement>;
 }
 
-export function InfoCard({ title, children, className = "", ...props }: InfoCardProps) {
+export function InfoCard({ title, actions, ref, children, className = "", ...props }: InfoCardProps) {
   const titleId = useId();
-  return <article aria-labelledby={titleId} {...props} className={`studio-info-card ${className}`.trim()}>
-    <InfoCardTitle id={titleId}>{title}</InfoCardTitle>
+  return <article aria-labelledby={titleId} {...props} ref={ref} className={`studio-info-card ${className}`.trim()}>
+    {actions != null ? <div className="studio-info-card__header">
+      <InfoCardTitle id={titleId}>{title}</InfoCardTitle>
+      <div className="studio-info-card__actions">{actions}</div>
+    </div> : <InfoCardTitle id={titleId}>{title}</InfoCardTitle>}
     {children}
   </article>;
 }

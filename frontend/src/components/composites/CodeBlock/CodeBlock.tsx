@@ -8,10 +8,12 @@ export interface CodeBlockToken { text: string; color?: string }
 export interface CodeBlockProps extends Omit<HTMLAttributes<HTMLElement>, "title" | "children"> {
   title?: string;
   lines: readonly (string | readonly CodeBlockToken[])[];
-  /** 纯文本行的语法语言，默认 auto 自动识别；plaintext 关闭高亮，手动颜色 token 保留 */
+  /** 纯文本行的语法语言，默认 auto 自动识别；log 高亮日志，plaintext 关闭高亮，手动颜色 token 保留 */
   language?: string;
   /** 长行按容器宽度折行，续行沿用同一行号 */
   wordWrap?: boolean;
+  /** 是否显示行号，默认 true；false 保留代码字体及原始缩进 */
+  showLineNumbers?: boolean;
   /** 复制按钮右侧的操作区域 */
   actions?: ReactNode;
   /** 自定义代码区域，例如复用代码编辑器 */
@@ -43,7 +45,7 @@ function physicalLines(lines: CodeBlockProps["lines"]): CodeBlockProps["lines"] 
   return result;
 }
 
-export function CodeBlock({ title = "Request example", lines, language = "auto", wordWrap = false, actions, children, scrollAreaProps, className = "", ...props }: CodeBlockProps) {
+export function CodeBlock({ title = "Request example", lines, language = "auto", wordWrap = false, showLineNumbers = true, actions, children, scrollAreaProps, className = "", ...props }: CodeBlockProps) {
   const titleId = useId();
   const [status, setStatus] = useState("");
   const text = useMemo(() => lines.map(line => typeof line === "string" ? line : line.map(token => token.text).join("")).join("\n"), [lines]);
@@ -60,13 +62,13 @@ export function CodeBlock({ title = "Request example", lines, language = "auto",
   }
   const body = children ?? <div className="studio-code-block__viewport" tabIndex={0} role="region" aria-label={title}>
     <pre><code>{displayLines.map((line, index) => <span className="studio-code-block__line" key={index}>
-      <span className="studio-code-block__number" aria-hidden="true">{String(index + 1).padStart(2, "0")}</span>
+      {showLineNumbers && <span className="studio-code-block__number" aria-hidden="true">{String(index + 1).padStart(2, "0")}</span>}
       <span className="studio-code-block__text">{typeof line === "string"
         ? highlighted[index]?.map((token, tokenIndex) => <span key={tokenIndex} className={token.color ? `studio-code-block__token--${token.color}` : undefined}>{token.text}</span>)
         : line.map((token, tokenIndex) => <span key={tokenIndex} style={{ color: token.color }}>{token.text}</span>)}{"\n"}</span>
     </span>)}</code></pre>
   </div>;
-  return <section {...props} aria-labelledby={titleId} data-word-wrap={wordWrap || undefined} className={`studio-code-block ${className}`.trim()}>
+  return <section {...props} aria-labelledby={titleId} data-word-wrap={wordWrap || undefined} data-line-numbers={showLineNumbers} className={`studio-code-block ${className}`.trim()}>
     <header className="studio-code-block__header">
       <h3 id={titleId}>{title}</h3>
       <div className="studio-code-block__actions">

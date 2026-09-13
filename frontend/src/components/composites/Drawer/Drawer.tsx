@@ -2,6 +2,7 @@ import { Dialog as BaseDialog } from "@base-ui/react/dialog";
 import type { ComponentPropsWithoutRef, CSSProperties, ReactElement, ReactNode } from "react";
 import { Button } from "../../primitives/Button";
 import { ScrollArea } from "../../primitives/ScrollArea";
+import "../../tokens/glass-surface.css";
 import "./Drawer.css";
 
 export type DrawerProps = Omit<ComponentPropsWithoutRef<"div">, "title"> & {
@@ -61,7 +62,7 @@ export function Drawer({
         <div className="studio-drawer__viewport">
           <BaseDialog.Popup
             {...props}
-            className={`studio-drawer ${className}`.trim()}
+            className={`studio-drawer studio-glass-surface ${className}`.trim()}
             data-surface={surface}
             style={{ width, ...style }}
             aria-label={props["aria-label"] ?? (hasTitle ? undefined : "侧边面板")}

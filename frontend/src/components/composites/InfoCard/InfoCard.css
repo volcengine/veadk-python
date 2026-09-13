@@ -11,6 +11,24 @@
   background: var(--studio-surface-metric, rgba(32, 33, 36, .39));
   color: var(--studio-text-primary, #dbdee7);
 }
+.studio-info-card__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+}
+.studio-info-card__header > .studio-info-card__title {
+  flex: 1;
+  min-width: 0;
+}
+.studio-info-card__actions {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 4px;
+}
+.studio-info-card__actions > * { flex-shrink: 0; }
 .studio-info-card__title {
   width: 100%;
   margin: 0;

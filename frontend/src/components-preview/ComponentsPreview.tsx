@@ -20,6 +20,7 @@ import { DividerPreview } from "./examples/DividerPreview";
 import { DropdownPreview } from "./examples/DropdownPreview";
 import { MenuPreview } from "./examples/MenuPreview";
 import { PromptInputPreview } from "./examples/PromptInputPreview";
+import { ConversationFlowPreview } from "./examples/ConversationFlowPreview";
 import { useState, useSyncExternalStore } from "react";
 import { ButtonsPreview, CardsPreview, TabsPreview, InputWithTailIconPreview, ItemPreview, LabelPreview, SidebarPreview, SwitchPreview, CheckboxPreview, FormFieldPreview, DashedZonePreview, CodeBlockPreview, ModalLayoutPreview, HeaderPreview, PillTagPreview, FormLabelPreview, ResourcePageLayoutPreview, DetailPageLayoutPreview, TextareaPreview, SelectPreview, BasicNodePreview, AgentNodePreview, CanvasBackgroundPreview, TokensPreview } from "./examples";
 import { applyPreviewTheme, readPreviewTheme, type PreviewTheme } from "./theme";
@@ -44,6 +45,7 @@ const examples = [
   { id: "divider", label: "分割线", Preview: DividerPreview, group: "primitives" },
   { id: "dropdown", label: "Dropdown", Preview: DropdownPreview, group: "primitives" },
   { id: "prompt-input", label: "Prompt Input", Preview: PromptInputPreview, group: "ai-app" },
+  { id: "conversation-flow", label: "Conversation Flow / 对话流", Preview: ConversationFlowPreview, group: "ai-app" },
   { id: "tokens", label: "Tokens", Preview: TokensPreview, group: "design" },
   { id: "canvas-background", label: "画布背景", Preview: CanvasBackgroundPreview, group: "nodes" },
   { id: "agent-node", label: "Agent 节点", Preview: AgentNodePreview, group: "nodes" },

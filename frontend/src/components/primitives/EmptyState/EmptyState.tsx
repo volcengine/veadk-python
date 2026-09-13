@@ -6,7 +6,7 @@ export interface EmptyStateProps extends Omit<HTMLAttributes<HTMLDivElement>, "t
   title: ReactNode;
   /** 标题下方的详细说明，长文字会自动换行 */
   description?: ReactNode;
-  /** 圆形背景内的 18px 图标，默认空文件夹；仅替换图标，传 null 隐藏图标区域 */
+  /** 圆形背景内的 24px 图标，默认空文件夹；仅替换图标，传 null 隐藏图标区域 */
   icon?: ReactNode;
   /** 底部操作区域，传入任意数量的 Button，横排显示，空间不足时换行 */
   actions?: ReactNode;

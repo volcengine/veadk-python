@@ -49,37 +49,7 @@
   pointer-events: auto;
 }
 
-.studio-drawer[data-surface="glass"] {
-  border-color: rgba(255, 255, 255, .2);
-  border-top-color: rgba(255, 255, 255, .48);
-  border-bottom-color: rgba(255, 255, 255, .1);
-  background:
-    linear-gradient(135deg, rgba(255, 255, 255, .14), rgba(255, 255, 255, .045) 28%, rgba(255, 255, 255, .012) 68%, rgba(255, 255, 255, .05)),
-    color-mix(in srgb, var(--studio-bg-elevated, #1c1c1e) 38%, transparent);
-  -webkit-backdrop-filter: blur(18px) saturate(1.35);
-  backdrop-filter: blur(18px) saturate(1.35);
-  box-shadow:
-    inset 1px 1px 0 rgba(255, 255, 255, .08),
-    inset -1px -1px 0 rgba(255, 255, 255, .025),
-    0 12px 36px rgba(0, 0, 0, .2),
-    0 2px 8px rgba(0, 0, 0, .08);
-}
-
 [data-theme="light"] .studio-drawer__backdrop[data-surface="glass"] { background: rgba(0, 0, 0, .08); }
-
-[data-theme="light"] .studio-drawer[data-surface="glass"] {
-  border-color: rgba(255, 255, 255, .62);
-  border-top-color: rgba(255, 255, 255, .9);
-  border-bottom-color: rgba(255, 255, 255, .35);
-  background:
-    linear-gradient(135deg, rgba(255, 255, 255, .3), rgba(255, 255, 255, .12) 28%, rgba(255, 255, 255, .035) 68%, rgba(255, 255, 255, .16)),
-    color-mix(in srgb, var(--studio-bg-elevated, #ffffff) 48%, transparent);
-  box-shadow:
-    inset 1px 1px 0 rgba(255, 255, 255, .5),
-    inset -1px -1px 0 rgba(255, 255, 255, .12),
-    0 12px 36px rgba(0, 0, 0, .1),
-    0 2px 6px rgba(0, 0, 0, .05);
-}
 
 .studio-drawer[data-starting-style],
 .studio-drawer[data-ending-style] {
@@ -138,11 +108,6 @@
   gap: 8px;
   padding: 16px 24px 20px;
   border-top: 1px solid var(--studio-border-subtle, rgba(219, 222, 231, .15));
-}
-
-@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  .studio-drawer[data-surface="glass"],
-  [data-theme="light"] .studio-drawer[data-surface="glass"] { background: var(--studio-bg-elevated, #1c1c1e); }
 }
 
 @media (prefers-reduced-motion: reduce) {

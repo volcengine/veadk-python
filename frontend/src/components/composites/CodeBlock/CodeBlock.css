@@ -40,6 +40,7 @@
 .studio-code-block__line { display: flex; height: 19.5px; }
 .studio-code-block__number { flex: 0 0 26px; width: 26px; padding: 0 4px; text-align: right; color: var(--studio-code-line-number, #5c6370); user-select: none; }
 .studio-code-block__text { padding-left: 16px; white-space: pre; }
+.studio-code-block[data-line-numbers="false"] .studio-code-block__text { padding-left: 0; }
 .studio-code-block[data-word-wrap] pre { width: 100%; min-width: 0; }
 .studio-code-block[data-word-wrap] .studio-code-block__line { height: auto; min-height: 19.5px; }
 .studio-code-block[data-word-wrap] .studio-code-block__text { min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }

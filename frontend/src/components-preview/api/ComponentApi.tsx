@@ -1,4 +1,5 @@
 import docs from "virtual:component-api";
+import { ConversationFlowApi } from "./ConversationFlowApi";
 import "./ComponentApi.css";
 
 const descriptions: Record<string, string> = {
@@ -24,6 +25,27 @@ const descriptions: Record<string, string> = {
 };
 
 const componentNotes: Record<string, Record<string, string>> = {
+  InfoCard: {
+    actions: "标题行右侧操作区域，支持 Button、IconButtonGroup 等 React 内容；长标题自动省略，操作区不收缩",
+    ref: "卡片根 article 元素引用",
+  },
+  ConversationFlow: {
+    messages: "按时间排列的消息；用户靠右、模型靠左，不显示头像和名称；name 仅用于无障碍识别。稳定 id 保留折叠状态，blocks 优先于 steps / content；running 消息及步骤独立实时计时，无新事件也更新",
+    height: "消息滚动区域高度，默认 600px；数字单位为 px，也支持 CSS 长度",
+    scrollAreaProps: "透传内部 ScrollArea 的滚动回调、无障碍属性及 hasMore / onLoadMore 等配置；不包含 children、orientation 和 ref，滚动方向固定为纵向",
+    onRetry: "重新生成指定 messageId 的回复；提供后显示重试按钮；复用 id 时更新 startedAt 并清除旧 endedAt / durationMs",
+    onStop: "停止指定 messageId 的执行；运行中显示停止按钮；调用方改为 cancelled 后冻结耗时，可同时提供 endedAt 或最终 durationMs",
+    onFeedback: "返回 messageId 与 like / dislike / null；调用方更新 message.feedback",
+  },
+  ConversationVisualization: {
+    kind: "echarts 或 mermaid；使用真实渲染引擎，按当前明暗主题调整",
+    source: "图表源码；ECharts 仅接受数据配置，不执行 JavaScript 回调",
+    streaming: "生成中显示源码及 Loading，完成后渲染图表，避免解析未完成配置",
+  },
+  ConversationMarkdown: {
+    text: "支持标题、列表、链接、表格和代码块；代码复用 CodeBlock，echarts / mermaid 代码块自动渲染",
+    streaming: "流式更新标记，控制未完成图表的展示",
+  },
   DatePicker: {
     value: "受控日期，day 使用 YYYY-MM-DD，minute 使用 YYYY-MM-DDTHH:mm；空字符串或 null 清空",
     defaultValue: "非受控初始日期，格式与 value 相同",
@@ -99,7 +121,7 @@ const componentNotes: Record<string, Record<string, string>> = {
   EmptyState: {
     title: "信息区域的标题，支持文字或 React 内容",
     description: "标题下方的详细说明，长文字自动换行；未设置时不占位",
-    icon: "40px 圆形背景内的 18px 图标，与标题字号一致；默认空文件夹，自定义仅替换图标，传 null 隐藏图标区域",
+    icon: "40px 圆形背景内的 24px 图标；默认空文件夹，自定义仅替换图标，传 null 隐藏图标区域",
     actions: "底部按钮组插槽，支持任意数量的 Button 子元素；8px 间距横排，窄容器自动换行",
     style: "外层容器样式，可调整宽度、内边距或最小高度",
   },
@@ -242,5 +264,6 @@ export function ComponentApi({ names }: { names: string[] }) {
         {inherited.length > 0 && <details><summary>其他原生属性（{inherited.length}）</summary>{table(inherited)}</details>}
       </section>;
     })}
+    {names.includes("ConversationFlow") && <ConversationFlowApi />}
   </div>;
 }

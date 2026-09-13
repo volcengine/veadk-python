@@ -9,6 +9,7 @@
 - `primitives/`：Button、Input 等原子组件
 - `composites/`：卡片、搜索栏等组合组件
 - `layouts/`：页面框架、侧边栏和分栏等布局组件
+- `ai-app/`：独立的 PromptInput 与 [ConversationFlow](ai-app/ConversationFlow/README.md)；对话流使用固定高度 ScrollArea，用户靠右、模型靠左，不显示头像和名称，支持图表及 Studio 数据适配
 - `index.ts`：统一导出入口
 
 ## 实现约定

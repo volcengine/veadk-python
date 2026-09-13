@@ -1,4 +1,4 @@
-import { useId, useState, type ComponentProps, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ComponentProps, type CSSProperties, type ReactNode } from "react";
 import "./Slider.css";
 
 export type SliderProps = Omit<ComponentProps<"input">, "type" | "children" | "size" | "value" | "defaultValue" | "onChange" | "min" | "max" | "step"> & {
@@ -46,6 +46,27 @@ export function Slider({
   const generatedId = useId();
   const inputId = id ?? generatedId;
   const [localValue, setLocalValue] = useState(defaultValue);
+  const [dragging, setDragging] = useState(false);
+  const thumbRef = useRef<HTMLSpanElement>(null);
+  const pointerStart = useRef<{ id: number; x: number; y: number } | null>(null);
+
+  useEffect(() => {
+    const ownerWindow = thumbRef.current?.ownerDocument.defaultView ?? window;
+    const finishPointer = (event: PointerEvent | FocusEvent) => {
+      if ("pointerId" in event && event.pointerId !== pointerStart.current?.id) return;
+      pointerStart.current = null;
+      setDragging(false);
+    };
+    ownerWindow.addEventListener("pointerup", finishPointer, true);
+    ownerWindow.addEventListener("pointercancel", finishPointer, true);
+    ownerWindow.addEventListener("blur", finishPointer);
+    return () => {
+      ownerWindow.removeEventListener("pointerup", finishPointer, true);
+      ownerWindow.removeEventListener("pointercancel", finishPointer, true);
+      ownerWindow.removeEventListener("blur", finishPointer);
+    };
+  }, []);
+
   const current = normalizeValue(value ?? localValue, min, max, step);
   const displayValue = valueFormat ? valueFormat(current) : String(current);
   const progress = max > min ? (current - min) / (max - min) * 100 : 0;
@@ -56,6 +77,7 @@ export function Slider({
       style={{ ...style, "--slider-progress": `${progress}%`, "--slider-ratio": progress / 100 } as CSSProperties}
       dir={props.dir}
       data-disabled={disabled || undefined}
+      data-dragging={dragging || undefined}
     >
       <div className="studio-slider__header">
         <label htmlFor={inputId} className="studio-slider__label">{label}</label>
@@ -76,12 +98,26 @@ export function Slider({
           value={current}
           disabled={disabled}
           aria-valuetext={props["aria-valuetext"] ?? (valueFormat ? displayValue : undefined)}
+          onPointerDown={event => {
+            props.onPointerDown?.(event);
+            if (disabled || event.defaultPrevented || event.button !== 0) return;
+            pointerStart.current = { id: event.pointerId, x: event.clientX, y: event.clientY };
+            const thumb = thumbRef.current?.getBoundingClientRect();
+            setDragging(Boolean(thumb && event.clientX >= thumb.left && event.clientX <= thumb.right));
+          }}
+          onPointerMove={event => {
+            props.onPointerMove?.(event);
+            const start = pointerStart.current;
+            if (disabled || event.defaultPrevented || !start || event.pointerId !== start.id) return;
+            if (Math.hypot(event.clientX - start.x, event.clientY - start.y) > 2) setDragging(true);
+          }}
           onChange={event => {
             const next = event.currentTarget.valueAsNumber;
             if (value === undefined) setLocalValue(next);
             onValueChange?.(next);
           }}
         />
+        <span ref={thumbRef} className="studio-slider__thumb" aria-hidden="true" />
       </div>
     </div>
   );
