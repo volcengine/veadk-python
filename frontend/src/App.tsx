@@ -413,8 +413,6 @@ const DRAFT_AUTOSAVE_DELAY_MS = 600;
 const AUTO_EVALUATION_RUNNING_POLL_MS = 1_000;
 const AUTO_EVALUATION_RETRY_POLL_MS = 5_000;
 const AUTO_EVALUATION_MIN_PENDING_POLL_MS = 500;
-const EMPTY_STRING_SET: Set<string> = new Set<string>();
-const EMPTY_STRING_ARR: string[] = [];
 const ENVIRONMENT_STUDIO_TOOL_IDS = [
   "list_envs",
   "get_env_manifest",
@@ -423,7 +421,6 @@ const ENVIRONMENT_STUDIO_TOOL_IDS = [
 ] as const;
 const SESSION_ENVIRONMENT_STORAGE_KEY = "veadk.sessionEnvironmentMounts.v1";
 const SESSION_SKILL_STORAGE_KEY = "veadk.sessionSkillMounts.v1";
-const SESSION_TOOL_STORAGE_KEY = "veadk.sessionStudioToolMounts.v1";
 
 interface StoredSessionEnvironmentState {
   mounts: Record<string, SessionEnvironmentMountSelection[]>;
@@ -531,35 +528,6 @@ function persistSessionSkills(skills: Record<string, SelectedSkill[]>) {
   if (typeof localStorage === "undefined") return;
   try {
     localStorage.setItem(SESSION_SKILL_STORAGE_KEY, JSON.stringify(skills));
-  } catch {
-    // Storage can be unavailable in private or quota-restricted browsers.
-  }
-}
-
-function loadStoredSessionTools(): Record<string, string[]> {
-  if (typeof localStorage === "undefined") return {};
-  try {
-    const raw = JSON.parse(localStorage.getItem(SESSION_TOOL_STORAGE_KEY) ?? "{}");
-    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
-    return Object.fromEntries(
-      Object.entries(raw as Record<string, unknown>).slice(-200).map(([key, value]) => [
-        key,
-        Array.isArray(value)
-          ? value.filter((item): item is string => (
-              typeof item === "string" && Boolean(item.trim())
-            )).slice(0, 50)
-          : [],
-      ]),
-    );
-  } catch {
-    return {};
-  }
-}
-
-function persistSessionTools(tools: Record<string, string[]>) {
-  if (typeof localStorage === "undefined") return;
-  try {
-    localStorage.setItem(SESSION_TOOL_STORAGE_KEY, JSON.stringify(tools));
   } catch {
     // Storage can be unavailable in private or quota-restricted browsers.
   }
@@ -1521,18 +1489,12 @@ export default function App() {
   const [studioToolCapabilities, setStudioToolCapabilities] =
     useState<RuntimeStudioToolCapabilities | null>(null);
   const [studioToolsLoading, setStudioToolsLoading] = useState(false);
-  const [studioToolsError, setStudioToolsError] = useState("");
   const [draftStudioRuntime, setDraftStudioRuntime] = useState<{
     appName: string;
     runtimeId: string;
     name: string;
     region: string;
   } | null>(null);
-  const [draftStudioToolIds, setDraftStudioToolIds] = useState<string[]>([]);
-  const [studioToolIdsBySession, setStudioToolIdsBySession] = useState<
-    Record<string, string[]>
-  >(() => loadStoredSessionTools());
-  useEffect(() => persistSessionTools(studioToolIdsBySession), [studioToolIdsBySession]);
   const [sessionSkillsBySession, setSessionSkillsBySession] = useState<
     Record<string, SelectedSkill[]>
   >(() => loadStoredSessionSkills());
@@ -1915,20 +1877,6 @@ export default function App() {
   const [uiConfigLoaded, setUiConfigLoaded] = useState(false);
   const [localMode, setLocalMode] = useState(false);
   const [loadingSession, setLoadingSession] = useState(false);
-  // The executing sub-agent (ADK event.author) and everyone who emitted this
-  // turn — PER SESSION, so each session's topology highlights its own stream.
-  const [activeAgentBySession, setActiveAgentBySession] = useState<
-    Record<string, string>
-  >({});
-  const [seenAgentsBySession, setSeenAgentsBySession] = useState<
-    Record<string, Set<string>>
-  >({});
-  // The current delegation chain (root → … → executing agent) per session,
-  // built from event.actions.transfer_to_agent / end_of_agent.
-  const [execPathBySession, setExecPathBySession] = useState<
-    Record<string, string[]>
-  >({});
-
   // Everything the view needs for the ACTIVE session, derived from the
   // per-session maps above.
   const busy = streamingSids.has(sessionId);
@@ -2053,9 +2001,6 @@ export default function App() {
       if (timer !== undefined) window.clearTimeout(timer);
     };
   }, [sandboxBusy, sandboxSession?.id]);
-  const activeAgent = activeAgentBySession[sessionId] ?? "";
-  const seenAgents = seenAgentsBySession[sessionId] ?? EMPTY_STRING_SET;
-  const execPath = execPathBySession[sessionId] ?? EMPTY_STRING_ARR;
   const rootCapabilityNode = agentInfo?.graph;
   const rootAgentNames = [
     agentInfo?.name,
@@ -2078,11 +2023,13 @@ export default function App() {
         tools: [
           ...new Set([
             ...(rootCapabilityNode?.tools ?? agentInfo.tools),
-            ...(sessionId
-              ? (studioToolIdsBySession[
-                  studioToolSelectionKey(appName, userId, sessionId)
-                ] ?? [])
-              : draftStudioToolIds),
+            ...(sessionId && (
+              environmentMountsBySession[
+                studioToolSelectionKey(appName, userId, sessionId)
+              ] ?? []
+            ).length > 0
+              ? [...ENVIRONMENT_STUDIO_TOOL_IDS]
+              : []),
           ]),
         ],
         skills: rootCapabilityNode?.skills ?? agentInfo.skills,
@@ -2135,41 +2082,6 @@ export default function App() {
     }
   }
 
-  // Apply a stream event's control-flow signals to a session's live state:
-  // author = who's executing now; transfer_to_agent pushes the delegation
-  // chain; end_of_agent / escalate pops it. `author` always wins for highlight.
-  const applyStreamSignals = (sid: string, ev: AdkEvent) => {
-    const who = ev.author && ev.author !== "user" ? ev.author : undefined;
-    if (who) {
-      setActiveAgentBySession((m) => ({ ...m, [sid]: who }));
-      setSeenAgentsBySession((m) => ({
-        ...m,
-        [sid]: new Set(m[sid] ?? []).add(who),
-      }));
-      // Seed the path with the entry (root) agent on the first event.
-      setExecPathBySession((m) =>
-        m[sid]?.length ? m : { ...m, [sid]: [who] },
-      );
-    }
-    const transferTo =
-      ev.actions?.transferToAgent ?? ev.actions?.transfer_to_agent;
-    if (transferTo) {
-      setExecPathBySession((m) => {
-        const cur = m[sid] ?? [];
-        return cur[cur.length - 1] === transferTo
-          ? m
-          : { ...m, [sid]: [...cur, transferTo] };
-      });
-    }
-    const ended =
-      ev.actions?.endOfAgent ?? ev.actions?.end_of_agent ?? ev.actions?.escalate;
-    if (ended) {
-      setExecPathBySession((m) => {
-        const cur = m[sid] ?? [];
-        return cur.length <= 1 ? m : { ...m, [sid]: cur.slice(0, -1) };
-      });
-    }
-  };
   const [createView, setCreateView] = useState<AppView>(loadView);
   const [deploymentTasks, setDeploymentTasks] = useState<
     DeploymentTaskUpdate[]
@@ -4832,7 +4744,6 @@ export default function App() {
     setInitializingSession(false);
     setPendingTurns([]);
     setInvocation(emptyInvocation());
-    setDraftStudioToolIds([]);
     discardDraftAttachments(attachments);
     setAttachments([]);
     if (abandonedSession) void abandonDraftSession(abandonedSession);
@@ -5213,7 +5124,7 @@ export default function App() {
           [],
           emptyInvocation(),
           "composer",
-          selectedStudioToolIds,
+          undefined,
           true,
         );
         return;
@@ -5280,7 +5191,7 @@ export default function App() {
     };
     setError("");
     const createsSession = !sessionId;
-    let platformTools = [...(selectedPlatformTools ?? selectedStudioToolIds)];
+    let platformTools = [...(selectedPlatformTools ?? environmentStudioToolIds)];
     const environmentMounts = createsSession
       ? []
       : environmentMountsBySession[
@@ -5359,6 +5270,9 @@ export default function App() {
     if (selectedTask) {
       const requiredTools = NEW_CHAT_TASK_TOOLS[selectedTask];
       const agentTools = new Set(agentInfo?.tools ?? []);
+      const availableStudioToolIds = new Set(
+        studioToolCapabilities?.tools.map((tool) => tool.id) ?? [],
+      );
       const availableTools = new Set([
         ...agentTools,
         ...(studioToolRuntime ? availableStudioToolIds : []),
@@ -5399,13 +5313,6 @@ export default function App() {
       createsSession ? optimisticTurns : [...current, ...optimisticTurns],
     );
     if (createsSession) {
-      if (studioToolRuntime) {
-        const key = studioToolSelectionKey(appName, userId, sid);
-        setStudioToolIdsBySession((current) => ({
-          ...current,
-          [key]: [...platformTools],
-        }));
-      }
       viewSidRef.current = sid;
       setSessionId(sid);
       if (requestedModel && createsSession) {
@@ -5436,10 +5343,6 @@ export default function App() {
     }
     startStreamPresentation(sid);
     viewSidRef.current = sid;
-
-    setActiveAgentBySession((m) => ({ ...m, [sid]: "" }));
-    setSeenAgentsBySession((m) => ({ ...m, [sid]: new Set() }));
-    setExecPathBySession((m) => ({ ...m, [sid]: [] }));
 
     const eventProjector = createAssistantEventProjector(
       `${sid}-${crypto.randomUUID()}`,
@@ -5478,8 +5381,6 @@ export default function App() {
           if (viewSidRef.current === sid) setError(errMsg);
           break;
         }
-        // Live topology: author + transfer/end signals, keyed by session.
-        applyStreamSignals(sid, event);
         addTokenUsageFor(appName, sid, event);
         const projection = eventProjector.project(event);
         if (projection.ignored) continue;
@@ -5560,8 +5461,6 @@ export default function App() {
         setStreaming(sid, false);
         finishStreamPresentation(sid);
       }
-      setActiveAgentBySession((m) => ({ ...m, [sid]: "" }));
-      setExecPathBySession((m) => ({ ...m, [sid]: [] }));
     }
   }
 
@@ -5622,8 +5521,8 @@ export default function App() {
       studioToolSelectionKey(appName, userId, sid)
     ] ?? [];
     const resumedPlatformTools = environmentMounts.length > 0
-      ? [...new Set([...selectedStudioToolIds, ...ENVIRONMENT_STUDIO_TOOL_IDS])]
-      : selectedStudioToolIds;
+      ? [...ENVIRONMENT_STUDIO_TOOL_IDS]
+      : [];
     const eventProjector = createAssistantEventProjector(
       `${sid}-${crypto.randomUUID()}`,
       lastTurn?.role === "assistant"
@@ -5660,7 +5559,6 @@ export default function App() {
           if (viewSidRef.current === sid) setError(errMsg);
           break;
         }
-        applyStreamSignals(sid, event);
         addTokenUsageFor(appName, sid, event);
         const projection = eventProjector.project(event);
         if (projection.ignored) continue;
@@ -5703,8 +5601,6 @@ export default function App() {
       if (streamAbortsRef.current.get(sid) === ctrl) streamAbortsRef.current.delete(sid);
       setStreaming(sid, false);
       finishStreamPresentation(sid);
-      setActiveAgentBySession((m) => ({ ...m, [sid]: "" }));
-      setExecPathBySession((m) => ({ ...m, [sid]: [] }));
     }
   }
 
@@ -5791,7 +5687,7 @@ export default function App() {
   useEffect(() => {
     let cancelled = false;
     setStudioToolCapabilities(null);
-    setStudioToolsError("");
+    setSessionEnvironmentsError("");
     if (
       authStatus !== "authenticated" ||
       !access ||
@@ -5812,7 +5708,7 @@ export default function App() {
       })
       .catch((cause) => {
         if (cancelled) return;
-        setStudioToolsError(
+        setSessionEnvironmentsError(
           cause instanceof Error ? cause.message : appText("errors.localToolsLoadFailed"),
         );
       })
@@ -5998,17 +5894,17 @@ export default function App() {
   const activeStudioToolSelectionKey = sessionId
     ? studioToolSelectionKey(appName, userId, sessionId)
     : "";
-  const storedStudioToolIds = sessionId
-    ? (studioToolIdsBySession[activeStudioToolSelectionKey] ?? [])
-    : draftStudioToolIds;
   const allStudioToolIds = new Set(
     studioToolCapabilities?.tools.map((tool) => tool.id) ?? [],
   );
-  const availableStudioToolIds = new Set(
-    [...allStudioToolIds].filter((toolId) => !agentInfo?.tools.includes(toolId)),
-  );
   const selectedEnvironmentMounts = sessionId
     ? environmentMountsBySession[activeStudioToolSelectionKey] ?? []
+    : [];
+  const canMountSessionEnvironment = ENVIRONMENT_STUDIO_TOOL_IDS.every((toolId) =>
+    allStudioToolIds.has(toolId)
+  );
+  const environmentStudioToolIds = selectedEnvironmentMounts.length > 0 && canMountSessionEnvironment
+    ? [...ENVIRONMENT_STUDIO_TOOL_IDS]
     : [];
   const selectedSessionSkills = sessionId
     ? sessionSkillsBySession[activeStudioToolSelectionKey] ?? []
@@ -6016,36 +5912,6 @@ export default function App() {
   const selectedEnvironmentWorkspaceIds = sessionId
     ? environmentWorkspaceIdsBySession[activeStudioToolSelectionKey] ?? []
     : [];
-  const canMountSessionEnvironment = ENVIRONMENT_STUDIO_TOOL_IDS.every((toolId) =>
-    allStudioToolIds.has(toolId)
-  );
-  const selectedStudioToolIds = [...new Set([
-    ...storedStudioToolIds.filter((toolId) => availableStudioToolIds.has(toolId)),
-    ...(selectedEnvironmentMounts.length > 0 && canMountSessionEnvironment
-      ? [...ENVIRONMENT_STUDIO_TOOL_IDS]
-      : []),
-  ])];
-  const visibleStudioTools = studioToolCapabilities?.tools.filter((tool) =>
-    !ENVIRONMENT_STUDIO_TOOL_IDS.includes(
-      tool.id as (typeof ENVIRONMENT_STUDIO_TOOL_IDS)[number],
-    ) || selectedEnvironmentMounts.length > 0
-  ) ?? [];
-  const updateSelectedStudioToolIds = (selectedIds: string[]) => {
-    const next = [...new Set([
-      ...selectedIds,
-      ...(selectedEnvironmentMounts.length > 0 ? [...ENVIRONMENT_STUDIO_TOOL_IDS] : []),
-    ])].filter((toolId) =>
-      availableStudioToolIds.has(toolId),
-    );
-    if (!sessionId) {
-      setDraftStudioToolIds(next);
-      return;
-    }
-    setStudioToolIdsBySession((current) => ({
-      ...current,
-      [activeStudioToolSelectionKey]: next,
-    }));
-  };
   const updateSelectedSessionSkills = (skills: SelectedSkill[]) => {
     if (!sessionId) return;
     setSessionSkillsBySession((current) => ({
@@ -6089,26 +5955,8 @@ export default function App() {
       ...current,
       [activeStudioToolSelectionKey]: workspaceIds,
     }));
-    setStudioToolIdsBySession((current) => {
-      const selectedIds = current[activeStudioToolSelectionKey] ?? [];
-      return {
-        ...current,
-        [activeStudioToolSelectionKey]: selections.length > 0
-          ? [...new Set([...selectedIds, ...ENVIRONMENT_STUDIO_TOOL_IDS])]
-          : selectedIds.filter((toolId) => !ENVIRONMENT_STUDIO_TOOL_IDS.includes(
-              toolId as (typeof ENVIRONMENT_STUDIO_TOOL_IDS)[number],
-            )),
-      };
-    });
   };
 
-  const studioToolsUnavailableReason = studioToolsError
-    ? studioToolsError
-    : studioToolCapabilities && !studioToolCapabilities.enabled
-      ? t("errors.localBffToolsNotConfigured")
-      : studioToolCapabilities && !studioToolCapabilities.supported
-        ? t("errors.runtimeBffToolsDisabled")
-        : "";
   const sessionEnvironmentsUnavailableReason = sessionEnvironmentsError
     || (!studioToolsLoading && studioToolCapabilities && !canMountSessionEnvironment
       ? t("errors.sandboxToolsUnavailable")
@@ -7096,7 +6944,7 @@ export default function App() {
                   atts,
                   selectedInvocation,
                   "composer",
-                  selectedStudioToolIds,
+                  undefined,
                 );
                 releaseAttachmentPreviews(atts);
               }}
@@ -8259,23 +8107,8 @@ export default function App() {
                 </div>
                 {!sandboxSession && (
                   <AgentInfoPanel
-                    appName={appName}
                     info={agentInfo}
                     loading={capabilitiesLoading}
-                    activeAgent={activeAgent}
-                    seenAgents={seenAgents}
-                    execPath={execPath}
-                    studioTools={visibleStudioTools}
-                    selectedStudioToolIds={selectedStudioToolIds}
-                    managedStudioToolIds={selectedEnvironmentMounts.length > 0
-                      ? ENVIRONMENT_STUDIO_TOOL_IDS
-                      : []}
-                    studioToolsLoading={studioToolsLoading}
-                    studioToolsDisabled={conversationBusy}
-                    studioToolsUnavailableReason={studioToolsUnavailableReason}
-                    onStudioToolsChange={
-                      studioToolRuntime ? updateSelectedStudioToolIds : undefined
-                    }
                     selectedSessionSkills={selectedSessionSkills}
                     onSessionSkillsChange={sessionId ? updateSelectedSessionSkills : undefined}
                     environments={sessionEnvironments}

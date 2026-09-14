@@ -5970,7 +5970,6 @@ a.search-result { text-decoration: none; color: inherit; }
   line-height: 1;
   white-space: nowrap;
 }
-.topo-remove-capability:disabled,
 .topo-capability-add-slot:disabled {
   cursor: not-allowed;
   opacity: 0.45;
@@ -5996,8 +5995,18 @@ a.search-result { text-decoration: none; color: inherit; }
   outline-offset: 3px;
   border-radius: 5px;
 }
-.topo-tools-scroll { max-height: 104px; }
+.topo-agents-md-scroll { max-height: 132px; }
 .topo-skills-scroll { max-height: 152px; }
+.topo-agents-md-content {
+  margin: 0;
+  color: hsl(var(--foreground));
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+    "Liberation Mono", "Courier New", monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
 .session-environment-select {
   display: flex;
   min-width: 0;
@@ -6298,41 +6307,6 @@ a.search-result { text-decoration: none; color: inherit; }
   outline: 2px solid hsl(var(--ring) / 0.38);
   outline-offset: 2px;
 }
-.topo-custom-badge {
-  display: inline-flex;
-  align-items: center;
-  height: 17px;
-  padding: 0 5px;
-  flex-shrink: 0;
-  border-radius: 5px;
-  background: hsl(var(--primary) / 0.1);
-  color: hsl(var(--primary));
-  font-size: 9.5px;
-  font-weight: 650;
-  line-height: 1;
-}
-.topo-remove-capability {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 20px;
-  margin-left: auto;
-  padding: 0;
-  flex-shrink: 0;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: hsl(var(--muted-foreground));
-  font-size: 15px;
-  line-height: 1;
-  cursor: pointer;
-}
-.topo-remove-capability svg { width: 14px; height: 14px; }
-.topo-remove-capability:hover:not(:disabled) {
-  background: hsl(var(--destructive) / 0.1);
-  color: hsl(var(--destructive));
-}
 .topo-skill-list {
   display: flex;
   min-width: 0;
@@ -6378,124 +6352,6 @@ a.search-result { text-decoration: none; color: inherit; }
   color: hsl(var(--muted-foreground));
   font-size: 11.5px;
   line-height: 1.5;
-}
-.topo-topology {
-  min-height: 0;
-}
-.topo-canvas-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 9px;
-}
-.topo-canvas-expand,
-.topo-canvas-dialog-header button {
-  display: inline-flex;
-  width: 30px;
-  height: 30px;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: hsl(var(--muted-foreground));
-  cursor: pointer;
-}
-.topo-canvas-expand:hover,
-.topo-canvas-dialog-header button:hover {
-  background: hsl(var(--muted));
-  color: hsl(var(--foreground));
-}
-.topo-canvas-expand:focus-visible,
-.topo-canvas-dialog-header button:focus-visible {
-  outline: 2px solid hsl(var(--ring) / 0.5);
-  outline-offset: 2px;
-}
-.topo-canvas-expand svg,
-.topo-canvas-dialog-header button svg {
-  width: 16px;
-  height: 16px;
-}
-.topo-canvas-preview {
-  position: relative;
-  min-height: 120px;
-  flex: 1;
-  overflow: hidden;
-  border: 1px solid hsl(var(--border));
-  border-radius: 12px;
-  background: hsl(var(--background));
-}
-.topo-runtime-flow { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 12px; }
-.topo-runtime-node { position: relative; display: grid; gap: 3px; min-width: 112px; max-width: 180px; padding: 10px; border: 1px solid hsl(var(--border)); border-radius: 9px; background: hsl(var(--panel)); }
-.topo-runtime-node strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
-.topo-runtime-node small, .topo-runtime-kind { color: hsl(var(--muted-foreground)); font-size: 10px; }
-.topo-runtime-edge { position: absolute; left: -12px; top: 50%; transform: translateY(-50%); color: hsl(var(--muted-foreground)); }
-.topo-canvas-preview .abc-root,
-.topo-canvas-dialog-body .abc-root {
-  width: 100%;
-  height: 100%;
-  min-width: 0;
-  flex: 1 1 auto;
-  border: 0;
-}
-.topo-canvas-preview .abc-minimap { display: none; }
-.topo-canvas-dialog {
-  position: fixed;
-  z-index: 1200;
-  inset: 0;
-  display: flex;
-  min-width: 0;
-  min-height: 0;
-  flex-direction: column;
-  background: hsl(var(--background));
-}
-.topo-canvas-dialog-header {
-  display: flex;
-  min-height: 64px;
-  align-items: center;
-  justify-content: space-between;
-  gap: 24px;
-  padding: 0 24px;
-  border-bottom: 1px solid hsl(var(--border));
-}
-.topo-canvas-dialog-header > div {
-  display: flex;
-  min-width: 0;
-  align-items: baseline;
-  gap: 10px;
-}
-.topo-canvas-dialog-header strong {
-  font-size: 15px;
-  font-weight: 600;
-}
-.topo-canvas-dialog-header span {
-  overflow: hidden;
-  color: hsl(var(--muted-foreground));
-  font-size: 13px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.topo-canvas-dialog-body {
-  display: flex;
-  min-width: 0;
-  min-height: 0;
-  flex: 1;
-  padding: 16px;
-}
-.topo-canvas-dialog-body .abc-canvas {
-  overflow: hidden;
-  border: 1px solid hsl(var(--border));
-  border-radius: 16px;
-}
-@media (max-width: 640px) {
-  .topo-canvas-dialog-header { padding: 0 16px; }
-  .topo-canvas-dialog-body { padding: 8px; }
-}
-/* Keep the fullscreen control visually quiet inside the information rail. */
-.topo-canvas-heading .topo-section-count {
-  flex-shrink: 0;
 }
 @media (min-width: 1280px) {
   .agent-info-trigger { display: none; }
