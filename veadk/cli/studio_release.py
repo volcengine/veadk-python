@@ -21,6 +21,8 @@ import hashlib
 import json
 import os
 import re
+import shutil
+import stat
 import tempfile
 import zipfile
 from dataclasses import asdict, dataclass
@@ -619,7 +621,17 @@ def _zip_directory(source: Path, destination: Path) -> None:
     with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for path in sorted(source.rglob("*")):
             if path.is_file():
-                archive.write(path, path.relative_to(source))
+                relative = path.relative_to(source)
+                info = zipfile.ZipInfo.from_file(path, relative)
+                info.create_system = 3
+                mode = 0o755 if relative.as_posix() == "run.sh" else 0o644
+                info.external_attr = (stat.S_IFREG | mode) << 16
+                info.compress_type = zipfile.ZIP_DEFLATED
+                with (
+                    path.open("rb") as input_file,
+                    archive.open(info, "w") as output_file,
+                ):
+                    shutil.copyfileobj(input_file, output_file)
 
 
 def _parser() -> argparse.ArgumentParser:

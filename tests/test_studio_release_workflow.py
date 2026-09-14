@@ -91,6 +91,22 @@ def test_smoke_gate_is_fresh_amd64_and_runs_before_import_validation() -> None:
     assert 'runtime_venv="$RUNNER_TEMP/studio-release-runtime-${provider}"' in script
 
 
+def test_smoke_gate_executes_bundle_as_low_privilege_user() -> None:
+    script = _smoke_script()
+
+    assert 'permission_probe_root="$(mktemp -d)"' in script
+    assert 'permission_probe="$permission_probe_root/package"' in script
+    assert 'sudo chown nobody "$permission_probe_state"' in script
+    assert 'unzip -q "${bundle[0]}" -d "$permission_probe"' in script
+    assert 'test "$(stat -c %a "$permission_probe/run.sh")" = "755"' in script
+    assert (
+        'test "$(stat -c %a "$permission_probe/agentkit-linux-x64.tar.gz")" = "644"'
+        in script
+    )
+    assert "sudo -u nobody -H env" in script
+    assert '"$permission_probe/run.sh"' in script
+
+
 def test_verification_reuses_checked_inputs_and_rebuilds_current_source(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
