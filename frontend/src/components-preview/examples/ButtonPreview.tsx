@@ -43,6 +43,10 @@ export function ButtonPreview() {
             <Button size="large" startIcon={<PlusIcon />}>Create</Button>
           </div>
         </section>
+        <section aria-labelledby="button-pill-title">
+          <h3 id="button-pill-title">Pill</h3>
+          <Button variant="pill">Update</Button>
+        </section>
         <section aria-labelledby="button-link-title">
           <h3 id="button-link-title">Link</h3>
           <Button variant="link" endIcon={<ExternalLinkIcon />}>View details</Button>
@@ -51,17 +55,13 @@ export function ButtonPreview() {
       <section className="button-preview-icon-section" aria-labelledby="button-icon-only-title">
         <h3 id="button-icon-only-title">Icon button</h3>
         <div className="button-preview-examples">
-          <section aria-labelledby="button-icon-primary-title">
-            <h4 id="button-icon-primary-title">Primary</h4>
-            <Button iconOnly startIcon={<PlusIcon />} aria-label="Add" title="Add" />
+          <section aria-labelledby="button-icon-background-title">
+            <h4 id="button-icon-background-title">Hover background</h4>
+            <Button iconOnly variant="ghost" hoverEffect="background" startIcon={<PlusIcon />} aria-label="Add with hover background" title="Hover background" />
           </section>
-          <section aria-labelledby="button-icon-secondary-title">
-            <h4 id="button-icon-secondary-title">Secondary</h4>
-            <Button iconOnly variant="secondary" startIcon={<PlayIcon />} aria-label="Run" title="Run" />
-          </section>
-          <section aria-labelledby="button-icon-ghost-title">
-            <h4 id="button-icon-ghost-title">Ghost</h4>
-            <Button iconOnly variant="ghost" startIcon={<BackIcon />} aria-label="Go back" title="Go back" />
+          <section aria-labelledby="button-icon-highlight-title">
+            <h4 id="button-icon-highlight-title">Hover icon highlight</h4>
+            <Button iconOnly variant="ghost" hoverEffect="icon" startIcon={<PlusIcon />} aria-label="Add with icon highlight" title="Hover icon highlight" />
           </section>
           <section aria-labelledby="button-icon-group-title">
             <h4 id="button-icon-group-title">Group</h4>

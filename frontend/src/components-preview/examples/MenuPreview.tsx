@@ -68,9 +68,11 @@ const nestedItems: readonly MenuEntry[] = [
 
 const entryFields = [
   ["id", "string", "全部类型必填", "未设置", "菜单项、分组和分割线的稳定标识，同一个 Menu 内保持唯一"],
-  ["type", "'item' | 'group' | 'separator'", "分组与分割线必填", "'item'", "item 为菜单项，group 为分组，separator 为分割线"],
+  ["type", "'item' | 'group' | 'separator' | 'radio-group'", "分组与分割线必填", "'item'", "item 为菜单项，group 为分组，separator 为分割线"],
   ["label", "string", "菜单项必填", "未设置", "菜单项文案或分组标题；分割线不使用此属性"],
   ["icon", "ReactNode", "否", "未设置", "菜单项左侧图标，可与无图标菜单项混排"],
+  ["destructive", "boolean", "否", "false", "删除或退出等操作使用统一的危险色"],
+  ["value / onValueChange", "string / (value: string) => void", "radio-group 必填", "未设置", "受控单选组的当前项与切换回调，选项使用 items 提供"],
   ["disabled", "boolean", "否", "false", "禁用菜单项，不能触发操作或打开子菜单"],
   ["children", "readonly MenuEntry[]", "否", "未设置", "菜单项的子菜单，可继续嵌套分组和多级菜单"],
   ["onSelect", "() => void", "否", "未设置", "末级菜单项选中时调用，同时触发 Menu 的 onSelect"],

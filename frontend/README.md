@@ -1377,3 +1377,10 @@ ModalButton 复用 ModalLayout 并提供遮罩和进出动效；Drawer 以留有
 FileExplorer 按文件名显示常用文件图标并选择高亮语言，file.language 可覆盖，支持自动格式化、折行及可选编辑保存；CodeBlock 支持自动语法高亮、手动颜色 token 和纯文本，复制保留传入文本
 Drawer 默认提供毛玻璃背景；FileUpload 复用 DashedZone 并提供文件选择与校验，Slider 支持原生拖动和键盘调整
 DatePicker 在基础组件中展示日期与日期时间选择；IndexLayout 在布局分组中展示首页；侧边栏会话示例位于复合组件的 Sidebar / 会话
+
+
+### 组件库侧栏预览
+
+`npm run dev:components` 启动独立组件库，在布局分组打开 App layout 可查看完整侧栏
+支持 240px / 56px 展开折叠、会话菜单、账号区域与默认深色的主题切换
+全屏入口为 `/components-preview/?fullscreen=app-layout#app-layout`，详见 [组件预览说明](src/components-preview/README.md)

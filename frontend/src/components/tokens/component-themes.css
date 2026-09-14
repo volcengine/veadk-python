@@ -120,14 +120,12 @@
 [data-theme="light"] .studio-switch__input:checked + .studio-switch__track { background: var(--studio-action-primary-bg); }
 [data-theme="light"] .studio-canvas-background { background: var(--studio-bg-canvas); }
 [data-theme="light"] .studio-canvas-background__dots { background-image: radial-gradient(circle at 1px 1px, rgba(46,57,78,.12) 1px, transparent 1px); }
-[data-theme="light"] .studio-detail-sidebar__brand > span,
-[data-theme="light"] .studio-detail-sidebar__account-actions > .studio-detail-sidebar__update { color: var(--studio-text-primary); }
 [data-theme="light"] .studio-promo-card { background: var(--studio-bg-promo); }
 [data-theme="light"] .studio-glass-icon-button::before,
 [data-theme="light"] .studio-glass-icon-button-group::before { background: linear-gradient(135deg, rgba(255,255,255,.9), rgba(46,57,78,.12) 45%, rgba(46,57,78,.08) 65%, rgba(255,255,255,.8)); }
 
 /* Only monochrome UI glyphs change; artwork, avatars, status colors and glows stay intact */
-[data-theme="light"] :is(.studio-agent-node__heading, .studio-agent-node__counts, .studio-basic-node__icon, .studio-dashed-zone__button, .studio-form-label-row__action, .studio-code-block__header, .studio-glass-icon-button, .studio-glass-icon-button-group, .studio-header__edit, .studio-card-layout__icon, .studio-card-layout__close, .studio-modal-layout__close, .studio-item__action, .studio-detail-sidebar__brand, .studio-detail-sidebar__account-actions, .studio-sidebar-item__icon, .detail-page-preview__back, .resource-page-preview-search) img {
+[data-theme="light"] :is(.studio-agent-node__heading, .studio-agent-node__counts, .studio-basic-node__icon, .studio-dashed-zone__button, .studio-form-label-row__action, .studio-code-block__header, .studio-glass-icon-button, .studio-glass-icon-button-group, .studio-header__edit, .studio-card-layout__icon, .studio-card-layout__close, .studio-modal-layout__close, .studio-item__action, .studio-sidebar-item__icon, .detail-page-preview__back, .resource-page-preview-search) img {
   filter: brightness(.32);
 }
 [data-theme="light"] .studio-select__arrow,

@@ -23,7 +23,16 @@
 }
 .studio-scroll-area[data-orientation="vertical"] { overflow-x: hidden; overflow-y: auto; overscroll-behavior-x: none; }
 .studio-scroll-area[data-orientation="horizontal"] { overflow-x: auto; overflow-y: hidden; }
+.studio-scroll-area[data-fade-edges] {
+  --scroll-area-fade-top: 0px;
+  --scroll-area-fade-bottom: 0px;
+  mask-image: linear-gradient(to bottom, transparent, #000 var(--scroll-area-fade-top), #000 calc(100% - var(--scroll-area-fade-bottom)), transparent);
+  mask-mode: alpha;
+}
+.studio-scroll-area[data-fade-top] { --scroll-area-fade-top: min(var(--studio-space-5, 16px), 25%); }
+.studio-scroll-area[data-fade-bottom] { --scroll-area-fade-bottom: min(var(--studio-space-5, 16px), 25%); }
 .studio-scroll-area:focus-visible { outline: 1px solid var(--studio-focus-ring); outline-offset: 2px; }
+.studio-scroll-area[data-fade-edges]:focus-visible { outline-offset: -1px; }
 .studio-scroll-area:focus-visible { --scroll-area-visible-thumb: var(--scroll-area-thumb); }
 @media (hover: hover) {
   .studio-scroll-area:hover { --scroll-area-visible-thumb: var(--scroll-area-thumb); }
