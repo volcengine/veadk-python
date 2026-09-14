@@ -25,6 +25,7 @@
 - `CON-3`：AgentKit Runtime 创建及收敛更新设置 `ApmplusEnable=true`。除非操作方显式覆盖，`APMPLUS_TRACE_CONTENT=false` 保持内容追踪关闭。
 - `CON-4`：第一阶段在启动前写入占位符；第二阶段只使用非空权威 Runtime 值覆盖。第二阶段部署失败必须报告失败，不得报告部分成功。
 - `CON-5`：调用方显式提供的 `extra_env` 继续保持 last-wins，包括有意覆盖 VeADK 配置默认值。
+- `CON-6`：AgentKit Runtime 创建及收敛更新必须持久化 `veadk:agent-type=mpa`，作为 Studio 稳定分类标签。未打标签 Runtime 在执行显式标签修复前不进入 MPA 筛选。
 
 ## 状态、安全与兼容
 
@@ -39,5 +40,5 @@
 | 契约 | 验证 |
 | --- | --- |
 | `CON-1`、`CON-2`、`CON-5` | `uv run --extra dev pytest tests/integrations/test_mpa_provision_env.py tests/cli/test_cli_mpa.py` |
-| `CON-2`、`CON-3`、`CON-4` | `uv run --extra dev pytest tests/integrations/test_mpa_runtime.py` |
+| `CON-2`、`CON-3`、`CON-4`、`CON-6` | `uv run --extra dev pytest tests/integrations/test_mpa_runtime.py` |
 | 端到端 | 创建/复用隔离 Runtime，不打印 Key 地检查 metadata，调用 A2A 和内置 MCP，并观察两个 MCP 缓存周期 |
