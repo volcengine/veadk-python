@@ -479,6 +479,7 @@ def test_http_permissions_refresh_and_cross_origin_mutations_are_blocked(
 def test_directory_uses_provider_host_and_fetches_all_pages(
     monkeypatch, provider, region, host
 ):
+    import importlib
     from types import SimpleNamespace
     from frontend.server.user_management import directory as module
 
@@ -507,8 +508,10 @@ def test_directory_uses_provider_host_and_fetches_all_pages(
             )
             return SimpleNamespace(data=[value], total_count=2)
 
-    monkeypatch.setattr(module.volcenginesdkcore, "ApiClient", api_client)
-    monkeypatch.setattr(module.sdk, "IDApi", Api)
+    monkeypatch.setattr(
+        importlib.import_module("volcenginesdkcore"), "ApiClient", api_client
+    )
+    monkeypatch.setattr(module._identity_sdk(), "IDApi", Api)
     monkeypatch.delenv("IDENTITY_OPENAPI_HOST", raising=False)
     directory = module.IdentityDirectory(
         "pool", provider, region, lambda: ("test-ak", "test-sk", None)
