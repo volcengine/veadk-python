@@ -459,6 +459,10 @@ test("implements the confirmed migration lifecycle as a desktop chat workspace",
   assert.match(source, /listModelOptions\(\{/);
   assert.match(
     source,
+    /listModelOptions\(\{[\s\S]*?scope: "development"/,
+  );
+  assert.match(
+    source,
     /<NewChatCompactSelect[\s\S]*?label=\{t\("model\.label"\)\}[\s\S]*?searchable[\s\S]*?disabled=\{composerBusy \|\| Boolean\(task\)\}/,
   );
   assert.match(

@@ -221,7 +221,7 @@ class _FakeGateway:
             dict(tool_envs)
             if tool_envs is not None
             else {
-                "CODEX_MODEL": "doubao-seed-1-8-251228",
+                "CODEX_MODEL": "doubao-seed-2-1-pro-260628",
                 "CODEX_API_KEY": "codex-api-key",
                 "CODEX_BASE_URL": "https://ark.cn-beijing.volces.com/api/v3",
             }
@@ -707,6 +707,44 @@ def test_create_accepts_selected_model_as_session_env() -> None:
         "CODEX_API_KEY",
         "OPENCODE_API_KEY",
     }.isdisjoint(envs)
+
+
+def test_create_rejects_selected_model_outside_provider_allowlist() -> None:
+    gateway = _FakeGateway()
+    with TestClient(_app(gateway)) as client:
+        response = client.post(
+            "/web/intelligent-development/sessions",
+            headers={"X-Test-User": "alice"},
+            json={"displayName": "天气 Agent", "modelId": "unlisted-model"},
+        )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == {
+        "code": "SANDBOX_INVALID_REQUEST",
+        "message": "所选模型暂不支持智能构建，请选择其他模型。",
+        "retryable": False,
+    }
+    assert gateway.created == 0
+
+
+def test_create_rejects_default_model_outside_provider_allowlist() -> None:
+    gateway = _FakeGateway(
+        tool_envs={
+            "CODEX_MODEL": "unlisted-model",
+            "CODEX_API_KEY": "codex-api-key",
+            "CODEX_BASE_URL": "https://ark.cn-beijing.volces.com/api/v3",
+        }
+    )
+    with TestClient(_app(gateway)) as client:
+        response = client.post(
+            "/web/intelligent-development/sessions",
+            headers={"X-Test-User": "alice"},
+            json={"displayName": "天气 Agent"},
+        )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "SANDBOX_INVALID_REQUEST"
+    assert gateway.created == 0
 
 
 def test_create_treats_blank_selected_model_as_default() -> None:

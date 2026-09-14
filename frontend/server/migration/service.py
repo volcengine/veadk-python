@@ -34,6 +34,10 @@ from pathlib import Path, PurePosixPath
 
 from dotenv import dotenv_values
 
+from veadk.cli.studio_model_catalog import (
+    provider_allows_studio_development_model,
+)
+
 from frontend.server.deployment_source import (
     DeploymentSourceError,
     extract_migration_source,
@@ -2413,19 +2417,24 @@ class MigrationService:
         owner_id: str,
         creator_name: str,
     ) -> dict[str, object]:
-        if body.model_id in MIGRATION_UNSUPPORTED_MODEL_IDS:
-            raise MigrationError(
-                "MIGRATION_MODEL_UNSUPPORTED",
-                "所选模型暂不兼容项目迁移，请选择其他模型。",
-                status_code=400,
-                retryable=False,
-            )
         capability = self.capabilities()
         if not capability["enabled"]:
             raise MigrationError(
                 "MIGRATION_DEVENV_UNAVAILABLE",
                 str(capability["reason"]) or "Dev Sandbox 暂不可用。",
                 status_code=503,
+            )
+        model = capability["model"]
+        assert isinstance(model, dict)
+        effective_model_id = body.model_id or str(model["id"])
+        if not provider_allows_studio_development_model(
+            str(capability["provider"]), effective_model_id
+        ):
+            raise MigrationError(
+                "MIGRATION_MODEL_UNSUPPORTED",
+                "所选模型暂不兼容项目迁移，请选择其他模型。",
+                status_code=400,
+                retryable=False,
             )
         task_id = body.task_id or f"migration-v1-{uuid.uuid4().hex}"
         ttl_seconds = (

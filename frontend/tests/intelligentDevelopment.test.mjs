@@ -1192,6 +1192,10 @@ test("intelligent goal input shares IME handling and semantic responsive styles"
   assert.match(createSource, /listModelOptions\(\{/);
   assert.match(
     createSource,
+    /listModelOptions\(\{[\s\S]*?scope: "development"/,
+  );
+  assert.match(
+    createSource,
     /function IntelligentModelSelect\([\s\S]*?<NewChatCompactSelect[\s\S]*?label=\{t\("intelligent\.model\.label"\)\}[\s\S]*?hideLabel[\s\S]*?searchable/,
   );
   assert.match(

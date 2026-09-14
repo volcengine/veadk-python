@@ -36,6 +36,34 @@ from frontend.server.model_catalog.service import (
     ModelCatalogService,
     join_model_options,
 )
+from veadk.cli.studio_model_catalog import (
+    BYTEPLUS_STUDIO_DEVELOPMENT_MODEL_IDS,
+    VOLCENGINE_STUDIO_DEVELOPMENT_MODEL_IDS,
+    provider_allows_studio_development_model,
+    studio_development_model_ids,
+)
+
+
+def test_studio_development_model_allowlists_are_provider_specific() -> None:
+    assert VOLCENGINE_STUDIO_DEVELOPMENT_MODEL_IDS == {
+        "doubao-seed-2-1-pro-260628",
+        "deepseek-v4-pro-ga-260813",
+        "doubao-seed-evolving",
+    }
+    assert BYTEPLUS_STUDIO_DEVELOPMENT_MODEL_IDS == {
+        "dola-seed-2-1-turbo-260628",
+        "deepseek-v4-pro-ga-260813",
+    }
+    assert studio_development_model_ids(" BYTEPLUS ") == (
+        BYTEPLUS_STUDIO_DEVELOPMENT_MODEL_IDS
+    )
+    assert provider_allows_studio_development_model(
+        "volcengine", "doubao-seed-evolving"
+    )
+    assert not provider_allows_studio_development_model(
+        "byteplus", "doubao-seed-evolving"
+    )
+    assert studio_development_model_ids("unknown") == frozenset()
 
 
 @pytest.mark.asyncio
@@ -402,6 +430,70 @@ async def test_route_uses_camel_case_response() -> None:
             }
         ],
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider", "expected_ids"),
+    [
+        (
+            "volcengine",
+            [
+                "doubao-seed-2-1-pro-260628",
+                "deepseek-v4-pro-ga-260813",
+                "doubao-seed-evolving",
+            ],
+        ),
+        (
+            "byteplus",
+            ["dola-seed-2-1-turbo-260628", "deepseek-v4-pro-ga-260813"],
+        ),
+    ],
+)
+async def test_development_scope_filters_models_by_provider_allowlist(
+    provider: str,
+    expected_ids: list[str],
+) -> None:
+    model_ids = [
+        "doubao-seed-2-1-pro-260628",
+        "dola-seed-2-1-turbo-260628",
+        "deepseek-v4-pro-ga-260813",
+        "doubao-seed-evolving",
+        "unlisted-model",
+    ]
+    response = ModelOptionsResponse(
+        provider=provider,  # type: ignore[arg-type]
+        models=[
+            ModelOption(
+                id=model_id,
+                name=model_id,
+                display_name=model_id,
+                vendor_name="ByteDance",
+                activation_state="Available",
+                lifecycle_status="Running",
+                available=True,
+            )
+            for model_id in model_ids
+        ],
+    )
+    app = FastAPI()
+    mount_model_catalog_routes(
+        app,
+        service=SimpleNamespace(  # type: ignore[arg-type]
+            list_options=lambda: _async_value(response)
+        ),
+        authorize=lambda _: None,
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        result = await client.get("/web/model-options?scope=development")
+        unscoped = await client.get("/web/model-options")
+
+    assert result.status_code == 200
+    assert [model["id"] for model in result.json()["models"]] == expected_ids
+    assert [model["id"] for model in unscoped.json()["models"]] == model_ids
 
 
 @pytest.mark.asyncio

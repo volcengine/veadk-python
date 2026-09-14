@@ -18,9 +18,14 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable
+from typing import Literal
 
 import httpx
 from fastapi import FastAPI, HTTPException, Query, Request, Response
+
+from veadk.cli.studio_model_catalog import (
+    provider_allows_studio_development_model,
+)
 
 from frontend.server.video.client import (
     ArkHttpClient,
@@ -192,14 +197,29 @@ def mount_model_catalog_routes(
         request: Request,
         api_key_id: str | None = Query(default=None, alias="apiKeyId"),
         refresh: bool = Query(default=False),
+        scope: Literal["development"] | None = Query(default=None),
     ) -> ModelOptionsResponse:
         authorize(request)
         try:
             if api_key_id is None and not refresh:
-                return await service.list_options()
-            return await service.list_options(
-                api_key_id=api_key_id,
-                force_refresh=refresh,
+                response = await service.list_options()
+            else:
+                response = await service.list_options(
+                    api_key_id=api_key_id,
+                    force_refresh=refresh,
+                )
+            if scope != "development":
+                return response
+            return response.model_copy(
+                update={
+                    "models": [
+                        model
+                        for model in response.models
+                        if provider_allows_studio_development_model(
+                            response.provider, model.id
+                        )
+                    ]
+                }
             )
         except ModelCatalogError as error:
             raise HTTPException(
