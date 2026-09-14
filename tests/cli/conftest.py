@@ -14,8 +14,20 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 import pytest
 from unittest.mock import AsyncMock, MagicMock
+
+from tests.cli.provider_environment import preserve_cli_provider_environment
+
+
+@pytest.fixture(autouse=True)
+def _isolate_cli_provider_environment() -> Iterator[None]:
+    """Keep direct Studio server calls from leaking provider selection."""
+
+    with preserve_cli_provider_environment():
+        yield
 
 
 @pytest.fixture(autouse=True)
