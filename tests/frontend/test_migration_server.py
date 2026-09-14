@@ -190,6 +190,8 @@ def test_public_environment_defaults_require_integrity_and_hide_secrets() -> Non
 class FakeMigrationGateway:
     def __init__(self) -> None:
         self.enabled = True
+        self.provider = "volcengine"
+        self.model_id = "doubao-seed-2-1-pro-260628"
         self.sessions: dict[str, MigrationSandboxSession] = {}
         self.files: dict[tuple[str, str], bytes] = {}
         self.commands: list[tuple[str, str, str]] = []
@@ -203,8 +205,8 @@ class FakeMigrationGateway:
         return {
             "enabled": self.enabled,
             "reason": "" if self.enabled else "Dev Sandbox 暂不可用",
-            "provider": "volcengine",
-            "model": {"configured": True, "id": "doubao-test"},
+            "provider": self.provider,
+            "model": {"configured": True, "id": self.model_id},
         }
 
     def create_session(
@@ -606,7 +608,7 @@ def test_migration_capability_and_session_contract_are_bounded() -> None:
         "enabled": True,
         "reason": "",
         "provider": "volcengine",
-        "model": {"configured": True, "id": "doubao-test"},
+        "model": {"configured": True, "id": "doubao-seed-2-1-pro-260628"},
         "unsupportedModelIds": ["deepseek-v4-pro-260425"],
         "maxUploadBytes": 20 * 1024 * 1024,
         "sessionTtlSeconds": 3600,
@@ -726,6 +728,60 @@ def test_migration_rejects_a_known_incompatible_codex_model() -> None:
 
     assert unsupported.value.code == "MIGRATION_MODEL_UNSUPPORTED"
     assert unsupported.value.status_code == 400
+    assert gateway.created_models == []
+
+
+def test_migration_rejects_any_model_outside_provider_allowlist() -> None:
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway)
+
+    with pytest.raises(MigrationError) as unsupported:
+        service.create_task(
+            CreateMigrationTaskBody(
+                sourceFileName="support-agent.zip",
+                modelId="unlisted-model",
+            ),
+            "owner-1",
+            "Owner",
+        )
+
+    assert unsupported.value.code == "MIGRATION_MODEL_UNSUPPORTED"
+    assert unsupported.value.status_code == 400
+    assert gateway.created_models == []
+
+
+def test_migration_uses_byteplus_specific_model_allowlist() -> None:
+    gateway = FakeMigrationGateway()
+    gateway.provider = "byteplus"
+    gateway.model_id = "dola-seed-2-1-turbo-260628"
+    service = MigrationService(gateway)
+
+    created = service.create_task(
+        CreateMigrationTaskBody(
+            sourceFileName="support-agent.zip",
+            modelId="deepseek-v4-pro-ga-260813",
+        ),
+        "owner-1",
+        "Owner",
+    )
+
+    assert created["modelId"] == "deepseek-v4-pro-ga-260813"
+    assert gateway.created_models == ["deepseek-v4-pro-ga-260813"]
+
+
+def test_migration_rejects_default_model_outside_provider_allowlist() -> None:
+    gateway = FakeMigrationGateway()
+    gateway.model_id = "unlisted-default-model"
+    service = MigrationService(gateway)
+
+    with pytest.raises(MigrationError) as unsupported:
+        service.create_task(
+            CreateMigrationTaskBody(sourceFileName="support-agent.zip"),
+            "owner-1",
+            "Owner",
+        )
+
+    assert unsupported.value.code == "MIGRATION_MODEL_UNSUPPORTED"
     assert gateway.created_models == []
 
 
@@ -1674,7 +1730,10 @@ def test_capabilities_expose_provider_model_and_per_session_runtime_checks() -> 
     capability = MigrationService(FakeMigrationGateway()).capabilities()
 
     assert capability["provider"] == "volcengine"
-    assert capability["model"] == {"configured": True, "id": "doubao-test"}
+    assert capability["model"] == {
+        "configured": True,
+        "id": "doubao-seed-2-1-pro-260628",
+    }
     assert capability["unsupportedModelIds"] == sorted(MIGRATION_UNSUPPORTED_MODEL_IDS)
     assert capability["cli"] == {
         "minimumVersion": "0.52.1",

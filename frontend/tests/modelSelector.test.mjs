@@ -64,6 +64,7 @@ test("model configuration switches between ModelArk and custom fields", () => {
 test("ModelArk picker exposes search, status, loading, empty and retry states", () => {
   assert.match(clientSource, /`\/web\/model-options\$\{query/);
   assert.match(clientSource, /params\.set\("refresh", "true"\)/);
+  assert.match(clientSource, /params\.set\("scope", options\.scope\)/);
   assert.match(clientSource, /`\/web\/model-api-keys\$\{refresh/);
   assert.doesNotMatch(customCreateSource, /<select[\s\S]*cw-model-key-select/);
   assert.match(customCreateSource, /function CatalogSelect/);

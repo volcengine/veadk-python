@@ -556,10 +556,12 @@ export async function listModelOptions(options?: {
   signal?: AbortSignal;
   apiKeyId?: string;
   refresh?: boolean;
+  scope?: "development";
 }): Promise<ModelOptionsResponse> {
   const params = new URLSearchParams();
   if (options?.apiKeyId) params.set("apiKeyId", options.apiKeyId);
   if (options?.refresh) params.set("refresh", "true");
+  if (options?.scope) params.set("scope", options.scope);
   const query = params.toString();
   const res = await apiFetch(`/web/model-options${query ? `?${query}` : ""}`, {
     signal: options?.signal,

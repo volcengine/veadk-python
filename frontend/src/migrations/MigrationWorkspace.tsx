@@ -841,11 +841,11 @@ export function MigrationWorkspace({
       capability?.model?.id ||
       ""
     ).trim();
-    const preservesExistingTaskModel = task?.modelId === fallbackId;
+    const preservesExistingTaskModel =
+      Boolean(task?.modelId) && task?.modelId === fallbackId;
     if (
       fallbackId &&
-      (preservesExistingTaskModel ||
-        !unsupportedMigrationModelIds.has(fallbackId)) &&
+      preservesExistingTaskModel &&
       !options.some((option) => option.value === fallbackId)
     ) {
       options.unshift({
@@ -861,7 +861,6 @@ export function MigrationWorkspace({
     selectedModelId,
     task?.modelId,
     t,
-    unsupportedMigrationModelIds,
   ]);
   const createElapsedSeconds = createStartedAt
     ? Math.max(0, Math.floor((now - createStartedAt) / 1_000))
@@ -967,6 +966,7 @@ export function MigrationWorkspace({
     void listModelOptions({
       signal: controller.signal,
       refresh: modelsReloadKey > 0,
+      scope: "development",
     })
       .then((response) => {
         if (controller.signal.aborted) return;
@@ -986,18 +986,30 @@ export function MigrationWorkspace({
   }, [cloudProvider, modelsReloadKey, t]);
 
   useEffect(() => {
-    if (!capability || selectedModelId) return;
+    if (
+      !capability ||
+      task ||
+      modelsLoading ||
+      modelsError ||
+      selectableModels.length === 0
+    ) {
+      return;
+    }
+    if (selectableModels.some((model) => model.id === selectedModelId)) return;
     const configuredModelId = capability.model?.id.trim() || "";
     const defaultModelId =
-      configuredModelId && !unsupportedMigrationModelIds.has(configuredModelId)
+      configuredModelId &&
+      selectableModels.some((model) => model.id === configuredModelId)
         ? configuredModelId
         : selectableModels[0]?.id || "";
     if (defaultModelId) setSelectedModelId(defaultModelId);
   }, [
     capability,
+    modelsError,
+    modelsLoading,
     selectableModels,
     selectedModelId,
-    unsupportedMigrationModelIds,
+    task,
   ]);
 
   useEffect(
@@ -1806,8 +1818,11 @@ export function MigrationWorkspace({
     setEvaluationReport(null);
     setEvaluationReportError("");
     setEvaluationActionError("");
+    const configuredModelId = capability?.model?.id.trim() || "";
     setSelectedModelId(
-      capability?.model?.id.trim() || selectableModels[0]?.id || "",
+      selectableModels.some((model) => model.id === configuredModelId)
+        ? configuredModelId
+        : selectableModels[0]?.id || "",
     );
   }
 

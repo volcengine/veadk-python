@@ -82,6 +82,9 @@ from veadk.cli.frontend_sandbox import (
     mount_sandbox_routes,
 )
 from veadk.cli.frontend_skill_creator import _sandbox_model_config
+from veadk.cli.studio_model_catalog import (
+    provider_allows_studio_development_model,
+)
 from veadk.utils.cloud_provider import cloud_provider_from_env
 from veadk.utils.logger import get_logger
 
@@ -564,10 +567,11 @@ async def _sandbox_dev_model_capability(
 
 async def _require_sandbox_dev_model_configured(
     service: SandboxConversationService,
-) -> None:
+) -> dict[str, object]:
     model = await _sandbox_dev_model_capability(service)
     if not model["configured"]:
         raise SandboxConfigurationError(_MODEL_CONFIGURATION_UNAVAILABLE_REASON)
+    return model
 
 
 async def _request_object(request: Request, maximum: int) -> dict[str, object]:
@@ -1003,17 +1007,14 @@ def mount_intelligent_development_routes(
             base_version_id = data.get("baseVersionId")
             if not isinstance(display_name, str):
                 raise SandboxValidationError("displayName 格式无效。")
-            if model_id is None:
-                session_envs = None
-            elif not isinstance(model_id, str):
+            if model_id is not None and not isinstance(model_id, str):
                 raise SandboxValidationError("模型 ID 必须是文本。")
-            else:
+            if isinstance(model_id, str):
                 model_id = model_id.strip()
                 if model_id and _MODEL_ID_RE.fullmatch(model_id) is None:
                     raise SandboxValidationError("模型 ID 格式无效。")
-                session_envs = (
-                    _selected_model_session_envs(model_id) if model_id else None
-                )
+            else:
+                model_id = ""
             if project_id is not None and not isinstance(project_id, str):
                 raise SandboxValidationError("projectId 格式无效。")
             if base_version_id is not None and not isinstance(base_version_id, str):
@@ -1022,7 +1023,15 @@ def mount_intelligent_development_routes(
                 raise SandboxValidationError(
                     "baseVersionId 必须与 projectId 一起使用。"
                 )
-            await _require_sandbox_dev_model_configured(service)
+            default_model = await _require_sandbox_dev_model_configured(service)
+            effective_model_id = model_id or str(default_model["id"])
+            if not provider_allows_studio_development_model(
+                cloud_provider_from_env(), effective_model_id
+            ):
+                raise SandboxValidationError(
+                    "所选模型暂不支持智能构建，请选择其他模型。"
+                )
+            session_envs = _selected_model_session_envs(model_id) if model_id else None
             session = await service.create(
                 owner,
                 display_name,

@@ -83,6 +83,20 @@ BYTEPLUS_MODELARK_MODEL_IDS = frozenset(
     }
 )
 
+VOLCENGINE_STUDIO_DEVELOPMENT_MODEL_IDS = frozenset(
+    {
+        "doubao-seed-2-1-pro-260628",
+        "deepseek-v4-pro-ga-260813",
+        "doubao-seed-evolving",
+    }
+)
+BYTEPLUS_STUDIO_DEVELOPMENT_MODEL_IDS = frozenset(
+    {
+        "dola-seed-2-1-turbo-260628",
+        "deepseek-v4-pro-ga-260813",
+    }
+)
+
 BYTEPLUS_SKILL_CREATOR_MODELS = (
     ("a", BYTEPLUS_STUDIO_AGENT_MODEL_NAME, "Dola Seed 2.1 Turbo"),
     ("b", "deepseek-v4-flash-260425", "DeepSeek V4 Flash"),
@@ -194,6 +208,21 @@ def provider_allows_model(provider: str, model_id: str) -> bool:
     if _provider_id(provider) == "byteplus":
         return is_byteplus_model(normalized)
     return True
+
+
+def studio_development_model_ids(provider: str) -> frozenset[str]:
+    """Return the provider-specific allowlist for Studio build and migration."""
+    normalized_provider = _provider_id(provider)
+    if normalized_provider == "volcengine":
+        return VOLCENGINE_STUDIO_DEVELOPMENT_MODEL_IDS
+    if normalized_provider == "byteplus":
+        return BYTEPLUS_STUDIO_DEVELOPMENT_MODEL_IDS
+    return frozenset()
+
+
+def provider_allows_studio_development_model(provider: str, model_id: str) -> bool:
+    """Return whether a model can power Studio intelligent development flows."""
+    return model_id.strip() in studio_development_model_ids(provider)
 
 
 def provider_env_placeholders(provider: str) -> dict[str, str]:
