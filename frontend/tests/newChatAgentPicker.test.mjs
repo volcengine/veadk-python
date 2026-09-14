@@ -53,6 +53,7 @@ test("keeps message actions disabled while leaving the Agent picker available", 
 
 test("renders a two-level Agent type and runtime menu", () => {
   assert.match(pickerSource, /labelKey: "agentPicker\.types\.general"/);
+  assert.match(pickerSource, /labelKey: "agentPicker\.types\.mpa"/);
   assert.match(pickerSource, /labelKey: "agentPicker\.types\.codex"/);
   assert.match(pickerSource, /labelKey: "agentPicker\.types\.deepseekHarness"/);
   assert.match(pickerSource, /labelKey: "agentPicker\.types\.openclaw"/);
@@ -61,6 +62,8 @@ test("renders a two-level Agent type and runtime menu", () => {
   assert.match(pickerSource, /aria-label=\{t\("agentPicker\.listLabel", \{ type: activeTypeLabel \}\)\}/);
   assert.match(pickerSource, /getRuntimes\(\{[\s\S]*?region: "all"[\s\S]*?pageSize: PAGE_SIZE/);
   assert.match(pickerSource, /onSelectRuntime\(runtime\)/);
+  assert.match(pickerSource, /runtime\.agentCategory === "mpa"/);
+  assert.match(pickerSource, /runtime\.agentCategory !== "mpa"/);
   assert.match(pickerSource, /sandboxClient\.listSessions/);
   assert.match(pickerSource, /sandboxClient\.listAgentSessions/);
   assert.match(pickerSource, /onSelectSandboxSession\(session\)/);
@@ -113,7 +116,7 @@ test("uses compact official empty states without fake actions", () => {
   );
   assert.match(
     pickerSource,
-    /runtimes\.length === 0[\s\S]*?className="new-chat-agent-picker__empty"[\s\S]*?<EmptyMessage\.Icon[\s\S]*?size="sm"[\s\S]*?<AgentFaceIcon[\s\S]*?<EmptyMessage\.Title[^>]*>[\s\S]*?agentPicker\.emptyGeneral[\s\S]*?<\/EmptyMessage\.Title>/,
+    /visibleRuntimes\.length === 0[\s\S]*?className="new-chat-agent-picker__empty"[\s\S]*?<EmptyMessage\.Icon[\s\S]*?size="sm"[\s\S]*?<AgentFaceIcon[\s\S]*?<EmptyMessage\.Title[^>]*>[\s\S]*?agentPicker\.emptyGeneral[\s\S]*?<\/EmptyMessage\.Title>/,
   );
   assert.match(pickerSource, /sandboxSessions\.length === 0[\s\S]*?agentPicker\.empty[\s\S]*?agentPicker\.createHint/);
   assert.match(pickerSource, /sandboxSessions\.map\(\(session, index\) =>/);
@@ -178,7 +181,7 @@ test("does not open the general Agent list until a type is deliberately chosen",
   );
   assert.match(
     pickerSource,
-    /activeType === null \|\| activeType === "general" \|\| loadedSandboxType === activeType/,
+    /activeType === "general" \|\|[\s\S]*?activeType === "mpa" \|\|[\s\S]*?loadedSandboxType === activeType/,
   );
   assert.match(pickerSource, /if \(activeType === null\) activateType\(activeTypeIndex\)/);
   assert.match(pickerSource, /setKeyboardNavigating\(fromKeyboard\)/);
@@ -204,4 +207,33 @@ test("shows request context and backend detail for every picker error", () => {
   assert.match(pickerSource, /formatRequestError\(cause, t\("agentPicker\.connectGeneral"\)\)/);
   assert.match(pickerSource, /t\("agentPicker\.openType", \{ type: activeTypeLabel \}\)/);
   assert.match(pickerStyles, /\.new-chat-agent-picker__error > span,[\s\S]*?white-space: pre-wrap/);
+});
+
+test("keeps optional environment storage failures out of Agent selection", () => {
+  assert.match(
+    appSource,
+    /const environmentResults = await Promise\.allSettled\(\[\s*listEnvironments\(controller\.signal\),\s*listWorkspaces\(controller\.signal\),?\s*\]\)/,
+  );
+  assert.match(appSource, /setSessionEnvironmentsError\(environmentErrors\.join/);
+  assert.match(appSource, /isOptionalStudioStorageUnavailable/);
+  assert.doesNotMatch(
+    appSource,
+    /Promise\.all\(\[\s*listEnvironments\(controller\.signal\),\s*listWorkspaces/,
+  );
+});
+
+test("commits a connected Runtime Agent before starting its fresh chat", () => {
+  const start = appSource.indexOf(
+    "const refreshCurrentAgentAndStartNewChat = async (id: string) => {",
+  );
+  const end = appSource.indexOf(
+    "const openIntelligentDeploymentChat",
+    start,
+  );
+  const refreshAgent = appSource.slice(start, end);
+  assert.ok(refreshAgent.includes("setAppName(id)"));
+  assert.ok(
+    refreshAgent.indexOf("startNewChat()") <
+      refreshAgent.indexOf("setAppName(id)"),
+  );
 });

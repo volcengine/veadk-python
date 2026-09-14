@@ -56,9 +56,9 @@ def test_apmplus_trace_uses_provider_endpoint_and_filters_spans(
                 "trace_id": "trace-1",
                 "span_id": "span-1",
                 "tags": {
-                    "gen_ai.session.id": "session-1",
+                    "a2a.context_id": "session-1",
                     "cozeloop_agent_runtime_id": "runtime-1",
-                    "gen_ai.invocation.id": "invocation-1",
+                    "a2a.invocation_id": "invocation-1",
                 },
             }
         ),
@@ -310,7 +310,8 @@ def test_apmplus_trace_falls_back_when_run_sse_candidate_is_missing(
         "span-nearest-child",
     ]
     assert requests[0].filters[0].values == ["POST /run_sse"]
-    assert requests[1].filters is None
+    assert requests[1].filters[0].key == "tags.a2a.context_id"
+    assert requests[2].filters is None
 
 
 def test_apmplus_trace_retries_while_spans_are_being_collected(
@@ -326,6 +327,8 @@ def test_apmplus_trace_retries_while_spans_are_being_collected(
         def list_span(self, request: Any) -> SimpleNamespace:
             nonlocal attempts
             if request.filters:
+                return SimpleNamespace(span_list=[])
+            if request.offset:
                 return SimpleNamespace(span_list=[])
             attempts += 1
             if attempts == 1:

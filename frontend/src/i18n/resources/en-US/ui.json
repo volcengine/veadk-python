@@ -439,6 +439,7 @@
   "environmentCenter": {
     "title": "Environments",
     "loadFailed": "Failed to load environments. Check the storage configuration and try again.",
+    "storageUnavailable": "Persistent storage is not configured. Environment management is unavailable.",
     "create": "New environment",
     "configure": "Configure environment",
     "details": "Environment details",
@@ -1158,6 +1159,7 @@
   },
   "workspace": {
     "title": "Workspaces",
+    "storageUnavailable": "Persistent storage is not configured. Workspace management is unavailable.",
     "detail": "Workspace details",
     "create": "New workspace",
     "editorDescription": "Group frequently used environments. An environment can belong to multiple workspaces.",
@@ -1233,6 +1235,24 @@
     }
   },
   "composer": {
+    "model": "Model",
+    "turnControls": "Turn controls",
+    "pause": "Pause",
+    "resume": "Resume",
+    "interrupt": "Interrupt",
+    "cancel": "Cancel",
+    "pauseTurn": "Pause the whole flow at a safe point",
+    "resumeTurn": "Resume the whole flow",
+    "interruptTurn": "Interrupt this flow and retain Session context",
+    "cancelTurn": "Cancel this flow permanently",
+    "turnState": {
+      "running": "Running",
+      "pausing": "Reaching safe point",
+      "paused": "Paused",
+      "resuming": "Resuming",
+      "interrupting": "Interrupting",
+      "cancelling": "Cancelling"
+    },
     "tasks": {
       "ppt": "Presentation",
       "image": "Image generation",

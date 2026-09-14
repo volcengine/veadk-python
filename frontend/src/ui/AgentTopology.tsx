@@ -12,6 +12,8 @@ import type {
   StudioWorkspace,
 } from "../adk/client";
 import { AgentBuildCanvas } from "../create/AgentBuildCanvas";
+import { SkillSpacePicker } from "../create/SkillSpacePicker";
+import type { SelectedSkill } from "../create/skills/types";
 import {
   modelConfigurationFromRuntime,
   modelNameFromRuntime,
@@ -127,6 +129,8 @@ interface AgentInfoPanelProps {
   studioToolsDisabled?: boolean;
   studioToolsUnavailableReason?: string;
   onStudioToolsChange?: (selectedIds: string[]) => void;
+  selectedSessionSkills?: readonly SelectedSkill[];
+  onSessionSkillsChange?: (skills: SelectedSkill[]) => void;
   environments?: StudioEnvironment[];
   workspaces?: StudioWorkspace[];
   selectedEnvironments?: readonly SessionEnvironmentMountSelection[];
@@ -156,6 +160,8 @@ export function AgentInfoPanel({
   studioToolsDisabled = false,
   studioToolsUnavailableReason = "",
   onStudioToolsChange,
+  selectedSessionSkills = [],
+  onSessionSkillsChange,
   environments = [],
   workspaces = [],
   selectedEnvironments = [],
@@ -167,7 +173,7 @@ export function AgentInfoPanel({
   onEnvironmentsRefresh,
 }: AgentInfoPanelProps) {
   const { t } = useTranslation("workspaceTools");
-  const [dialog, setDialog] = useState<"tool" | null>(null);
+  const [dialog, setDialog] = useState<"tool" | "skill" | null>(null);
   const [canvasExpanded, setCanvasExpanded] = useState(false);
   const expandCanvasRef = useRef<HTMLButtonElement>(null);
   const closeCanvas = () => {
@@ -240,9 +246,37 @@ export function AgentInfoPanel({
       removable: !managedIds.has(tool.id),
     }));
   const tools = [...baseTools, ...selectedStudioTools];
-  const skills = uniqueSkills(info.skills);
+  const skills = uniqueSkills([
+    ...info.skills,
+    ...selectedSessionSkills.map((skill) => ({
+      name: skill.name,
+      description: skill.description ?? "",
+    })),
+  ]);
   const canCustomize = Boolean(onStudioToolsChange);
   const canvasDraft = graphNodeToCanvasDraft(graph);
+  const sessionTopologyNodes = [
+    ...(info.resourceTopology?.nodes ?? []),
+    ...selectedEnvironments.map((environment) => ({
+      id: `environment:${environment.environment_id}:${environment.environment_version_id}`,
+      kind: "environment",
+      name: environments.find((item) => item.id === environment.environment_id)?.name
+        ?? environment.environment_id,
+      status: "mounted",
+    })),
+    ...selectedStudioTools.map((tool) => ({
+      id: tool.id, kind: "studio-tool", name: tool.label, status: "mounted",
+    })),
+    ...selectedSessionSkills.map((skill) => ({
+      id: `skill:${skill.skillSpaceId}:${skill.skillId}:${skill.version}`,
+      kind: "skill",
+      name: skill.name,
+      status: "mounted",
+    })),
+  ];
+  const topologyNodeCount = sessionTopologyNodes.length > 0
+    ? sessionTopologyNodes.length
+    : totalNodes(graph);
   const renderCanvas = (key: string) => (
     <AgentBuildCanvas
       key={key}
@@ -374,6 +408,20 @@ export function AgentInfoPanel({
               <div className="topo-empty">{t("agentTopology.notConfigured")}</div>
             )}
           </div>
+          {onSessionSkillsChange && (
+            <div className="topo-capability-add-dock">
+              <button
+                type="button"
+                className="topo-capability-add-slot"
+                aria-label={t("agentTopology.addSkill")}
+                disabled={studioToolsDisabled}
+                onClick={() => setDialog("skill")}
+              >
+                <span aria-hidden="true">＋</span>
+                <span>{t("agentTopology.addSkillHere")}</span>
+              </button>
+            </div>
+          )}
         </section>
 
         {(onEnvironmentsChange || selectedEnvironments.length > 0) && (
@@ -395,7 +443,7 @@ export function AgentInfoPanel({
 
         <section className="topo-module-card topo-topology" aria-label={t("agentTopology.agentCanvas")}>
           <div className="topo-canvas-heading">
-            <ModuleTitle title={t("agentTopology.topology")} count={totalNodes(graph)} />
+            <ModuleTitle title={t("agentTopology.topology")} count={topologyNodeCount} />
             <button
               ref={expandCanvasRef}
               type="button"
@@ -408,7 +456,22 @@ export function AgentInfoPanel({
             </button>
           </div>
           <div className="topo-canvas-preview" role="region" aria-label={t("agentTopology.executionCanvas")}>
-            {renderCanvas(`conversation-canvas:${appName}`)}
+            {sessionTopologyNodes.length > 1 ? (
+              <div className="topo-runtime-flow">
+                {sessionTopologyNodes.map((node, index) => (
+                  <div className={`topo-runtime-node is-${node.kind}`} key={node.id}>
+                    {index > 0 ? <span className="topo-runtime-edge">→</span> : null}
+                    <span className="topo-runtime-kind">
+                      {t(`agentTopology.nodeKinds.${node.kind}`, { defaultValue: node.kind })}
+                    </span>
+                    <strong title={node.name}>{node.name}</strong>
+                    <small>
+                      {t(`agentTopology.nodeStatuses.${node.status}`, { defaultValue: node.status })}
+                    </small>
+                  </div>
+                ))}
+              </div>
+            ) : renderCanvas(`conversation-canvas:${appName}`)}
           </div>
         </section>
       </div>
@@ -425,6 +488,39 @@ export function AgentInfoPanel({
           onChange={onStudioToolsChange}
           onClose={() => setDialog(null)}
         />
+      )}
+      {dialog === "skill" && onSessionSkillsChange && createPortal(
+        <div className="studio-tool-dialog-layer">
+          <button
+            type="button"
+            className="studio-tool-dialog-scrim"
+            aria-label={t("agentTopology.close")}
+            onClick={() => setDialog(null)}
+          />
+          <section className="studio-tool-dialog" role="dialog" aria-modal="true">
+            <header className="studio-tool-dialog-head is-iconless">
+              <div>
+                <h2>{t("agentTopology.addSkill")}</h2>
+                <p>{t("agentTopology.skillMountNextTurn")}</p>
+              </div>
+              <button
+                type="button"
+                className="studio-tool-dialog-close"
+                aria-label={t("agentTopology.close")}
+                onClick={() => setDialog(null)}
+              >
+                <X aria-hidden="true" />
+              </button>
+            </header>
+            <div className="studio-tool-dialog-body">
+              <SkillSpacePicker
+                selected={[...selectedSessionSkills]}
+                onChange={onSessionSkillsChange}
+              />
+            </div>
+          </section>
+        </div>,
+        document.body,
       )}
     </aside>
     {canvasExpanded && createPortal(

@@ -212,6 +212,25 @@ def test_create_dry_run_masks_secrets_and_no_side_effects(
     assert calls["seed"] == 0
 
 
+def test_create_accepts_repeatable_selectable_models_in_dry_run() -> None:
+    result = CliRunner().invoke(
+        cli_mpa.mpa,
+        _base_args(compute_plane="vefaas")
+        + [
+            "--selectable-model",
+            "doubao-alt-1",
+            "--selectable-model",
+            "doubao-alt-2",
+            "--dry-run",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert (
+        "MPA_SELECTABLE_MODELS=doubao-seed,doubao-alt-1,doubao-alt-2" in result.output
+    )
+
+
 def test_create_prompts_hidden_for_feishu_secret(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

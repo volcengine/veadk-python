@@ -633,7 +633,7 @@ test("deployed agent detail connects, refreshes the current Agent, then opens a 
   );
   assert.match(
     appSource,
-    /const refreshCurrentAgentAndStartNewChat[\s\S]*?loadHydratedSessions\(id, userId\)[\s\S]*?getAgentInfo\(id\)[\s\S]*?setConnections\(nextConnections\)[\s\S]*?setAgentInfo\(nextAgentInfo\)[\s\S]*?setAppName\(id\)[\s\S]*?startNewChat\(\)/,
+    /const refreshCurrentAgentAndStartNewChat[\s\S]*?loadHydratedSessions\(id, userId\)[\s\S]*?getAgentInfo\(id\)[\s\S]*?setConnections\(nextConnections\)[\s\S]*?setAgentInfo\(nextAgentInfo\)[\s\S]*?startNewChat\(\)[\s\S]*?setAppName\(id\)/,
   );
   assert.match(appSource, /await refreshCurrentAgentAndStartNewChat\(agent\.id\)/);
   assert.match(appSource, /onTalkAgent=\{talkToWorkspaceAgent\}/);
@@ -825,7 +825,7 @@ test("agent detail actions clear the detail stack before opening another view", 
   );
   assert.match(
     appSource,
-    /const refreshCurrentAgentAndStartNewChat[\s\S]*?exitAgentDetailContext\(\)[\s\S]*?startNewChat\(\)/,
+    /const refreshCurrentAgentAndStartNewChat[\s\S]*?startNewChat\(\)[\s\S]*?setAppName\(id\)[\s\S]*?exitAgentDetailContext\(\)/,
   );
   assert.match(
     appSource,

@@ -20,6 +20,7 @@ import {
 import "./tool-activity.css";
 
 const ICONS = {
+  goal: ToolGenericIcon,
   command: ToolCommandIcon,
   read: ToolReadIcon,
   search: ToolSearchIcon,
@@ -36,6 +37,17 @@ function durationLabel(durationMs: number): string {
 
 function jsonText(value: unknown): string {
   if (value === undefined) return "";
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+      try {
+        return JSON.stringify(JSON.parse(trimmed), null, 2);
+      } catch {
+        return value;
+      }
+    }
+    return value;
+  }
   try {
     return JSON.stringify(value, null, 2);
   } catch {
@@ -118,6 +130,7 @@ function RawData({
             <RawSection
               label={t("blocks.arguments")}
               value={presentation.rawArgs}
+              preview={presentation.rawArgsPreview}
               copied={copied === "input"}
               onCopy={() => void copy("input", presentation.rawArgs)}
             />
@@ -126,6 +139,7 @@ function RawData({
             <RawSection
               label={t("blocks.result")}
               value={presentation.rawResponse}
+              preview={presentation.rawResponsePreview}
               copied={copied === "result"}
               onCopy={() => void copy("result", presentation.rawResponse)}
             />
@@ -144,11 +158,13 @@ function RawData({
 function RawSection({
   label,
   value,
+  preview,
   copied,
   onCopy,
 }: {
   label: string;
   value: unknown;
+  preview?: ToolPresentation["rawArgsPreview"];
   copied: boolean;
   onCopy: () => void;
 }) {
@@ -163,7 +179,14 @@ function RawSection({
             : t("blocks.toolActivity.copy")}
         </button>
       </div>
-      <pre>{jsonText(value)}</pre>
+      <pre>
+        {preview?.head.join("\n") ?? jsonText(value)}
+        {preview && preview.omittedCharacters > 0
+          ? `\n${t("blocks.toolActivity.omittedCharacters", { count: preview.omittedCharacters })}\n${preview.tail.join("\n")}`
+          : preview && preview.omittedLines > 0
+            ? `\n${t("blocks.toolActivity.omittedLines", { count: preview.omittedLines })}\n${preview.tail.join("\n")}`
+            : ""}
+      </pre>
     </section>
   );
 }
@@ -205,6 +228,7 @@ export function ToolActivityCard({
   }, [presentation.defaultOpen]);
   const Icon = ICONS[presentation.category];
   const title = presentation.title || t(`blocks.toolActivity.${presentation.titleKey}`, {
+    ...presentation.titleParams,
     defaultValue: input.name || t("blocks.toolActivity.generic.completed"),
   });
   const metrics = [

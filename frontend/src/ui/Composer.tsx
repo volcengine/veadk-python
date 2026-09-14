@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ComponentType, SVGProps } from "react";
 import {
   AtSign,
@@ -10,6 +10,8 @@ import {
   ImageIcon,
   Loader2,
   MonitorPlay,
+  Pause,
+  Play,
   Plus,
   Sparkles,
   X,
@@ -23,6 +25,7 @@ import type {
   CloudRuntime,
   FrontendInvocation,
   RuntimeScope,
+  TurnControlState,
 } from "../adk/client";
 import type { CloudProvider } from "../adk/cloudProvider";
 import type { RuntimeLogTarget } from "../adk/runtimeLogs";
@@ -138,6 +141,12 @@ export interface ComposerProps {
   invocation: FrontendInvocation;
   capabilitiesLoading?: boolean;
   modelName: string;
+  selectableModels?: readonly string[];
+  selectedModel?: string;
+  onSelectedModelChange?: (model: string) => void;
+  turnControl?: TurnControlState | null;
+  turnControlBusy?: boolean;
+  onTurnControl?: (action: "pause" | "resume") => void;
   tokenUsage: SessionTokenUsage;
   systemTokenEstimate: number | null;
   allowAttachments?: boolean;
@@ -196,6 +205,12 @@ export function Composer({
   invocation,
   capabilitiesLoading = false,
   modelName,
+  selectableModels = [],
+  selectedModel = "",
+  onSelectedModelChange,
+  turnControl = null,
+  turnControlBusy = false,
+  onTurnControl,
   tokenUsage,
   systemTokenEstimate,
   allowAttachments = true,
@@ -236,6 +251,11 @@ export function Composer({
   const imageInput = useRef<HTMLInputElement>(null);
   const documentInput = useRef<HTMLInputElement>(null);
   const videoInput = useRef<HTMLInputElement>(null);
+  const hasTurnModelSelector = selectableModels.length > 1 && Boolean(onSelectedModelChange);
+  const turnModelOptions = useMemo(
+    () => selectableModels.map((model) => ({ value: model, label: model })),
+    [selectableModels],
+  );
   const [menuOpen, setMenuOpen] = useState(false);
   const [trigger, setTrigger] = useState<CompletionTrigger | null>(null);
   const [activeIndex, setActiveIndex] = useState(0);
@@ -331,7 +351,20 @@ export function Composer({
         : null;
   const videoTaskRunning = isVideoTaskRunning(videoTask);
   const canOpenVideoTask = videoMode && Boolean(videoTask) && !value.trim();
-  const canStop = busy && Boolean(onStop);
+  const canPauseTurn = turnControl?.allowedActions.includes("pause") === true;
+  const canResumeTurn = turnControl?.allowedActions.includes("resume") === true;
+  const turnControlPending = turnControlBusy || ["pausing", "resuming"].includes(turnControl?.state ?? "");
+  const canStop = busy && Boolean(onStop) && !turnControl;
+  const turnStateLabel = turnControl
+    ? ({
+        running: t("composer.turnState.running"),
+        pausing: t("composer.turnState.pausing"),
+        paused: t("composer.turnState.paused"),
+        resuming: t("composer.turnState.resuming"),
+        interrupting: t("composer.turnState.interrupting"),
+        cancelling: t("composer.turnState.cancelling"),
+      }[turnControl.state] ?? turnControl.state)
+    : "";
   const canSend = videoMode
     ? videoTaskRunning ||
       canOpenVideoTask ||
@@ -557,7 +590,7 @@ export function Composer({
             ? "new-chat-workspace-panel"
             : undefined
         }
-        className="composer-box"
+        className={`composer-box${hasTurnModelSelector ? " composer-box--has-model" : ""}`}
         role={newChatLayout && showWorkspaceTabs ? "tabpanel" : undefined}
         aria-labelledby={
           newChatLayout && showWorkspaceTabs
@@ -895,6 +928,27 @@ export function Composer({
           ) : null}
         </div>
         <div className="composer-submit-actions">
+          {turnControl && turnStateLabel ? (
+            <div className="composer-turn-status" aria-live="polite">
+              <span className="composer-turn-state">
+                {turnStateLabel}
+              </span>
+            </div>
+          ) : null}
+          {hasTurnModelSelector && onSelectedModelChange ? (
+            <div className="composer-model-select">
+              <NewChatCompactSelect
+                label={t("composer.model")}
+                hideLabel
+                value={selectedModel || modelName}
+                options={turnModelOptions}
+                onChange={onSelectedModelChange}
+                placeholder={t("composer.model")}
+                searchable
+                disabled={busy}
+              />
+            </div>
+          ) : null}
           {sessionId && appName && newChatWorkspaceMode === "agent" ? (
             <TokenUsageIndicator
               cloudProvider={cloudProvider}
@@ -906,20 +960,40 @@ export function Composer({
           <motion.button
             type="button"
             className="comp-send"
-            disabled={canStop ? false : !canSend}
-            onClick={canStop ? onStop : submitComposer}
+            disabled={turnControlPending ? true : canPauseTurn || canResumeTurn ? false : canStop ? false : !canSend}
+            onClick={
+              canPauseTurn && onTurnControl
+                ? () => onTurnControl("pause")
+                : canResumeTurn && onTurnControl
+                  ? () => onTurnControl("resume")
+                  : canStop
+                    ? onStop
+                    : submitComposer
+            }
             aria-label={
-              canStop
-                ? t("composer.stopGenerating")
+              canPauseTurn
+                ? t("composer.pauseTurn")
+                : canResumeTurn
+                  ? t("composer.resumeTurn")
+                  : turnControlPending
+                    ? turnStateLabel
+                    : canStop
+                      ? t("composer.stopGenerating")
                 : videoTaskRunning || canOpenVideoTask
                   ? t("composer.viewVideoProgress")
                   : t("composer.send")
             }
-            title={canStop ? t("composer.stopGenerating") : videoCapabilitiesError || undefined}
-            whileTap={canStop || canSend ? { scale: 0.9 } : undefined}
+            title={canPauseTurn ? t("composer.pauseTurn") : canResumeTurn ? t("composer.resumeTurn") : canStop ? t("composer.stopGenerating") : videoCapabilitiesError || undefined}
+            whileTap={canPauseTurn || canResumeTurn || canStop || canSend ? { scale: 0.9 } : undefined}
             transition={{ type: "spring", stiffness: 600, damping: 22 }}
           >
-            {canStop ? (
+            {turnControlPending ? (
+              <Loader2 className="icon spin" />
+            ) : canPauseTurn ? (
+              <Pause className="icon" />
+            ) : canResumeTurn ? (
+              <Play className="icon" />
+            ) : canStop ? (
               <ComposerStopIcon className="icon" />
             ) : busy || videoTaskRunning ? (
               <Loader2 className="icon spin" />

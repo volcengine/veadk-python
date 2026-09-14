@@ -172,6 +172,14 @@ function environmentRepositoryModeOptions(t: TFunction): Option[] {
 const MAX_ENVIRONMENT_SHARE_CODES = 20;
 const promptedClipboardShareTexts = new Set<string>();
 
+function isStorageUnavailable(cause: unknown): boolean {
+  const message = cause instanceof Error ? cause.message : String(cause ?? "");
+  return message.includes("HTTP 503") && (
+    message.includes("未配置持久化存储") ||
+    message.includes("storage is not configured")
+  );
+}
+
 async function clipboardReadPermissionDenied(): Promise<boolean> {
   if (typeof navigator === "undefined" || !navigator.permissions?.query) return false;
   try {
@@ -2118,7 +2126,13 @@ export function EnvironmentCenter({
       })
       .catch((cause) => {
         if ((cause as Error)?.name !== "AbortError") {
-          setLoadError(cause instanceof Error ? cause.message : String(cause));
+          if (isStorageUnavailable(cause)) {
+            setEnvironments([]);
+            setStatusError(false);
+            setStatusMessage(t("environmentCenter.storageUnavailable"));
+          } else {
+            setLoadError(cause instanceof Error ? cause.message : String(cause));
+          }
         }
       })
       .finally(() => {

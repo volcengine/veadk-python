@@ -50,6 +50,7 @@
     "connectingDescription": "正在通过 Studio BFF 建立安全日志流。",
     "emptyTitle": "暂无日志",
     "emptyDescription": "已连接实例，等待新的日志输出。",
+    "download": "下载日志",
     "retention": "日志自动刷新，仅保留最近 {{count}} 行"
   },
   "trace": {
@@ -105,8 +106,10 @@
     "unsupportedComponent": "不支持的组件：{{component}}",
     "sandboxIdentity": "Codex Sandbox 执行标识",
     "useSkill": "使用 {{name}} 技能",
-    "thinkingDone": "已完成思考",
-    "thinking": "思考中",
+    "thinkingDone": "已完成工作思考",
+    "thinking": "工作思考中",
+    "reasoningDone": "已完成模型推理",
+    "reasoning": "模型推理中",
     "justNow": "刚刚",
     "sourceUnavailable": "暂时无法读取生成的源码，请稍后重试。",
     "downloadStarted": "已开始下载",
@@ -242,6 +245,12 @@
         "completed": "执行成功",
         "failed": "执行失败"
       },
+      "goal": {
+        "queued": "等待创建目标",
+        "running": "正在创建目标",
+        "completed": "已创建目标",
+        "failed": "创建目标失败"
+      },
       "command": {
         "queued": "等待运行命令",
         "running": "正在运行命令",
@@ -282,7 +291,13 @@
         "queued": "等待调用工具",
         "running": "正在调用工具",
         "completed": "已调用工具",
-        "failed": "工具调用失败"
+        "failed": "工具调用失败",
+        "named": {
+          "queued": "等待调用 {{tool}}",
+          "running": "正在调用 {{tool}}",
+          "completed": "已调用 {{tool}}",
+          "failed": "{{tool}} 调用失败"
+        }
       },
       "exitCode": "退出码 {{code}}",
       "omittedLines": "… 省略 {{count}} 行 …",
@@ -319,6 +334,16 @@
     "summaryTokens": "<strong>{{used}}</strong> 已用，剩余 <strong>{{remaining}}</strong>，总计 <strong>{{total}}</strong>",
     "overflow": "已超出上下文 {{count}} Token",
     "title": "上下文用量",
+    "category": "类型",
+    "currentTurn": "当前轮",
+    "sessionTotal": "会话累计",
+    "details": {
+      "input": "输入",
+      "output": "输出",
+      "reasoning": "推理",
+      "cache": "缓存命中",
+      "total": "总计"
+    },
     "unknownModel": "暂未收录该模型的上下文窗口",
     "unknownRuntime": "当前 Runtime 未提供模型信息"
   },
@@ -335,7 +360,7 @@
     "connecting": "连接中…",
     "connect": "连接并添加"
   },
-  "composer": { "placeholder": "输入消息…", "inputAria": "输入消息", "generating": "正在生成", "send": "发送" },
+  "composer": { "placeholder": "输入消息…", "inputAria": "输入消息", "generating": "正在生成", "send": "发送", "model": "模型" },
   "invocation": { "ariaLabel": "本轮调用上下文", "removeSkill": "移除技能 {{name}}", "removeAgent": "移除 Agent {{name}}" },
   "visualization": { "cardAria": "{{label}} 图表", "viewAria": "{{label}} 显示方式", "preview": "预览", "code": "代码", "invalidEcharts": "ECharts 配置不是有效且安全的数据对象，请切换到代码检查内容。", "renderFailed": "图表暂时无法渲染，请切换到代码检查内容。", "echartsAria": "ECharts 图表预览", "rendering": "正在渲染图表…", "mermaidFailed": "图表暂时无法渲染，请切换到代码查看 Mermaid 内容。", "mermaidAria": "Mermaid 图表预览" }
   ,"markdown": { "playVideo": "点击播放视频：{{name}}", "enlargeImage": "放大预览：{{name}}", "image": "图片", "enlargeVideo": "点击放大视频", "videoPreview": "视频预览", "downloadVideo": "下载视频", "close": "关闭" }

@@ -18,7 +18,9 @@ class A2AStreamDecoder:
         self._seen_event_ids: set[tuple[str, str]] = set()
         self._projected_event_id_counts: dict[str, int] = {}
         self._partial_text = {"answer": "", "thought": ""}
+        self._reasoning_text_by_source: dict[tuple[str, str], str] = {}
         self._heartbeat_states: set[tuple[str, str]] = set()
+        self._usage_snapshots: dict[str, dict[str, int]] = {}
         self._terminal_state = ""
 
     def feed(self, chunk: str | bytes) -> list[dict[str, Any]]:
@@ -89,6 +91,16 @@ class A2AStreamDecoder:
             and isinstance(metadata, Mapping)
             and "adk_usage_metadata" in metadata
         )
+        if isinstance(metadata, Mapping):
+            usage = metadata.get("adk_usage_metadata")
+            usage_event = self._usage_event(
+                usage,
+                author=author,
+                event_id=f"a2a-{task_id}-usage",
+                source_key=f"primary:{task_id}",
+            )
+            if usage_event is not None:
+                projected.append(usage_event)
         output: list[dict[str, Any]] = []
         for item in projected:
             event_id = str(item.get("id") or uuid4())
@@ -107,6 +119,28 @@ class A2AStreamDecoder:
                 if heartbeat_key in self._heartbeat_states:
                     continue
                 self._heartbeat_states.add(heartbeat_key)
+            item_usage = item.get("usageMetadata")
+            if (
+                isinstance(item_usage, Mapping)
+                and isinstance(item_metadata, Mapping)
+                and item_metadata.get("source") == "sandbox"
+            ):
+                source_key = "sandbox:" + str(
+                    item_metadata.get("requestId")
+                    or item.get("invocationId")
+                    or item.get("modelVersion")
+                    or "unknown"
+                )
+                normalized = _normalize_usage(item_usage)
+                previous = self._usage_snapshots.get(source_key, {})
+                delta = {
+                    key: max(0, value - previous.get(key, 0))
+                    for key, value in normalized.items()
+                }
+                self._usage_snapshots[source_key] = normalized
+                if not any(delta.values()):
+                    continue
+                item = {**item, "usageMetadata": delta}
             if item.get("partial") is not True:
                 parts = item.get("content", {}).get("parts", [])
                 if any(
@@ -127,6 +161,57 @@ class A2AStreamDecoder:
                 output.append(item)
                 continue
             stream = "thought" if parts[0].get("thought") is True else "answer"
+            if stream == "thought":
+                item_metadata = item.get("customMetadata")
+                item_metadata = (
+                    dict(item_metadata) if isinstance(item_metadata, Mapping) else {}
+                )
+                item_metadata.setdefault("thoughtKind", "reasoning")
+                item = {**item, "customMetadata": item_metadata}
+                projection_source = str(
+                    item_metadata.get("projectionSource") or "unknown"
+                )
+                source_key = (task_id, projection_source)
+                source_text = self._reasoning_text_by_source.get(source_key, "")
+                other_texts = [
+                    value
+                    for (
+                        seen_task,
+                        seen_source,
+                    ), value in self._reasoning_text_by_source.items()
+                    if seen_task == task_id and seen_source != projection_source
+                ]
+                if (source_text and source_text.endswith(text)) or any(
+                    other == text or other.startswith(text) for other in other_texts
+                ):
+                    self._reasoning_text_by_source[source_key] = text
+                    continue
+                cross_prefix = max(
+                    (other for other in other_texts if text.startswith(other)),
+                    key=len,
+                    default="",
+                )
+                cumulative = projection_source == "a2a-status" or cumulative_snapshot
+                prefix = (
+                    source_text
+                    if cumulative and text.startswith(source_text)
+                    else cross_prefix
+                )
+                self._reasoning_text_by_source[source_key] = (
+                    text if cumulative or cross_prefix else source_text + text
+                )
+                if prefix:
+                    suffix = text[len(prefix) :]
+                    if not suffix:
+                        continue
+                    text = suffix
+                    item = {
+                        **item,
+                        "content": {
+                            **item["content"],
+                            "parts": [{**parts[0], "text": suffix}],
+                        },
+                    }
             previous_text = self._partial_text[stream]
             if cumulative_snapshot and text == previous_text:
                 continue
@@ -146,6 +231,37 @@ class A2AStreamDecoder:
                 self._partial_text[stream] += text
             output.append(item)
         return output
+
+    def _usage_event(
+        self,
+        usage: Any,
+        *,
+        author: str,
+        event_id: str,
+        source_key: str,
+        invocation_id: str = "",
+        model: str = "",
+    ) -> dict[str, Any] | None:
+        normalized = _normalize_usage(usage)
+        if not normalized:
+            return None
+        previous = self._usage_snapshots.get(source_key, {})
+        delta = {
+            key: max(0, value - previous.get(key, 0))
+            for key, value in normalized.items()
+        }
+        self._usage_snapshots[source_key] = normalized
+        if not any(delta.values()):
+            return None
+        return {
+            "id": event_id,
+            "author": author,
+            "invocationId": invocation_id,
+            "partial": True,
+            "content": {"role": "model", "parts": []},
+            "modelVersion": model,
+            "usageMetadata": delta,
+        }
 
     def finalize_projection(self, *, author: str) -> list[dict[str, Any]]:
         """Finalize streamed answer deltas when A2A ends without final text."""
@@ -270,6 +386,12 @@ def _message_to_partial_events(
                 event_id=f"{message_id}-{index}",
                 partial=True,
                 thought=thought,
+                custom_metadata={
+                    "thoughtKind": "reasoning",
+                    "projectionSource": "a2a-status",
+                }
+                if thought
+                else None,
             )
         )
     return events
@@ -299,6 +421,12 @@ def _artifact_to_studio_events(
                     partial=not turn_complete,
                     turn_complete=turn_complete,
                     thought=thought,
+                    custom_metadata={
+                        "thoughtKind": "reasoning",
+                        "projectionSource": "a2a-artifact",
+                    }
+                    if thought
+                    else None,
                 )
             )
             continue
@@ -347,6 +475,11 @@ def _sandbox_event(data: Mapping[str, Any], *, author: str) -> dict[str, Any] | 
             "source": "sandbox",
             "eventType": event_type,
             "sourceEventId": event_id,
+            **(
+                {"requestId": str(payload["requestId"])}
+                if payload.get("requestId")
+                else {}
+            ),
         },
     }
     if event_type == "message.delta":
@@ -397,6 +530,42 @@ def _sandbox_event(data: Mapping[str, Any], *, author: str) -> dict[str, Any] | 
                 ],
             },
         }
+    if event_type == "usage.updated":
+        usage = {
+            target: int(value)
+            for source, target in (
+                ("inputTokens", "promptTokenCount"),
+                ("outputTokens", "candidatesTokenCount"),
+                ("totalTokens", "totalTokenCount"),
+                ("cachedTokens", "cachedContentTokenCount"),
+                ("reasoningTokens", "thoughtsTokenCount"),
+            )
+            if isinstance((value := payload.get(source)), int) and value >= 0
+        }
+        if not usage:
+            return None
+        return {
+            **common,
+            "partial": True,
+            "content": {"role": "model", "parts": []},
+            "modelVersion": str(payload.get("modelId") or ""),
+            "usageMetadata": usage,
+        }
+    if event_type == "thought.delta":
+        text = str(payload.get("text") or "")[:_MAX_EVENT_TEXT_CHARS]
+        return (
+            _text_event(
+                text,
+                author=author,
+                event_id=event_id,
+                invocation_id=invocation_id,
+                partial=True,
+                thought=True,
+                custom_metadata=common["customMetadata"],
+            )
+            if text
+            else None
+        )
     text = str(payload.get("text") or payload.get("message") or "")[
         :_MAX_EVENT_TEXT_CHARS
     ]
@@ -410,6 +579,24 @@ def _sandbox_event(data: Mapping[str, Any], *, author: str) -> dict[str, Any] | 
             custom_metadata=common["customMetadata"],
         )
     return None
+
+
+def _normalize_usage(usage: Any) -> dict[str, int]:
+    if not isinstance(usage, Mapping):
+        return {}
+    aliases = (
+        ("promptTokenCount", "inputTokens"),
+        ("candidatesTokenCount", "outputTokens"),
+        ("totalTokenCount", "totalTokens"),
+        ("cachedContentTokenCount", "cachedTokens"),
+        ("thoughtsTokenCount", "reasoningTokens"),
+    )
+    normalized: dict[str, int] = {}
+    for target, source in aliases:
+        value = usage.get(target, usage.get(source))
+        if isinstance(value, int) and value >= 0:
+            normalized[target] = value
+    return normalized
 
 
 def _text_event(

@@ -1,5 +1,6 @@
 export type ToolActivityStatus = "queued" | "running" | "completed" | "failed";
 export type ToolActivityCategory =
+  | "goal"
   | "command"
   | "read"
   | "search"
@@ -31,6 +32,7 @@ export interface ToolOutputPreview {
 export interface ToolPresentation {
   category: ToolActivityCategory;
   titleKey: string;
+  titleParams?: Record<string, string>;
   title?: string;
   summary: string;
   status: ToolActivityStatus;
@@ -45,6 +47,8 @@ export interface ToolPresentation {
   defaultOpen: boolean;
   rawArgs?: unknown;
   rawResponse?: unknown;
+  rawArgsPreview?: ToolOutputPreview;
+  rawResponsePreview?: ToolOutputPreview;
 }
 
 export type ToolActivityGroup =
@@ -75,6 +79,7 @@ const COMMAND_NAMES = new Set([
 const SEARCH_NAMES = new Set(["web_search", "search", "grep", "rg"]);
 const READ_NAMES = new Set(["read_file", "read", "list_files", "glob", "ls"]);
 const FILE_CHANGE_NAMES = new Set(["apply_patch", "file_change", "fileChange"]);
+const GOAL_NAMES = new Set(["create_goal", "update_goal", "get_goal"]);
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -103,13 +108,43 @@ function numberValue(...values: unknown[]): number | undefined {
   return undefined;
 }
 
+function nestedRecords(value: unknown): Record<string, unknown>[] {
+  const root = record(value);
+  if (!root) return [];
+  const records = [root];
+  for (const key of [
+    "payload",
+    "input",
+    "arguments",
+    "args",
+    "goal",
+    "result",
+    "display",
+    "safeCommandSummary",
+    "safeInputSummary",
+  ]) {
+    const nested = record(root[key]);
+    if (nested) records.push(nested);
+  }
+  return records;
+}
+
+function field(records: Record<string, unknown>[], ...keys: string[]): string {
+  return stringValue(...records.flatMap((item) => keys.map((key) => item[key])));
+}
+
 function maskText(value: string): string {
-  return value
+  let masked = value
+    .replace(ANSI_CSI_ESCAPE, "")
+    .replace(ANSI_OSC_ESCAPE, "")
+    .replace(UNSAFE_CONTROL, "");
+  if (!/[=:]|Bearer|Cookie|AKLT/i.test(masked)) return masked;
+  masked = masked
     .replace(/\bBearer\s+[^\s,;]+/gi, `Bearer ${MASK}`)
     .replace(/\b(?:set-)?cookie\s*:\s*[^\r\n]*/gi, `cookie: ${MASK}`)
     .replace(/\bAKLT[A-Za-z0-9_-]{6,}\b/g, MASK)
     .replace(
-      /((?:access[_-]?key(?:[_-]?id)?|secret(?:[_-]?(?:access)?[_-]?key)?|session[_-]?token|security[_-]?token|client[_-]?secret|api[_-]?key|authorization|cookie|[a-z0-9_-]*(?:password|secret|token)|credential|ak|sk)\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;&]+)/gi,
+      /((?:access[_-]?key(?:[_-]?id)?|secret(?:[_-]?(?:access)?[_-]?key)?|session[_-]?token|security[_-]?token|client[_-]?secret|api[_-]?key|authorization|cookie|[a-z0-9_-]{0,80}(?:password|secret|token)|credential|ak|sk)\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;&]+)/gi,
       `$1${MASK}`,
     )
     .replace(
@@ -120,6 +155,7 @@ function maskText(value: string): string {
       /([?&](?:x-amz-(?:credential|signature|security-token)|x-tos-signature|signature)=)[^&#\s]+/gi,
       `$1${MASK}`,
     );
+  return masked;
 }
 
 function safeVisibleText(value: string): string {
@@ -170,13 +206,38 @@ export function maskToolRawValue(
   );
 }
 
+export function sanitizeToolRawValue(
+  value: unknown,
+  depth = 0,
+  seen = new WeakSet<object>(),
+): unknown {
+  if (depth >= MAX_RAW_DEPTH) return "[truncated: maximum depth]";
+  if (typeof value === "string") return safeVisibleText(value);
+  if (value === null || typeof value !== "object") return value;
+  if (seen.has(value)) return "[circular]";
+  seen.add(value);
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeToolRawValue(item, depth + 1, seen));
+  }
+  const object = record(value);
+  if (!object) return value;
+  return Object.fromEntries(
+    Object.entries(object).map(([key, item]) => [
+      key,
+      SENSITIVE_KEY.test(key)
+        ? MASK
+        : sanitizeToolRawValue(item, depth + 1, seen),
+    ]),
+  );
+}
+
 export function previewToolOutput(
   value: string,
 ): ToolOutputPreview | undefined {
   const text = safeVisibleText(value).trimEnd();
   if (!text) return undefined;
   const lines = text.split(/\r?\n/);
-  if (lines.length === 1 && text.length > OUTPUT_EDGE_CHARACTERS * 2) {
+  if (text.length > OUTPUT_EDGE_CHARACTERS * 2) {
     return {
       text:
         text.slice(0, OUTPUT_EDGE_CHARACTERS) +
@@ -206,6 +267,7 @@ export function previewToolOutput(
 }
 
 function categoryFor(name: string): ToolActivityCategory {
+  if (GOAL_NAMES.has(name)) return "goal";
   if (COMMAND_NAMES.has(name)) return "command";
   if (SEARCH_NAMES.has(name) || /search/i.test(name)) return "search";
   if (READ_NAMES.has(name) || /(?:read|list|glob)/i.test(name)) return "read";
@@ -258,14 +320,18 @@ function summaryFor(
   response: Record<string, unknown> | undefined,
   paths: string[],
 ): string {
+  const records = [...nestedRecords(args), ...nestedRecords(response)];
+  if (category === "goal") {
+    return safeVisibleText(field(records, "objective", "title", "name"));
+  }
   if (category === "command") {
     return safeVisibleText(
-      stringValue(args?.command, args?.cmd, args?.script, response?.command),
+      field(records, "command", "cmd", "script", "commandPreview", "binary"),
     );
   }
   if (category === "search") {
     return safeVisibleText(
-      stringValue(args?.query, args?.pattern, args?.search, response?.query),
+      field(records, "query", "pattern", "search"),
     );
   }
   if (category === "read" || category === "file-change") {
@@ -292,6 +358,13 @@ export function presentToolActivity(
 ): ToolPresentation {
   const args = record(input.args);
   const response = record(input.response);
+  const rawArgs =
+    input.args === undefined ? undefined : sanitizeToolRawValue(input.args);
+  const rawResponse =
+    input.response === undefined
+      ? undefined
+      : sanitizeToolRawValue(input.response);
+  const records = [...nestedRecords(input.args), ...nestedRecords(input.response)];
   const category = categoryFor(input.name);
   const status = statusFor(input, response);
   const nestedDisplay = record(response?.display) ?? record(args?.display);
@@ -320,7 +393,9 @@ export function presentToolActivity(
 
   return {
     category,
-    titleKey: `${category}.${status}`,
+    titleKey:
+      category === "generic" ? `generic.named.${status}` : `${category}.${status}`,
+    titleParams: category === "generic" ? { tool: input.name } : undefined,
     title: input.title,
     summary: summaryFor(category, input.name, args, response, paths),
     status,
@@ -329,16 +404,13 @@ export function presentToolActivity(
       category === "command"
         ? safeVisibleText(
             stringValue(
-              args?.command,
-              args?.cmd,
-              args?.script,
-              response?.command,
+              field(records, "command", "cmd", "script", "commandPreview", "binary"),
             ),
           )
         : undefined,
     cwd:
       category === "command"
-        ? safeVisibleText(stringValue(args?.cwd, response?.cwd)) || undefined
+        ? safeVisibleText(field(records, "cwd")) || undefined
         : undefined,
     output: previewToolOutput(output),
     exitCode,
@@ -347,13 +419,25 @@ export function presentToolActivity(
     paths: [...new Set(paths.map(safeVisibleText))],
     defaultOpen:
       input.defaultOpen === true || status === "running" || status === "failed",
-    rawArgs:
-      input.args === undefined ? undefined : maskToolRawValue(input.args),
-    rawResponse:
-      input.response === undefined
+    rawArgs,
+    rawResponse,
+    rawArgsPreview:
+      rawArgs === undefined
         ? undefined
-        : maskToolRawValue(input.response),
+        : previewToolOutput(jsonTextForPreview(rawArgs)),
+    rawResponsePreview:
+      rawResponse === undefined
+        ? undefined
+        : previewToolOutput(jsonTextForPreview(rawResponse)),
   };
+}
+
+function jsonTextForPreview(value: unknown): string {
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
 }
 
 export function isSafeExploration(item: ToolPresentation): boolean {

@@ -115,6 +115,93 @@ def test_maps_sandbox_tool_and_text_delta_to_studio_events():
     assert events[1]["content"]["parts"][0]["text"] == "hello"
 
 
+def test_maps_sandbox_usage_to_existing_studio_usage_fields():
+    event = {
+        "kind": "artifact-update",
+        "lastChunk": False,
+        "artifact": {
+            "artifactId": "sandbox-e-1",
+            "parts": [
+                {
+                    "metadata": {"schemaVersion": "mpa.sandbox-event.v1"},
+                    "data": {
+                        "eventId": "usage-1",
+                        "invocationId": "e-1",
+                        "eventType": "usage.updated",
+                        "payload": {
+                            "modelId": "model-a",
+                            "inputTokens": 10,
+                            "outputTokens": 4,
+                            "totalTokens": 14,
+                            "cachedTokens": 3,
+                        },
+                    },
+                }
+            ],
+        },
+    }
+
+    projected = A2AStreamDecoder().project(event, author="default")
+
+    assert projected == [
+        {
+            "id": "usage-1",
+            "author": "default",
+            "invocationId": "e-1",
+            "partial": True,
+            "content": {"role": "model", "parts": []},
+            "modelVersion": "model-a",
+            "usageMetadata": {
+                "promptTokenCount": 10,
+                "candidatesTokenCount": 4,
+                "totalTokenCount": 14,
+                "cachedContentTokenCount": 3,
+            },
+            "customMetadata": {
+                "source": "sandbox",
+                "eventType": "usage.updated",
+                "sourceEventId": "usage-1",
+            },
+        }
+    ]
+
+
+def test_decoder_emits_only_positive_delta_for_replayed_sandbox_usage():
+    decoder = A2AStreamDecoder()
+
+    def usage_event(total: int, event_id: str):
+        return {
+            "kind": "artifact-update",
+            "artifact": {
+                "artifactId": "sandbox-e-1",
+                "parts": [
+                    {
+                        "metadata": {"schemaVersion": "mpa.sandbox-event.v1"},
+                        "data": {
+                            "eventId": event_id,
+                            "invocationId": "e-1",
+                            "eventType": "usage.updated",
+                            "payload": {
+                                "requestId": "request-1",
+                                "inputTokens": total - 4,
+                                "outputTokens": 4,
+                                "totalTokens": total,
+                            },
+                        },
+                    }
+                ],
+            },
+        }
+
+    first = decoder.project(usage_event(14, "usage-1"), author="default")
+    replay = decoder.project(usage_event(14, "usage-2"), author="default")
+    advanced = decoder.project(usage_event(20, "usage-3"), author="default")
+
+    assert first[0]["usageMetadata"]["totalTokenCount"] == 14
+    assert replay == []
+    assert advanced[0]["usageMetadata"]["totalTokenCount"] == 6
+
+
 def test_maps_final_function_response_artifact_to_text_once():
     event = {
         "kind": "artifact-update",
@@ -292,6 +379,106 @@ def test_projection_tracks_cumulative_reasoning_separately_from_answer():
     assert reasoning[0]["content"]["parts"][0]["text"] == "think"
     assert reasoning_delta[0]["content"]["parts"][0]["text"] == "-more"
     assert answer[0]["content"]["parts"][0]["text"] == "answer"
+
+
+def test_projection_suppresses_reasoning_replayed_across_status_and_artifact():
+    decoder = A2AStreamDecoder()
+    status = {
+        "kind": "status-update",
+        "taskId": "task-1",
+        "status": {
+            "state": "working",
+            "message": {
+                "role": "agent",
+                "parts": [
+                    {
+                        "kind": "text",
+                        "text": "inspect then compare",
+                        "metadata": {"adk_thought": True},
+                    }
+                ],
+            },
+        },
+    }
+    artifact = {
+        "kind": "artifact-update",
+        "taskId": "task-1",
+        "artifact": {
+            "artifactId": "thought-1",
+            "parts": [
+                {
+                    "kind": "text",
+                    "text": "inspect then compare",
+                    "metadata": {"adk_thought": True},
+                }
+            ],
+        },
+    }
+
+    first = decoder.project(status, author="default")
+    replay = decoder.project(artifact, author="default")
+
+    assert first[0]["customMetadata"]["thoughtKind"] == "reasoning"
+    assert replay == []
+
+
+def test_projection_keeps_equal_reasoning_for_different_tasks():
+    decoder = A2AStreamDecoder()
+
+    def artifact(task_id):
+        return {
+            "kind": "artifact-update",
+            "taskId": task_id,
+            "artifact": {
+                "artifactId": f"{task_id}-thought",
+                "parts": [
+                    {
+                        "kind": "text",
+                        "text": "same deliberate thought",
+                        "metadata": {"adk_thought": True},
+                    }
+                ],
+            },
+        }
+
+    first = decoder.project(artifact("task-1"), author="default")
+    second = decoder.project(artifact("task-2"), author="default")
+
+    assert len(first) == 1
+    assert len(second) == 1
+
+
+def test_projection_suppresses_completed_reasoning_replayed_after_deltas():
+    decoder = A2AStreamDecoder()
+
+    def artifact(text, event_id):
+        return {
+            "kind": "artifact-update",
+            "taskId": "task-1",
+            "artifact": {
+                "artifactId": "sandbox-invocation-1",
+                "parts": [
+                    {
+                        "kind": "data",
+                        "metadata": {"schemaVersion": "mpa.sandbox-event.v1"},
+                        "data": {
+                            "eventId": event_id,
+                            "invocationId": "invocation-1",
+                            "eventType": "thought.delta",
+                            "payload": {"text": text},
+                        },
+                    }
+                ],
+            },
+        }
+
+    first = decoder.project(artifact("inspect ", "10"), author="default")
+    second = decoder.project(artifact("the repository", "11"), author="default")
+    replay = decoder.project(artifact("inspect the repository", "12"), author="default")
+
+    assert first[0]["content"]["parts"][0]["text"] == "inspect "
+    assert second[0]["content"]["parts"][0]["text"] == "the repository"
+    assert replay == []
 
 
 def test_decoder_finalizes_received_answer_when_a2a_terminal_has_no_message():
@@ -500,7 +687,9 @@ def test_projection_suppresses_cumulative_working_message_after_deltas():
 
     assert first[0]["content"]["parts"][0]["text"] == "hello"
     assert second[0]["content"]["parts"][0]["text"] == "-stream"
-    assert cumulative == []
+    assert len(cumulative) == 1
+    assert cumulative[0]["content"]["parts"] == []
+    assert cumulative[0]["usageMetadata"] == {"totalTokenCount": 1}
 
 
 def test_projection_preserves_identical_non_cumulative_deltas():

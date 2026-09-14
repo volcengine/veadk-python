@@ -33,17 +33,22 @@ _SESSION_TAGS = (
     "gen_ai.session.id",
     "gen_ai.conversation.id",
     "gcp.vertex.agent.session_id",
+    "mpa.session.id",
+    "a2a.context_id",
 )
 _INVOCATION_TAGS = (
     "invocation.id",
     "gen_ai.invocation.id",
     "gcp.vertex.agent.invocation_id",
+    "mpa.invocation.id",
+    "a2a.invocation_id",
 )
 _RUNTIME_TAGS = (
     "cozeloop_agent_runtime_id",
     "agentkit.runtime.id",
     "runtime.id",
 )
+_A2A_CONTEXT_TAGS = ("a2a.context_id",)
 _QUERY_WINDOW_MS = 2 * 60 * 60 * 1000
 _PAGE_SIZE = 200
 _MAX_PAGES = 5
@@ -193,8 +198,16 @@ def load_apmplus_trace(
     configuration.host = f"https://{apmplus_openapi_host(provider)}"
     api = APMPLUSSERVERApi(volcenginesdkcore.ApiClient(configuration))
 
-    end_time = now_ms if now_ms is not None else int(time.time() * 1000)
-    query_end_time = end_time + (_TRACE_END_BUFFER_MS if now_ms is not None else 0)
+    end_time_ms = now_ms if now_ms is not None else int(time.time() * 1000)
+    query_end_time_ms = end_time_ms + (
+        _TRACE_END_BUFFER_MS if now_ms is not None else 0
+    )
+
+    # ListSpan accepts epoch seconds even though returned spans expose both
+    # millisecond and microsecond timestamps. Supplying milliseconds produces
+    # a valid but empty response instead of a validation error.
+    def api_time(value_ms: int) -> int:
+        return value_ms // 1_000
 
     def matching_spans(rows: list[object]) -> list[dict[str, Any]]:
         session_spans: list[dict[str, Any]] = []
@@ -222,6 +235,21 @@ def load_apmplus_trace(
                 if str(span.get("trace_id") or "") in invocation_trace_ids
             ]
         return session_spans
+
+    def trace_ids_for_session(rows: list[object]) -> list[str]:
+        return list(
+            dict.fromkeys(
+                str(span.get("trace_id") or "")
+                for row in rows
+                if (span := _span_dict(row))
+                and _matches_tag(
+                    _span_tags(span),
+                    _A2A_CONTEXT_TAGS,
+                    session_id,
+                )
+                and span.get("trace_id")
+            )
+        )
 
     def scan_session_spans(start_time: int, end_time: int) -> list[dict[str, Any]]:
         session_spans: list[dict[str, Any]] = []
@@ -262,7 +290,7 @@ def load_apmplus_trace(
                         span.get("start_time_millisecond")
                         or int(span.get("start_time_microsecond") or 0) // 1_000
                     )
-                    - end_time
+                    - end_time_ms
                 )
                 for span in trace_spans
             )
@@ -271,14 +299,68 @@ def load_apmplus_trace(
 
     def load_once() -> list[dict[str, Any]]:
         if now_ms is None:
-            return scan_session_spans(end_time - _QUERY_WINDOW_MS, query_end_time)
+            tagged_rows = _list_spans(
+                api,
+                ListSpanRequest(
+                    project_name=project_name or "default",
+                    start_time=api_time(end_time_ms - _QUERY_WINDOW_MS),
+                    end_time=api_time(query_end_time_ms),
+                    limit=_PAGE_SIZE,
+                    offset=0,
+                    min_call_cost_millisecond=0,
+                    max_call_cost_millisecond=86_400_000,
+                    order="desc",
+                    order_by="start_time",
+                    filters=[
+                        FilterForListSpanInput(
+                            key="tags.a2a.context_id",
+                            op="in",
+                            values=[session_id],
+                        )
+                    ],
+                ),
+            )
+            for trace_id in trace_ids_for_session(tagged_rows):
+                rows = _list_spans(
+                    api,
+                    ListSpanRequest(
+                        project_name=project_name or "default",
+                        start_time=api_time(end_time_ms - _QUERY_WINDOW_MS),
+                        end_time=api_time(query_end_time_ms),
+                        limit=_PAGE_SIZE,
+                        offset=0,
+                        min_call_cost_millisecond=0,
+                        max_call_cost_millisecond=86_400_000,
+                        order="desc",
+                        order_by="start_time",
+                        filters=[
+                            FilterForListSpanInput(
+                                key="trace_id",
+                                op="in",
+                                values=[trace_id],
+                            )
+                        ],
+                    ),
+                )
+                resolved = [
+                    span
+                    for row in rows
+                    if (span := _span_dict(row))
+                    and str(span.get("trace_id") or "") == trace_id
+                ]
+                if resolved:
+                    return resolved
+            return scan_session_spans(
+                api_time(end_time_ms - _QUERY_WINDOW_MS),
+                api_time(query_end_time_ms),
+            )
 
         candidates = _list_spans(
             api,
             ListSpanRequest(
                 project_name=project_name or "default",
-                start_time=end_time - _TRACE_CANDIDATE_WINDOW_MS,
-                end_time=query_end_time,
+                start_time=api_time(end_time_ms - _TRACE_CANDIDATE_WINDOW_MS),
+                end_time=api_time(query_end_time_ms),
                 limit=_PAGE_SIZE,
                 offset=0,
                 min_call_cost_millisecond=0,
@@ -297,7 +379,7 @@ def load_apmplus_trace(
         candidate_spans = [_span_dict(row) for row in candidates]
         candidate_spans.sort(
             key=lambda span: abs(
-                int(span.get("start_time_millisecond") or end_time) - end_time
+                int(span.get("start_time_millisecond") or end_time_ms) - end_time_ms
             )
         )
         trace_ids = list(
@@ -312,8 +394,8 @@ def load_apmplus_trace(
                 api,
                 ListSpanRequest(
                     project_name=project_name or "default",
-                    start_time=end_time - _QUERY_WINDOW_MS,
-                    end_time=query_end_time,
+                    start_time=api_time(end_time_ms - _QUERY_WINDOW_MS),
+                    end_time=api_time(query_end_time_ms),
                     limit=_PAGE_SIZE,
                     offset=0,
                     min_call_cost_millisecond=0,
@@ -333,10 +415,68 @@ def load_apmplus_trace(
             if session_spans:
                 return session_spans
 
+        # mpa-agent's control/reconcile span carries a2a.context_id even when
+        # the A2A SDK's HTTP root lacks the ADK session tags. Resolve its trace
+        # after preserving the established candidate path above.
+        tagged_rows = _list_spans(
+            api,
+            ListSpanRequest(
+                project_name=project_name or "default",
+                start_time=api_time(end_time_ms - _QUERY_WINDOW_MS),
+                end_time=api_time(query_end_time_ms),
+                limit=_PAGE_SIZE,
+                offset=0,
+                min_call_cost_millisecond=0,
+                max_call_cost_millisecond=86_400_000,
+                order="desc",
+                order_by="start_time",
+                filters=[
+                    FilterForListSpanInput(
+                        key="tags.a2a.context_id",
+                        op="in",
+                        values=[session_id],
+                    )
+                ],
+            ),
+        )
+        for trace_id in trace_ids_for_session(tagged_rows):
+            rows = _list_spans(
+                api,
+                ListSpanRequest(
+                    project_name=project_name or "default",
+                    start_time=api_time(end_time_ms - _QUERY_WINDOW_MS),
+                    end_time=api_time(query_end_time_ms),
+                    limit=_PAGE_SIZE,
+                    offset=0,
+                    min_call_cost_millisecond=0,
+                    max_call_cost_millisecond=86_400_000,
+                    order="desc",
+                    order_by="start_time",
+                    filters=[
+                        FilterForListSpanInput(
+                            key="trace_id",
+                            op="in",
+                            values=[trace_id],
+                        )
+                    ],
+                ),
+            )
+            resolved = [
+                span
+                for row in rows
+                if (span := _span_dict(row))
+                and str(span.get("trace_id") or "") == trace_id
+            ]
+            if resolved:
+                return resolved
+
         # Gateways can rename their HTTP server span. Use a bounded broad scan
         # before concluding that this session has not arrived in APMPlus.
         return nearest_trace(
-            scan_session_spans(end_time - _QUERY_WINDOW_MS, query_end_time)
+            scan_session_spans(
+                api_time(end_time_ms - _QUERY_WINDOW_MS),
+                api_time(query_end_time_ms),
+            )
         )
 
     for attempt in range(len(retry_delays) + 1):

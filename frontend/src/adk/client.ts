@@ -91,6 +91,8 @@ export interface AdkEvent {
   timestamp?: number;
   usageMetadata?: AdkUsage;
   usage_metadata?: AdkUsage;
+  customMetadata?: Record<string, unknown>;
+  custom_metadata?: Record<string, unknown>;
   // Set when the model/run fails; /run_sse emits it as a `data: {"error": ...}`
   // frame (also seen as errorMessage / error_message).
   error?: string;
@@ -1466,8 +1468,14 @@ export interface AgentTarget {
 }
 
 export interface FrontendInvocation {
-  skills: AgentSkill[];
+  skills: SessionSkillSelection[];
   targetAgent?: AgentTarget;
+}
+
+export interface SessionSkillSelection extends AgentSkill {
+  skillSpaceId?: string;
+  skillId?: string;
+  version?: string;
 }
 
 /** Introspected metadata for an agent app, served locally or by Agent Server. */
@@ -1478,6 +1486,9 @@ export interface AgentInfo {
   description: string;
   type?: AgentNodeType;
   model: string;
+  selectableModels?: string[];
+  turnLifecycleControl?: TurnLifecycleCapability;
+  resourceTopology?: ResourceTopology;
   tools: string[];
   skills: AgentSkill[];
   /** False when an older Agent Server omits Skill introspection entirely. */
@@ -1518,6 +1529,9 @@ async function fetchAgentInfo(
     description: info.description ?? "",
     type: info.type,
     model: info.model ?? "",
+    selectableModels: info.selectableModels ?? [],
+    turnLifecycleControl: info.turnLifecycleControl,
+    resourceTopology: info.resourceTopology,
     tools: info.tools ?? [],
     skillsPreviewSupported: Array.isArray(info.skills),
     skills: info.skills ?? [],
@@ -1527,6 +1541,82 @@ async function fetchAgentInfo(
     graph: info.graph,
     draft: info.draft,
   };
+}
+
+export type TurnControlAction = "pause" | "resume";
+
+export interface TurnLifecycleCapability {
+  actions: TurnControlAction[];
+  pauseMode: "cooperative-safe-point" | string;
+  processReplacementResume: boolean;
+}
+
+export interface ResourceTopology {
+  nodes: Array<{ id: string; kind: string; name: string; status: string; resourceId?: string }>;
+  edges: Array<{ source: string; target: string; relation: string }>;
+}
+
+export interface TurnControlState {
+  taskId: string;
+  state: string;
+  generation: number;
+  desiredState?: string | null;
+  safePoint?: string | null;
+  checkpoint?: Record<string, unknown> | null;
+  allowedActions: TurnControlAction[];
+  idempotentReplay: boolean;
+  pausedAt?: string | null;
+  resumableUntil?: string | null;
+  resumeDisposition?: "same_turn" | "new_turn_required";
+  continuationPrompt?: string | null;
+}
+
+export class TurnControlConflictError extends Error {
+  constructor(readonly authoritativeState: TurnControlState) {
+    super("Turn state changed before the control request completed");
+    this.name = "TurnControlConflictError";
+  }
+}
+
+export async function getTurnControl(
+  appName: string,
+  sessionId: string,
+): Promise<TurnControlState> {
+  const { ep } = resolve(appName);
+  const res = await apiFetch(
+    `/api/v1/a2a/tasks/by-session/${encodeURIComponent(sessionId)}/control`,
+    { cache: "no-store" },
+    ep,
+  );
+  if (!res.ok) throw new Error(await httpErrorMessage(res, "turn control failed"));
+  return res.json();
+}
+
+export async function controlTurn(
+  appName: string,
+  sessionId: string,
+  action: TurnControlAction,
+  expectedGeneration: number,
+): Promise<TurnControlState> {
+  const { ep } = resolve(appName);
+  const res = await apiFetch(
+    `/api/v1/a2a/tasks/by-session/${encodeURIComponent(sessionId)}/control/${action}`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Idempotency-Key": crypto.randomUUID(),
+      },
+      body: JSON.stringify({ expectedGeneration }),
+    },
+    ep,
+  );
+  if (res.status === 409) {
+    const body = await res.json().catch(() => null) as { detail?: TurnControlState } | null;
+    if (body?.detail?.taskId) throw new TurnControlConflictError(body.detail);
+  }
+  if (!res.ok) throw new Error(await httpErrorMessage(res, "turn control failed"));
+  return res.json();
 }
 
 export async function getAgentInfo(appName: string): Promise<AgentInfo> {
@@ -1698,6 +1788,7 @@ export interface RunArgs {
   userId: string;
   sessionId: string;
   text: string;
+  modelId?: string;
   attachments?: Attachment[];
   invocation?: FrontendInvocation;
   /** Complete set of local BFF tool IDs selected for this run. */
@@ -1784,6 +1875,7 @@ export async function* runSSE({
   userId,
   sessionId,
   text,
+  modelId,
   attachments = [],
   invocation,
   platformTools,
@@ -1850,6 +1942,7 @@ export async function* runSSE({
           session_id: sessionId,
           new_message: { role: "user", parts },
           streaming: true,
+          ...(modelId?.trim() ? { model_id: modelId.trim() } : {}),
           ...(platformTools !== undefined
             ? { platform_tools: [...platformTools] }
             : {}),
@@ -4098,6 +4191,8 @@ export interface CloudRuntime {
   memoryMb?: number | null;
   createdAt?: string;
   currentVersion?: number | null;
+  /** Product family used by the new-chat picker. */
+  agentCategory?: "general" | "mpa";
   /** True when this runtime was deployed by the current user (veadk:author). */
   isMine: boolean;
   /** Server-authorized deletion capability for this managed Runtime. */
@@ -4811,7 +4906,7 @@ export interface RuntimeDetail {
     maxInstance?: number | null;
     maxConcurrency?: number | null;
   };
-  envs: { key: string; value: string }[];
+  envs: { key: string; value: string; sensitive?: boolean; configured?: boolean }[];
   memoryId: string;
   toolId: string;
   knowledgeId: string;
@@ -4873,6 +4968,21 @@ export async function getRuntimeDetail(
       });
     }
   }
+}
+
+export async function copyRuntimeEnvironmentSecret(
+  runtimeId: string,
+  region: string,
+  key: string,
+): Promise<void> {
+  const params = new URLSearchParams({ runtimeId, region, key });
+  const response = await apiFetch(`/web/runtime-env/copy?${params.toString()}`, { method: "POST" });
+  if (!response.ok) throw new Error(await httpErrorMessage(response, adkT("client.copySecretFailed")));
+  const payload = await response.json() as { value?: unknown };
+  if (typeof payload.value !== "string" || !payload.value) {
+    throw new Error(adkT("client.copySecretFailed"));
+  }
+  await navigator.clipboard.writeText(payload.value);
 }
 
 export function getCachedRuntimeDetail(

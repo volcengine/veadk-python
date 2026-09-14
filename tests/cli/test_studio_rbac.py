@@ -3125,16 +3125,28 @@ def test_runtime_detail_proxy_and_delete_enforce_role_and_owner(
         assert runtime_detail.json()["endpoint"] == "https://runtime.example.com"
         assert runtime_detail.json()["authType"] == "key_auth"
         assert runtime_detail.json()["envs"] == [
-            {"key": "MCP_VISIBLE_AUTH_TOKEN", "value": "visible-secret"}
+            {
+                "key": "MCP_VISIBLE_AUTH_TOKEN",
+                "value": "",
+                "sensitive": True,
+                "configured": True,
+            }
         ]
+        assert "visible-secret" not in runtime_detail.text
         viewer_runtime_detail = client.get(
             "/web/runtime-detail?runtimeId=runtime-viewer&region=cn-beijing",
             headers=viewer_headers,
         )
         assert viewer_runtime_detail.status_code == 200
         assert viewer_runtime_detail.json()["envs"] == [
-            {"key": "VIEWER_VISIBLE_TOKEN", "value": "viewer-secret"}
+            {
+                "key": "VIEWER_VISIBLE_TOKEN",
+                "value": "",
+                "sensitive": True,
+                "configured": True,
+            }
         ]
+        assert "viewer-secret" not in viewer_runtime_detail.text
         assert "runtime-key" not in runtime_detail.text
         revealed_key = client.post(
             "/web/runtime-api-key/reveal?runtimeId=runtime-developer&region=cn-beijing",

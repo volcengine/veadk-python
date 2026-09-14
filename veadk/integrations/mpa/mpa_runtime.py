@@ -182,6 +182,7 @@ def provision_runtime(
     enable_key_auth: bool = True,
     resolve_apig_instance_id: Callable[[str], str] | None = None,
     reinject_public_url: bool = False,
+    enable_apmplus: bool = True,
     ready_timeout: float = _READY_TIMEOUT_SECONDS,
     poll_interval: float = _READY_POLL_SECONDS,
 ) -> dict[str, str]:
@@ -203,6 +204,7 @@ def provision_runtime(
             APIG gateway id for ``mpa_meta`` (kept injectable for testability).
         reinject_public_url: When True, after the endpoint is known, re-inject
             ``A2A_PUBLIC_URL`` via ``UpdateRuntime(envs=...)`` (never Release).
+        enable_apmplus: Enable APMPlus tracing on the Runtime resource.
 
     Returns:
         ``{public_endpoint, apig_instance_id, runtime_api_key, runtime_id}``.
@@ -240,6 +242,7 @@ def provision_runtime(
                 RoleName=role_name,
                 MinInstance=min_instance,
                 MaxInstance=max_instance,
+                ApmplusEnable=enable_apmplus,
                 Envs=_update_envs_items(envs),
                 ReleaseEnable=True,
             )
@@ -256,6 +259,7 @@ def provision_runtime(
                 ClientToken=secrets.token_hex(16),
                 MinInstance=min_instance,
                 MaxInstance=max_instance,
+                ApmplusEnable=enable_apmplus,
                 AuthorizerConfiguration=authorizer,
                 NetworkConfiguration=rt.NetworkForCreateRuntime(
                     enable_public_network=True,
@@ -288,10 +292,13 @@ def provision_runtime(
         current_version = int(getattr(runtime, "current_version_number", 0) or 0)
         merged = dict(envs)
         merged["A2A_PUBLIC_URL"] = public_endpoint
+        if api_key:
+            merged["CODEX_MCP_RUNTIME_API_KEY"] = api_key
         client.update_runtime(
             rt.UpdateRuntimeRequest(
                 RuntimeId=runtime_id,
                 Envs=_update_envs_items(merged),
+                ApmplusEnable=enable_apmplus,
                 ReleaseEnable=True,
             )
         )

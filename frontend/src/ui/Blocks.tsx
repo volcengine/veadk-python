@@ -247,12 +247,14 @@ function loadSkillLabel(
 export function ThinkingBlock({
   text,
   done,
+  thoughtKind = "thought",
   answerStarted = false,
   streaming = false,
   onStreamFrame,
 }: {
   text: string;
   done: boolean;
+  thoughtKind?: "reasoning" | "thought";
   answerStarted?: boolean;
   streaming?: boolean;
   onStreamFrame?: () => void;
@@ -306,11 +308,11 @@ export function ThinkingBlock({
         </span>
         {done ? (
           <span className="think-label think-label--done">
-            {t("blocks.thinkingDone")}
+            {t(thoughtKind === "reasoning" ? "blocks.reasoningDone" : "blocks.thinkingDone")}
           </span>
         ) : (
           <TextShimmer className="think-label" duration={2.4} spread={18}>
-            {t("blocks.thinking")}
+            {t(thoughtKind === "reasoning" ? "blocks.reasoning" : "blocks.thinking")}
           </TextShimmer>
         )}
         <ChevronRight className={`chev ${open ? "open" : ""}`} />
@@ -1427,6 +1429,7 @@ export function Blocks({
                 key={i}
                 text={b.text}
                 done={b.done}
+                thoughtKind={b.thoughtKind}
                 answerStarted={answerStarted}
                 streaming={streaming}
                 onStreamFrame={onStreamFrame}

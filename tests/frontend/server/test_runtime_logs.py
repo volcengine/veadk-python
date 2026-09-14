@@ -142,6 +142,32 @@ async def test_runtime_log_service_validates_instance_and_reads_logs(
     assert calls[1][0] == "logs"
     assert calls[1][1].instance_name == "instance-abc"
     assert calls[1][1].runtime_id == "runtime-1"
+    assert calls[1][1].limit == 1000
+
+
+@pytest.mark.asyncio
+async def test_runtime_log_service_bounds_snapshot_to_latest_thousand_lines() -> None:
+    class _Client:
+        def get_runtime_instance_logs(self, request: Any) -> SimpleNamespace:
+            assert request.limit == 1000
+            return SimpleNamespace(
+                logs="\n".join(f"line-{index}" for index in range(1005))
+            )
+
+    service = RuntimeLogService(
+        provider="volcengine",
+        resolve_credentials=lambda: ("ak", "sk", ""),
+        create_client=lambda **kwargs: _Client(),
+    )
+
+    logs = await service.read_logs(
+        _Client(), runtime_id="runtime-1", instance_name="instance-abc"
+    )
+
+    lines = logs.splitlines()
+    assert len(lines) == 1000
+    assert lines[0] == "line-5"
+    assert lines[-1] == "line-1004"
 
 
 @pytest.mark.asyncio

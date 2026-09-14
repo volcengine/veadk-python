@@ -722,7 +722,7 @@ test("successful intelligent deployment opens a fresh agent chat", () => {
   );
   assert.match(
     appSource,
-    /const refreshCurrentAgentAndStartNewChat = async \(id: string\) => \{[\s\S]*?setIntelligentDeployment\(null\);[\s\S]*?startNewChat\(\);[\s\S]*?\};/,
+    /const refreshCurrentAgentAndStartNewChat = async \(id: string\) => \{[\s\S]*?startNewChat\(\);[\s\S]*?setAppName\(id\);[\s\S]*?setIntelligentDeployment\(null\);[\s\S]*?\};/,
   );
   assert.match(
     appSource,

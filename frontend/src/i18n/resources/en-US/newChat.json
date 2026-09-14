@@ -55,6 +55,7 @@
     "types": {
       "agent": "Agent",
       "general": "General Agent",
+      "mpa": "MPA Agent",
       "codex": "Codex Agent",
       "deepseekHarness": "DeepSeek Harness",
       "openclaw": "OpenClaw Agent",
