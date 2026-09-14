@@ -988,6 +988,7 @@ def _build_local_requirements(
             veadk_wheel=built_wheels[0],
             dependency_sources=dependency_sources,
             environment=env,
+            optimize_cold_start=True,
         )
     except ValueError as error:
         raise StudioPublisherError(str(error)) from error
@@ -1009,6 +1010,12 @@ def _studio_run_script(*, thin: bool = False) -> str:
         else "python3 -m veadk.cli.studio_companion "
         f'--archive "$ROOT_DIR/{_AGENTKIT_CLI_ARCHIVE}"\n'
     )
+    studio = (
+        "python3 -m veadk.cli.studio_start "
+        '--provider "${CLOUD_PROVIDER:-${AGENTKIT_CLOUD_PROVIDER:-volcengine}}" '
+        "--auth-mode frontend "
+        '--host "$HOST" --port "$PORT"\n'
+    )
     return (
         "#!/bin/bash\n"
         "set -ex\n"
@@ -1021,11 +1028,19 @@ def _studio_run_script(*, thin: bool = False) -> str:
         "HOST=0.0.0.0\n"
         "PORT=${_FAAS_RUNTIME_PORT:-8000}\n"
         'export PYTHONPATH="./site-packages${PYTHONPATH:+:$PYTHONPATH}"\n'
-        f"{companion}"
-        "exec python3 -m veadk.cli.cli studio "
-        '--provider "${CLOUD_PROVIDER:-${AGENTKIT_CLOUD_PROVIDER:-volcengine}}" '
-        "--auth-mode frontend "
-        '--host "$HOST" --port "$PORT"\n'
+        'trap \'kill "${COMPANION_PID:-}" "${STUDIO_PID:-}" '
+        "2>/dev/null || true' INT TERM\n"
+        f"{companion.rstrip()} &\n"
+        "COMPANION_PID=$!\n"
+        f"{studio.rstrip()} &\n"
+        "STUDIO_PID=$!\n"
+        'if ! wait "$COMPANION_PID"; then\n'
+        '  kill "$STUDIO_PID" 2>/dev/null || true\n'
+        '  wait "$STUDIO_PID" 2>/dev/null || true\n'
+        "  exit 1\n"
+        "fi\n"
+        "COMPANION_PID=\n"
+        'wait "$STUDIO_PID"\n'
     )
 
 

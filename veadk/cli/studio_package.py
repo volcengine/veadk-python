@@ -66,7 +66,7 @@ def studio_run_script(
         else '"${CLOUD_PROVIDER:-${AGENTKIT_CLOUD_PROVIDER:-volcengine}}"'
     )
     command = (
-        "python3 -m veadk.cli.cli studio "
+        "python3 -m veadk.cli.studio_start "
         f"--provider {provider_argument} --auth-mode frontend"
     )
     if site_logo_filename:
@@ -201,6 +201,7 @@ def build_local_studio_requirements(
     dependency_wheels: Path | None = None,
     provider: CloudProvider = DEFAULT_CLOUD_PROVIDER,
     offline_runtime: bool = True,
+    optimize_cold_start: bool = False,
 ) -> str:
     """Build a local VeADK wheel and return exact deployment requirements.
 
@@ -269,6 +270,7 @@ def build_local_studio_requirements(
         package_dir,
         veadk_wheel=wheels[0],
         dependency_sources=dependency_sources,
+        optimize_cold_start=optimize_cold_start,
     )
     shutil.rmtree(prepared_dependencies)
     return requirements
