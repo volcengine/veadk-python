@@ -218,7 +218,7 @@ jobs:
           test "$(uname -s)" = "Linux"
           test "$(uname -m)" = "x86_64"
           test "$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')" = "3.12"
-          COLD_START_DEADLINE_SECONDS=90
+          COLD_START_DEADLINE_SECONDS=60
           STUDIO_MAX_BUNDLE_BYTES=$((256 * 1024 * 1024))
           bundle=("$RUNNER_TEMP"/studio-release-output/studio-bundle-*.zip)
           test "${#bundle[@]}" -eq 1

@@ -84,7 +84,8 @@ def test_smoke_gate_is_fresh_amd64_and_runs_before_import_validation() -> None:
 
     assert 'test "$(uname -s)" = "Linux"' in script
     assert 'test "$(uname -m)" = "x86_64"' in script
-    assert "COLD_START_DEADLINE_SECONDS=90" in script
+    assert "COLD_START_DEADLINE_SECONDS=60" in script
+    assert "COLD_START_DEADLINE_SECONDS=90" not in script
     assert "STUDIO_MAX_BUNDLE_BYTES=$((256 * 1024 * 1024))" in script
     assert script.index("smoke_studio byteplus") < script.index("import frontend")
     assert script.index("smoke_studio volcengine") < script.index("import frontend")

@@ -55,3 +55,29 @@ if "veadk.integrations.agentkit.app" in sys.modules:
         capture_output=True,
         text=True,
     )
+
+
+def test_studio_tool_catalog_does_not_eagerly_load_branch_model_runtime() -> None:
+    root = Path(__file__).resolve().parents[2]
+    script = """
+import sys
+
+from frontend.server.studio_tools.registry import build_studio_tool_registry
+
+if "veadk.agent" in sys.modules:
+    raise SystemExit("VeADK Agent loaded before Studio tool catalog construction")
+
+registry = build_studio_tool_registry()
+assert any(item["name"] == "branch_compare" for item in registry.manifests())
+
+if "veadk.agent" in sys.modules:
+    raise SystemExit("branch model runtime loaded during Studio cold start")
+"""
+
+    subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
