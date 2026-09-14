@@ -366,7 +366,7 @@ class VeFaaS:
         # Create function
         res = self.client.create_function(
             volcenginesdkvefaas.CreateFunctionRequest(
-                command="./run.sh",
+                command="bash ./run.sh",
                 name=function_name,
                 description="Created by VeADK (Volcengine Agent Development Kit)",
                 tags=[TagForCreateFunctionInput(key="provider", value="veadk")],
@@ -589,6 +589,7 @@ class VeFaaS:
         path: str,
         environment_overrides: dict[str, str] | None = None,
         disable_gateway_cors: bool = False,
+        normalize_studio_entrypoint: bool = False,
     ) -> str:
         """Replace an application's function bundle and release it.
 
@@ -603,6 +604,10 @@ class VeFaaS:
             path: Prepared function bundle directory.
             environment_overrides: Environment values to explicitly replace.
             disable_gateway_cors: Disable route-wide APIG CORS after release.
+            normalize_studio_entrypoint: Replace only the legacy ``./run.sh``
+                command with ``bash ./run.sh`` so platform archive mode
+                normalization cannot prevent Studio from starting. Custom
+                commands are preserved.
 
         Returns:
             The existing Application URL after the new revision is released.
@@ -611,6 +616,7 @@ class VeFaaS:
             function_id=function_id,
             path=path,
             environment_overrides=environment_overrides,
+            normalize_studio_entrypoint=normalize_studio_entrypoint,
         )
         url = self._release_application(application_id)
         self._set_function_min_instance(function_id)
@@ -628,6 +634,7 @@ class VeFaaS:
         function_id: str,
         path: str,
         environment_overrides: dict[str, str] | None = None,
+        normalize_studio_entrypoint: bool = False,
     ) -> None:
         """Replace a function bundle and submit its Application release.
 
@@ -641,6 +648,7 @@ class VeFaaS:
             function_id=function_id,
             path=path,
             environment_overrides=environment_overrides,
+            normalize_studio_entrypoint=normalize_studio_entrypoint,
         )
         self._set_function_min_instance(function_id)
         self._start_application_release(application_id)
@@ -652,18 +660,22 @@ class VeFaaS:
         path: str,
         environment_overrides: dict[str, str] | None,
         request_timeout: int | None = None,
+        normalize_studio_entrypoint: bool = False,
     ) -> None:
         """Upload a bundle and update the Function without releasing it."""
         request_options: dict[str, Any] = {"id": function_id}
         if request_timeout is not None:
             request_options["request_timeout"] = request_timeout
-        if environment_overrides:
+        function: Any | None = None
+        if environment_overrides or normalize_studio_entrypoint:
             function = cast(
                 Any,
                 self.client.get_function(
                     volcenginesdkvefaas.GetFunctionRequest(id=function_id)
                 ),
             )
+        if environment_overrides:
+            assert function is not None
             environment = {
                 item.key: item.value for item in (getattr(function, "envs", None) or [])
             }
@@ -672,6 +684,10 @@ class VeFaaS:
                 volcenginesdkvefaas.EnvForUpdateFunctionInput(key=key, value=value)
                 for key, value in environment.items()
             ]
+        if normalize_studio_entrypoint:
+            assert function is not None
+            if str(getattr(function, "command", "") or "").strip() == "./run.sh":
+                request_options["command"] = "bash ./run.sh"
 
         self._upload_and_mount_code(function_id, path)
         self.client.update_function(
@@ -1051,6 +1067,7 @@ class VeFaaS:
                     if value is not None
                 },
                 disable_gateway_cors=disable_gateway_cors,
+                normalize_studio_entrypoint=True,
             )
             logger.info(
                 f"VeFaaS application {name} with ID {existing_app_id} updated on {url}."

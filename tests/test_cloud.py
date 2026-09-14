@@ -229,6 +229,7 @@ def test_vefaas_deploy_updates_existing_application_in_place() -> None:
         path="/tmp/studio-bundle",
         environment_overrides={"VEADK_STUDIO_DEPLOY_ID": "deploy-id"},
         disable_gateway_cors=True,
+        normalize_studio_entrypoint=True,
     )
     service._create_function.assert_not_called()
     service._create_application.assert_not_called()

@@ -14,11 +14,13 @@ on:
       - 'tests/cli/test_generated_agent_mcp.py'
       - 'tests/cli/test_studio_rbac.py'
       - 'tests/cli/test_studio_release.py'
+      - 'tests/cli/test_studio_update.py'
       - 'tests/cli/test_studio_startup_imports.py'
       - 'tests/frontend/server/test_runtime_iam.py'
       - 'tests/extensions/harness/**'
       - 'tests/integrations/agentkit/test_app.py'
       - 'tests/test_harness_sidecar_release_gate.py'
+      - 'tests/test_cloud.py'
       - 'tests/test_studio_release_server.py'
       - 'tests/test_studio_release_workflow.py'
       - 'veadk/cli/generated_agent_codegen.py'
@@ -31,6 +33,8 @@ on:
       - 'veadk/cli/legacy_runtime_recovery.py'
       - 'veadk/cli/studio_vpc_network.py'
       - 'veadk/cli/studio_release.py'
+      - 'veadk/cli/studio_self_update.py'
+      - 'veadk/integrations/ve_faas/ve_faas.py'
       - 'veadk/extensions/harness/**'
       - 'veadk/integrations/agentkit/app.py'
       - 'pyproject.toml'
@@ -46,11 +50,13 @@ on:
       - 'tests/cli/test_generated_agent_mcp.py'
       - 'tests/cli/test_studio_rbac.py'
       - 'tests/cli/test_studio_release.py'
+      - 'tests/cli/test_studio_update.py'
       - 'tests/cli/test_studio_startup_imports.py'
       - 'tests/frontend/server/test_runtime_iam.py'
       - 'tests/extensions/harness/**'
       - 'tests/integrations/agentkit/test_app.py'
       - 'tests/test_harness_sidecar_release_gate.py'
+      - 'tests/test_cloud.py'
       - 'tests/test_studio_release_server.py'
       - 'tests/test_studio_release_workflow.py'
       - 'veadk/cli/generated_agent_codegen.py'
@@ -63,6 +69,8 @@ on:
       - 'veadk/cli/legacy_runtime_recovery.py'
       - 'veadk/cli/studio_vpc_network.py'
       - 'veadk/cli/studio_release.py'
+      - 'veadk/cli/studio_self_update.py'
+      - 'veadk/integrations/ve_faas/ve_faas.py'
       - 'veadk/extensions/harness/**'
       - 'veadk/integrations/agentkit/app.py'
       - 'pyproject.toml'
@@ -141,6 +149,11 @@ jobs:
               tests/test_studio_release_server.py::test_release_server_zip_normalizes_runtime_file_permissions \
               tests/cli/test_studio_release.py::test_release_zip_normalizes_runtime_file_permissions \
               tests/test_studio_release_workflow.py::test_smoke_gate_executes_bundle_as_low_privilege_user \
+              tests/test_studio_release_workflow.py::test_smoke_gate_survives_platform_entrypoint_mode_normalization \
+              tests/cli/test_studio_update.py::test_update_application_code_bundle_merges_only_explicit_environment \
+              tests/cli/test_studio_update.py::test_studio_update_preserves_custom_function_command \
+              tests/cli/test_studio_update.py::test_native_python_function_uses_mode_independent_bundle_entrypoint \
+              tests/test_cloud.py::test_vefaas_deploy_updates_existing_application_in_place \
               tests/test_studio_release_server.py::test_tos_dependency_store_accepts_manifest_pinned_agentkit_cli_version \
               tests/test_studio_release_server.py::test_tos_dependency_store_rejects_untrusted_agentkit_cli_url \
               tests/test_harness_sidecar_release_gate.py
