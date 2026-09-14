@@ -627,9 +627,6 @@ def _gitlab_app_review_environment(
         GITLAB_OAUTH_CLIENT_ID_ENV,
         GITLAB_OAUTH_CLIENT_SECRET_ENV,
         GITLAB_OAUTH_REDIRECT_URI_ENV,
-        GITLAB_REVIEW_CREATOR_ENV,
-        GITLAB_REVIEW_OWNER_ID_ENV,
-        GITLAB_TOKEN_ENV,
         GITLAB_WEBHOOK_SECRET_ENV,
         STUDIO_PUBLIC_BASE_URL_ENV,
     )
@@ -641,14 +638,11 @@ def _gitlab_app_review_environment(
         key: value
         for key in (
             GITLAB_BASE_URL_ENV,
-            GITLAB_TOKEN_ENV,
             GITLAB_WEBHOOK_SECRET_ENV,
             GITLAB_OAUTH_CLIENT_ID_ENV,
             GITLAB_OAUTH_CLIENT_SECRET_ENV,
             GITLAB_OAUTH_REDIRECT_URI_ENV,
             GITLAB_GROUP_ID_OR_PATH_ENV,
-            GITLAB_REVIEW_OWNER_ID_ENV,
-            GITLAB_REVIEW_CREATOR_ENV,
             STUDIO_PUBLIC_BASE_URL_ENV,
         )
         if (value := _value(key))

@@ -3888,7 +3888,7 @@ def mount_sandbox_routes(
         store: TosGitLabAppReviewProjectStore,
         owner_id: str,
     ) -> GitLabOAuthCredential | None:
-        config = load_gitlab_app_config(require_token=False)
+        config = load_gitlab_app_config()
         if config is None:
             return None
         credential = await store.oauth_credential_for_owner(owner_id, config.base_url)
@@ -3930,10 +3930,8 @@ def mount_sandbox_routes(
 
     async def _gitlab_config_for_owner(
         owner_id: str,
-        *,
-        allow_managed: bool = True,
     ) -> tuple[GitLabAppConfig, GitLabOAuthCredential | None, str]:
-        config = load_gitlab_app_config(require_token=False)
+        config = load_gitlab_app_config()
         if config is None:
             raise GitLabAppReviewError("管理员未配置 GitLab OAuth。")
         store = _gitlab_app_review_store()
@@ -3944,32 +3942,19 @@ def mount_sandbox_routes(
                     replace(
                         config,
                         token=credential.access_token,
-                        token_auth_scheme="bearer",
                     ),
                     credential,
                     "oauth",
                 )
-        if allow_managed and config.token:
-            return config, None, "managed"
         raise GitLabAppReviewError("请先连接 GitLab 后再继续。")
 
     async def _gitlab_config_for_binding(
         store: TosGitLabAppReviewProjectStore,
         binding: GitLabProjectBinding,
     ) -> tuple[GitLabAppConfig, str, str]:
-        config = load_gitlab_app_config(require_token=False)
+        config = load_gitlab_app_config()
         if config is None:
             raise GitLabAppReviewError("管理员未配置 GitLab OAuth。")
-        if binding.credential_type == "managed":
-            if not config.token:
-                await store.update_project_binding_status(
-                    binding.instance_id,
-                    binding.project_id,
-                    status="auth_invalid",
-                    reason="托管凭证未配置。",
-                )
-                raise GitLabAppReviewError("GitLab 托管凭证未配置。")
-            return config, config.review_owner_id, config.review_creator_name
         credential = await store.oauth_credential(binding.credential_id)
         if credential is None:
             await store.update_project_binding_status(
@@ -4010,7 +3995,6 @@ def mount_sandbox_routes(
             replace(
                 config,
                 token=credential.access_token,
-                token_auth_scheme="bearer",
             ),
             credential.owner_id,
             credential.gitlab_name or credential.gitlab_username or credential.owner_id,
@@ -4286,7 +4270,7 @@ def mount_sandbox_routes(
                     "管理员未配置 Studio 持久化存储，无法删除 GitLab 授权。"
                 )
             )
-        config = load_gitlab_app_config(require_token=False)
+        config = load_gitlab_app_config()
         if config is None:
             return {"status": "disconnected"}
         await store.delete_oauth_credential_for_owner(owner_id, config.base_url)
@@ -4343,20 +4327,10 @@ def mount_sandbox_routes(
             review_enabled = data.get("reviewEnabled")
             if not isinstance(project_id, int) or not isinstance(review_enabled, bool):
                 raise SandboxValidationError("启用评审项目更新格式无效。")
-            credential_mode_value = data.get("credentialMode")
-            credential_mode = str(credential_mode_value or "oauth").strip()
-            if credential_mode not in {"oauth", "managed"}:
-                raise SandboxValidationError("GitLab 凭证模式无效。")
-            config, credential, resolved_mode = await _gitlab_config_for_owner(
-                owner_id,
-                allow_managed=credential_mode == "managed"
-                or credential_mode_value is None,
+            config, credential, _credential_type = await _gitlab_config_for_owner(
+                owner_id
             )
-            if (
-                credential_mode_value is not None
-                and credential_mode == "oauth"
-                and credential is None
-            ):
+            if credential is None:
                 raise GitLabAppReviewError("请先连接 GitLab 后再启用自动评审。")
             client = GitLabAppClient(config)
             projects = await client.projects()
@@ -4370,10 +4344,7 @@ def mount_sandbox_routes(
                     project.project_id,
                 )
             else:
-                if (
-                    resolved_mode == "oauth"
-                    and project.access_level < _GITLAB_MIN_WEBHOOK_ACCESS_LEVEL
-                ):
+                if project.access_level < _GITLAB_MIN_WEBHOOK_ACCESS_LEVEL:
                     raise SandboxValidationError(
                         "启用自动评审需要 GitLab Maintainer 权限。"
                     )
@@ -4389,13 +4360,9 @@ def mount_sandbox_routes(
                         base_url=project.base_url,
                         project_id=project.project_id,
                         path_with_namespace=project.path_with_namespace,
-                        credential_owner=owner_id
-                        if credential is not None
-                        else config.review_owner_id,
-                        credential_id=credential.credential_id
-                        if credential is not None
-                        else "managed",
-                        credential_type=resolved_mode,
+                        credential_owner=owner_id,
+                        credential_id=credential.credential_id,
+                        credential_type="oauth",
                         webhook_id=webhook_id,
                         enabled=True,
                         status="active",
@@ -4441,7 +4408,7 @@ def mount_sandbox_routes(
         store: TosGitLabAppReviewProjectStore | None = None
         event: GitLabMergeRequestEvent | None = None
         try:
-            config = load_gitlab_app_config(require_token=False)
+            config = load_gitlab_app_config()
             if config is None:
                 raise GitLabAppReviewError("管理员未配置 GitLab OAuth。")
             if not verify_gitlab_webhook_token(

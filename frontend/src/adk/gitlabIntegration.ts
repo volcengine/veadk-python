@@ -11,7 +11,6 @@ export interface GitLabAppConfig {
   oauthConfigured: boolean;
   oauthConnected: boolean;
   oauthUser: GitLabOAuthUser | null;
-  managedTokenConfigured: boolean;
 }
 
 export interface GitLabOAuthUser {
@@ -121,7 +120,6 @@ export async function getGitLabAppConfig(signal: AbortSignal): Promise<GitLabApp
     typeof value.reason !== "string" ||
     typeof value.oauthConfigured !== "boolean" ||
     typeof value.oauthConnected !== "boolean" ||
-    typeof value.managedTokenConfigured !== "boolean" ||
     (
       value.oauthUser !== null &&
       value.oauthUser !== undefined &&
@@ -137,7 +135,7 @@ export async function getGitLabAppConfig(signal: AbortSignal): Promise<GitLabApp
       )
     )
   ) {
-    throw new Error("GitLab App 配置响应格式无效。");
+    throw new Error("GitLab 集成配置响应格式无效。");
   }
   return value as GitLabAppConfig;
 }
@@ -186,13 +184,13 @@ export async function getGitLabProjects(
       typeof project.reviewCredentialType !== "string"
     ))
   ) {
-    throw new Error("GitLab App 项目列表响应格式无效。");
+    throw new Error("GitLab 集成项目列表响应格式无效。");
   }
   return value as GitLabProjectsResult;
 }
 
 export async function updateGitLabReviewProject(
-  input: { projectId: number; reviewEnabled: boolean; credentialMode?: "oauth" | "managed" },
+  input: { projectId: number; reviewEnabled: boolean },
   signal: AbortSignal,
 ): Promise<Array<{ projectId: number }>> {
   const response = await studioFetch("/web/gitlab/app/review-projects", {
@@ -208,7 +206,7 @@ export async function updateGitLabReviewProject(
     project === null ||
     typeof (project as { projectId?: unknown }).projectId !== "number"
   ))) {
-    throw new Error("GitLab App 评审项目保存响应格式无效。");
+    throw new Error("GitLab 集成评审项目保存响应格式无效。");
   }
   return value.projects as Array<{ projectId: number }>;
 }

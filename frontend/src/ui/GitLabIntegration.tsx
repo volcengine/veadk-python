@@ -24,7 +24,6 @@ interface GitLabIntegrationProps {
 }
 
 const REVIEW_PAGE_SIZE = 10;
-type GitLabReviewCredentialMode = "oauth" | "managed";
 
 function ExternalIcon() {
   return (
@@ -105,7 +104,6 @@ export function GitLabIntegration({ onBack, onOpenSandboxSession }: GitLabIntegr
   const [reviewRecordsSettings, setReviewRecordsSettings] = useState<{ reviewSettingsConfigured: boolean; reviewSettingsReason: string } | null>(null);
   const [connectingGitLab, setConnectingGitLab] = useState(false);
   const [disconnectingGitLab, setDisconnectingGitLab] = useState(false);
-  const [reviewCredentialMode, setReviewCredentialMode] = useState<GitLabReviewCredentialMode>("oauth");
   const configAbortRef = useRef<AbortController | null>(null);
   const projectsAbortRef = useRef<AbortController | null>(null);
   const recordsAbortRef = useRef<AbortController | null>(null);
@@ -118,10 +116,7 @@ export function GitLabIntegration({ onBack, onOpenSandboxSession }: GitLabIntegr
     : undefined;
   const showProjectsPagination = projectsPage > 1 || projectsHasNextPage;
   const showRecordsPagination = reviewRecordsPage > 1 || reviewRecordsHasNextPage;
-  const gitLabAccessReady = config?.configured === true && (config.oauthConnected || config.managedTokenConfigured);
-  const selectedReviewCredentialReady = reviewCredentialMode === "oauth"
-    ? config?.oauthConnected === true
-    : config?.managedTokenConfigured === true;
+  const gitLabAccessReady = config?.configured === true && config.oauthConnected;
 
   const refreshProjects = (page = projectsPage, query = projectQuery) => {
     projectsAbortRef.current?.abort();
@@ -201,7 +196,7 @@ export function GitLabIntegration({ onBack, onOpenSandboxSession }: GitLabIntegr
       .then((nextConfig) => {
         if (configAbortRef.current !== controller) return;
         setConfig(nextConfig);
-        if (!nextConfig.configured || (nextConfig.oauthConfigured && !nextConfig.oauthConnected && !nextConfig.managedTokenConfigured)) {
+        if (!nextConfig.configured || (nextConfig.oauthConfigured && !nextConfig.oauthConnected)) {
           setProjectsLoading(false);
           setReviewRecordsLoading(false);
         }
@@ -231,15 +226,6 @@ export function GitLabIntegration({ onBack, onOpenSandboxSession }: GitLabIntegr
     refreshReviewRecords(1);
   }, [gitLabAccessReady]);
 
-  useEffect(() => {
-    if (!config) return;
-    if (reviewCredentialMode === "oauth" && !config.oauthConnected && config.managedTokenConfigured) {
-      setReviewCredentialMode("managed");
-    } else if (reviewCredentialMode === "managed" && !config.managedTokenConfigured && config.oauthConnected) {
-      setReviewCredentialMode("oauth");
-    }
-  }, [config, reviewCredentialMode]);
-
   const searchProjects = () => {
     const query = projectQueryInput.trim();
     setProjectQuery(query);
@@ -249,8 +235,8 @@ export function GitLabIntegration({ onBack, onOpenSandboxSession }: GitLabIntegr
 
   const toggleProjectReview = async (project: GitLabProject) => {
     if (reviewSettings?.reviewSettingsConfigured !== true || updatingProject !== null) return;
-    if (!project.reviewEnabled && !selectedReviewCredentialReady) {
-      setProjectsError(reviewCredentialMode === "oauth" ? "请先连接 GitLab 后再启用自动评审。" : "管理员未配置 GitLab 托管凭证。");
+    if (!project.reviewEnabled && !gitLabAccessReady) {
+      setProjectsError("请先连接 GitLab 后再启用自动评审。");
       return;
     }
     const controller = new AbortController();
@@ -260,7 +246,6 @@ export function GitLabIntegration({ onBack, onOpenSandboxSession }: GitLabIntegr
       await updateGitLabReviewProject({
         projectId: project.projectId,
         reviewEnabled: !project.reviewEnabled,
-        credentialMode: project.reviewEnabled ? undefined : reviewCredentialMode,
       }, controller.signal);
       setProjects((current) => current.map((item) => (
         item.projectId === project.projectId
@@ -358,7 +343,7 @@ export function GitLabIntegration({ onBack, onOpenSandboxSession }: GitLabIntegr
           <div className="github-release-form">
             <div className={`github-app-card${config?.configured ? " is-ready" : ""}`}>
               <div>
-                <strong>GitLab App 配置</strong>
+                <strong>GitLab 集成配置</strong>
                 <span>
                   {configLoading
                     ? "正在检查中心服务配置..."
@@ -442,43 +427,20 @@ export function GitLabIntegration({ onBack, onOpenSandboxSession }: GitLabIntegr
                   </button>
                 ) : null}
               </div>
-              {config?.oauthConnected && config.managedTokenConfigured ? (
-                <div className="github-review-credential-mode" role="radiogroup" aria-label="自动评审凭证">
-                  <span>自动评审凭证</span>
-                  <button
-                    type="button"
-                    role="radio"
-                    aria-checked={reviewCredentialMode === "oauth"}
-                    className={reviewCredentialMode === "oauth" ? "is-selected" : ""}
-                    onClick={() => setReviewCredentialMode("oauth")}
-                  >
-                    我的授权
-                  </button>
-                  <button
-                    type="button"
-                    role="radio"
-                    aria-checked={reviewCredentialMode === "managed"}
-                    className={reviewCredentialMode === "managed" ? "is-selected" : ""}
-                    onClick={() => setReviewCredentialMode("managed")}
-                  >
-                    托管凭证
-                  </button>
-                </div>
-              ) : null}
               {!gitLabAccessReady && !configLoading ? (
                 <div className="github-app-repository-empty">请先连接 GitLab。</div>
               ) : null}
               {projectsLoading && projects.length === 0 && gitLabAccessReady ? <div className="github-app-repository-empty">正在读取 GitLab 项目...</div> : null}
               {!projectsLoading && projects.length === 0 && !projectsError && gitLabAccessReady ? (
                 <div className="github-app-repository-empty">
-                  {projectQuery ? `没有匹配 “${projectQuery}” 的 GitLab 项目。` : "GitLab App 暂无可访问项目。"}
+                  {projectQuery ? `没有匹配 “${projectQuery}” 的 GitLab 项目。` : "GitLab 集成暂无可访问项目。"}
                 </div>
               ) : null}
               {projects.length > 0 ? (
                 <div className="github-app-repository-list">
                   {projects.map((project) => {
                     const busy = updatingProject === project.projectId;
-                    const disabled = reviewSettings?.reviewSettingsConfigured !== true || updatingProject !== null || (!project.reviewEnabled && !selectedReviewCredentialReady);
+                    const disabled = reviewSettings?.reviewSettingsConfigured !== true || updatingProject !== null || (!project.reviewEnabled && !gitLabAccessReady);
                     return (
                       <div className="github-app-repository-row" key={`${project.instanceId}:${project.projectId}`}>
                         <div className="github-app-repository-main">
@@ -534,7 +496,7 @@ export function GitLabIntegration({ onBack, onOpenSandboxSession }: GitLabIntegr
                   {reviewProject ? (
                     <span className="github-field-help">
                       {accessibleReviewProject
-                        ? `将使用 GitLab App 评审 ${accessibleReviewProject.pathWithNamespace}`
+                        ? `将使用 GitLab 授权评审 ${accessibleReviewProject.pathWithNamespace}`
                         : `MR URL 所属项目 ${reviewProject} 不在当前项目列表中`}
                     </span>
                   ) : null}

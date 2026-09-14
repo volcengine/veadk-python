@@ -77,11 +77,53 @@ from veadk.cli.github_app_pr_review import (
 )
 from veadk.cli.gitlab_app_mr_review import (
     GitLabAppReviewError,
+    GITLAB_REVIEW_PROJECTS_KEY,
     GitLabOAuthCredential,
     GitLabProject,
     TosGitLabAppReviewProjectStore,
     create_review_record as create_gitlab_review_record,
 )
+
+
+def _configure_gitlab_oauth(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("VEADK_GITLAB_BASE_URL", "https://gitlab.example.com")
+    monkeypatch.setenv("VEADK_GITLAB_WEBHOOK_SECRET", "secret")
+    monkeypatch.setenv("VEADK_STUDIO_PUBLIC_BASE_URL", "https://studio.example.com")
+    monkeypatch.setenv("VEADK_GITLAB_OAUTH_CLIENT_ID", "client-id")
+    monkeypatch.setenv("VEADK_GITLAB_OAUTH_CLIENT_SECRET", "client-secret")
+    monkeypatch.setenv(
+        "VEADK_GITLAB_OAUTH_REDIRECT_URI",
+        "https://studio.example.com/web/gitlab/oauth/callback",
+    )
+
+
+def _save_gitlab_oauth_credential(
+    storage: object,
+    *,
+    owner_id: str = "alice",
+    credential_id: str = "cred-1",
+    token: str = "oauth-token",
+) -> TosGitLabAppReviewProjectStore:
+    store = TosGitLabAppReviewProjectStore(
+        bucket="studio-state",
+        client_factory=lambda: storage,
+    )
+    asyncio.run(
+        store.save_oauth_credential(
+            GitLabOAuthCredential(
+                credential_id=credential_id,
+                owner_id=owner_id,
+                base_url="https://gitlab.example.com",
+                access_token=token,
+                refresh_token="refresh-token",
+                expires_at=0,
+                gitlab_user_id=42,
+                gitlab_username=owner_id,
+                gitlab_name=owner_id.title(),
+            )
+        )
+    )
+    return store
 
 
 @pytest.mark.parametrize("is_vestack_deployment", [False, True])
@@ -1300,10 +1342,7 @@ def test_github_app_webhook_ignores_disabled_repository(
 def test_gitlab_app_projects_include_review_enablement_and_create_webhook(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("VEADK_GITLAB_BASE_URL", "https://gitlab.example.com")
-    monkeypatch.setenv("VEADK_GITLAB_TOKEN", "gitlab-token")
-    monkeypatch.setenv("VEADK_GITLAB_WEBHOOK_SECRET", "secret")
-    monkeypatch.setenv("VEADK_STUDIO_PUBLIC_BASE_URL", "https://studio.example.com")
+    _configure_gitlab_oauth(monkeypatch)
     calls: list[tuple[str, int]] = []
 
     class _FakeGitLabAppClient:
@@ -1321,6 +1360,7 @@ def test_gitlab_app_projects_include_review_enablement_and_create_webhook(
                     namespace="Group",
                     web_url="https://gitlab.example.com/Group/nice",
                     private=False,
+                    access_level=40,
                 )
             ]
 
@@ -1329,6 +1369,7 @@ def test_gitlab_app_projects_include_review_enablement_and_create_webhook(
 
     monkeypatch.setattr(frontend_sandbox, "GitLabAppClient", _FakeGitLabAppClient)
     storage = _FakeTosClient()
+    _save_gitlab_oauth_credential(storage)
     client = TestClient(_app(_FakeGateway(), gitlab_app_review_storage_client=storage))
 
     save_response = client.put(
@@ -1353,9 +1394,9 @@ def test_gitlab_app_projects_include_review_enablement_and_create_webhook(
             "baseUrl": "https://gitlab.example.com",
             "projectId": 123,
             "pathWithNamespace": "Group/nice",
-            "credentialOwner": "gitlab-app",
-            "credentialId": "managed",
-            "credentialType": "managed",
+            "credentialOwner": "alice",
+            "credentialId": "cred-1",
+            "credentialType": "oauth",
             "webhookId": 0,
             "enabled": True,
             "status": "active",
@@ -1369,9 +1410,9 @@ def test_gitlab_app_projects_include_review_enablement_and_create_webhook(
             "baseUrl": "https://gitlab.example.com",
             "projectId": 123,
             "pathWithNamespace": "Group/nice",
-            "credentialOwner": "gitlab-app",
-            "credentialId": "managed",
-            "credentialType": "managed",
+            "credentialOwner": "alice",
+            "credentialId": "cred-1",
+            "credentialType": "oauth",
             "webhookId": 0,
             "enabled": False,
             "status": "disabled",
@@ -1390,34 +1431,83 @@ def test_gitlab_app_projects_include_review_enablement_and_create_webhook(
         "private": False,
         "reviewEnabled": False,
         "permissionsNote": "",
-        "accessLevel": 0,
-        "canManageWebhooks": False,
+        "accessLevel": 40,
+        "canManageWebhooks": True,
         "reviewBindingStatus": "disabled",
         "reviewBindingReason": "用户已关闭自动评审。",
-        "reviewCredentialOwner": "gitlab-app",
-        "reviewCredentialType": "managed",
+        "reviewCredentialOwner": "alice",
+        "reviewCredentialType": "oauth",
     }
     assert calls == [("hook", 123)]
 
 
-def test_gitlab_oauth_project_binding_without_managed_token(
+def test_gitlab_app_projects_tolerate_legacy_project_binding(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("VEADK_GITLAB_BASE_URL", "https://gitlab.example.com")
-    monkeypatch.delenv("VEADK_GITLAB_TOKEN", raising=False)
-    monkeypatch.setenv("VEADK_GITLAB_WEBHOOK_SECRET", "secret")
-    monkeypatch.setenv("VEADK_STUDIO_PUBLIC_BASE_URL", "https://studio.example.com")
-    monkeypatch.setenv("VEADK_GITLAB_OAUTH_CLIENT_ID", "client-id")
-    monkeypatch.setenv("VEADK_GITLAB_OAUTH_CLIENT_SECRET", "client-secret")
-    monkeypatch.setenv(
-        "VEADK_GITLAB_OAUTH_REDIRECT_URI",
-        "https://studio.example.com/web/gitlab/oauth/callback",
-    )
-    tokens: list[tuple[str, str]] = []
+    _configure_gitlab_oauth(monkeypatch)
 
     class _FakeGitLabAppClient:
         def __init__(self, config: object) -> None:
-            tokens.append((config.token, config.token_auth_scheme))
+            del config
+
+        async def projects(self) -> list[GitLabProject]:
+            return [
+                GitLabProject(
+                    instance_id="default",
+                    base_url="https://gitlab.example.com",
+                    project_id=123,
+                    path_with_namespace="Group/nice",
+                    name="nice",
+                    namespace="Group",
+                    web_url="https://gitlab.example.com/Group/nice",
+                    private=False,
+                    access_level=40,
+                )
+            ]
+
+    monkeypatch.setattr(frontend_sandbox, "GitLabAppClient", _FakeGitLabAppClient)
+    storage = _FakeTosClient()
+    _save_gitlab_oauth_credential(storage)
+    storage.objects[("studio-state", GITLAB_REVIEW_PROJECTS_KEY)] = json.dumps(
+        {
+            "projects": [
+                {
+                    "instanceId": "default",
+                    "baseUrl": "https://gitlab.example.com",
+                    "projectId": 123,
+                    "pathWithNamespace": "Group/nice",
+                    "enabled": True,
+                    "status": "active",
+                }
+            ]
+        }
+    ).encode("utf-8")
+    client = TestClient(_app(_FakeGateway(), gitlab_app_review_storage_client=storage))
+
+    response = client.get(
+        "/web/gitlab/app/projects",
+        headers={"X-Test-User": "alice"},
+    )
+
+    assert response.status_code == 200
+    project = response.json()["projects"][0]
+    assert project["reviewEnabled"] is False
+    assert project["reviewBindingStatus"] == "auth_invalid"
+    assert (
+        project["reviewBindingReason"]
+        == "历史项目绑定缺少 OAuth 授权，请重新启用自动评审。"
+    )
+
+
+def test_gitlab_oauth_project_binding_uses_user_credential(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_gitlab_oauth(monkeypatch)
+    tokens: list[str] = []
+
+    class _FakeGitLabAppClient:
+        def __init__(self, config: object) -> None:
+            tokens.append(config.token)
 
         async def projects(self) -> list[GitLabProject]:
             return [
@@ -1440,25 +1530,7 @@ def test_gitlab_oauth_project_binding_without_managed_token(
 
     monkeypatch.setattr(frontend_sandbox, "GitLabAppClient", _FakeGitLabAppClient)
     storage = _FakeTosClient()
-    store = TosGitLabAppReviewProjectStore(
-        bucket="studio-state",
-        client_factory=lambda: storage,
-    )
-    asyncio.run(
-        store.save_oauth_credential(
-            GitLabOAuthCredential(
-                credential_id="cred-1",
-                owner_id="alice",
-                base_url="https://gitlab.example.com",
-                access_token="oauth-token",
-                refresh_token="refresh-token",
-                expires_at=0,
-                gitlab_user_id=42,
-                gitlab_username="alice",
-                gitlab_name="Alice",
-            )
-        )
-    )
+    _save_gitlab_oauth_credential(storage)
     client = TestClient(_app(_FakeGateway(), gitlab_app_review_storage_client=storage))
 
     config_response = client.get(
@@ -1467,7 +1539,7 @@ def test_gitlab_oauth_project_binding_without_managed_token(
     )
     save_response = client.put(
         "/web/gitlab/app/review-projects",
-        json={"projectId": 123, "reviewEnabled": True, "credentialMode": "oauth"},
+        json={"projectId": 123, "reviewEnabled": True},
         headers={"X-Test-User": "alice"},
     )
 
@@ -1489,14 +1561,13 @@ def test_gitlab_oauth_project_binding_without_managed_token(
             "reason": "",
         }
     ]
-    assert tokens == [("oauth-token", "bearer")]
+    assert tokens == ["oauth-token"]
 
 
-def test_gitlab_expired_oauth_does_not_fallback_to_managed_token(
+def test_gitlab_expired_oauth_requires_reconnect(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("VEADK_GITLAB_BASE_URL", "https://gitlab.example.com")
-    monkeypatch.setenv("VEADK_GITLAB_TOKEN", "managed-token")
     monkeypatch.setenv("VEADK_GITLAB_WEBHOOK_SECRET", "secret")
     monkeypatch.setenv("VEADK_STUDIO_PUBLIC_BASE_URL", "https://studio.example.com")
     monkeypatch.setenv("VEADK_GITLAB_OAUTH_CLIENT_ID", "client-id")
@@ -1516,7 +1587,7 @@ def test_gitlab_expired_oauth_does_not_fallback_to_managed_token(
 
     class _UnexpectedGitLabAppClient:
         def __init__(self, config: object) -> None:
-            raise AssertionError(f"unexpected fallback to {config.token}")
+            raise AssertionError(f"unexpected GitLab request with {config.token}")
 
     monkeypatch.setattr(frontend_sandbox, "GitLabOAuthClient", _FailingOAuthClient)
     monkeypatch.setattr(frontend_sandbox, "GitLabAppClient", _UnexpectedGitLabAppClient)
@@ -1555,15 +1626,7 @@ def test_gitlab_expired_oauth_does_not_fallback_to_managed_token(
 def test_gitlab_oauth_start_url_returns_authorization_url(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("VEADK_GITLAB_BASE_URL", "https://gitlab.example.com")
-    monkeypatch.delenv("VEADK_GITLAB_TOKEN", raising=False)
-    monkeypatch.setenv("VEADK_GITLAB_WEBHOOK_SECRET", "secret")
-    monkeypatch.setenv("VEADK_GITLAB_OAUTH_CLIENT_ID", "client-id")
-    monkeypatch.setenv("VEADK_GITLAB_OAUTH_CLIENT_SECRET", "client-secret")
-    monkeypatch.setenv(
-        "VEADK_GITLAB_OAUTH_REDIRECT_URI",
-        "https://studio.example.com/web/gitlab/oauth/callback",
-    )
+    _configure_gitlab_oauth(monkeypatch)
     client = TestClient(
         _app(_FakeGateway(), gitlab_app_review_storage_client=_FakeTosClient())
     )
@@ -1584,10 +1647,7 @@ def test_gitlab_oauth_start_url_returns_authorization_url(
 def test_gitlab_app_webhook_starts_merge_request_review(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("VEADK_GITLAB_BASE_URL", "https://gitlab.example.com")
-    monkeypatch.setenv("VEADK_GITLAB_TOKEN", "gitlab-token")
-    monkeypatch.setenv("VEADK_GITLAB_WEBHOOK_SECRET", "secret")
-    monkeypatch.setenv("VEADK_STUDIO_PUBLIC_BASE_URL", "https://studio.example.com")
+    _configure_gitlab_oauth(monkeypatch)
 
     class _FakeGitLabAppClient:
         def __init__(self, config: object) -> None:
@@ -1604,6 +1664,7 @@ def test_gitlab_app_webhook_starts_merge_request_review(
                     namespace="Group",
                     web_url="https://gitlab.example.com/Group/nice",
                     private=False,
+                    access_level=40,
                 )
             ]
 
@@ -1616,6 +1677,7 @@ def test_gitlab_app_webhook_starts_merge_request_review(
 
     monkeypatch.setattr(frontend_sandbox, "GitLabAppClient", _FakeGitLabAppClient)
     storage = _FakeTosClient()
+    _save_gitlab_oauth_credential(storage)
     gateway = _FakeGateway()
     client = TestClient(_app(gateway, gitlab_app_review_storage_client=storage))
     assert (
@@ -1677,7 +1739,7 @@ def test_gitlab_app_webhook_starts_merge_request_review(
     }
     assert gateway.display_names[-1] == "MR Review: Group/nice!7"
     assert gateway.envs[-1] == {
-        "GITLAB_TOKEN": "gitlab-token",
+        "GITLAB_TOKEN": "oauth-token",
         "GITLAB_API_BASE": "https://gitlab.example.com/api/v4",
         "GIT_TERMINAL_PROMPT": "0",
     }
@@ -1686,9 +1748,7 @@ def test_gitlab_app_webhook_starts_merge_request_review(
 def test_gitlab_manual_review_bounds_long_session_display_name(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("VEADK_GITLAB_BASE_URL", "https://gitlab.example.com")
-    monkeypatch.setenv("VEADK_GITLAB_TOKEN", "gitlab-token")
-    monkeypatch.setenv("VEADK_GITLAB_WEBHOOK_SECRET", "secret")
+    _configure_gitlab_oauth(monkeypatch)
     long_path = "Group/veadk-mr-review-test-with-a-very-long-project-name"
 
     class _FakeGitLabAppClient:
@@ -1710,10 +1770,10 @@ def test_gitlab_manual_review_bounds_long_session_display_name(
             ]
 
     monkeypatch.setattr(frontend_sandbox, "GitLabAppClient", _FakeGitLabAppClient)
+    storage = _FakeTosClient()
+    _save_gitlab_oauth_credential(storage)
     gateway = _FakeGateway()
-    client = TestClient(
-        _app(gateway, gitlab_app_review_storage_client=_FakeTosClient())
-    )
+    client = TestClient(_app(gateway, gitlab_app_review_storage_client=storage))
 
     response = client.post(
         "/web/gitlab/merge-request-reviews",
@@ -1737,9 +1797,7 @@ def test_gitlab_manual_review_bounds_long_session_display_name(
 def test_gitlab_app_webhook_ignores_disabled_project(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("VEADK_GITLAB_BASE_URL", "https://gitlab.example.com")
-    monkeypatch.setenv("VEADK_GITLAB_TOKEN", "gitlab-token")
-    monkeypatch.setenv("VEADK_GITLAB_WEBHOOK_SECRET", "secret")
+    _configure_gitlab_oauth(monkeypatch)
 
     class _FakeGitLabAppClient:
         def __init__(self, config: object) -> None:

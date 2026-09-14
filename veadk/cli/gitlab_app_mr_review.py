@@ -34,11 +34,8 @@ from veadk.cli.github_app_pr_review import PageRequest, PageResult, _status_code
 
 GITLAB_DEFAULT_BASE_URL = "https://gitlab.com"
 GITLAB_BASE_URL_ENV = "VEADK_GITLAB_BASE_URL"
-GITLAB_TOKEN_ENV = "VEADK_GITLAB_TOKEN"
 GITLAB_WEBHOOK_SECRET_ENV = "VEADK_GITLAB_WEBHOOK_SECRET"
 GITLAB_GROUP_ID_OR_PATH_ENV = "VEADK_GITLAB_GROUP_ID_OR_PATH"
-GITLAB_REVIEW_OWNER_ID_ENV = "VEADK_GITLAB_REVIEW_OWNER_ID"
-GITLAB_REVIEW_CREATOR_ENV = "VEADK_GITLAB_REVIEW_CREATOR"
 GITLAB_OAUTH_CLIENT_ID_ENV = "VEADK_GITLAB_OAUTH_CLIENT_ID"
 GITLAB_OAUTH_CLIENT_SECRET_ENV = "VEADK_GITLAB_OAUTH_CLIENT_SECRET"
 GITLAB_OAUTH_REDIRECT_URI_ENV = "VEADK_GITLAB_OAUTH_REDIRECT_URI"
@@ -66,14 +63,11 @@ class GitLabAppReviewStorageUnavailable(GitLabAppReviewError):
 @dataclass(frozen=True)
 class GitLabAppConfig:
     base_url: str
-    token: str
     webhook_secret: str
+    token: str = ""
     group_id_or_path: str = ""
-    review_owner_id: str = "gitlab-app"
-    review_creator_name: str = "GitLab App"
     studio_public_base_url: str = ""
     instance_id: str = "default"
-    token_auth_scheme: str = "private_token"
 
     @property
     def api_root(self) -> str:
@@ -420,21 +414,28 @@ class TosGitLabAppReviewProjectStore:
             status = _project_binding_status(_payload_text(item, "status") or "active")
             if enabled is None:
                 enabled = status == "active"
+            credential_id = _payload_text(item, "credentialId")
+            credential_owner = _payload_text(item, "credentialOwner") or _payload_text(
+                item, "ownerId"
+            )
+            credential_type = _credential_type(_payload_text(item, "credentialType"))
+            reason = _payload_text(item, "reason")[:240]
+            if not credential_id or credential_id == "managed":
+                enabled = False
+                status = "auth_invalid"
+                reason = reason or "历史项目绑定缺少 OAuth 授权，请重新启用自动评审。"
             bindings[project_key(instance_id, project_id)] = GitLabProjectBinding(
                 instance_id=instance_id,
                 base_url=_payload_text(item, "baseUrl"),
                 project_id=project_id,
                 path_with_namespace=_payload_text(item, "pathWithNamespace"),
-                credential_owner=_payload_text(item, "credentialOwner")
-                or _payload_text(item, "ownerId"),
-                credential_id=_payload_text(item, "credentialId"),
-                credential_type=_credential_type(
-                    _payload_text(item, "credentialType") or "managed"
-                ),
+                credential_owner=credential_owner,
+                credential_id=credential_id,
+                credential_type=credential_type,
                 webhook_id=_nonnegative_int(item.get("webhookId")),
                 enabled=bool(enabled),
                 status=status,
-                reason=_payload_text(item, "reason")[:240],
+                reason=reason,
             )
         return bindings
 
@@ -453,9 +454,9 @@ class TosGitLabAppReviewProjectStore:
                 base_url=project.base_url,
                 project_id=project.project_id,
                 path_with_namespace=project.path_with_namespace,
-                credential_owner=previous.credential_owner if previous else "managed",
-                credential_id=previous.credential_id if previous else "managed",
-                credential_type=previous.credential_type if previous else "managed",
+                credential_owner=previous.credential_owner if previous else "",
+                credential_id=previous.credential_id if previous else "",
+                credential_type=previous.credential_type if previous else "oauth",
                 webhook_id=previous.webhook_id if previous else 0,
                 enabled=True,
                 status=previous.status if previous else "active",
@@ -838,10 +839,7 @@ class GitLabAppClient:
         self, method: str, path: str, *, json: dict[str, object] | None = None
     ) -> Any:
         headers = {"Accept": "application/json"}
-        if self._config.token_auth_scheme == "bearer":
-            headers["Authorization"] = f"Bearer {self._config.token}"
-        else:
-            headers["PRIVATE-TOKEN"] = self._config.token
+        headers["Authorization"] = f"Bearer {self._config.token}"
         try:
             async with httpx.AsyncClient(timeout=self._timeout) as client:
                 response = await client.request(
@@ -976,7 +974,7 @@ def _load_gitlab_base_url() -> str:
     )
     missing = [name for name, value in ((GITLAB_BASE_URL_ENV, base_url),) if not value]
     if missing:
-        raise GitLabAppReviewError("GitLab App 配置不完整：" + "、".join(missing))
+        raise GitLabAppReviewError("GitLab 集成配置不完整：" + "、".join(missing))
     parsed = urlparse(base_url)
     if (
         parsed.scheme != "https"
@@ -991,34 +989,24 @@ def _load_gitlab_base_url() -> str:
     return base_url
 
 
-def load_gitlab_app_config(*, require_token: bool = True) -> GitLabAppConfig | None:
+def load_gitlab_app_config() -> GitLabAppConfig | None:
     base_url = _load_gitlab_base_url()
-    token = (os.getenv(GITLAB_TOKEN_ENV) or "").strip()
     webhook_secret = (os.getenv(GITLAB_WEBHOOK_SECRET_ENV) or "").strip()
     explicit_base_url = (os.getenv(GITLAB_BASE_URL_ENV) or "").strip()
     oauth_configured = gitlab_oauth_configured()
-    if not any((explicit_base_url, token, webhook_secret, oauth_configured)):
+    if not any((explicit_base_url, webhook_secret, oauth_configured)):
         return None
     missing = []
-    if require_token and not token:
-        missing.append(GITLAB_TOKEN_ENV)
     if not webhook_secret:
         missing.append(GITLAB_WEBHOOK_SECRET_ENV)
     if missing:
-        raise GitLabAppReviewError("GitLab App 配置不完整：" + "、".join(missing))
+        raise GitLabAppReviewError("GitLab 集成配置不完整：" + "、".join(missing))
     return GitLabAppConfig(
         base_url=base_url,
-        token=token,
         webhook_secret=webhook_secret,
         group_id_or_path=(os.getenv(GITLAB_GROUP_ID_OR_PATH_ENV) or "")
         .strip()
         .strip("/"),
-        review_owner_id=(os.getenv(GITLAB_REVIEW_OWNER_ID_ENV) or "gitlab-app").strip()
-        or "gitlab-app",
-        review_creator_name=(
-            os.getenv(GITLAB_REVIEW_CREATOR_ENV) or "GitLab App"
-        ).strip()
-        or "GitLab App",
         studio_public_base_url=(os.getenv(STUDIO_PUBLIC_BASE_URL_ENV) or "")
         .strip()
         .rstrip("/"),
@@ -1063,7 +1051,7 @@ def gitlab_app_public_config(
     credential: GitLabOAuthCredential | None = None,
 ) -> dict[str, object]:
     try:
-        config = load_gitlab_app_config(require_token=False)
+        config = load_gitlab_app_config()
         oauth_config = load_gitlab_oauth_config()
     except GitLabAppReviewError as error:
         return {
@@ -1074,30 +1062,25 @@ def gitlab_app_public_config(
             "oauthConfigured": False,
             "oauthConnected": False,
             "oauthUser": None,
-            "managedTokenConfigured": False,
         }
     if config is None:
         return {
             "configured": False,
             "baseUrl": "",
             "webhookUrl": "",
-            "reason": "管理员未配置 GitLab App。",
+            "reason": "管理员未配置 GitLab OAuth。",
             "oauthConfigured": oauth_config is not None,
             "oauthConnected": False,
             "oauthUser": None,
-            "managedTokenConfigured": False,
         }
     return {
-        "configured": bool(config.token or oauth_config is not None),
+        "configured": oauth_config is not None,
         "baseUrl": config.base_url,
         "webhookUrl": config.webhook_url,
-        "reason": ""
-        if config.token or oauth_config is not None
-        else "管理员未配置 GitLab OAuth 或托管 Token。",
+        "reason": "" if oauth_config is not None else "管理员未配置 GitLab OAuth。",
         "oauthConfigured": oauth_config is not None,
         "oauthConnected": credential is not None,
         "oauthUser": credential.to_public_dict() if credential is not None else None,
-        "managedTokenConfigured": bool(config.token),
     }
 
 
@@ -1478,6 +1461,8 @@ def _project_binding_status(value: str) -> str:
 
 
 def _credential_type(value: str) -> str:
-    if value not in {"oauth", "managed"}:
+    if value in {"", "managed"}:
+        return "oauth"
+    if value != "oauth":
         raise GitLabAppReviewStorageUnavailable("MR 自动评审凭证类型无效。")
     return value
