@@ -24,6 +24,7 @@ import os
 import re
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -812,7 +813,8 @@ def ensure_studio_bundle_agentkit_cli(
     )
     try:
         with zipfile.ZipFile(bundle, "a") as archive:
-            archive.write(
+            _write_zip_file(
+                archive,
                 cli_archive,
                 _AGENTKIT_CLI_ARCHIVE,
                 compress_type=zipfile.ZIP_STORED,
@@ -1361,11 +1363,33 @@ def _validate_public_wheel_license(path: Path, expected_name: str) -> None:
         )
 
 
+def _write_zip_file(
+    archive: zipfile.ZipFile,
+    path: Path,
+    relative: Path | str,
+    *,
+    compress_type: int,
+) -> None:
+    relative_path = Path(relative)
+    info = zipfile.ZipInfo.from_file(path, relative_path)
+    info.create_system = 3
+    mode = 0o755 if relative_path.as_posix() == "run.sh" else 0o644
+    info.external_attr = (stat.S_IFREG | mode) << 16
+    info.compress_type = compress_type
+    with path.open("rb") as input_file, archive.open(info, "w") as output_file:
+        shutil.copyfileobj(input_file, output_file)
+
+
 def _zip_directory(source: Path, destination: Path) -> None:
     with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for path in sorted(source.rglob("*")):
             if path.is_file():
-                archive.write(path, path.relative_to(source))
+                _write_zip_file(
+                    archive,
+                    path,
+                    path.relative_to(source),
+                    compress_type=zipfile.ZIP_DEFLATED,
+                )
 
 
 def build_studio_release(

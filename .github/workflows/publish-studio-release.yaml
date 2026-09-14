@@ -224,6 +224,35 @@ jobs:
           test "${#bundle[@]}" -eq 1
           test "$(stat -c %s "${bundle[0]}")" -lt "$STUDIO_MAX_BUNDLE_BYTES"
 
+          permission_probe_root="$(mktemp -d)"
+          permission_probe="$permission_probe_root/package"
+          permission_probe_bin="$permission_probe_root/bin"
+          permission_probe_state="$permission_probe_root/state"
+          mkdir "$permission_probe" "$permission_probe_bin" "$permission_probe_state"
+          chmod 755 "$permission_probe_root" "$permission_probe" "$permission_probe_bin"
+          sudo chown nobody "$permission_probe_state"
+          chmod 700 "$permission_probe_state"
+          unzip -q "${bundle[0]}" -d "$permission_probe"
+          test "$(stat -c %a "$permission_probe/run.sh")" = "755"
+          test "$(stat -c %a "$permission_probe/agentkit-linux-x64.tar.gz")" = "644"
+          cat >"$permission_probe_bin/python3" <<'SH'
+          #!/bin/bash
+          set -eu
+          if [[ "$*" == *"veadk.cli.studio_companion"* ]]; then
+            test -r "$VEADK_STUDIO_AGENTKIT_CLI_ARCHIVE"
+            touch "$PERMISSION_PROBE_STATE/companion-started"
+            while [ ! -f "$PERMISSION_PROBE_STATE/studio-started" ]; do sleep 0.01; done
+            exit 0
+          fi
+          touch "$PERMISSION_PROBE_STATE/studio-started"
+          while [ ! -f "$PERMISSION_PROBE_STATE/companion-started" ]; do sleep 0.01; done
+          SH
+          chmod 755 "$permission_probe_bin/python3"
+          sudo -u nobody -H env \
+            PATH="$permission_probe_bin:/usr/bin:/bin" \
+            PERMISSION_PROBE_STATE="$permission_probe_state" \
+            "$permission_probe/run.sh"
+
           smoke_studio() {
             provider="$1"
             port="$2"

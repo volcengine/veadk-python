@@ -35,6 +35,8 @@ from frontend.service.studio_release_server.publisher import (
     validate_studio_bundle_dependencies,
 )
 
+from veadk.cli import studio_release as studio_release_module
+
 from veadk.cli.studio_dependencies import (
     STUDIO_AGENTKIT_CLI_ARTIFACT,
     STUDIO_DEPENDENCY_SOURCES,
@@ -68,6 +70,32 @@ def _manifest(content: bytes = b"bundle") -> StudioReleaseManifest:
         created_at="2026-07-24T15:30:45+08:00",
         changelog=("新增版本选择", "修复自更新权限"),
     )
+
+
+def test_release_zip_normalizes_runtime_file_permissions(tmp_path: Path) -> None:
+    package = tmp_path / "package"
+    package.mkdir()
+    run_script = package / "run.sh"
+    run_script.write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
+    run_script.chmod(0o600)
+    cli_archive = package / "agentkit-linux-x64.tar.gz"
+    cli_archive.write_bytes(b"cli")
+    cli_archive.chmod(0o600)
+    regular_file = package / "requirements.txt"
+    regular_file.write_text("dependency\n", encoding="utf-8")
+    regular_file.chmod(0o700)
+    bundle = tmp_path / "bundle.zip"
+
+    studio_release_module._zip_directory(package, bundle)
+
+    with zipfile.ZipFile(bundle) as archive:
+        assert archive.getinfo("run.sh").create_system == 3
+        assert archive.getinfo("run.sh").external_attr >> 16 & 0o777 == 0o755
+        assert (
+            archive.getinfo("agentkit-linux-x64.tar.gz").external_attr >> 16 & 0o777
+            == 0o644
+        )
+        assert archive.getinfo("requirements.txt").external_attr >> 16 & 0o777 == 0o644
 
 
 class _FakeTosClient:

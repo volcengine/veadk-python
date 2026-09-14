@@ -956,6 +956,7 @@ def test_publisher_repairs_missing_agentkit_cli_before_manifest(
     dependency_wheels.mkdir()
     cli_archive = dependency_wheels / "agentkit-linux-x64.tar.gz"
     cli_archive.write_bytes(b"pinned-cli")
+    cli_archive.chmod(0o600)
     monkeypatch.setattr(
         release_publisher,
         "_AGENTKIT_CLI_ARCHIVE_SHA256",
@@ -972,6 +973,34 @@ def test_publisher_repairs_missing_agentkit_cli_before_manifest(
 
     with zipfile.ZipFile(bundle) as archive:
         assert archive.read("agentkit-linux-x64.tar.gz") == b"pinned-cli"
+        assert (
+            archive.getinfo("agentkit-linux-x64.tar.gz").external_attr >> 16 & 0o777
+            == 0o644
+        )
+
+
+def test_release_server_zip_normalizes_runtime_file_permissions(
+    tmp_path: Path,
+) -> None:
+    package = tmp_path / "package"
+    package.mkdir()
+    run_script = package / "run.sh"
+    run_script.write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
+    run_script.chmod(0o600)
+    cli_archive = package / "agentkit-linux-x64.tar.gz"
+    cli_archive.write_bytes(b"cli")
+    cli_archive.chmod(0o600)
+    bundle = tmp_path / "bundle.zip"
+
+    release_publisher._zip_directory(package, bundle)
+
+    with zipfile.ZipFile(bundle) as archive:
+        assert archive.getinfo("run.sh").create_system == 3
+        assert archive.getinfo("run.sh").external_attr >> 16 & 0o777 == 0o755
+        assert (
+            archive.getinfo("agentkit-linux-x64.tar.gz").external_attr >> 16 & 0o777
+            == 0o644
+        )
 
 
 def test_publisher_rejects_bad_agentkit_cli_in_final_bundle(
