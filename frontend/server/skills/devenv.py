@@ -46,17 +46,6 @@ from typing import Any, Literal, cast
 
 import requests
 from agentkit.auth.errors import NetworkError
-from agentkit.sdk.skills import types as skills_types
-from agentkit.sdk.skills.client import AgentkitSkillsClient
-from agentkit.sdk.tools import types as tools_types
-from agentkit.sdk.tools.client import AgentkitToolsClient
-from agentkit.toolkit.cli.sandbox.env_config import build_exec_session_envs
-from agentkit.toolkit.cli.sandbox.sandbox_client import (
-    SANDBOX_FILE_DOWNLOAD_ROUTE,
-    build_bash_exec_url,
-    build_exec_url,
-    build_file_url,
-)
 from fastapi import HTTPException, Query, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import Response, StreamingResponse
@@ -67,21 +56,8 @@ from veadk.cli.agentkit_sandbox_region import (
     is_agentkit_resource_not_found,
     sandbox_region_candidates,
 )
-from veadk.cli.agentkit_session_metadata import (
-    build_create_session_request,
-    build_list_sessions_request,
-    call_session_client,
-    session_display_name,
-    session_username,
-)
-from veadk.cli.frontend_skill_creator import (
-    _safe_json_response,
-    _sandbox_model_config,
-    _validated_activities,
-)
 from veadk.cli.studio_model_catalog import provider_allows_model
 from veadk.cli.studio_sandbox_tools import studio_sandbox_agent_model_name
-from veadk.skills.skill import Skill
 from veadk.utils.cloud_provider import cloud_provider_from_env
 from veadk.utils.logger import get_logger
 
@@ -90,6 +66,125 @@ from .prompts import STYLE_PRESETS, decorate_intent
 from .repair import skill_workbench_runner_source
 
 logger = get_logger(__name__)
+
+
+def AgentkitSkillsClient(*args: Any, **kwargs: Any) -> Any:
+    """Construct the Skill client only when a workbench request needs it."""
+    from agentkit.sdk.skills.client import AgentkitSkillsClient as _Client
+
+    return _Client(*args, **kwargs)
+
+
+def AgentkitToolsClient(*args: Any, **kwargs: Any) -> Any:
+    """Construct the Tool client only when a workbench request needs it."""
+    from agentkit.sdk.tools.client import AgentkitToolsClient as _Client
+
+    return _Client(*args, **kwargs)
+
+
+def _skills_types() -> Any:
+    from agentkit.sdk.skills import types
+
+    return types
+
+
+def _tools_types() -> Any:
+    from agentkit.sdk.tools import types
+
+    return types
+
+
+def build_exec_session_envs(*args: Any, **kwargs: Any) -> Any:
+    from agentkit.toolkit.cli.sandbox.env_config import (
+        build_exec_session_envs as _build_exec_session_envs,
+    )
+
+    return _build_exec_session_envs(*args, **kwargs)
+
+
+def build_bash_exec_url(*args: Any, **kwargs: Any) -> str:
+    from agentkit.toolkit.cli.sandbox.sandbox_client import (
+        build_bash_exec_url as _build_bash_exec_url,
+    )
+
+    return _build_bash_exec_url(*args, **kwargs)
+
+
+def build_exec_url(*args: Any, **kwargs: Any) -> str:
+    from agentkit.toolkit.cli.sandbox.sandbox_client import (
+        build_exec_url as _build_exec_url,
+    )
+
+    return _build_exec_url(*args, **kwargs)
+
+
+def build_file_url(*args: Any, **kwargs: Any) -> str:
+    from agentkit.toolkit.cli.sandbox.sandbox_client import (
+        build_file_url as _build_file_url,
+    )
+
+    return _build_file_url(*args, **kwargs)
+
+
+def _sandbox_file_download_route() -> str:
+    from agentkit.toolkit.cli.sandbox.sandbox_client import (
+        SANDBOX_FILE_DOWNLOAD_ROUTE,
+    )
+
+    return SANDBOX_FILE_DOWNLOAD_ROUTE
+
+
+def _safe_json_response(*args: Any, **kwargs: Any) -> Any:
+    from veadk.cli.frontend_skill_creator import _safe_json_response as _impl
+
+    return _impl(*args, **kwargs)
+
+
+def _sandbox_model_config(*args: Any, **kwargs: Any) -> Any:
+    from veadk.cli.frontend_skill_creator import _sandbox_model_config as _impl
+
+    return _impl(*args, **kwargs)
+
+
+def _validated_activities(*args: Any, **kwargs: Any) -> Any:
+    from veadk.cli.frontend_skill_creator import _validated_activities as _impl
+
+    return _impl(*args, **kwargs)
+
+
+def build_create_session_request(*args: Any, **kwargs: Any) -> Any:
+    from veadk.cli.agentkit_session_metadata import (
+        build_create_session_request as _impl,
+    )
+
+    return _impl(*args, **kwargs)
+
+
+def build_list_sessions_request(*args: Any, **kwargs: Any) -> Any:
+    from veadk.cli.agentkit_session_metadata import (
+        build_list_sessions_request as _impl,
+    )
+
+    return _impl(*args, **kwargs)
+
+
+def call_session_client(*args: Any, **kwargs: Any) -> Any:
+    from veadk.cli.agentkit_session_metadata import call_session_client as _impl
+
+    return _impl(*args, **kwargs)
+
+
+def session_display_name(*args: Any, **kwargs: Any) -> str:
+    from veadk.cli.agentkit_session_metadata import session_display_name as _impl
+
+    return _impl(*args, **kwargs)
+
+
+def session_username(*args: Any, **kwargs: Any) -> str:
+    from veadk.cli.agentkit_session_metadata import session_username as _impl
+
+    return _impl(*args, **kwargs)
+
 
 _TOOL_ID_ENV = "SANDBOX_DEV"
 _DEVENV_IMAGE_ENV = "VEADK_DEVENV_IMAGE"
@@ -2235,7 +2330,7 @@ class SkillWorkbenchService:
         for attempt in range(1, _ARTIFACT_READ_ATTEMPTS + 1):
             try:
                 response = requests.get(
-                    build_file_url(endpoint, SANDBOX_FILE_DOWNLOAD_ROUTE),
+                    build_file_url(endpoint, _sandbox_file_download_route()),
                     params={"path": path, "change_policy": "abort"},
                     timeout=(10, 120),
                 )
@@ -2851,7 +2946,7 @@ class SkillWorkbenchService:
                 for item in SkillVersionRepository._versions(client, effective_skill_id)
             }
             client.update_skill(
-                skills_types.UpdateSkillRequest(
+                _skills_types().UpdateSkillRequest(
                     Id=effective_skill_id,
                     Name=archive.name,
                     Description=archive.description,
@@ -2862,7 +2957,7 @@ class SkillWorkbenchService:
             )
         else:
             created = client.create_skill(
-                skills_types.CreateSkillRequest(
+                _skills_types().CreateSkillRequest(
                     Name=archive.name,
                     Description=archive.description,
                     TosUrl=tos_url,
@@ -2892,10 +2987,10 @@ class SkillWorkbenchService:
         if body.skill_space_ids:
             report("publishing", "正在发布到技能空间")
             client.publish_skill_to_skill_space(
-                skills_types.PublishSkillToSkillSpaceRequest(
+                _skills_types().PublishSkillToSkillSpaceRequest(
                     SkillSpaces=body.skill_space_ids,
                     Skills=[
-                        skills_types.SkillBasicInfo(
+                        _skills_types().SkillBasicInfo(
                             SkillId=effective_skill_id, Version=version
                         )
                     ],
@@ -3002,7 +3097,7 @@ class SkillWorkbenchService:
             )
         client = self._skills_client_factory(source.region)
         try:
-            version_request = skills_types.GetSkillVersionRequest(
+            version_request = _skills_types().GetSkillVersionRequest(
                 Id=source.skill_id,
                 SkillVersion=source.version,
             )
@@ -3035,7 +3130,7 @@ class SkillWorkbenchService:
                     status_code=404,
                 ) from version_error
             try:
-                info_request = skills_types.GetSkillInfoRequest(
+                info_request = _skills_types().GetSkillInfoRequest(
                     SkillName=source.skill_name,
                     SkillSpaceName=source.skill_space_name,
                     SkillSpaceId=source.skill_space_id,
@@ -3085,6 +3180,8 @@ class SkillWorkbenchService:
         tos_path = str(getattr(response, "tos_path", "") or "")
         if bucket and tos_path:
             from veadk.skills.materializer import _download_legacy_skill_space_skill
+
+            from veadk.skills.skill import Skill
 
             remote = Skill(
                 name=str(
@@ -3170,7 +3267,7 @@ class SkillWorkbenchService:
         return value
 
     def _get_tool(self, tool_id: str) -> Any:
-        request = tools_types.GetToolRequest(ToolId=tool_id)
+        request = _tools_types().GetToolRequest(ToolId=tool_id)
         for index, region in enumerate(sandbox_region_candidates(self._region)):
             try:
                 client = self._tools_client_factory(region)
@@ -3198,12 +3295,12 @@ class SkillWorkbenchService:
             try:
                 client = self._tools_client_factory(region)
                 for _page in range(100):
-                    list_request = tools_types.ListSessionsRequest(
+                    list_request = _tools_types().ListSessionsRequest(
                         ToolId=tool_id,
                         MaxResults=100,
                         NextToken=next_token,
                         Filters=[
-                            tools_types.FiltersItemForListSessions(
+                            _tools_types().FiltersItemForListSessions(
                                 Name="UserSessionId", Values=[job_id]
                             )
                         ],
@@ -3400,7 +3497,7 @@ class SkillWorkbenchService:
 
         def read_output() -> bytes:
             response = requests.get(
-                build_file_url(endpoint, SANDBOX_FILE_DOWNLOAD_ROUTE),
+                build_file_url(endpoint, _sandbox_file_download_route()),
                 params={"path": path, "change_policy": "abort"},
                 timeout=(10, 30),
             )
@@ -3826,7 +3923,7 @@ class SkillWorkbenchService:
         next_token: str | None = None
         seen_tokens: set[str] = set()
         for _page in range(100):
-            request = tools_types.ListSessionSnapshotsRequest(
+            request = _tools_types().ListSessionSnapshotsRequest(
                 ToolId=tool_id,
                 SessionId=session_id,
                 UserSessionId=job_id,
@@ -3906,7 +4003,7 @@ class SkillWorkbenchService:
         job_id: str,
     ) -> str | None:
         """Read and validate the authoritative state of one checkpoint."""
-        request = tools_types.GetSessionSnapshotRequest(
+        request = _tools_types().GetSessionSnapshotRequest(
             ToolId=tool_id,
             SnapshotId=snapshot_id,
         )
@@ -4011,7 +4108,7 @@ class SkillWorkbenchService:
                 )
                 return existing_session
             for _page in range(100):
-                list_request = tools_types.ListSessionSnapshotsRequest(
+                list_request = _tools_types().ListSessionSnapshotsRequest(
                     ToolId=tool_id,
                     UserSessionId=job_id,
                     MaxResults=100,
@@ -4054,7 +4151,7 @@ class SkillWorkbenchService:
             )
             resume_requested = True
             resumed = client.resume_session_from_snapshot(
-                tools_types.ResumeSessionFromSnapshotRequest(
+                _tools_types().ResumeSessionFromSnapshotRequest(
                     ToolId=tool_id,
                     SnapshotId=snapshot.snapshot_id,
                     CreateNewInstance=True,
@@ -4098,12 +4195,12 @@ class SkillWorkbenchService:
         next_token: str | None = None
         seen_tokens: set[str] = set()
         for _page in range(100):
-            request = tools_types.ListSessionsRequest(
+            request = _tools_types().ListSessionsRequest(
                 ToolId=tool_id,
                 MaxResults=100,
                 NextToken=next_token,
                 Filters=[
-                    tools_types.FiltersItemForListSessions(
+                    _tools_types().FiltersItemForListSessions(
                         Name="UserSessionId",
                         Values=[job_id],
                     )
@@ -4161,7 +4258,7 @@ class SkillWorkbenchService:
     ) -> dict[str, str]:
         deadline = time.monotonic() + 60
         while True:
-            get_request = tools_types.GetSessionRequest(
+            get_request = _tools_types().GetSessionRequest(
                 ToolId=tool_id,
                 SessionId=session_id,
             )
@@ -4299,7 +4396,7 @@ class SkillWorkbenchService:
         def delete_once() -> None:
             try:
                 client.delete_session(
-                    tools_types.DeleteSessionRequest(
+                    _tools_types().DeleteSessionRequest(
                         ToolId=tool_id,
                         SessionId=session_id,
                     )
