@@ -547,29 +547,27 @@ def _prepare_managed_sidecar_runtime_envs(
             "请返回模型配置后重新发布。"
         )
     runtime_envs.setdefault("MODEL_NAME", runtime_envs["MODEL_AGENT_NAME"])
-    effective_components = set(
-        sidecar_plan.get("effectiveComponents") or []
-        if isinstance(sidecar_plan, Mapping)
-        else []
-    )
     raw_structured_mcp = runtime_envs.get("MCP_SERVERS_JSON", "").strip()
-    try:
-        structured_mcp = json.loads(raw_structured_mcp) if raw_structured_mcp else []
-    except (TypeError, ValueError):
-        structured_mcp = []
-    has_structured_mcp = isinstance(structured_mcp, list) and bool(structured_mcp)
-    has_legacy_mcp = all(
-        runtime_envs.get(key, "").strip() for key in ("MCP_URLS", "MCP_API_KEY")
-    )
-    if (
-        effective_components & {"mcp_resilience", "sql_readonly"}
-        and not has_structured_mcp
-        and not has_legacy_mcp
-    ):
-        return (
-            "已选择 MCP 稳定性治理，请在“添加 MCP 工具”中配置至少一个 HTTP MCP "
-            "服务地址后重新发布；Bearer Token 仅在该服务需要认证时配置。"
+    if raw_structured_mcp:
+        from veadk.cli.legacy_runtime_recovery import (
+            LegacyRecoveryError,
+            recover_mcp_from_runtime_environment,
         )
+
+        try:
+            recovered_mcp = recover_mcp_from_runtime_environment(
+                {"MCP_SERVERS_JSON": raw_structured_mcp}
+            )
+        except LegacyRecoveryError as error:
+            return _mcp_deployment_error_detail(error.code)
+        if not recovered_mcp.tools:
+            # Historical managed Runtimes persist an explicit empty list when
+            # no user MCP exists.  The list is a valid source state, but the
+            # Sidecar process does not need an upstream configuration for it.
+            # Treat it as authoritative and remove any stale legacy fallback
+            # values so an update cannot accidentally reactivate an old MCP.
+            for key in ("MCP_SERVERS_JSON", "MCP_URLS", "MCP_API_KEY"):
+                runtime_envs.pop(key, None)
     from veadk.extensions.harness.sidecar import (
         MANAGED_HARNESS_SIDECAR_RUNTIME_COMMAND,
     )

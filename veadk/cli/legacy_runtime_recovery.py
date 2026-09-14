@@ -1348,7 +1348,11 @@ def recover_mcp_from_runtime_environment(
             payload = json.loads(raw_servers)
         except (TypeError, ValueError) as error:
             raise LegacyRecoveryError("legacy_mcp_servers_json_invalid") from error
-        if not isinstance(payload, list) or not 1 <= len(payload) <= 32:
+        # Managed Sidecar persists an explicit empty list when MCP-capable
+        # components are enabled but the user configured no MCP servers.  That
+        # is a valid, stable state and must survive later source-preserving
+        # updates without manufacturing a server or requiring new input.
+        if not isinstance(payload, list) or len(payload) > 32:
             raise LegacyRecoveryError("legacy_mcp_servers_json_invalid")
         tools: list[dict[str, Any]] = []
         seen_names: set[str] = set()

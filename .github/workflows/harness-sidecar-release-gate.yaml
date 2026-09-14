@@ -109,7 +109,8 @@ jobs:
           pids+=("$!")
           (
             python -m pytest -q \
-              tests/cli/test_legacy_runtime_recovery.py -k 'six_case_ or changed_unnamed_mcp_url'
+              tests/cli/test_legacy_runtime_recovery.py -k 'six_case_ or changed_unnamed_mcp_url or zero_mcp_servers_json' \
+              tests/extensions/harness/sidecar_runtime/test_sidecar.py::test_zero_structured_mcp_is_valid_and_does_not_reactivate_legacy_upstream
           ) > "$RUNNER_TEMP/sidecar-lifecycle.log" 2>&1 &
           pids+=("$!")
           (
