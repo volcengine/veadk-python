@@ -504,6 +504,7 @@ class StudioSelfUpdater:
                     function_id=self._settings.function_id,
                     path=str(package_dir),
                     environment_overrides=environment_overrides,
+                    normalize_studio_entrypoint=True,
                 )
             self._submitted_version = manifest.version
             self._set_progress("publishing", "已提交，正在等待新 Revision 发布")

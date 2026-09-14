@@ -17445,6 +17445,7 @@ def frontend_update(
                 path=str(package_dir),
                 environment_overrides=environment_overrides or None,
                 disable_gateway_cors=True,
+                normalize_studio_entrypoint=True,
             )
         except Exception as error:
             if _is_retryable_cloud_read_error(error):

@@ -252,6 +252,14 @@ jobs:
             PATH="$permission_probe_bin:/usr/bin:/bin" \
             PERMISSION_PROBE_STATE="$permission_probe_state" \
             "$permission_probe/run.sh"
+          sudo -u nobody -H rm \
+            "$permission_probe_state/companion-started" \
+            "$permission_probe_state/studio-started"
+          chmod 644 "$permission_probe/run.sh"
+          sudo -u nobody -H env \
+            PATH="$permission_probe_bin:/usr/bin:/bin" \
+            PERMISSION_PROBE_STATE="$permission_probe_state" \
+            bash "$permission_probe/run.sh"
 
           smoke_studio() {
             provider="$1"

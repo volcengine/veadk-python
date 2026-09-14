@@ -65,6 +65,13 @@ def test_sidecar_release_gate_runs_backend_and_frontend_in_parallel() -> None:
         in (backend_run)
     )
     assert "test_release_server_agentkit_cli_pin_matches_veadk" in backend_run
+    assert "test_smoke_gate_survives_platform_entrypoint_mode_normalization" in (
+        backend_run
+    )
+    assert "test_update_application_code_bundle_merges_only_explicit_environment" in (
+        backend_run
+    )
+    assert "test_vefaas_deploy_updates_existing_application_in_place" in backend_run
     assert "test_tos_dependency_store_accepts_manifest_pinned_agentkit_cli_version" in (
         backend_run
     )

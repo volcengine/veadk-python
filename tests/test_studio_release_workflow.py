@@ -107,6 +107,13 @@ def test_smoke_gate_executes_bundle_as_low_privilege_user() -> None:
     assert '"$permission_probe/run.sh"' in script
 
 
+def test_smoke_gate_survives_platform_entrypoint_mode_normalization() -> None:
+    script = _smoke_script()
+
+    assert 'chmod 644 "$permission_probe/run.sh"' in script
+    assert 'bash "$permission_probe/run.sh"' in script
+
+
 def test_verification_reuses_checked_inputs_and_rebuilds_current_source(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
