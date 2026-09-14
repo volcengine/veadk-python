@@ -523,7 +523,11 @@ See [deployment and operation](service/studio_release_notifier/README.md).
   cleanup before completing or cancelling. Reports show 0–100 display scores,
   execution success, evidence coverage, N/A counts, low-scoring and failed
   cases, versions, evidence severity, and cleanup status without a pass/fail
-  verdict. Evaluation failure never hides or rolls back the migration artifact.
+  verdict. Each raw judge score is rounded half up to a 0–100 integer before
+  aggregation. Case scores and dimension averages use those integers; the total
+  uses the rounded dimension averages. Each average rounds half up and excludes
+  N/A values, matching report validation and low-scoring case rankings.
+  Evaluation failure never hides or rolls back the migration artifact.
   Runtime deployment resolves and verifies the owned Session artifact on the
   server instead of trusting browser-provided files or entry points. The Dev
   Sandbox image must pin AgentKit CLI `0.52.16` and its SHA256 at image build
