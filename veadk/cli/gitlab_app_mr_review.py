@@ -20,10 +20,11 @@ import asyncio
 import hmac
 import json
 import os
+import time
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Any
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, urlencode, urlparse
 from uuid import uuid4
 
 import httpx
@@ -38,13 +39,20 @@ GITLAB_WEBHOOK_SECRET_ENV = "VEADK_GITLAB_WEBHOOK_SECRET"
 GITLAB_GROUP_ID_OR_PATH_ENV = "VEADK_GITLAB_GROUP_ID_OR_PATH"
 GITLAB_REVIEW_OWNER_ID_ENV = "VEADK_GITLAB_REVIEW_OWNER_ID"
 GITLAB_REVIEW_CREATOR_ENV = "VEADK_GITLAB_REVIEW_CREATOR"
+GITLAB_OAUTH_CLIENT_ID_ENV = "VEADK_GITLAB_OAUTH_CLIENT_ID"
+GITLAB_OAUTH_CLIENT_SECRET_ENV = "VEADK_GITLAB_OAUTH_CLIENT_SECRET"
+GITLAB_OAUTH_REDIRECT_URI_ENV = "VEADK_GITLAB_OAUTH_REDIRECT_URI"
 STUDIO_PUBLIC_BASE_URL_ENV = "VEADK_STUDIO_PUBLIC_BASE_URL"
 GITLAB_WEBHOOK_PATH = "/web/gitlab/app/webhook"
 GITLAB_REVIEW_PROJECTS_KEY = "veadk-studio/v1/gitlab-mr-review/projects.json"
 GITLAB_REVIEW_HISTORY_KEY = "veadk-studio/v1/gitlab-mr-review/history.json"
+GITLAB_OAUTH_CREDENTIALS_KEY = "veadk-studio/v1/gitlab-mr-review/credentials.json"
 _MAX_REVIEW_PROJECTS_BYTES = 128 * 1024
 _MAX_REVIEW_HISTORY_BYTES = 256 * 1024
+_MAX_OAUTH_CREDENTIALS_BYTES = 256 * 1024
 _MAX_REVIEW_HISTORY_ITEMS = 50
+_GITLAB_OAUTH_SCOPE = "api"
+_GITLAB_MIN_WEBHOOK_ACCESS_LEVEL = 40
 
 
 class GitLabAppReviewError(RuntimeError):
@@ -65,6 +73,7 @@ class GitLabAppConfig:
     review_creator_name: str = "GitLab App"
     studio_public_base_url: str = ""
     instance_id: str = "default"
+    token_auth_scheme: str = "private_token"
 
     @property
     def api_root(self) -> str:
@@ -78,6 +87,84 @@ class GitLabAppConfig:
 
 
 @dataclass(frozen=True)
+class GitLabOAuthConfig:
+    base_url: str
+    client_id: str
+    client_secret: str
+    redirect_uri: str
+
+    @property
+    def authorize_url(self) -> str:
+        return f"{self.base_url.rstrip('/')}/oauth/authorize"
+
+    @property
+    def token_url(self) -> str:
+        return f"{self.base_url.rstrip('/')}/oauth/token"
+
+    @property
+    def api_root(self) -> str:
+        return f"{self.base_url.rstrip('/')}/api/v4"
+
+
+@dataclass(frozen=True)
+class GitLabOAuthCredential:
+    credential_id: str
+    owner_id: str
+    base_url: str
+    access_token: str
+    refresh_token: str
+    expires_at: int
+    gitlab_user_id: int = 0
+    gitlab_username: str = ""
+    gitlab_name: str = ""
+
+    @property
+    def expired(self) -> bool:
+        return self.expires_at > 0 and self.expires_at <= int(time.time()) + 60
+
+    def to_public_dict(self) -> dict[str, object]:
+        return {
+            "credentialId": self.credential_id,
+            "ownerId": self.owner_id,
+            "baseUrl": self.base_url,
+            "gitlabUserId": self.gitlab_user_id,
+            "gitlabUsername": self.gitlab_username,
+            "gitlabName": self.gitlab_name,
+            "expiresAt": self.expires_at,
+        }
+
+
+@dataclass(frozen=True)
+class GitLabProjectBinding:
+    instance_id: str
+    base_url: str
+    project_id: int
+    path_with_namespace: str
+    credential_owner: str
+    credential_id: str
+    credential_type: str
+    webhook_id: int = 0
+    enabled: bool = True
+    status: str = "active"
+    reason: str = ""
+
+    def to_public_dict(self) -> dict[str, object]:
+        return {
+            "instanceId": self.instance_id,
+            "baseUrl": self.base_url,
+            "projectId": self.project_id,
+            "pathWithNamespace": self.path_with_namespace,
+            "credentialOwner": self.credential_owner,
+            "credentialId": self.credential_id,
+            "credentialType": self.credential_type,
+            "webhookId": self.webhook_id,
+            "enabled": self.enabled,
+            "status": self.status,
+            "reason": self.reason,
+        }
+
+
+@dataclass(frozen=True)
 class GitLabProject:
     instance_id: str
     base_url: str
@@ -88,8 +175,14 @@ class GitLabProject:
     web_url: str
     private: bool
     permissions_note: str = ""
+    access_level: int = 0
 
-    def to_public_dict(self, *, review_enabled: bool) -> dict[str, object]:
+    def to_public_dict(
+        self,
+        *,
+        review_enabled: bool,
+        review_binding: GitLabProjectBinding | None = None,
+    ) -> dict[str, object]:
         return {
             "instanceId": self.instance_id,
             "baseUrl": self.base_url,
@@ -101,6 +194,16 @@ class GitLabProject:
             "private": self.private,
             "reviewEnabled": review_enabled,
             "permissionsNote": self.permissions_note,
+            "accessLevel": self.access_level,
+            "canManageWebhooks": self.access_level >= _GITLAB_MIN_WEBHOOK_ACCESS_LEVEL,
+            "reviewBindingStatus": review_binding.status if review_binding else "",
+            "reviewBindingReason": review_binding.reason if review_binding else "",
+            "reviewCredentialOwner": review_binding.credential_owner
+            if review_binding
+            else "",
+            "reviewCredentialType": review_binding.credential_type
+            if review_binding
+            else "",
         }
 
 
@@ -176,6 +279,7 @@ class TosGitLabAppReviewProjectStore:
         client_factory: Any,
         key: str = GITLAB_REVIEW_PROJECTS_KEY,
         history_key: str = GITLAB_REVIEW_HISTORY_KEY,
+        credentials_key: str = GITLAB_OAUTH_CREDENTIALS_KEY,
     ) -> None:
         if not bucket.strip():
             raise ValueError("GitLab review storage requires a bucket.")
@@ -183,9 +287,76 @@ class TosGitLabAppReviewProjectStore:
         self._client_factory = client_factory
         self._key = key.strip("/")
         self._history_key = history_key.strip("/")
+        self._credentials_key = credentials_key.strip("/")
 
     async def enabled_projects(self) -> set[str]:
         return await asyncio.to_thread(self._enabled_projects)
+
+    async def project_bindings(self) -> dict[str, GitLabProjectBinding]:
+        return await asyncio.to_thread(self._project_bindings)
+
+    async def project_binding(
+        self, instance_id: str, project_id: int
+    ) -> GitLabProjectBinding | None:
+        return (await self.project_bindings()).get(project_key(instance_id, project_id))
+
+    async def save_project_binding(
+        self, binding: GitLabProjectBinding
+    ) -> list[dict[str, object]]:
+        return await asyncio.to_thread(self._save_project_binding, binding)
+
+    async def disable_project_binding(
+        self, instance_id: str, project_id: int
+    ) -> list[dict[str, object]]:
+        return await asyncio.to_thread(
+            self._disable_project_binding,
+            instance_id,
+            project_id,
+        )
+
+    async def update_project_binding_status(
+        self,
+        instance_id: str,
+        project_id: int,
+        *,
+        status: str,
+        reason: str = "",
+    ) -> GitLabProjectBinding | None:
+        return await asyncio.to_thread(
+            self._update_project_binding_status,
+            instance_id,
+            project_id,
+            status=status,
+            reason=reason,
+        )
+
+    async def oauth_credential(
+        self, credential_id: str
+    ) -> GitLabOAuthCredential | None:
+        return await asyncio.to_thread(self._oauth_credential, credential_id)
+
+    async def oauth_credential_for_owner(
+        self, owner_id: str, base_url: str
+    ) -> GitLabOAuthCredential | None:
+        return await asyncio.to_thread(
+            self._oauth_credential_for_owner,
+            owner_id,
+            base_url,
+        )
+
+    async def save_oauth_credential(
+        self, credential: GitLabOAuthCredential
+    ) -> GitLabOAuthCredential:
+        return await asyncio.to_thread(self._save_oauth_credential, credential)
+
+    async def delete_oauth_credential_for_owner(
+        self, owner_id: str, base_url: str
+    ) -> None:
+        await asyncio.to_thread(
+            self._delete_oauth_credential_for_owner,
+            owner_id,
+            base_url,
+        )
 
     async def save_enabled_projects(
         self, projects: list[GitLabProject]
@@ -219,6 +390,13 @@ class TosGitLabAppReviewProjectStore:
         )
 
     def _enabled_projects(self) -> set[str]:
+        return {
+            key
+            for key, binding in self._project_bindings().items()
+            if binding.enabled and binding.status == "active"
+        }
+
+    def _project_bindings(self) -> dict[str, GitLabProjectBinding]:
         payload = self._read_json_object(
             self._key,
             max_bytes=_MAX_REVIEW_PROJECTS_BYTES,
@@ -227,10 +405,10 @@ class TosGitLabAppReviewProjectStore:
         )
         projects = payload.get("projects")
         if projects is None:
-            return set()
+            return {}
         if not isinstance(projects, list):
             raise GitLabAppReviewStorageUnavailable("MR 自动评审项目配置格式无效。")
-        enabled: set[str] = set()
+        bindings: dict[str, GitLabProjectBinding] = {}
         for item in projects:
             if not isinstance(item, dict):
                 raise GitLabAppReviewStorageUnavailable("MR 自动评审项目配置格式无效。")
@@ -238,24 +416,110 @@ class TosGitLabAppReviewProjectStore:
             project_id = item.get("projectId")
             if not isinstance(project_id, int) or project_id <= 0:
                 raise GitLabAppReviewStorageUnavailable("MR 自动评审项目配置格式无效。")
-            enabled.add(project_key(instance_id, project_id))
-        return enabled
+            enabled = item.get("enabled")
+            status = _project_binding_status(_payload_text(item, "status") or "active")
+            if enabled is None:
+                enabled = status == "active"
+            bindings[project_key(instance_id, project_id)] = GitLabProjectBinding(
+                instance_id=instance_id,
+                base_url=_payload_text(item, "baseUrl"),
+                project_id=project_id,
+                path_with_namespace=_payload_text(item, "pathWithNamespace"),
+                credential_owner=_payload_text(item, "credentialOwner")
+                or _payload_text(item, "ownerId"),
+                credential_id=_payload_text(item, "credentialId"),
+                credential_type=_credential_type(
+                    _payload_text(item, "credentialType") or "managed"
+                ),
+                webhook_id=_nonnegative_int(item.get("webhookId")),
+                enabled=bool(enabled),
+                status=status,
+                reason=_payload_text(item, "reason")[:240],
+            )
+        return bindings
 
     def _save_enabled_projects(
         self, projects: list[GitLabProject]
     ) -> list[dict[str, object]]:
+        current = self._project_bindings()
         deduped = {
             project_key(item.instance_id, item.project_id): item for item in projects
         }
+        bindings: dict[str, GitLabProjectBinding] = {}
+        for key, project in deduped.items():
+            previous = current.get(key)
+            bindings[key] = GitLabProjectBinding(
+                instance_id=project.instance_id,
+                base_url=project.base_url,
+                project_id=project.project_id,
+                path_with_namespace=project.path_with_namespace,
+                credential_owner=previous.credential_owner if previous else "managed",
+                credential_id=previous.credential_id if previous else "managed",
+                credential_type=previous.credential_type if previous else "managed",
+                webhook_id=previous.webhook_id if previous else 0,
+                enabled=True,
+                status=previous.status if previous else "active",
+                reason=previous.reason if previous else "",
+            )
+        return self._write_project_bindings(bindings)
+
+    def _save_project_binding(
+        self, binding: GitLabProjectBinding
+    ) -> list[dict[str, object]]:
+        bindings = self._project_bindings()
+        bindings[project_key(binding.instance_id, binding.project_id)] = binding
+        return self._write_project_bindings(bindings)
+
+    def _disable_project_binding(
+        self, instance_id: str, project_id: int
+    ) -> list[dict[str, object]]:
+        bindings = self._project_bindings()
+        key = project_key(instance_id, project_id)
+        binding = bindings.get(key)
+        if binding is not None:
+            bindings[key] = replace(
+                binding,
+                enabled=False,
+                status="disabled",
+                reason="用户已关闭自动评审。",
+            )
+        return self._write_project_bindings(bindings)
+
+    def _update_project_binding_status(
+        self,
+        instance_id: str,
+        project_id: int,
+        *,
+        status: str,
+        reason: str = "",
+    ) -> GitLabProjectBinding | None:
+        bindings = self._project_bindings()
+        key = project_key(instance_id, project_id)
+        binding = bindings.get(key)
+        if binding is None:
+            return None
+        updated = replace(
+            binding,
+            enabled=status == "active",
+            status=_project_binding_status(status),
+            reason=reason.strip()[:240],
+        )
+        bindings[key] = updated
+        self._write_project_bindings(bindings)
+        return updated
+
+    def _write_project_bindings(
+        self, bindings: dict[str, GitLabProjectBinding]
+    ) -> list[dict[str, object]]:
         ordered = sorted(
-            deduped.values(),
+            bindings.values(),
             key=lambda item: (
                 item.instance_id.casefold(),
                 item.path_with_namespace.casefold(),
             ),
         )
         content = json.dumps(
-            {"projects": [_project_storage_dict(item) for item in ordered]},
+            {"projects": [_project_binding_storage_dict(item) for item in ordered]},
             ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),
@@ -274,7 +538,99 @@ class TosGitLabAppReviewProjectStore:
             raise GitLabAppReviewStorageUnavailable(
                 "无法保存 MR 自动评审项目配置。"
             ) from error
-        return [_project_storage_dict(item) for item in ordered]
+        return [_project_binding_storage_dict(item) for item in ordered]
+
+    def _oauth_credentials(self) -> dict[str, GitLabOAuthCredential]:
+        payload = self._read_json_object(
+            self._credentials_key,
+            max_bytes=_MAX_OAUTH_CREDENTIALS_BYTES,
+            not_found={},
+            invalid_message="GitLab OAuth 凭证格式无效。",
+        )
+        credentials = payload.get("credentials")
+        if credentials is None:
+            return {}
+        if not isinstance(credentials, list):
+            raise GitLabAppReviewStorageUnavailable("GitLab OAuth 凭证格式无效。")
+        result: dict[str, GitLabOAuthCredential] = {}
+        for item in credentials:
+            if not isinstance(item, dict):
+                raise GitLabAppReviewStorageUnavailable("GitLab OAuth 凭证格式无效。")
+            credential = _oauth_credential_from_payload(item)
+            result[credential.credential_id] = credential
+        return result
+
+    def _oauth_credential(self, credential_id: str) -> GitLabOAuthCredential | None:
+        return self._oauth_credentials().get(credential_id.strip())
+
+    def _oauth_credential_for_owner(
+        self, owner_id: str, base_url: str
+    ) -> GitLabOAuthCredential | None:
+        normalized_owner = owner_id.strip()
+        normalized_base_url = base_url.strip().rstrip("/")
+        for credential in self._oauth_credentials().values():
+            if (
+                credential.owner_id == normalized_owner
+                and credential.base_url == normalized_base_url
+            ):
+                return credential
+        return None
+
+    def _save_oauth_credential(
+        self, credential: GitLabOAuthCredential
+    ) -> GitLabOAuthCredential:
+        credentials = self._oauth_credentials()
+        for key, item in list(credentials.items()):
+            if (
+                item.owner_id == credential.owner_id
+                and item.base_url == credential.base_url
+                and key != credential.credential_id
+            ):
+                del credentials[key]
+        credentials[credential.credential_id] = credential
+        self._write_oauth_credentials(credentials)
+        return credential
+
+    def _delete_oauth_credential_for_owner(self, owner_id: str, base_url: str) -> None:
+        normalized_owner = owner_id.strip()
+        normalized_base_url = base_url.strip().rstrip("/")
+        credentials = {
+            key: value
+            for key, value in self._oauth_credentials().items()
+            if not (
+                value.owner_id == normalized_owner
+                and value.base_url == normalized_base_url
+            )
+        }
+        self._write_oauth_credentials(credentials)
+
+    def _write_oauth_credentials(
+        self, credentials: dict[str, GitLabOAuthCredential]
+    ) -> None:
+        ordered = sorted(
+            credentials.values(),
+            key=lambda item: (item.owner_id.casefold(), item.base_url.casefold()),
+        )
+        content = json.dumps(
+            {"credentials": [_oauth_credential_storage_dict(item) for item in ordered]},
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        if len(content) > _MAX_OAUTH_CREDENTIALS_BYTES:
+            raise GitLabAppReviewStorageUnavailable("GitLab OAuth 凭证配置过大。")
+        try:
+            self._client_factory().put_object(
+                bucket=self._bucket,
+                key=self._credentials_key,
+                content=content,
+                content_length=len(content),
+                content_type="application/json",
+            )
+        except Exception as error:
+            raise GitLabAppReviewStorageUnavailable(
+                "无法保存 GitLab OAuth 凭证。"
+            ) from error
 
     def _review_records(self) -> list[GitLabMergeRequestReviewRecord]:
         payload = self._read_json_object(
@@ -436,7 +792,7 @@ class GitLabAppClient:
                 note_ids.add(note_id)
         return note_ids
 
-    async def ensure_project_webhook(self, project_id: int) -> None:
+    async def ensure_project_webhook(self, project_id: int) -> int:
         webhook_url = self._config.webhook_url
         if not webhook_url:
             raise GitLabAppReviewError(
@@ -467,13 +823,25 @@ class GitLabAppClient:
             await self._request(
                 "PUT", f"/projects/{project_id}/hooks/{hook_id}", json=body
             )
-            return
-        await self._request("POST", f"/projects/{project_id}/hooks", json=body)
+            return hook_id
+        payload = await self._request(
+            "POST", f"/projects/{project_id}/hooks", json=body
+        )
+        if not isinstance(payload, dict):
+            raise GitLabAppReviewError("GitLab webhook 响应格式无效。")
+        hook_id = payload.get("id")
+        if not isinstance(hook_id, int) or hook_id <= 0:
+            raise GitLabAppReviewError("GitLab webhook 响应格式无效。")
+        return hook_id
 
     async def _request(
         self, method: str, path: str, *, json: dict[str, object] | None = None
     ) -> Any:
-        headers = {"Accept": "application/json", "PRIVATE-TOKEN": self._config.token}
+        headers = {"Accept": "application/json"}
+        if self._config.token_auth_scheme == "bearer":
+            headers["Authorization"] = f"Bearer {self._config.token}"
+        else:
+            headers["PRIVATE-TOKEN"] = self._config.token
         try:
             async with httpx.AsyncClient(timeout=self._timeout) as client:
                 response = await client.request(
@@ -509,23 +877,104 @@ class GitLabAppClient:
         return items
 
 
-def load_gitlab_app_config() -> GitLabAppConfig | None:
+class GitLabOAuthClient:
+    def __init__(self, config: GitLabOAuthConfig, *, timeout: float = 20.0) -> None:
+        self._config = config
+        self._timeout = timeout
+
+    def authorization_url(self, state: str) -> str:
+        params = urlencode(
+            {
+                "client_id": self._config.client_id,
+                "redirect_uri": self._config.redirect_uri,
+                "response_type": "code",
+                "scope": _GITLAB_OAUTH_SCOPE,
+                "state": state,
+            }
+        )
+        return f"{self._config.authorize_url}?{params}"
+
+    async def exchange_code(self, code: str) -> dict[str, object]:
+        return await self._token_request(
+            {
+                "client_id": self._config.client_id,
+                "client_secret": self._config.client_secret,
+                "code": code,
+                "grant_type": "authorization_code",
+                "redirect_uri": self._config.redirect_uri,
+            }
+        )
+
+    async def refresh_token(self, refresh_token: str) -> dict[str, object]:
+        return await self._token_request(
+            {
+                "client_id": self._config.client_id,
+                "client_secret": self._config.client_secret,
+                "refresh_token": refresh_token,
+                "grant_type": "refresh_token",
+            }
+        )
+
+    async def current_user(self, access_token: str) -> dict[str, object]:
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
+                response = await client.get(
+                    f"{self._config.api_root}/user",
+                    headers={
+                        "Accept": "application/json",
+                        "Authorization": f"Bearer {access_token}",
+                    },
+                )
+        except httpx.HTTPError as error:
+            raise GitLabAppReviewError(
+                "连接 GitLab 失败，请检查网络后重试。"
+            ) from error
+        payload = response.json() if response.content else {}
+        if not response.is_success:
+            message = payload.get("message") if isinstance(payload, dict) else ""
+            detail = str(message or "").strip()
+            raise GitLabAppReviewError(
+                detail[:240]
+                or f"GitLab OAuth 请求失败（HTTP {response.status_code}）。"
+            )
+        if not isinstance(payload, dict):
+            raise GitLabAppReviewError("GitLab OAuth 响应格式无效。")
+        return payload
+
+    async def _token_request(self, data: dict[str, str]) -> dict[str, object]:
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
+                response = await client.post(
+                    self._config.token_url,
+                    data=data,
+                    headers={"Accept": "application/json"},
+                )
+        except httpx.HTTPError as error:
+            raise GitLabAppReviewError(
+                "连接 GitLab 失败，请检查网络后重试。"
+            ) from error
+        payload = response.json() if response.content else {}
+        if not response.is_success:
+            message = (
+                payload.get("error_description") or payload.get("error")
+                if isinstance(payload, dict)
+                else ""
+            )
+            detail = str(message or "").strip()
+            raise GitLabAppReviewError(
+                detail[:240]
+                or f"GitLab OAuth 请求失败（HTTP {response.status_code}）。"
+            )
+        if not isinstance(payload, dict):
+            raise GitLabAppReviewError("GitLab OAuth 响应格式无效。")
+        return payload
+
+
+def _load_gitlab_base_url() -> str:
     base_url = (
         (os.getenv(GITLAB_BASE_URL_ENV) or GITLAB_DEFAULT_BASE_URL).strip().rstrip("/")
     )
-    token = (os.getenv(GITLAB_TOKEN_ENV) or "").strip()
-    webhook_secret = (os.getenv(GITLAB_WEBHOOK_SECRET_ENV) or "").strip()
-    explicit_base_url = (os.getenv(GITLAB_BASE_URL_ENV) or "").strip()
-    if not any((explicit_base_url, token, webhook_secret)):
-        return None
-    missing = [
-        name
-        for name, value in (
-            (GITLAB_TOKEN_ENV, token),
-            (GITLAB_WEBHOOK_SECRET_ENV, webhook_secret),
-        )
-        if not value
-    ]
+    missing = [name for name, value in ((GITLAB_BASE_URL_ENV, base_url),) if not value]
     if missing:
         raise GitLabAppReviewError("GitLab App 配置不完整：" + "、".join(missing))
     parsed = urlparse(base_url)
@@ -539,6 +988,24 @@ def load_gitlab_app_config() -> GitLabAppConfig | None:
         raise GitLabAppReviewError(
             "VEADK_GITLAB_BASE_URL 必须是不含路径参数的 HTTPS 地址。"
         )
+    return base_url
+
+
+def load_gitlab_app_config(*, require_token: bool = True) -> GitLabAppConfig | None:
+    base_url = _load_gitlab_base_url()
+    token = (os.getenv(GITLAB_TOKEN_ENV) or "").strip()
+    webhook_secret = (os.getenv(GITLAB_WEBHOOK_SECRET_ENV) or "").strip()
+    explicit_base_url = (os.getenv(GITLAB_BASE_URL_ENV) or "").strip()
+    oauth_configured = gitlab_oauth_configured()
+    if not any((explicit_base_url, token, webhook_secret, oauth_configured)):
+        return None
+    missing = []
+    if require_token and not token:
+        missing.append(GITLAB_TOKEN_ENV)
+    if not webhook_secret:
+        missing.append(GITLAB_WEBHOOK_SECRET_ENV)
+    if missing:
+        raise GitLabAppReviewError("GitLab App 配置不完整：" + "、".join(missing))
     return GitLabAppConfig(
         base_url=base_url,
         token=token,
@@ -558,15 +1025,56 @@ def load_gitlab_app_config() -> GitLabAppConfig | None:
     )
 
 
-def gitlab_app_public_config() -> dict[str, object]:
+def gitlab_oauth_configured() -> bool:
+    return bool(
+        (os.getenv(GITLAB_OAUTH_CLIENT_ID_ENV) or "").strip()
+        and (os.getenv(GITLAB_OAUTH_CLIENT_SECRET_ENV) or "").strip()
+        and (os.getenv(GITLAB_OAUTH_REDIRECT_URI_ENV) or "").strip()
+    )
+
+
+def load_gitlab_oauth_config() -> GitLabOAuthConfig | None:
+    client_id = (os.getenv(GITLAB_OAUTH_CLIENT_ID_ENV) or "").strip()
+    client_secret = (os.getenv(GITLAB_OAUTH_CLIENT_SECRET_ENV) or "").strip()
+    redirect_uri = (os.getenv(GITLAB_OAUTH_REDIRECT_URI_ENV) or "").strip()
+    if not any((client_id, client_secret, redirect_uri)):
+        return None
+    missing = [
+        name
+        for name, value in (
+            (GITLAB_OAUTH_CLIENT_ID_ENV, client_id),
+            (GITLAB_OAUTH_CLIENT_SECRET_ENV, client_secret),
+            (GITLAB_OAUTH_REDIRECT_URI_ENV, redirect_uri),
+        )
+        if not value
+    ]
+    if missing:
+        raise GitLabAppReviewError("GitLab OAuth 配置不完整：" + "、".join(missing))
+    return GitLabOAuthConfig(
+        base_url=_load_gitlab_base_url(),
+        client_id=client_id,
+        client_secret=client_secret,
+        redirect_uri=redirect_uri,
+    )
+
+
+def gitlab_app_public_config(
+    *,
+    credential: GitLabOAuthCredential | None = None,
+) -> dict[str, object]:
     try:
-        config = load_gitlab_app_config()
+        config = load_gitlab_app_config(require_token=False)
+        oauth_config = load_gitlab_oauth_config()
     except GitLabAppReviewError as error:
         return {
             "configured": False,
             "baseUrl": "",
             "webhookUrl": "",
             "reason": str(error),
+            "oauthConfigured": False,
+            "oauthConnected": False,
+            "oauthUser": None,
+            "managedTokenConfigured": False,
         }
     if config is None:
         return {
@@ -574,12 +1082,22 @@ def gitlab_app_public_config() -> dict[str, object]:
             "baseUrl": "",
             "webhookUrl": "",
             "reason": "管理员未配置 GitLab App。",
+            "oauthConfigured": oauth_config is not None,
+            "oauthConnected": False,
+            "oauthUser": None,
+            "managedTokenConfigured": False,
         }
     return {
-        "configured": True,
+        "configured": bool(config.token or oauth_config is not None),
         "baseUrl": config.base_url,
         "webhookUrl": config.webhook_url,
-        "reason": "",
+        "reason": ""
+        if config.token or oauth_config is not None
+        else "管理员未配置 GitLab OAuth 或托管 Token。",
+        "oauthConfigured": oauth_config is not None,
+        "oauthConnected": credential is not None,
+        "oauthUser": credential.to_public_dict() if credential is not None else None,
+        "managedTokenConfigured": bool(config.token),
     }
 
 
@@ -721,6 +1239,7 @@ def _project_from_payload(
     if not path:
         raise GitLabAppReviewError("GitLab App 项目响应格式无效。")
     permissions_note = ""
+    access_level = 0
     permissions = payload.get("permissions")
     if isinstance(permissions, dict):
         project_access = permissions.get("project_access")
@@ -730,8 +1249,13 @@ def _project_from_payload(
             for item in (project_access, group_access)
             if isinstance(item, dict)
         ]
-        if access_levels and max(int(level or 0) for level in access_levels) < 30:
+        access_level = (
+            max(int(level or 0) for level in access_levels) if access_levels else 0
+        )
+        if access_levels and access_level < 30:
             permissions_note = "Token 权限可能不足，至少需要 Developer 权限。"
+        elif access_levels and access_level < _GITLAB_MIN_WEBHOOK_ACCESS_LEVEL:
+            permissions_note = "启用自动评审需要 Maintainer 权限。"
     return GitLabProject(
         instance_id=config.instance_id,
         base_url=config.base_url,
@@ -742,16 +1266,122 @@ def _project_from_payload(
         web_url=web_url,
         private=str(payload.get("visibility") or "").lower() == "private",
         permissions_note=permissions_note,
+        access_level=access_level,
     )
 
 
-def _project_storage_dict(project: GitLabProject) -> dict[str, object]:
+def _project_binding_storage_dict(binding: GitLabProjectBinding) -> dict[str, object]:
     return {
-        "instanceId": project.instance_id,
-        "baseUrl": project.base_url,
-        "projectId": project.project_id,
-        "pathWithNamespace": project.path_with_namespace,
+        "instanceId": binding.instance_id,
+        "baseUrl": binding.base_url,
+        "projectId": binding.project_id,
+        "pathWithNamespace": binding.path_with_namespace,
+        "credentialOwner": binding.credential_owner,
+        "credentialId": binding.credential_id,
+        "credentialType": binding.credential_type,
+        "webhookId": binding.webhook_id,
+        "enabled": binding.enabled,
+        "status": binding.status,
+        "reason": binding.reason,
     }
+
+
+def create_oauth_credential(
+    *,
+    owner_id: str,
+    base_url: str,
+    token_payload: dict[str, object],
+    user_payload: dict[str, object],
+    credential_id: str = "",
+) -> GitLabOAuthCredential:
+    access_token = _required_payload_text(
+        token_payload, "access_token", "GitLab OAuth 未返回 access token。"
+    )
+    refresh_token = _payload_text(token_payload, "refresh_token")
+    expires_in = token_payload.get("expires_in")
+    expires_at = 0
+    if isinstance(expires_in, int) and expires_in > 0:
+        expires_at = int(time.time()) + expires_in
+    elif isinstance(expires_in, str) and expires_in.isdigit() and int(expires_in) > 0:
+        expires_at = int(time.time()) + int(expires_in)
+    user_id = _nonnegative_int(user_payload.get("id"))
+    username = _payload_text(user_payload, "username")
+    return GitLabOAuthCredential(
+        credential_id=credential_id.strip() or uuid4().hex,
+        owner_id=owner_id.strip(),
+        base_url=base_url.strip().rstrip("/"),
+        access_token=access_token,
+        refresh_token=refresh_token,
+        expires_at=expires_at,
+        gitlab_user_id=user_id,
+        gitlab_username=username,
+        gitlab_name=_payload_text(user_payload, "name") or username,
+    )
+
+
+def refreshed_oauth_credential(
+    credential: GitLabOAuthCredential,
+    token_payload: dict[str, object],
+) -> GitLabOAuthCredential:
+    access_token = _required_payload_text(
+        token_payload, "access_token", "GitLab OAuth 未返回 access token。"
+    )
+    refresh_token = (
+        _payload_text(token_payload, "refresh_token") or credential.refresh_token
+    )
+    expires_in = token_payload.get("expires_in")
+    expires_at = credential.expires_at
+    if isinstance(expires_in, int) and expires_in > 0:
+        expires_at = int(time.time()) + expires_in
+    elif isinstance(expires_in, str) and expires_in.isdigit() and int(expires_in) > 0:
+        expires_at = int(time.time()) + int(expires_in)
+    return replace(
+        credential,
+        access_token=access_token,
+        refresh_token=refresh_token,
+        expires_at=expires_at,
+    )
+
+
+def _oauth_credential_storage_dict(
+    credential: GitLabOAuthCredential,
+) -> dict[str, object]:
+    return {
+        "credentialId": credential.credential_id,
+        "ownerId": credential.owner_id,
+        "baseUrl": credential.base_url,
+        "accessToken": credential.access_token,
+        "refreshToken": credential.refresh_token,
+        "expiresAt": credential.expires_at,
+        "gitlabUserId": credential.gitlab_user_id,
+        "gitlabUsername": credential.gitlab_username,
+        "gitlabName": credential.gitlab_name,
+    }
+
+
+def _oauth_credential_from_payload(
+    payload: dict[str, Any],
+) -> GitLabOAuthCredential:
+    expires_at = payload.get("expiresAt")
+    if not isinstance(expires_at, int) or expires_at < 0:
+        expires_at = 0
+    return GitLabOAuthCredential(
+        credential_id=_required_text(
+            payload, "credentialId", "GitLab OAuth 凭证格式无效。"
+        ),
+        owner_id=_required_text(payload, "ownerId", "GitLab OAuth 凭证格式无效。"),
+        base_url=_required_text(
+            payload, "baseUrl", "GitLab OAuth 凭证格式无效。"
+        ).rstrip("/"),
+        access_token=_required_text(
+            payload, "accessToken", "GitLab OAuth 凭证格式无效。"
+        ),
+        refresh_token=_payload_text(payload, "refreshToken"),
+        expires_at=expires_at,
+        gitlab_user_id=_nonnegative_int(payload.get("gitlabUserId")),
+        gitlab_username=_payload_text(payload, "gitlabUsername"),
+        gitlab_name=_payload_text(payload, "gitlabName"),
+    )
 
 
 def _review_record_from_payload(
@@ -796,6 +1426,14 @@ def _payload_text(payload: dict[str, Any], key: str) -> str:
     return value.strip() if isinstance(value, str) else ""
 
 
+def _required_payload_text(payload: dict[str, object], key: str, message: str) -> str:
+    value = payload.get(key)
+    text = value.strip() if isinstance(value, str) else ""
+    if not text:
+        raise GitLabAppReviewError(message)
+    return text
+
+
 def _required_text(payload: dict[str, Any], key: str, message: str) -> str:
     value = _payload_text(payload, key)
     if not value:
@@ -809,6 +1447,12 @@ def _positive_int(value: object, message: str) -> int:
     raise GitLabAppReviewError(message)
 
 
+def _nonnegative_int(value: object) -> int:
+    if isinstance(value, int) and value >= 0:
+        return value
+    return 0
+
+
 def _review_record_status(value: str) -> str:
     if value not in {"started", "completed", "ignored", "failed"}:
         raise GitLabAppReviewStorageUnavailable("MR 评审记录状态无效。")
@@ -818,4 +1462,22 @@ def _review_record_status(value: str) -> str:
 def _review_record_trigger(value: str) -> str:
     if value not in {"manual", "webhook"}:
         raise GitLabAppReviewStorageUnavailable("MR 评审记录触发方式无效。")
+    return value
+
+
+def _project_binding_status(value: str) -> str:
+    if value not in {
+        "active",
+        "disabled",
+        "auth_invalid",
+        "permission_lost",
+        "webhook_invalid",
+    }:
+        raise GitLabAppReviewStorageUnavailable("MR 自动评审项目授权状态无效。")
+    return value
+
+
+def _credential_type(value: str) -> str:
+    if value not in {"oauth", "managed"}:
+        raise GitLabAppReviewStorageUnavailable("MR 自动评审凭证类型无效。")
     return value

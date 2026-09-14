@@ -32,7 +32,12 @@ from dataclasses import dataclass, field, replace
 from typing import Annotated, Any, Protocol
 
 from fastapi import File, Request, UploadFile
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import (
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    StreamingResponse,
+)
 
 from frontend.server.sandbox.tool_sessions import SandboxToolPair
 from veadk.cli.agentkit_sandbox_region import is_agentkit_resource_not_found
@@ -96,17 +101,23 @@ from veadk.cli.gitlab_app_mr_review import (
     GitLabAppClient,
     GitLabAppReviewError,
     GitLabAppReviewStorageUnavailable,
+    GitLabOAuthClient,
+    GitLabOAuthCredential,
     GitLabMergeRequestEvent,
     GitLabMergeRequestReviewRecord,
     GitLabProject,
     GitLabAppConfig,
+    GitLabProjectBinding,
     TosGitLabAppReviewProjectStore,
+    create_oauth_credential,
     create_review_record as create_gitlab_review_record,
     gitlab_app_public_config,
     load_gitlab_app_config,
+    load_gitlab_oauth_config,
     parse_merge_request_event,
     parse_merge_request_url,
     project_key,
+    refreshed_oauth_credential,
     verify_gitlab_webhook_token,
 )
 from veadk.utils.logger import get_logger
@@ -167,6 +178,9 @@ _CODEX_PROJECT_HANDOFF_HISTORY_MAX_IMAGE_TOTAL_BYTES = 8 * 1024 * 1024
 _CODEX_PROJECT_HANDOFF_HISTORY_IMAGE_MIME_TYPES = frozenset(
     {"image/png", "image/jpeg", "image/gif", "image/webp"}
 )
+_GITLAB_OAUTH_STATES: dict[str, tuple[str, float]] = {}
+_GITLAB_OAUTH_STATE_TTL_SECONDS = 10 * 60
+_GITLAB_MIN_WEBHOOK_ACCESS_LEVEL = 40
 _CODEX_PROJECT_HANDOFF_CONTINUATION_MAX_CHARACTERS = 20_000
 _GITHUB_PR_REVIEW_CONNECT_ATTEMPTS = 3
 _GITHUB_PR_REVIEW_CONNECT_RETRY_SECONDS = 2.0
@@ -3870,28 +3884,168 @@ def mount_sandbox_routes(
 
         asyncio.create_task(_run_review_message())
 
-    async def _gitlab_app_projects() -> list[dict[str, object]]:
-        config = load_gitlab_app_config()
+    async def _gitlab_oauth_credential_for_owner(
+        store: TosGitLabAppReviewProjectStore,
+        owner_id: str,
+    ) -> GitLabOAuthCredential | None:
+        config = load_gitlab_app_config(require_token=False)
         if config is None:
-            raise GitLabAppReviewError("管理员未配置 GitLab App。")
+            return None
+        credential = await store.oauth_credential_for_owner(owner_id, config.base_url)
+        if credential is None or not credential.expired:
+            return credential
+
+        async def _mark_owner_bindings_invalid(reason: str) -> None:
+            bindings = await store.project_bindings()
+            for binding in bindings.values():
+                if (
+                    binding.credential_type == "oauth"
+                    and binding.credential_owner == owner_id
+                    and binding.credential_id == credential.credential_id
+                ):
+                    await store.update_project_binding_status(
+                        binding.instance_id,
+                        binding.project_id,
+                        status="auth_invalid",
+                        reason=reason,
+                    )
+
+        oauth_config = load_gitlab_oauth_config()
+        if oauth_config is None or not credential.refresh_token:
+            await store.delete_oauth_credential_for_owner(owner_id, config.base_url)
+            await _mark_owner_bindings_invalid("授权无法刷新，请重新连接 GitLab。")
+            raise GitLabAppReviewError("GitLab 授权无法刷新，请重新连接。")
+        try:
+            refreshed = refreshed_oauth_credential(
+                credential,
+                await GitLabOAuthClient(oauth_config).refresh_token(
+                    credential.refresh_token
+                ),
+            )
+        except GitLabAppReviewError:
+            await store.delete_oauth_credential_for_owner(owner_id, config.base_url)
+            await _mark_owner_bindings_invalid("授权已失效，请重新连接 GitLab。")
+            raise GitLabAppReviewError("GitLab 授权已失效，请重新连接。")
+        return await store.save_oauth_credential(refreshed)
+
+    async def _gitlab_config_for_owner(
+        owner_id: str,
+        *,
+        allow_managed: bool = True,
+    ) -> tuple[GitLabAppConfig, GitLabOAuthCredential | None, str]:
+        config = load_gitlab_app_config(require_token=False)
+        if config is None:
+            raise GitLabAppReviewError("管理员未配置 GitLab OAuth。")
+        store = _gitlab_app_review_store()
+        if store is not None:
+            credential = await _gitlab_oauth_credential_for_owner(store, owner_id)
+            if credential is not None:
+                return (
+                    replace(
+                        config,
+                        token=credential.access_token,
+                        token_auth_scheme="bearer",
+                    ),
+                    credential,
+                    "oauth",
+                )
+        if allow_managed and config.token:
+            return config, None, "managed"
+        raise GitLabAppReviewError("请先连接 GitLab 后再继续。")
+
+    async def _gitlab_config_for_binding(
+        store: TosGitLabAppReviewProjectStore,
+        binding: GitLabProjectBinding,
+    ) -> tuple[GitLabAppConfig, str, str]:
+        config = load_gitlab_app_config(require_token=False)
+        if config is None:
+            raise GitLabAppReviewError("管理员未配置 GitLab OAuth。")
+        if binding.credential_type == "managed":
+            if not config.token:
+                await store.update_project_binding_status(
+                    binding.instance_id,
+                    binding.project_id,
+                    status="auth_invalid",
+                    reason="托管凭证未配置。",
+                )
+                raise GitLabAppReviewError("GitLab 托管凭证未配置。")
+            return config, config.review_owner_id, config.review_creator_name
+        credential = await store.oauth_credential(binding.credential_id)
+        if credential is None:
+            await store.update_project_binding_status(
+                binding.instance_id,
+                binding.project_id,
+                status="auth_invalid",
+                reason="授权已失效，请重新连接 GitLab。",
+            )
+            raise GitLabAppReviewError("GitLab 授权已失效，请重新连接。")
+        if credential.expired:
+            oauth_config = load_gitlab_oauth_config()
+            if oauth_config is None or not credential.refresh_token:
+                await store.update_project_binding_status(
+                    binding.instance_id,
+                    binding.project_id,
+                    status="auth_invalid",
+                    reason="授权无法刷新，请重新连接 GitLab。",
+                )
+                raise GitLabAppReviewError("GitLab 授权无法刷新，请重新连接。")
+            try:
+                credential = await store.save_oauth_credential(
+                    refreshed_oauth_credential(
+                        credential,
+                        await GitLabOAuthClient(oauth_config).refresh_token(
+                            credential.refresh_token
+                        ),
+                    )
+                )
+            except GitLabAppReviewError as error:
+                await store.update_project_binding_status(
+                    binding.instance_id,
+                    binding.project_id,
+                    status="auth_invalid",
+                    reason=str(error),
+                )
+                raise
+        return (
+            replace(
+                config,
+                token=credential.access_token,
+                token_auth_scheme="bearer",
+            ),
+            credential.owner_id,
+            credential.gitlab_name or credential.gitlab_username or credential.owner_id,
+        )
+
+    async def _gitlab_app_projects(owner_id: str) -> list[dict[str, object]]:
+        config, _, _credential_type = await _gitlab_config_for_owner(owner_id)
         projects = await GitLabAppClient(config).projects()
         store = _gitlab_app_review_store()
-        enabled_projects: set[str] = set()
+        bindings: dict[str, GitLabProjectBinding] = {}
         if store is not None:
-            enabled_projects = await store.enabled_projects()
+            bindings = await store.project_bindings()
         return [
             project.to_public_dict(
-                review_enabled=project_key(project.instance_id, project.project_id)
-                in enabled_projects
+                review_enabled=(
+                    (
+                        binding := bindings.get(
+                            project_key(project.instance_id, project.project_id)
+                        )
+                    )
+                    is not None
+                    and binding.enabled
+                    and binding.status == "active"
+                ),
+                review_binding=binding,
             )
             for project in projects
         ]
 
     async def _gitlab_app_projects_page(
         page_request: PageRequest,
+        owner_id: str,
         query: str = "",
     ) -> dict[str, object]:
-        projects = await _gitlab_app_projects()
+        projects = await _gitlab_app_projects(owner_id)
         keyword = query.strip().casefold()
         if keyword:
             projects = [
@@ -4045,16 +4199,119 @@ def mount_sandbox_routes(
 
     @app.get("/web/gitlab/app/config")
     async def _gitlab_app_config(request: Request) -> dict[str, object]:
-        owner_resolver(request)
-        return gitlab_app_public_config()
+        owner_id = owner_resolver(request)
+        credential = None
+        store = _gitlab_app_review_store()
+        if store is not None:
+            credential = await _gitlab_oauth_credential_for_owner(store, owner_id)
+        return gitlab_app_public_config(credential=credential)
+
+    def _gitlab_oauth_authorization_url(owner_id: str) -> str:
+        if _gitlab_app_review_store() is None:
+            raise _gitlab_app_http_error(
+                GitLabAppReviewStorageUnavailable(
+                    "管理员未配置 Studio 持久化存储，无法保存 GitLab 授权。"
+                )
+            )
+        oauth_config = load_gitlab_oauth_config()
+        if oauth_config is None:
+            raise _gitlab_app_http_error(
+                GitLabAppReviewError("管理员未配置 GitLab OAuth。")
+            )
+        now = time.monotonic()
+        for state, (_owner, created_at) in list(_GITLAB_OAUTH_STATES.items()):
+            if now - created_at > _GITLAB_OAUTH_STATE_TTL_SECONDS:
+                _GITLAB_OAUTH_STATES.pop(state, None)
+        state = secrets.token_urlsafe(32)
+        _GITLAB_OAUTH_STATES[state] = (owner_id, now)
+        return GitLabOAuthClient(oauth_config).authorization_url(state)
+
+    @app.get("/web/gitlab/oauth/start-url")
+    async def _gitlab_oauth_start_url(request: Request) -> dict[str, object]:
+        owner_id = owner_resolver(request)
+        return {"authorizationUrl": _gitlab_oauth_authorization_url(owner_id)}
+
+    @app.get("/web/gitlab/oauth/start")
+    async def _gitlab_oauth_start(request: Request) -> RedirectResponse:
+        owner_id = owner_resolver(request)
+        return RedirectResponse(_gitlab_oauth_authorization_url(owner_id))
+
+    @app.get("/web/gitlab/oauth/callback")
+    async def _gitlab_oauth_callback(request: Request) -> Any:
+        state = request.query_params.get("state", "")
+        code = request.query_params.get("code", "")
+        state_owner = _GITLAB_OAUTH_STATES.pop(state, None)
+        if (
+            state_owner is None
+            or time.monotonic() - state_owner[1] > _GITLAB_OAUTH_STATE_TTL_SECONDS
+        ):
+            return HTMLResponse(
+                "GitLab 授权状态已过期，请回到 Studio 重新连接。", status_code=400
+            )
+        if not code:
+            return HTMLResponse("GitLab 授权失败：缺少授权 code。", status_code=400)
+        store = _gitlab_app_review_store()
+        if store is None:
+            return HTMLResponse(
+                "管理员未配置 Studio 持久化存储，无法保存 GitLab 授权。",
+                status_code=503,
+            )
+        oauth_config = load_gitlab_oauth_config()
+        if oauth_config is None:
+            return HTMLResponse("管理员未配置 GitLab OAuth。", status_code=503)
+        owner_id = state_owner[0]
+        try:
+            oauth_client = GitLabOAuthClient(oauth_config)
+            token_payload = await oauth_client.exchange_code(code)
+            access_token = str(token_payload.get("access_token") or "")
+            user_payload = await oauth_client.current_user(access_token)
+            credential = create_oauth_credential(
+                owner_id=owner_id,
+                base_url=oauth_config.base_url,
+                token_payload=token_payload,
+                user_payload=user_payload,
+            )
+            await store.save_oauth_credential(credential)
+        except GitLabAppReviewError as error:
+            return HTMLResponse(f"GitLab 授权失败：{str(error)}", status_code=502)
+        return RedirectResponse("/?gitlabOAuth=connected")
+
+    @app.post("/web/gitlab/oauth/disconnect")
+    async def _gitlab_oauth_disconnect(request: Request) -> dict[str, object]:
+        owner_id = owner_resolver(request)
+        store = _gitlab_app_review_store()
+        if store is None:
+            raise _gitlab_app_http_error(
+                GitLabAppReviewStorageUnavailable(
+                    "管理员未配置 Studio 持久化存储，无法删除 GitLab 授权。"
+                )
+            )
+        config = load_gitlab_app_config(require_token=False)
+        if config is None:
+            return {"status": "disconnected"}
+        await store.delete_oauth_credential_for_owner(owner_id, config.base_url)
+        bindings = await store.project_bindings()
+        for binding in bindings.values():
+            if (
+                binding.credential_owner == owner_id
+                and binding.credential_type == "oauth"
+            ):
+                await store.update_project_binding_status(
+                    binding.instance_id,
+                    binding.project_id,
+                    status="auth_invalid",
+                    reason="用户已断开 GitLab 授权。",
+                )
+        return {"status": "disconnected"}
 
     @app.get("/web/gitlab/app/projects")
     async def _gitlab_app_project_list(request: Request) -> dict[str, object]:
-        owner_resolver(request)
+        owner_id = owner_resolver(request)
         try:
             page_request = _github_review_page_request(request)
             page_result = await _gitlab_app_projects_page(
                 page_request,
+                owner_id,
                 request.query_params.get("q", ""),
             )
         except GitLabAppReviewError as error:
@@ -4072,7 +4329,7 @@ def mount_sandbox_routes(
 
     @app.put("/web/gitlab/app/review-projects")
     async def _gitlab_app_review_projects(request: Request) -> dict[str, object]:
-        owner_resolver(request)
+        owner_id = owner_resolver(request)
         store = _gitlab_app_review_store()
         if store is None:
             raise _gitlab_app_http_error(
@@ -4086,30 +4343,64 @@ def mount_sandbox_routes(
             review_enabled = data.get("reviewEnabled")
             if not isinstance(project_id, int) or not isinstance(review_enabled, bool):
                 raise SandboxValidationError("启用评审项目更新格式无效。")
-            config = load_gitlab_app_config()
-            if config is None:
-                raise GitLabAppReviewError("管理员未配置 GitLab App。")
+            credential_mode_value = data.get("credentialMode")
+            credential_mode = str(credential_mode_value or "oauth").strip()
+            if credential_mode not in {"oauth", "managed"}:
+                raise SandboxValidationError("GitLab 凭证模式无效。")
+            config, credential, resolved_mode = await _gitlab_config_for_owner(
+                owner_id,
+                allow_managed=credential_mode == "managed"
+                or credential_mode_value is None,
+            )
+            if (
+                credential_mode_value is not None
+                and credential_mode == "oauth"
+                and credential is None
+            ):
+                raise GitLabAppReviewError("请先连接 GitLab 后再启用自动评审。")
             client = GitLabAppClient(config)
             projects = await client.projects()
             by_id = {project.project_id: project for project in projects}
             project = by_id.get(project_id)
             if project is None:
                 raise SandboxValidationError("GitLab App 无法访问该项目。")
-            current = await store.enabled_projects()
-            updated_keys = {
-                item
-                for item in current
-                if item != project_key(project.instance_id, project.project_id)
-            }
-            if review_enabled:
-                await client.ensure_project_webhook(project.project_id)
-                updated_keys.add(project_key(project.instance_id, project.project_id))
-            enabled_projects = [
-                item
-                for item in projects
-                if project_key(item.instance_id, item.project_id) in updated_keys
-            ]
-            saved = await store.save_enabled_projects(enabled_projects)
+            if not review_enabled:
+                saved = await store.disable_project_binding(
+                    project.instance_id,
+                    project.project_id,
+                )
+            else:
+                if (
+                    resolved_mode == "oauth"
+                    and project.access_level < _GITLAB_MIN_WEBHOOK_ACCESS_LEVEL
+                ):
+                    raise SandboxValidationError(
+                        "启用自动评审需要 GitLab Maintainer 权限。"
+                    )
+                webhook_id_value = await client.ensure_project_webhook(
+                    project.project_id
+                )
+                webhook_id = (
+                    webhook_id_value if isinstance(webhook_id_value, int) else 0
+                )
+                saved = await store.save_project_binding(
+                    GitLabProjectBinding(
+                        instance_id=project.instance_id,
+                        base_url=project.base_url,
+                        project_id=project.project_id,
+                        path_with_namespace=project.path_with_namespace,
+                        credential_owner=owner_id
+                        if credential is not None
+                        else config.review_owner_id,
+                        credential_id=credential.credential_id
+                        if credential is not None
+                        else "managed",
+                        credential_type=resolved_mode,
+                        webhook_id=webhook_id,
+                        enabled=True,
+                        status="active",
+                    )
+                )
         except SandboxError as error:
             raise _http_error(error) from error
         except GitLabAppReviewError as error:
@@ -4150,9 +4441,9 @@ def mount_sandbox_routes(
         store: TosGitLabAppReviewProjectStore | None = None
         event: GitLabMergeRequestEvent | None = None
         try:
-            config = load_gitlab_app_config()
+            config = load_gitlab_app_config(require_token=False)
             if config is None:
-                raise GitLabAppReviewError("管理员未配置 GitLab App。")
+                raise GitLabAppReviewError("管理员未配置 GitLab OAuth。")
             if not verify_gitlab_webhook_token(
                 request.headers.get("X-Gitlab-Token", ""),
                 config.webhook_secret,
@@ -4213,8 +4504,8 @@ def mount_sandbox_routes(
                     "reason": "review-settings-unavailable",
                     "projectId": event.project_id,
                 }
-            enabled = await store.enabled_projects()
-            if project_key(event.instance_id, event.project_id) not in enabled:
+            binding = await store.project_binding(event.instance_id, event.project_id)
+            if binding is None or not binding.enabled or binding.status != "active":
                 await _remember_gitlab_review_record(
                     store,
                     create_gitlab_review_record(
@@ -4236,10 +4527,18 @@ def mount_sandbox_routes(
                     "reason": "project-review-disabled",
                     "projectId": event.project_id,
                 }
+            (
+                config,
+                credential_owner,
+                credential_creator,
+            ) = await _gitlab_config_for_binding(
+                store,
+                binding,
+            )
             project = await GitLabAppClient(config).project(event.project_id)
             session = await _create_gitlab_merge_request_review_session(
-                owner_id=config.review_owner_id,
-                creator_name=config.review_creator_name,
+                owner_id=credential_owner,
+                creator_name=credential_creator,
                 config=config,
                 project=project,
                 merge_request_url=event.merge_request_url,
@@ -4261,7 +4560,7 @@ def mount_sandbox_routes(
             await _remember_gitlab_review_record(store, record)
             _schedule_gitlab_merge_request_review_message(
                 session_id=session.instance_id,
-                owner_id=config.review_owner_id,
+                owner_id=credential_owner,
                 config=config,
                 project_id=event.project_id,
                 merge_request_iid=event.merge_request_iid,
@@ -4323,9 +4622,9 @@ def mount_sandbox_routes(
             merge_request_url = data.get("mergeRequestUrl")
             if not isinstance(merge_request_url, str):
                 raise SandboxValidationError("Merge Request URL 必须是文本。")
-            config = load_gitlab_app_config()
-            if config is None:
-                raise GitLabAppReviewError("管理员未配置 GitLab App。")
+            config, _credential, _credential_type = await _gitlab_config_for_owner(
+                owner_id
+            )
             project_path, mr_iid = parse_merge_request_url(config, merge_request_url)
             projects = await GitLabAppClient(config).projects()
             project = next(

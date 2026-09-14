@@ -8,6 +8,20 @@ export interface GitLabAppConfig {
   baseUrl: string;
   webhookUrl: string;
   reason: string;
+  oauthConfigured: boolean;
+  oauthConnected: boolean;
+  oauthUser: GitLabOAuthUser | null;
+  managedTokenConfigured: boolean;
+}
+
+export interface GitLabOAuthUser {
+  credentialId: string;
+  ownerId: string;
+  baseUrl: string;
+  gitlabUserId: number;
+  gitlabUsername: string;
+  gitlabName: string;
+  expiresAt: number;
 }
 
 export interface GitLabProject {
@@ -21,6 +35,12 @@ export interface GitLabProject {
   private: boolean;
   reviewEnabled: boolean;
   permissionsNote: string;
+  accessLevel: number;
+  canManageWebhooks: boolean;
+  reviewBindingStatus: string;
+  reviewBindingReason: string;
+  reviewCredentialOwner: string;
+  reviewCredentialType: string;
 }
 
 export interface GitLabPagination {
@@ -98,7 +118,24 @@ export async function getGitLabAppConfig(signal: AbortSignal): Promise<GitLabApp
     typeof value.configured !== "boolean" ||
     typeof value.baseUrl !== "string" ||
     typeof value.webhookUrl !== "string" ||
-    typeof value.reason !== "string"
+    typeof value.reason !== "string" ||
+    typeof value.oauthConfigured !== "boolean" ||
+    typeof value.oauthConnected !== "boolean" ||
+    typeof value.managedTokenConfigured !== "boolean" ||
+    (
+      value.oauthUser !== null &&
+      value.oauthUser !== undefined &&
+      (
+        typeof value.oauthUser !== "object" ||
+        typeof value.oauthUser.credentialId !== "string" ||
+        typeof value.oauthUser.ownerId !== "string" ||
+        typeof value.oauthUser.baseUrl !== "string" ||
+        typeof value.oauthUser.gitlabUserId !== "number" ||
+        typeof value.oauthUser.gitlabUsername !== "string" ||
+        typeof value.oauthUser.gitlabName !== "string" ||
+        typeof value.oauthUser.expiresAt !== "number"
+      )
+    )
   ) {
     throw new Error("GitLab App 配置响应格式无效。");
   }
@@ -140,7 +177,13 @@ export async function getGitLabProjects(
       typeof project.webUrl !== "string" ||
       typeof project.private !== "boolean" ||
       typeof project.reviewEnabled !== "boolean" ||
-      typeof project.permissionsNote !== "string"
+      typeof project.permissionsNote !== "string" ||
+      typeof project.accessLevel !== "number" ||
+      typeof project.canManageWebhooks !== "boolean" ||
+      typeof project.reviewBindingStatus !== "string" ||
+      typeof project.reviewBindingReason !== "string" ||
+      typeof project.reviewCredentialOwner !== "string" ||
+      typeof project.reviewCredentialType !== "string"
     ))
   ) {
     throw new Error("GitLab App 项目列表响应格式无效。");
@@ -149,7 +192,7 @@ export async function getGitLabProjects(
 }
 
 export async function updateGitLabReviewProject(
-  input: { projectId: number; reviewEnabled: boolean },
+  input: { projectId: number; reviewEnabled: boolean; credentialMode?: "oauth" | "managed" },
   signal: AbortSignal,
 ): Promise<Array<{ projectId: number }>> {
   const response = await studioFetch("/web/gitlab/app/review-projects", {
@@ -168,6 +211,29 @@ export async function updateGitLabReviewProject(
     throw new Error("GitLab App 评审项目保存响应格式无效。");
   }
   return value.projects as Array<{ projectId: number }>;
+}
+
+export async function disconnectGitLabOAuth(signal: AbortSignal): Promise<void> {
+  const response = await studioFetch("/web/gitlab/oauth/disconnect", {
+    method: "POST",
+    headers: { Accept: "application/json" },
+    signal,
+  });
+  if (!response.ok) throw await gitLabReviewError(response);
+}
+
+export async function getGitLabOAuthAuthorizationUrl(signal: AbortSignal): Promise<string> {
+  const response = await studioFetch("/web/gitlab/oauth/start-url", {
+    method: "GET",
+    headers: { Accept: "application/json" },
+    signal,
+  });
+  if (!response.ok) throw await gitLabReviewError(response);
+  const value = (await response.json()) as { authorizationUrl?: unknown };
+  if (typeof value.authorizationUrl !== "string" || !value.authorizationUrl) {
+    throw new Error("GitLab OAuth 授权地址响应格式无效。");
+  }
+  return value.authorizationUrl;
 }
 
 export async function getGitLabReviewRecords(

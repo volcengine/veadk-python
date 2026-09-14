@@ -62,6 +62,9 @@ def _clear_provider_environment(monkeypatch: pytest.MonkeyPatch) -> None:
         "VEADK_GITLAB_BASE_URL",
         "VEADK_GITLAB_TOKEN",
         "VEADK_GITLAB_WEBHOOK_SECRET",
+        "VEADK_GITLAB_OAUTH_CLIENT_ID",
+        "VEADK_GITLAB_OAUTH_CLIENT_SECRET",
+        "VEADK_GITLAB_OAUTH_REDIRECT_URI",
         "VEADK_GITLAB_GROUP_ID_OR_PATH",
         "VEADK_GITLAB_REVIEW_OWNER_ID",
         "VEADK_GITLAB_REVIEW_CREATOR",
@@ -586,6 +589,12 @@ def test_studio_update_propagates_git_review_environment(
     monkeypatch.setenv("VEADK_GITLAB_BASE_URL", "https://gitlab.com")
     monkeypatch.setenv("VEADK_GITLAB_TOKEN", "gitlab-token")
     monkeypatch.setenv("VEADK_GITLAB_WEBHOOK_SECRET", "gitlab-secret")
+    monkeypatch.setenv("VEADK_GITLAB_OAUTH_CLIENT_ID", "gitlab-client-id")
+    monkeypatch.setenv("VEADK_GITLAB_OAUTH_CLIENT_SECRET", "gitlab-client-secret")
+    monkeypatch.setenv(
+        "VEADK_GITLAB_OAUTH_REDIRECT_URI",
+        "https://studio.example.com/web/gitlab/oauth/callback",
+    )
     monkeypatch.setenv("VEADK_GITLAB_GROUP_ID_OR_PATH", "example-group")
     monkeypatch.setenv("VEADK_GITLAB_REVIEW_OWNER_ID", "gitlab-owner")
     monkeypatch.setenv("VEADK_GITLAB_REVIEW_CREATOR", "GitLab App")
@@ -649,6 +658,12 @@ def test_studio_update_propagates_git_review_environment(
     assert overrides["VEADK_GITLAB_BASE_URL"] == "https://gitlab.com"
     assert overrides["VEADK_GITLAB_TOKEN"] == "gitlab-token"
     assert overrides["VEADK_GITLAB_WEBHOOK_SECRET"] == "gitlab-secret"
+    assert overrides["VEADK_GITLAB_OAUTH_CLIENT_ID"] == "gitlab-client-id"
+    assert overrides["VEADK_GITLAB_OAUTH_CLIENT_SECRET"] == "gitlab-client-secret"
+    assert (
+        overrides["VEADK_GITLAB_OAUTH_REDIRECT_URI"]
+        == "https://studio.example.com/web/gitlab/oauth/callback"
+    )
     assert overrides["VEADK_GITLAB_GROUP_ID_OR_PATH"] == "example-group"
     assert overrides["VEADK_GITLAB_REVIEW_OWNER_ID"] == "gitlab-owner"
     assert overrides["VEADK_GITLAB_REVIEW_CREATOR"] == "GitLab App"
@@ -659,6 +674,7 @@ def test_studio_update_propagates_git_review_environment(
     )
     assert scheduler_overrides["VEADK_GITHUB_APP_ID"] == "4830047"
     assert scheduler_overrides["VEADK_GITLAB_TOKEN"] == "gitlab-token"
+    assert scheduler_overrides["VEADK_GITLAB_OAUTH_CLIENT_ID"] == "gitlab-client-id"
 
 
 def test_studio_update_can_skip_cronjob_scheduler(
