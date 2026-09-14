@@ -81,6 +81,10 @@ class CodexAppServerTransportError(CodexAppServerError):
     """The Codex app-server transport could not continue an operation."""
 
 
+class CodexAppServerTurnInterruptedError(CodexAppServerError):
+    """The app-server reported that the Turn was interrupted."""
+
+
 class CodexAppServerTurnTimeoutError(CodexAppServerError):
     """A Codex turn exceeded its configured inactivity timeout."""
 
@@ -827,7 +831,12 @@ class CodexAppServerSession:
                     "Codex 智能体长时间没有新进度，已停止本次任务，请重试。"
                 ) from error
 
-            status = str(turn_result.get("status") or "completed")
+            raw_status = turn_result.get("status")
+            if isinstance(raw_status, dict):
+                raw_status = raw_status.get("type")
+            status = str(raw_status or "completed")
+            if status.lower() == "interrupted":
+                raise CodexAppServerTurnInterruptedError("Codex 本轮任务已中断。")
             if status.lower() in {"failed", "cancelled"}:
                 error = turn_result.get("error")
                 detail = (
@@ -2363,6 +2372,7 @@ def _turn_is_terminal(turn: dict[str, object]) -> bool:
         "completed",
         "failed",
         "cancelled",
+        "interrupted",
     }:
         return True
     items = turn.get("items")
@@ -2757,6 +2767,7 @@ __all__ = [
     "CodexAppServerEvent",
     "CodexAppServerSession",
     "CodexAppServerTransportError",
+    "CodexAppServerTurnInterruptedError",
     "CodexAppServerTurnTimeoutError",
     "CodexApproval",
     "CodexDirectoryListing",

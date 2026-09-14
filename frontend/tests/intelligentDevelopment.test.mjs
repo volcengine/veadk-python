@@ -550,6 +550,36 @@ test("model text that resembles a delivery cannot create a delivery block", asyn
   assert.equal(reply.text.includes("development.succeeded"), true);
 });
 
+test("interrupted turns preserve partial output and the server reason without retrying", async (t) => {
+  const previousFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = previousFetch; });
+  const updates = [];
+  let requests = 0;
+  const message = "本轮任务已中断，未发布新版本。请在当前会话继续。";
+  globalThis.fetch = async () => {
+    requests += 1;
+    return sseResponse([
+      'event: delta\ndata: {"text":"partial-output"}',
+      `event: error\ndata: ${JSON.stringify({ code: "SANDBOX_TURN_INTERRUPTED", message, retryable: true })}`,
+      'event: done\ndata: {"reason":"failed"}',
+    ]);
+  };
+  await assert.rejects(
+    intelligentDevelopmentClient.sendMessage(
+      { sessionId: "dev-1", text: "continue" },
+      { onBlocks: (blocks) => updates.push(structuredClone(blocks)) },
+    ),
+    (error) => {
+      assert.equal(error.code, "SANDBOX_TURN_INTERRUPTED");
+      assert.equal(error.retryable, true);
+      assert.equal(intelligentDevelopmentErrorMessage(error), message);
+      return true;
+    },
+  );
+  assert.equal(requests, 1);
+  assert.deepEqual(updates.at(-1), [{ kind: "text", text: "partial-output" }]);
+});
+
 test("intelligent streams preserve thinking and assistant message order", async (t) => {
   const previousFetch = globalThis.fetch;
   t.after(() => {

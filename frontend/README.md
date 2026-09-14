@@ -266,8 +266,10 @@ See [deployment and operation](service/studio_release_notifier/README.md).
   Navigating away from an active build requires confirmation and stops that
   build before leaving, while the conversation remains available until expiry.
   Stopping preserves received output and blocks the next submission until
-  cleanup finishes. Users can inspect generated text files and download the
-  complete ZIP (including binary assets) as soon as the source is ready.
+  cleanup finishes. An interrupted Codex turn is reported explicitly, including
+  when Studio discovers it after reconnecting; it does not publish a new version
+  or wait for the inactivity timeout. Users can inspect generated text files and
+  download the complete ZIP (including binary assets) as soon as the source is ready.
   Each completed build or optimization is also saved as an immutable project
   version in the private Studio TOS bucket. Users can reopen any saved version,
   view, download, deploy, delete, or restore it into a new Sandbox for another

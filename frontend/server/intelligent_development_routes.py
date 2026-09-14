@@ -75,6 +75,7 @@ from veadk.cli.frontend_sandbox import (
     SandboxStreamEvent,
     SandboxToolQuotaError,
     SandboxTransportError,
+    SandboxTurnInterruptedError,
     SandboxTurnTimeoutError,
     SandboxValidationError,
     mount_sandbox_routes,
@@ -777,6 +778,12 @@ def _stream_error_payload(error: SandboxError) -> dict[str, object]:
             SandboxProvisioningError.code,
             "开发环境创建失败，请稍后重试。",
             SandboxProvisioningError.retryable,
+        ),
+        (
+            SandboxTurnInterruptedError,
+            SandboxTurnInterruptedError.code,
+            "本轮任务已中断，未发布新版本。请在当前会话继续。",
+            SandboxTurnInterruptedError.retryable,
         ),
         (
             SandboxTurnTimeoutError,

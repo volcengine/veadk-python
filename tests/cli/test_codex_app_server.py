@@ -638,6 +638,47 @@ class _DelayedStoredFinalWebSocket(_ThreadReadFinalWebSocket):
         asyncio.create_task(complete())
 
 
+class _TerminalTurnWebSocket(_FakeWebSocket):
+    """Expose the same terminal Turn through notifications and stored history."""
+
+    def __init__(self, status: str | dict[str, str], *, has_final: bool) -> None:
+        super().__init__()
+        self.turn = {
+            "id": "turn-active",
+            "status": status,
+            "items": [
+                {
+                    "id": "message-active",
+                    "type": "agentMessage",
+                    "phase": "final_answer",
+                    "text": "partial-output",
+                }
+            ]
+            if has_final
+            else [],
+        }
+
+    async def send(self, raw: str) -> None:
+        message = json.loads(raw)
+        method = message.get("method")
+        if method not in {"turn/start", "thread/read"}:
+            await super().send(raw)
+            return
+        self.messages.append(message)
+        result = (
+            {"turn": {"id": "turn-active"}}
+            if method == "turn/start"
+            else {"thread": {"id": "thread-1", "turns": [self.turn]}}
+        )
+        await self.queue.put(json.dumps({"id": message["id"], "result": result}))
+        if method == "turn/start":
+            await self._notification(
+                "item/agentMessage/delta",
+                {"itemId": "message-active", "delta": "partial-output"},
+            )
+            await self._notification("turn/completed", {"turn": self.turn})
+
+
 class _DisconnectAfterStoredTurnReadWebSocket(_FakeWebSocket):
     """Drop a resumed transport after reporting that the Turn is still active."""
 
@@ -1358,6 +1399,41 @@ async def test_active_turn_reconnect_reads_completion_missed_during_disconnect()
         sum(message.get("method") == "thread/read" for message in second.messages) >= 1
     )
     await session.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("recovered", [False, True])
+@pytest.mark.parametrize("has_final", [False, True])
+@pytest.mark.parametrize("status", ["interrupted", {"type": "interrupted"}])
+async def test_interrupted_turn_retains_its_terminal_reason(
+    recovered: bool, has_final: bool, status: str | dict[str, str]
+) -> None:
+    terminal = _TerminalTurnWebSocket(status, has_final=has_final)
+    sockets = (
+        [_DisconnectingActiveTurnWebSocket(), terminal] if recovered else [terminal]
+    )
+    available = list(sockets)
+
+    async def factory(_url: str) -> _FakeWebSocket:
+        return available.pop(0)
+
+    session = CodexAppServerSession(
+        "https://sandbox.example?Authorization=secret", websocket_factory=factory
+    )
+    events = []
+    try:
+        with pytest.raises(CodexAppServerError, match="本轮任务已中断") as captured:
+            async for event in session.stream_turn("long-running", timeout_seconds=0.1):
+                events.append(event)
+        assert type(captured.value).__name__ == "CodexAppServerTurnInterruptedError"
+        assert session.active is False
+        if not recovered:
+            assert any(event.text == "partial-output" for event in events)
+        methods = [message.get("method") for ws in sockets for message in ws.messages]
+        assert methods.count("turn/start") == 1
+        assert "turn/interrupt" not in methods
+    finally:
+        await session.close()
 
 
 @pytest.mark.asyncio

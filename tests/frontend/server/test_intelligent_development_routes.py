@@ -55,6 +55,7 @@ from frontend.server.intelligent_development_task import (
 from veadk.cli.codex_app_server import (
     CodexAppServerError,
     CodexAppServerEvent,
+    CodexAppServerTurnInterruptedError,
     CodexPermissionSettings,
     CodexSkill,
     CodexThreadMessage,
@@ -2523,6 +2524,51 @@ def test_stream_error_payload_distinguishes_codex_failures(
         "message": message,
         "retryable": True,
     }
+
+
+@pytest.mark.parametrize("cleanup_fails", [False, True])
+def test_interrupted_turn_reports_reason_after_credential_cleanup(
+    monkeypatch: pytest.MonkeyPatch, cleanup_fails: bool
+) -> None:
+    gateway = _FakeGateway()
+    gateway.sessions["dev-session"] = _cloud()
+    gateway.codex.turns = [CodexAppServerTurnInterruptedError("private-error-detail")]
+    lease = _Lease(
+        _Remote(gateway.sessions["dev-session"].endpoint),
+        cleanup_error=RuntimeError("cannot remove credentials")
+        if cleanup_fails
+        else None,
+    )
+    monkeypatch.setattr(
+        routes, "create_credential_lease", AsyncMock(return_value=lease)
+    )
+    monkeypatch.setattr(routes, "invalidate_current_delivery", AsyncMock())
+    monkeypatch.setattr(routes, "remove_completion_file", AsyncMock())
+    with TestClient(_app(gateway)) as client:
+        _connect(client)
+        response = client.post(
+            "/web/intelligent-development/sessions/dev-session/messages",
+            headers={"X-Test-User": "alice"},
+            json={"message": "做一个天气 Agent"},
+        )
+        if not cleanup_fails:
+            assert gateway.codex.closed is False
+    assert "event: error" in response.text
+    assert 'event: done\ndata: {"reason":"failed"}' in response.text
+    assert "development.source_ready" not in response.text
+    assert "development.succeeded" not in response.text
+    assert "private-error-detail" not in response.text
+    assert lease.cleanup_attempts == 1
+    assert len(gateway.codex.calls) == 1
+    if cleanup_fails:
+        assert "SANDBOX_TURN_INTERRUPTED" not in response.text
+        assert "当前开发环境已结束或不可用" in response.text
+        assert "dev-session" not in gateway.sessions
+    else:
+        assert '"code": "SANDBOX_TURN_INTERRUPTED"' in response.text
+        assert "本轮任务已中断" in response.text
+        assert lease.cleaned is True
+        assert "dev-session" in gateway.sessions
 
 
 def test_cleanup_failure_terminates_session_and_is_not_suppressed(

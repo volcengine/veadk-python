@@ -42,6 +42,7 @@ from veadk.cli.agentkit_session_metadata import (
 from veadk.cli.codex_app_server import (
     CodexAppServerError,
     CodexAppServerEvent,
+    CodexAppServerTurnInterruptedError,
     CodexDirectoryEntry,
     CodexDirectoryListing,
     CodexImportedImage,
@@ -1850,6 +1851,48 @@ async def test_sandbox_client_disconnect_keeps_the_cloud_turn_running() -> None:
         async for event in service.stream_message("remote-existing", "alice", "again")
     ]
     assert [event.text for event in follow_up] == ["reply:again"]
+
+
+def test_interrupted_turn_preserves_output_and_releases_the_session() -> None:
+    class _InterruptedCodex(_FakeCodex):
+        async def stream_turn(
+            self, prompt: str, skill_ids: tuple[str, ...] = ()
+        ) -> AsyncIterator[CodexAppServerEvent]:
+            if prompt == "interrupt":
+                yield CodexAppServerEvent(kind="text", text="partial-output")
+                raise CodexAppServerTurnInterruptedError("Codex 本轮任务已中断。")
+            async for event in super().stream_turn(prompt, skill_ids):
+                yield event
+
+    class _InterruptedGateway(_FakeGateway):
+        async def open_codex(self, session: SandboxCloudSession) -> _FakeCodex:
+            connection = _InterruptedCodex(self.thread_ids)
+            self.connections.append(connection)
+            return connection
+
+    gateway = _InterruptedGateway()
+    headers = {"X-Test-User": "alice"}
+    with TestClient(_app(gateway)) as client:
+        connected = client.post(
+            "/web/sandbox/sessions/remote-existing/connect", headers=headers
+        )
+        assert connected.status_code == 200
+        response = client.post(
+            "/web/sandbox/sessions/remote-existing/messages",
+            headers=headers,
+            json={"message": "interrupt"},
+        )
+        assert "partial-output" in response.text
+        assert '"code": "SANDBOX_TURN_INTERRUPTED"' in response.text
+        assert gateway.connections[0].closed is False
+        follow_up = client.post(
+            "/web/sandbox/sessions/remote-existing/messages",
+            headers=headers,
+            json={"message": "again"},
+        )
+        assert "reply:again" in follow_up.text
+        assert "event: error" not in follow_up.text
+        assert len(gateway.connections) == 1
 
 
 @pytest.mark.asyncio
