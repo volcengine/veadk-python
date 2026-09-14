@@ -8,12 +8,19 @@ import { build } from "esbuild";
 import { JSDOM } from "jsdom";
 
 const require = createRequire(import.meta.url);
-const resources = JSON.parse(
+const migrationsResources = JSON.parse(
   readFileSync(
     new URL("../src/i18n/resources/zh-CN/migrations.json", import.meta.url),
     "utf8",
   ),
 );
+const uiResources = JSON.parse(
+  readFileSync(
+    new URL("../src/i18n/resources/zh-CN/ui.json", import.meta.url),
+    "utf8",
+  ),
+);
+const resources = { migrations: migrationsResources, ui: uiResources };
 
 const bundle = await build({
   entryPoints: [
@@ -38,12 +45,12 @@ const bundle = await build({
           () => ({
             contents: `
               const resources = ${JSON.stringify(resources)};
-              export function useTranslation() {
+              export function useTranslation(namespace = "migrations") {
                 return {
                   t(key, options = {}) {
                     const value = key.split(".").reduce(
                       (current, part) => current?.[part],
-                      resources,
+                      resources[namespace],
                     ) ?? key;
                     return typeof value === "string"
                       ? value.replace(/{{(\\w+)}}/g, (_, name) => String(options[name] ?? ""))
@@ -451,4 +458,92 @@ test("shows all evaluation steps and the current server-reported action", async 
   } finally {
     await view.cleanup();
   }
+});
+
+test("shows and expands copyable evaluation failure diagnostics", async () => {
+  const evaluation = {
+    enabled: true,
+    state: "failed",
+    message: "临时部署或评测执行失败，请重试。",
+    attempt: 2,
+    runtimeName: "migration-eval-111111111111-a2",
+    canRetry: true,
+    error: {
+      code: "MIGRATION_EVALUATION_EXECUTION_FAILED",
+      message: "临时部署或评测执行失败，请重试。",
+      retryable: true,
+      stage: "deploying",
+      detail: "Command exited with code 1.\nModuleNotFoundError: demo",
+    },
+  };
+  let retries = 0;
+  const view = await mount((React) =>
+    React.createElement(MigrationEvaluationResult, {
+      taskId: `migration-v1-${"1".repeat(32)}`,
+      evaluation,
+      report: null,
+      reportLoading: false,
+      reportError: "",
+      actionError: "",
+      busy: false,
+      reportDownloading: false,
+      onResume() {},
+      async onRetry() {
+        retries += 1;
+      },
+      onLoadReport() {},
+      onDownloadReport() {},
+    }),
+  );
+  try {
+    await view.render();
+    const failure = view.document.querySelector(
+      ".migration-evaluation-failure .deploy-error-message",
+    );
+    assert.ok(failure);
+    assert.equal(failure.classList.contains("is-expanded"), false);
+    assert.match(failure.textContent, /失败阶段：启动 Runtime/);
+    assert.match(failure.textContent, /MIGRATION_EVALUATION_EXECUTION_FAILED/);
+    assert.match(failure.textContent, /migration-v1-11111111111111111111111111111111/);
+    assert.match(failure.textContent, /migration-eval-111111111111-a2/);
+    assert.match(failure.textContent, /ModuleNotFoundError: demo/);
+    assert.ok(
+      failure.querySelector('[aria-label="复制完整错误信息"]'),
+      "the shared error component must keep copy diagnostics available",
+    );
+    const failedStep = view.document.querySelector(
+      ".migration-evaluation-execution li.is-failed",
+    );
+    assert.match(failedStep.textContent, /启动 Runtime/);
+    assert.match(failedStep.textContent, /失败/);
+    assert.equal(
+      view.document.querySelectorAll(
+        ".migration-evaluation-execution li.is-complete",
+      ).length,
+      1,
+    );
+
+    const expand = failure.querySelector('[aria-label="展开完整错误信息"]');
+    await view.act(async () => expand.click());
+    assert.equal(failure.classList.contains("is-expanded"), true);
+
+    const retry = failure.querySelector(".deploy-error-retry");
+    await view.act(async () => retry.click());
+    await view.settle();
+    assert.equal(retries, 1);
+  } finally {
+    await view.cleanup();
+  }
+});
+
+test("keeps evaluation failure diagnostic labels bilingual", () => {
+  const english = JSON.parse(
+    readFileSync(
+      new URL("../src/i18n/resources/en-US/migrations.json", import.meta.url),
+      "utf8",
+    ),
+  );
+  assert.equal(english.evaluation.result.failureStage, "Failed at");
+  assert.equal(english.evaluation.result.errorDetails, "Error details");
+  assert.equal(english.evaluation.result.taskId, "Task ID");
 });

@@ -610,6 +610,24 @@ def runner_source() -> str:
             )
 
 
+        def redact_failure_detail(raw, sensitive_values, *, prefix=""):
+            if isinstance(raw, str):
+                raw = raw.encode("utf-8", errors="replace")
+            text = redact_runtime_data(raw, sensitive_values).strip()
+            if not text:
+                return ""
+            prefix = str(prefix).strip()
+            prefix_text = prefix + "\n" if prefix else ""
+            available = 2048 - len(prefix_text.encode("utf-8"))
+            encoded = text.encode("utf-8")
+            if len(encoded) > available:
+                marker = "…\n"
+                available -= len(marker.encode("utf-8"))
+                tail = encoded[-available:].decode("utf-8", errors="ignore")
+                text = marker + tail
+            return prefix_text + text
+
+
         def capture_runtime_observation(raw, *, raw_total, sensitive_values):
             text = redact_runtime_data(raw, sensitive_values)
             encoded = text.encode("utf-8")
@@ -1645,6 +1663,9 @@ def runner_source() -> str:
             config_file = None
             deployment = None
             runtime_project = config_project_name(config)
+            current_stage = "preparing"
+            failure_detail = None
+            failure_exit_code = None
             try:
                 diagnostic(config, "runner_started")
                 secrets = load_secrets(config.get("secret_path"))
@@ -1691,6 +1712,7 @@ def runner_source() -> str:
                         env=env,
                     ),
                 }
+                current_stage = "deploying"
                 status(
                     config,
                     "deploying",
@@ -1718,6 +1740,8 @@ def runner_source() -> str:
                     )
                     code, output = deploy_runtime(deployment, env)
                     if code != 0:
+                        failure_detail = output
+                        failure_exit_code = code
                         diagnostic(
                             config,
                             "runtime_deploy_failed",
@@ -1743,6 +1767,7 @@ def runner_source() -> str:
                 for case_index, case in enumerate(cases, start=1):
                     if case["case_id"] in observations:
                         continue
+                    current_stage = "executing"
                     status(
                         config,
                         "executing",
@@ -1778,6 +1803,7 @@ def runner_source() -> str:
                 batch_total = (len(cases) + 9) // 10
                 for batch_number, index in enumerate(range(0, len(cases), 10), start=1):
                     batch_end = min(index + 10, len(cases))
+                    current_stage = "judging"
                     status(
                         config,
                         "judging",
@@ -1797,6 +1823,7 @@ def runner_source() -> str:
                             env,
                         )
                     )
+                current_stage = "aggregating"
                 status(
                     config,
                     "aggregating",
@@ -1839,7 +1866,24 @@ def runner_source() -> str:
                         "The temporary deployment or evaluation failed. Try again.",
                     ),
                     "retryable": True,
+                    "stage": current_stage,
                 }
+                detail_prefix = (
+                    localized(
+                        config,
+                        f"命令退出码：{failure_exit_code}",
+                        f"Command exit code: {failure_exit_code}",
+                    )
+                    if failure_exit_code is not None
+                    else ""
+                )
+                detail = redact_failure_detail(
+                    failure_detail if failure_detail is not None else str(error),
+                    runtime_sensitive_values({**secrets, **cloud_environment}),
+                    prefix=detail_prefix,
+                )
+                if detail:
+                    failure["detail"] = detail
                 status(config, "failed", failure["message"], error=failure)
             finally:
                 secrets.clear()

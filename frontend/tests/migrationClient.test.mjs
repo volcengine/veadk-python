@@ -373,6 +373,78 @@ test("preserves required and optional evaluation environment variables", async (
   });
 });
 
+test("preserves actionable evaluation failure diagnostics", async (t) => {
+  const previousFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = previousFetch;
+  });
+  globalThis.fetch = async () =>
+    new Response(
+      JSON.stringify({
+        enabled: true,
+        state: "failed",
+        message: "临时部署或评测执行失败，请重试。",
+        attempt: 2,
+        runtimeName: "migration-eval-111111111111-a2",
+        canResume: false,
+        canRetry: true,
+        error: {
+          code: "MIGRATION_EVALUATION_EXECUTION_FAILED",
+          message: "临时部署或评测执行失败，请重试。",
+          retryable: true,
+          stage: "deploying",
+          detail: "Command exited with code 1.\nModuleNotFoundError: demo",
+        },
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    );
+
+  const status = await getMigrationEvaluation("task-1");
+
+  assert.deepEqual(status.error, {
+    code: "MIGRATION_EVALUATION_EXECUTION_FAILED",
+    message: "临时部署或评测执行失败，请重试。",
+    retryable: true,
+    stage: "deploying",
+    detail: "Command exited with code 1.\nModuleNotFoundError: demo",
+  });
+});
+
+test("rejects malformed evaluation failure diagnostics", async (t) => {
+  const previousFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = previousFetch;
+  });
+  const errors = [
+    { stage: "cleaning" },
+    { detail: "" },
+    { detail: "中".repeat(683) },
+  ];
+  globalThis.fetch = async () => {
+    const diagnostic = errors.shift();
+    return new Response(
+      JSON.stringify({
+        enabled: true,
+        state: "failed",
+        message: "评测失败",
+        canResume: false,
+        canRetry: true,
+        error: {
+          code: "MIGRATION_EVALUATION_EXECUTION_FAILED",
+          message: "评测失败",
+          retryable: true,
+          ...diagnostic,
+        },
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    );
+  };
+
+  for (let index = 0; index < 3; index += 1) {
+    await assert.rejects(() => getMigrationEvaluation("task-1"), /格式错误/);
+  }
+});
+
 test("accepts the migration default model while preserving legacy capabilities", async (t) => {
   const previousFetch = globalThis.fetch;
   t.after(() => {

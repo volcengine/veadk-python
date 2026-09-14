@@ -645,6 +645,10 @@
   justify-self: start;
 }
 
+.migration-evaluation-failure__details {
+  min-width: 0;
+}
+
 .migration-evaluation-execution {
   display: grid;
   padding: 4px 12px;
@@ -721,11 +725,25 @@
   background: hsl(var(--primary) / 0.06);
 }
 
+.migration-evaluation-execution li.is-failed {
+  background: hsl(var(--destructive) / 0.05);
+}
+
 .migration-evaluation-execution li.is-active > span,
 .migration-evaluation-execution li.is-complete > span {
   border-color: hsl(var(--primary));
   background: hsl(var(--primary));
   color: hsl(var(--primary-foreground));
+}
+
+.migration-evaluation-execution li.is-failed > span {
+  border-color: hsl(var(--destructive));
+  background: hsl(var(--destructive));
+  color: hsl(var(--primary-foreground));
+}
+
+.migration-evaluation-execution li.is-failed b {
+  color: hsl(var(--destructive));
 }
 
 .migration-evaluation-execution li.is-waiting > span {

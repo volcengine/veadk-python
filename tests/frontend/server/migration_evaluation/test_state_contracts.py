@@ -233,6 +233,34 @@ def test_status_requires_environment_names_errors_and_report_by_state() -> None:
         validate_evaluation_status(_status("completed"), expected_task_id=TASK_ID)
 
 
+def test_failed_status_accepts_bounded_diagnostic_context() -> None:
+    value = _status(
+        "failed",
+        error={
+            "code": "MIGRATION_EVALUATION_EXECUTION_FAILED",
+            "message": "临时部署或评测执行失败，请重试。",
+            "retryable": True,
+            "stage": "deploying",
+            "detail": "Command exited with code 1.\nModuleNotFoundError: demo",
+        },
+    )
+
+    assert validate_evaluation_status(value, expected_task_id=TASK_ID) == value
+    error = value["error"]
+    assert isinstance(error, dict)
+
+    for invalid_error in (
+        {**error, "stage": "cleaning"},
+        {**error, "detail": ""},
+        {**error, "detail": "中" * 683},
+    ):
+        with pytest.raises(EvaluationContractError, match="evaluation error"):
+            validate_evaluation_status(
+                _status("failed", error=invalid_error),
+                expected_task_id=TASK_ID,
+            )
+
+
 def test_public_assets_are_content_bound_and_validate_kind_identity() -> None:
     dataset = {
         "schemaVersion": 1,

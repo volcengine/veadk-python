@@ -34,6 +34,7 @@ from .models import (
 EVALUATION_REASON_MAX_BYTES = 4 * 1024
 EVALUATION_EVIDENCE_MAX_BYTES = 2 * 1024
 EVALUATION_LIMITATION_MAX_BYTES = 4 * 1024
+EVALUATION_ERROR_DETAIL_MAX_BYTES = 2 * 1024
 _VERSION_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _ENVIRONMENT_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -224,13 +225,27 @@ def validate_evaluation_status(
             raise EvaluationContractError(
                 "terminal evaluation status is missing an error"
             )
-        _exact_keys(error, required={"code", "message", "retryable"})
+        _exact_keys(
+            error,
+            required={"code", "message", "retryable"},
+            optional={"stage", "detail"},
+        )
         if (
             not isinstance(error.get("code"), str)
             or not error["code"]
             or not isinstance(error.get("message"), str)
             or not error["message"]
             or not isinstance(error.get("retryable"), bool)
+        ):
+            raise EvaluationContractError("invalid evaluation error")
+        stage = error.get("stage")
+        detail = error.get("detail")
+        if stage is not None and stage not in _ACTIVE_STATES:
+            raise EvaluationContractError("invalid evaluation error")
+        if detail is not None and (
+            not isinstance(detail, str)
+            or not detail.strip()
+            or len(detail.encode("utf-8")) > EVALUATION_ERROR_DETAIL_MAX_BYTES
         ):
             raise EvaluationContractError("invalid evaluation error")
     elif error is not None:
