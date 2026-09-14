@@ -270,6 +270,9 @@ See [deployment and operation](service/studio_release_notifier/README.md).
   when Studio discovers it after reconnecting; it does not publish a new version
   or wait for the inactivity timeout. Users can inspect generated text files and
   download the complete ZIP (including binary assets) as soon as the source is ready.
+  Active turns resume on the same thread after a connection drops. New task
+  progress resets the recovery allowance; reconnecting and reading unchanged
+  state do not extend the inactivity deadline or restart the task.
   Each completed build or optimization is also saved as an immutable project
   version in the private Studio TOS bucket. Users can reopen any saved version,
   view, download, deploy, delete, or restore it into a new Sandbox for another

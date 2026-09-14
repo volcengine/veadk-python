@@ -1764,7 +1764,10 @@ def test_sandbox_routes_list_create_connect_and_disconnect() -> None:
 
 
 @pytest.mark.asyncio
-async def test_sandbox_client_disconnect_keeps_the_cloud_turn_running() -> None:
+@pytest.mark.parametrize("interrupted", [False, True])
+async def test_sandbox_client_disconnect_keeps_the_cloud_turn_running(
+    interrupted: bool,
+) -> None:
     class _CancellableCodex(_FakeCodex):
         def __init__(self, turns: list[str]) -> None:
             super().__init__(turns)
@@ -1784,6 +1787,8 @@ async def test_sandbox_client_disconnect_keeps_the_cloud_turn_running() -> None:
                 yield CodexAppServerEvent(kind="text", text="partial")
                 self.partial_sent.set()
                 await self.release.wait()
+                if interrupted:
+                    raise CodexAppServerTurnInterruptedError("Codex 本轮任务已中断。")
                 yield CodexAppServerEvent(kind="text", text="completed")
             finally:
                 self.active = False

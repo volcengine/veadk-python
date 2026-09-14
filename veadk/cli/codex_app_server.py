@@ -645,7 +645,7 @@ class CodexAppServerSession:
                 self._workspace_locked = previous_workspace_locked
                 self._thread_token_total = previous_thread_total
                 self._model_context_window = previous_context_window
-        except Exception:
+        except (Exception, asyncio.CancelledError):
             await self._close_transport()
             raise
 
@@ -798,6 +798,9 @@ class CodexAppServerSession:
                                 await event_task
                             raise TimeoutError
                         if event_task in done:
+                            # Progress ends the current failure streak. A healthy
+                            # long Turn may outlive many transport connections.
+                            transport_recoveries = 0
                             yield event_task.result()
                             # Treat the turn timeout as an inactivity bound, not an
                             # absolute wall-clock limit. Long coding tasks can run
@@ -818,14 +821,25 @@ class CodexAppServerSession:
                         transport_recoveries += 1
                         completion = loop.create_future()
                         self._turn_completion = completion
-                        await self._reconnect_transport()
-                        stored_turn = await self._read_stored_turn(turn["id"])
-                        if stored_turn is not None and _turn_is_terminal(stored_turn):
+                        # Recovery consumes the remaining inactivity budget;
+                        # handshakes and repeated snapshots are not Turn progress.
+                        await asyncio.wait_for(
+                            self._reconnect_transport(),
+                            timeout=max(0.0, deadline - loop.time()),
+                        )
+                        stored_turn = await asyncio.wait_for(
+                            self._read_stored_turn(turn["id"]),
+                            timeout=max(0.0, deadline - loop.time()),
+                        )
+                        if (
+                            stored_turn is not None
+                            and _turn_is_terminal(stored_turn)
+                            and not completion.done()
+                        ):
                             completion.set_result(stored_turn)
-                        deadline = loop.time() + turn_timeout
                         continue
                     break
-            except TimeoutError as error:
+            except (TimeoutError, asyncio.TimeoutError) as error:
                 await self.interrupt()
                 raise CodexAppServerTurnTimeoutError(
                     "Codex 智能体长时间没有新进度，已停止本次任务，请重试。"
