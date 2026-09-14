@@ -125,3 +125,51 @@ for module in ("requests", "yaml"):
         capture_output=True,
         text=True,
     )
+
+
+def test_evaluation_automation_defers_model_runtime_until_first_call() -> None:
+    root = Path(__file__).resolve().parents[2]
+    script = """
+import sys
+
+import frontend.server.evaluation_automation
+
+if "veadk.agent" in sys.modules:
+    raise SystemExit("evaluation model runtime loaded during Studio cold start")
+"""
+
+    subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_knowledge_routes_defer_document_extraction_stack() -> None:
+    root = Path(__file__).resolve().parents[2]
+    script = """
+import sys
+
+import frontend.server.knowledge.routes
+
+unexpected = sorted(
+    name
+    for name in sys.modules
+    if name == "trafilatura"
+    or name.startswith("trafilatura.")
+    or name == "dateparser"
+    or name.startswith("dateparser.")
+)
+if unexpected:
+    raise SystemExit("web document extraction stack loaded during Studio cold start")
+"""
+
+    subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
