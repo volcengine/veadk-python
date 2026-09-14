@@ -1508,6 +1508,7 @@ def test_studio_deploy_byteplus_wires_provider_to_cloud_engine_and_package(
     assert deploy["disable_gateway_cors"] is True
     assert "--provider byteplus --auth-mode frontend" in str(captured["run_script"])
     assert str(captured["requirements"]).startswith(
+        "--extra-index-url https://pypi.org/simple\n"
         "./pydantic-2.12.5-py3-none-any.whl\n"
     )
     assert captured["serverless_role"] == {

@@ -15917,10 +15917,17 @@ def frontend_deploy(
             from veadk.cli.studio_package import stage_studio_provider_requirements
 
             try:
-                requirements = (
-                    stage_studio_provider_requirements(Path(tmp), provider_id)
-                    + requirements
+                provider_requirements = stage_studio_provider_requirements(
+                    Path(tmp), provider_id
                 )
+                if provider_id == "byteplus":
+                    requirements = (
+                        "--extra-index-url https://pypi.org/simple\n"
+                        + provider_requirements
+                        + requirements
+                    )
+                else:
+                    requirements = provider_requirements + requirements
             except ValueError as error:
                 raise click.ClickException(str(error)) from error
 
