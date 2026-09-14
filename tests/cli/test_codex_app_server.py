@@ -23,6 +23,7 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 
 import pytest
+from websockets.asyncio.server import ServerConnection, serve
 
 import veadk.cli.codex_app_server as codex_app_server
 from veadk.cli.codex_app_server import (
@@ -638,6 +639,47 @@ class _DelayedStoredFinalWebSocket(_ThreadReadFinalWebSocket):
         asyncio.create_task(complete())
 
 
+class _TerminalTurnWebSocket(_FakeWebSocket):
+    """Expose the same terminal Turn through notifications and stored history."""
+
+    def __init__(self, status: str | dict[str, str], *, has_final: bool) -> None:
+        super().__init__()
+        self.turn = {
+            "id": "turn-active",
+            "status": status,
+            "items": [
+                {
+                    "id": "message-active",
+                    "type": "agentMessage",
+                    "phase": "final_answer",
+                    "text": "partial-output",
+                }
+            ]
+            if has_final
+            else [],
+        }
+
+    async def send(self, raw: str) -> None:
+        message = json.loads(raw)
+        method = message.get("method")
+        if method not in {"turn/start", "thread/read"}:
+            await super().send(raw)
+            return
+        self.messages.append(message)
+        result = (
+            {"turn": {"id": "turn-active"}}
+            if method == "turn/start"
+            else {"thread": {"id": "thread-1", "turns": [self.turn]}}
+        )
+        await self.queue.put(json.dumps({"id": message["id"], "result": result}))
+        if method == "turn/start":
+            await self._notification(
+                "item/agentMessage/delta",
+                {"itemId": "message-active", "delta": "partial-output"},
+            )
+            await self._notification("turn/completed", {"turn": self.turn})
+
+
 class _DisconnectAfterStoredTurnReadWebSocket(_FakeWebSocket):
     """Drop a resumed transport after reporting that the Turn is still active."""
 
@@ -1184,6 +1226,7 @@ async def test_custom_turn_timeout_controls_transport_preflight(
 @pytest.mark.asyncio
 async def test_turn_inactivity_raises_specific_timeout_error(
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     monkeypatch.setattr(codex_app_server, "_TURN_TIMEOUT_SECONDS", 0.01)
     websocket = _CustomTurnTimeoutWebSocket()
@@ -1196,6 +1239,38 @@ async def test_turn_inactivity_raises_specific_timeout_error(
     with pytest.raises(CodexAppServerTurnTimeoutError):
         _ = [event async for event in session.stream_turn("long-running")]
 
+    assert "reason=inactivity_timeout" in caplog.text
+    assert "thread_id=thread-1" in caplog.text
+    assert "turn_id=" in caplog.text
+    assert "elapsed_seconds=" in caplog.text
+    assert "idle_seconds=" in caplog.text
+    assert "reason=task_cancelled" not in caplog.text
+    assert "Authorization=secret" not in caplog.text
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_turn_logs_cancellation_without_claiming_user_stop(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    websocket = _FakeWebSocket()
+    session = CodexAppServerSession(
+        "https://sandbox.example?Authorization=secret",
+        websocket_factory=lambda _url: _ready(websocket),
+    )
+    await session.connect()
+    stream = session.stream_turn("approve")
+    await anext(stream)
+    pending = asyncio.ensure_future(anext(stream))
+    await asyncio.sleep(0)
+    pending.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await pending
+    assert "reason=task_cancelled" in caplog.text
+    assert "reason=user_stop" not in caplog.text
+    assert "reason=inactivity_timeout" not in caplog.text
+    assert "Authorization=secret" not in caplog.text
+    assert sum(m.get("method") == "turn/interrupt" for m in websocket.messages) == 1
     await session.close()
 
 
@@ -1307,7 +1382,10 @@ async def test_aging_transport_rotates_before_starting_a_long_turn() -> None:
 
 
 @pytest.mark.asyncio
-async def test_active_turn_reconnects_without_starting_a_duplicate_turn() -> None:
+async def test_active_turn_reconnects_without_starting_a_duplicate_turn(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level("INFO", logger="veadk.cli.codex_app_server")
     first = _DisconnectingActiveTurnWebSocket()
     second = _ResumedActiveTurnWebSocket()
     sockets = [first, second]
@@ -1329,6 +1407,11 @@ async def test_active_turn_reconnects_without_starting_a_duplicate_turn() -> Non
     assert sum(message.get("method") == "turn/start" for message in first.messages) == 1
     assert not any(message.get("method") == "turn/start" for message in second.messages)
     assert any(message.get("method") == "thread/resume" for message in second.messages)
+    assert "reason=transport_reconnecting" in caplog.text
+    assert "reason=transport_recovered" in caplog.text
+    assert "attempt=1" in caplog.text
+    assert "reason=transport_failed" not in caplog.text
+    assert "Authorization=secret" not in caplog.text
     await session.close()
 
 
@@ -1361,7 +1444,44 @@ async def test_active_turn_reconnect_reads_completion_missed_during_disconnect()
 
 
 @pytest.mark.asyncio
-async def test_active_turn_reconnect_stops_after_bounded_failures() -> None:
+@pytest.mark.parametrize("recovered", [False, True])
+@pytest.mark.parametrize("has_final", [False, True])
+@pytest.mark.parametrize("status", ["interrupted", {"type": "interrupted"}])
+async def test_interrupted_turn_retains_its_terminal_reason(
+    recovered: bool, has_final: bool, status: str | dict[str, str]
+) -> None:
+    terminal = _TerminalTurnWebSocket(status, has_final=has_final)
+    sockets = (
+        [_DisconnectingActiveTurnWebSocket(), terminal] if recovered else [terminal]
+    )
+    available = list(sockets)
+
+    async def factory(_url: str) -> _FakeWebSocket:
+        return available.pop(0)
+
+    session = CodexAppServerSession(
+        "https://sandbox.example?Authorization=secret", websocket_factory=factory
+    )
+    events = []
+    try:
+        with pytest.raises(CodexAppServerError, match="本轮任务已中断") as captured:
+            async for event in session.stream_turn("long-running", timeout_seconds=0.1):
+                events.append(event)
+        assert type(captured.value).__name__ == "CodexAppServerTurnInterruptedError"
+        assert session.active is False
+        if not recovered:
+            assert any(event.text == "partial-output" for event in events)
+        methods = [message.get("method") for ws in sockets for message in ws.messages]
+        assert methods.count("turn/start") == 1
+        assert "turn/interrupt" not in methods
+    finally:
+        await session.close()
+
+
+@pytest.mark.asyncio
+async def test_active_turn_reconnect_stops_after_bounded_failures(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     sockets = [
         _DisconnectingActiveTurnWebSocket(),
         _DisconnectAfterStoredTurnReadWebSocket(),
@@ -1381,7 +1501,386 @@ async def test_active_turn_reconnect_stops_after_bounded_failures() -> None:
         _ = [event async for event in session.stream_turn("long-running")]
 
     assert sockets == []
+    assert "reason=transport_failed" in caplog.text
+    assert "recoveries=2" in caplog.text
+    assert "error_type=CodexAppServerTransportError" in caplog.text
+    assert "Authorization=secret" not in caplog.text
     await session.close()
+
+
+@pytest.mark.asyncio
+async def test_reconnect_failure_logs_only_safe_error_metadata(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    first = _DisconnectingActiveTurnWebSocket()
+    connections = 0
+
+    async def factory(_url: str) -> _FakeWebSocket:
+        nonlocal connections
+        connections += 1
+        if connections > 1:
+            raise CodexAppServerTransportError("private-endpoint-and-credential")
+        return first
+
+    session = CodexAppServerSession(
+        "https://sandbox.example?Authorization=secret", websocket_factory=factory
+    )
+    await session.connect()
+    with pytest.raises(CodexAppServerTransportError):
+        _ = [event async for event in session.stream_turn("private-user-prompt")]
+    assert "reason=transport_failed" in caplog.text
+    assert "error_type=CodexAppServerTransportError" in caplog.text
+    assert "private-endpoint-and-credential" not in caplog.text
+    assert "private-user-prompt" not in caplog.text
+    assert "Authorization=secret" not in caplog.text
+    await session.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("terminal_status", ["completed", "interrupted"])
+async def test_real_websocket_turn_survives_three_progressing_reconnections(
+    terminal_status: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
+    methods: list[str] = []
+    connections = 0
+    turn = {
+        "id": "turn-active",
+        "status": terminal_status,
+        "items": [{"id": "final", "type": "agentMessage", "text": "finished"}],
+    }
+
+    async def handle(socket: ServerConnection) -> None:
+        nonlocal connections
+        connections += 1
+        connection = connections
+        async for raw in socket:
+            message = json.loads(raw)
+            method = message["method"]
+            methods.append(method)
+            if "id" not in message:
+                continue
+            result: dict[str, object] = {}
+            if method in {"thread/start", "thread/resume"}:
+                result = {"thread": {"id": "thread-1"}, "cwd": "/workspace"}
+                if method == "thread/resume":
+                    assert message["params"]["threadId"] == "thread-1"
+            elif method == "turn/start":
+                result = {"turn": {"id": "turn-active"}}
+            elif method == "thread/read":
+                result = {
+                    "thread": {
+                        "id": "thread-1",
+                        "turns": [
+                            turn
+                            if connection == 4
+                            else {
+                                "id": "turn-active",
+                                "status": "inProgress",
+                                "items": [],
+                            }
+                        ],
+                    }
+                }
+            await socket.send(json.dumps({"id": message["id"], "result": result}))
+            if method in {"turn/start", "thread/read"} and connection < 4:
+                await socket.send(
+                    json.dumps(
+                        {
+                            "method": "item/agentMessage/delta",
+                            "params": {
+                                "itemId": f"progress-{connection}",
+                                "delta": f"step-{connection}",
+                            },
+                        }
+                    )
+                )
+                await socket.close(code=1012, reason="test transport rotation")
+                return
+            elif method == "thread/read" and connection == 4:
+                # The live terminal notification can race the history response.
+                await socket.send(
+                    json.dumps({"method": "turn/completed", "params": {"turn": turn}})
+                )
+
+    async with serve(handle, "127.0.0.1", 0) as server:
+        port = next(iter(server.sockets)).getsockname()[1]
+        session = CodexAppServerSession(f"http://127.0.0.1:{port}")
+        events = []
+
+        async def consume() -> None:
+            async for event in session.stream_turn("long-running"):
+                events.append(event)
+
+        try:
+            if terminal_status == "interrupted":
+                with pytest.raises(codex_app_server.CodexAppServerTurnInterruptedError):
+                    await asyncio.wait_for(consume(), timeout=5)
+            else:
+                await asyncio.wait_for(consume(), timeout=5)
+                assert [
+                    event.text for event in events if event.kind == "assistant_final"
+                ] == ["finished"]
+            assert [event.text for event in events if event.kind == "text"][:3] == [
+                "step-1",
+                "step-2",
+                "step-3",
+            ]
+            assert methods.count("turn/start") == 1
+            assert methods.count("thread/resume") == 3
+            assert "turn/interrupt" not in methods
+            assert connections == 4
+            assert session.active is False
+        finally:
+            await session.close()
+
+
+class _BlockedRecoveryWebSocket(_FakeWebSocket):
+    def __init__(self, method: str) -> None:
+        super().__init__()
+        self.method = method
+        self.blocked = asyncio.Event()
+
+    async def send(self, raw: str) -> None:
+        message = json.loads(raw)
+        if message.get("method") == self.method:
+            self.messages.append(message)
+            self.blocked.set()
+            return
+        await super().send(raw)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["failed", "cancelled"])
+@pytest.mark.parametrize("recovered", [False, True])
+async def test_failed_terminal_turns_remain_failures(
+    status: str, recovered: bool
+) -> None:
+    terminal = _TerminalTurnWebSocket({"type": status}, has_final=True)
+    sockets = (
+        [_DisconnectingActiveTurnWebSocket(), terminal] if recovered else [terminal]
+    )
+    available = list(sockets)
+
+    async def factory(_url: str) -> _FakeWebSocket:
+        return available.pop(0)
+
+    session = CodexAppServerSession(
+        "https://sandbox.example", websocket_factory=factory
+    )
+    try:
+        with pytest.raises(CodexAppServerError, match=status) as captured:
+            _ = [event async for event in session.stream_turn("long-running")]
+        assert type(captured.value) is CodexAppServerError
+        assert session.active is False
+        methods = [
+            message.get("method") for socket in sockets for message in socket.messages
+        ]
+        assert methods.count("turn/start") == 1
+        assert "turn/interrupt" not in methods
+    finally:
+        await session.close()
+
+
+@pytest.mark.asyncio
+async def test_rejected_resume_fails_without_replaying_the_turn() -> None:
+    class _RejectedResumeWebSocket(_FakeWebSocket):
+        async def send(self, raw: str) -> None:
+            message = json.loads(raw)
+            if message.get("method") != "thread/resume":
+                await super().send(raw)
+                return
+            self.messages.append(message)
+            await self.queue.put(
+                json.dumps(
+                    {
+                        "id": message["id"],
+                        "error": {"code": -32603, "message": "resume rejected"},
+                    }
+                )
+            )
+
+    first = _DisconnectingActiveTurnWebSocket()
+    second = _RejectedResumeWebSocket()
+    sockets = [first, second]
+
+    async def factory(_url: str) -> _FakeWebSocket:
+        return sockets.pop(0)
+
+    session = CodexAppServerSession(
+        "https://sandbox.example", websocket_factory=factory
+    )
+    try:
+        with pytest.raises(CodexAppServerError, match="resume rejected"):
+            _ = [event async for event in session.stream_turn("long-running")]
+        assert second.closed is True
+        assert session.active is False
+        assert sockets == []
+        assert not any(
+            message.get("method") == "turn/start" for message in second.messages
+        )
+    finally:
+        await session.close()
+
+
+@pytest.mark.asyncio
+async def test_reading_unchanged_turn_state_does_not_extend_inactivity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    loop = asyncio.get_running_loop()
+    original_time = loop.time
+    elapsed = 0.0
+    terminal_callback: asyncio.TimerHandle | None = None
+
+    class _UnchangedTurnWebSocket(_FakeWebSocket):
+        async def send(self, raw: str) -> None:
+            nonlocal elapsed, terminal_callback
+            message = json.loads(raw)
+            if message.get("method") != "thread/read":
+                await super().send(raw)
+                return
+            self.messages.append(message)
+            await self.queue.put(
+                json.dumps(
+                    {
+                        "id": message["id"],
+                        "result": {
+                            "thread": {
+                                "id": "thread-1",
+                                "turns": [
+                                    {
+                                        "id": "turn-active",
+                                        "status": "inProgress",
+                                        "items": [],
+                                    }
+                                ],
+                            }
+                        },
+                    }
+                )
+            )
+            elapsed += 2
+            terminal_callback = loop.call_later(
+                0.01,
+                self.queue.put_nowait,
+                json.dumps(
+                    {
+                        "method": "turn/completed",
+                        "params": {
+                            "turn": {
+                                "id": "turn-active",
+                                "status": "completed",
+                                "items": [
+                                    {
+                                        "id": "late",
+                                        "type": "agentMessage",
+                                        "text": "late result",
+                                    }
+                                ],
+                            }
+                        },
+                    }
+                ),
+            )
+
+    sockets = [_DisconnectingActiveTurnWebSocket(), _UnchangedTurnWebSocket()]
+
+    async def factory(_url: str) -> _FakeWebSocket:
+        return sockets.pop(0)
+
+    session = CodexAppServerSession(
+        "https://sandbox.example", websocket_factory=factory
+    )
+    monkeypatch.setattr(loop, "time", lambda: original_time() + elapsed)
+    try:
+        with pytest.raises(CodexAppServerTurnTimeoutError):
+            _ = [
+                event
+                async for event in session.stream_turn(
+                    "long-running", timeout_seconds=1
+                )
+            ]
+        assert sockets == []
+    finally:
+        if terminal_callback is not None:
+            terminal_callback.cancel()
+        await session.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["initialize", "thread/read"])
+async def test_recovery_respects_remaining_inactivity_time(method: str) -> None:
+    first = _DisconnectingActiveTurnWebSocket()
+    second = _BlockedRecoveryWebSocket(method)
+    sockets = [first, second]
+
+    async def factory(_url: str) -> _FakeWebSocket:
+        return sockets.pop(0)
+
+    session = CodexAppServerSession(
+        "https://sandbox.example", websocket_factory=factory
+    )
+
+    async def consume() -> None:
+        _ = [
+            event
+            async for event in session.stream_turn("long-running", timeout_seconds=0.05)
+        ]
+
+    try:
+        with pytest.raises(CodexAppServerTurnTimeoutError):
+            await asyncio.wait_for(consume(), timeout=0.5)
+        assert second.blocked.is_set()
+        assert session.active is False
+        assert sockets == []
+        assert (
+            sum(
+                message.get("method") == "turn/start"
+                for message in first.messages + second.messages
+            )
+            == 1
+        )
+        if method == "initialize":
+            assert second.closed is True
+        else:
+            assert any(
+                message.get("method") == "turn/interrupt" for message in second.messages
+            )
+    finally:
+        await session.close()
+
+
+@pytest.mark.asyncio
+async def test_cancelling_transport_recovery_closes_the_uninitialized_socket() -> None:
+    first = _DisconnectingActiveTurnWebSocket()
+    second = _BlockedRecoveryWebSocket("initialize")
+    sockets = [first, second]
+
+    async def factory(_url: str) -> _FakeWebSocket:
+        return sockets.pop(0)
+
+    session = CodexAppServerSession(
+        "https://sandbox.example", websocket_factory=factory
+    )
+
+    async def consume() -> None:
+        _ = [event async for event in session.stream_turn("long-running")]
+
+    task = asyncio.create_task(consume())
+    try:
+        await asyncio.wait_for(second.blocked.wait(), timeout=1)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert second.closed is True
+        assert session.active is False
+        assert sockets == []
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await session.close()
 
 
 @pytest.mark.asyncio

@@ -151,6 +151,17 @@ See [deployment and operation](service/studio_release_notifier/README.md).
   of tags. Do not change these identities through the cloud console.
   Creation failures remain visible with a retry action
 
+- **Intelligent development stream diagnostics**: Quiet SSE responses send a
+  comment heartbeat every 15 seconds without resetting Codex's inactivity timeout.
+  Logs correlate stream stages and elapsed time with Session/Thread IDs, and
+  Codex interruption and transport recovery with Thread/Turn IDs. Explicit stop
+  requests, inactivity timeouts, task cancellation and transport failures have
+  distinct reasons; cancellation alone does not imply a user stop. Logs exclude
+  prompts, command arguments and credentials. The dedicated client preserves
+  intelligent-development identity when Session metadata is absent or generic.
+  Heartbeats mitigate idle disconnects; request deadlines and process restarts
+  still apply, and this does not add background delivery or stream replay.
+
 - **DeepSeek Harness native configuration**: Quick-create now offers VeADK
   Agent or DeepSeek Harness (Beta) through a radio-selection dialog. Continuing closes
   the dialog and opens the selected Agent type’s own configuration page. The
@@ -266,8 +277,13 @@ See [deployment and operation](service/studio_release_notifier/README.md).
   Navigating away from an active build requires confirmation and stops that
   build before leaving, while the conversation remains available until expiry.
   Stopping preserves received output and blocks the next submission until
-  cleanup finishes. Users can inspect generated text files and download the
-  complete ZIP (including binary assets) as soon as the source is ready.
+  cleanup finishes. An interrupted Codex turn is reported explicitly, including
+  when Studio discovers it after reconnecting; it does not publish a new version
+  or wait for the inactivity timeout. Users can inspect generated text files and
+  download the complete ZIP (including binary assets) as soon as the source is ready.
+  Active turns resume on the same thread after a connection drops. New task
+  progress resets the recovery allowance; reconnecting and reading unchanged
+  state do not extend the inactivity deadline or restart the task.
   Each completed build or optimization is also saved as an immutable project
   version in the private Studio TOS bucket. Users can reopen any saved version,
   view, download, deploy, delete, or restore it into a new Sandbox for another
