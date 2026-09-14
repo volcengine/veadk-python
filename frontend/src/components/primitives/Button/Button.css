@@ -46,6 +46,22 @@
   height: 16px;
 }
 
+/* Figma 635:258177 — compact account action */
+.studio-button--pill {
+  min-width: 65px;
+  height: var(--studio-size-control-pill);
+  padding: 2px 12px;
+  border-radius: var(--studio-radius-pill);
+  background: var(--studio-surface-update);
+  color: var(--studio-text-strong);
+  font-size: var(--studio-font-size-xs);
+  line-height: var(--studio-line-height-xs);
+}
+.studio-button--pill:not(:disabled):hover { background: color-mix(in srgb, var(--studio-surface-update), var(--studio-text-primary) 10%); }
+.studio-button--pill:not(:disabled):active { background: color-mix(in srgb, var(--studio-surface-update), var(--studio-text-primary) 16%); }
+.studio-button--pill:focus-visible { outline: 2px solid var(--studio-focus-ring); outline-offset: 2px; }
+.studio-button--pill:disabled { opacity: .45; cursor: not-allowed; }
+
 .studio-button--secondary .studio-button__icon {
   flex-basis: 10px;
   width: 10px;
@@ -72,7 +88,7 @@
   gap: 8px;
   border-radius: 0;
   background: transparent;
-  color: rgba(219, 222, 231, .6);
+  color: var(--studio-text-secondary, rgba(219, 222, 231, .6));
   font-size: 16px;
   line-height: 24px;
 }
@@ -218,7 +234,7 @@
   .studio-button--primary:not(:disabled):hover { background: var(--studio-action-hover, #e9e9ec); }
   .studio-button--secondary:not(:disabled):hover { background: var(--studio-secondary-hover, #323234); }
   .studio-button--ghost:not(:disabled):hover { color: var(--studio-text-primary, #dbdee7); }
-  .studio-button--icon-only.studio-button--ghost:not(:disabled):hover { background: var(--studio-fill-hover, rgba(255, 255, 255, .06)); }
+  .studio-button--icon-only.studio-button--ghost[data-hover-effect="background"]:not(:disabled):hover { background: var(--studio-fill-hover, rgba(255, 255, 255, .06)); }
   .studio-button--link:not(:disabled):hover .studio-button__label::after,
   .studio-button--link:not(:disabled):hover .studio-button__end-icon { opacity: 1; }
 }
@@ -226,7 +242,7 @@
 .studio-button--primary:not(:disabled):active { background: var(--studio-action-active, #dbdee7); }
 .studio-button--secondary:not(:disabled):active { background: var(--studio-secondary-active, #3b3b3e); }
 .studio-button--ghost:not(:disabled):active { color: var(--studio-text-strong, #ffffff); }
-.studio-button--icon-only.studio-button--ghost:not(:disabled):active { background: var(--studio-fill-selected, rgba(170, 163, 225, .1)); }
+.studio-button--icon-only.studio-button--ghost[data-hover-effect="background"]:not(:disabled):active { background: var(--studio-fill-selected, rgba(170, 163, 225, .1)); }
 
 @media (prefers-reduced-motion: reduce) {
   .studio-button { transition: none; }

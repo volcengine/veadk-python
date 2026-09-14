@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ComponentProps, ReactNode } from "react";
+import { Button } from "../../primitives/Button";
 import "./Sidebar.css";
 import "./SidebarItemWithIcon.css";
 
@@ -12,6 +13,11 @@ export type SidebarItemWithIconProps = Omit<ComponentProps<"button">, "children"
   trailing?: ReactNode;
   /** 悬停或键盘聚焦时替换尾部内容，文字区域随尾部宽度调整 */
   hoverTrailing?: ReactNode;
+  /** 当前会话，独立于 hover 和 focus 状态 */
+  selected?: boolean;
+  /** 默认在尾部操作位显示加载动画，hoverTrailing 在悬停时替换它 */
+  loading?: boolean;
+  loadingLabel?: string;
 };
 
 const fadeWidth = 12;
@@ -22,6 +28,9 @@ export function SidebarItemWithIcon({
   icon,
   trailing,
   hoverTrailing,
+  selected = false,
+  loading = false,
+  loadingLabel = "正在生成",
   className = "",
   style,
   disabled = false,
@@ -37,7 +46,8 @@ export function SidebarItemWithIcon({
   const [distance, setDistance] = useState(0);
   const [reducedMotion, setReducedMotion] = useState(false);
   const active = !disabled && (hovered || keyboardFocused);
-  const tail = active && hoverTrailing !== undefined ? hoverTrailing : trailing;
+  const defaultTail = trailing ?? (loading ? <Button variant="ghost" iconOnly hoverEffect="icon" loading aria-label={loadingLabel} /> : undefined);
+  const tail = active && hoverTrailing !== undefined ? hoverTrailing : defaultTail;
   const hasTail = tail !== undefined && tail !== null && tail !== false;
 
   useLayoutEffect(() => {
@@ -86,6 +96,7 @@ export function SidebarItemWithIcon({
       style={style}
       aria-disabled={disabled || undefined}
       data-active={active || undefined}
+      data-selected={selected || undefined}
       data-overflow={distance > 0 || undefined}
       data-has-trailing={hasTail || undefined}
       onMouseEnter={() => setHovered(true)}
@@ -101,6 +112,7 @@ export function SidebarItemWithIcon({
     >
       <button
         {...buttonProps}
+        aria-current={buttonProps["aria-current"] ?? (selected ? "page" : undefined)}
         className="studio-sidebar-item-with-icon__main"
         type={type}
         disabled={disabled}

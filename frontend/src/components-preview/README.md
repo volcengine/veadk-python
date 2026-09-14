@@ -21,7 +21,7 @@ npm run dev:components
 - 设计规范：颜色、字体、尺寸、间距、圆角和动效 Tokens
 - 基础组件：Button、Tabs、Label、FormLabel、InputWithTailIcon、InputWithHeaderIcon、Textarea、Select、DatePicker、Menu、Switch、Checkbox、Radio、RadioCard、PillTag、Divider、Dropdown、ScrollArea、Table、Toast、Loading、EmptyState、ErrorState、Slider
 - 复合组件：Sidebar、Item、卡片、Header、FormField、FormLabelRow、DashedZone、CodeBlock、LongRunningState、ModalButton、Drawer、FileExplorer、FileUpload 和玻璃按钮组
-- 布局：CardLayout、ModalLayout、ResourcePageLayout、DetailPageLayout、IndexLayout
+- 布局：AppLayout、CardLayout、ModalLayout、ResourcePageLayout、DetailPageLayout、IndexLayout
 - 节点组件：BasicNode、AgentNode、CanvasBackground
 - AI APP：PromptInput、ConversationFlow，对话流包含完整分析、富内容、多模态输入、多模态回复、授权与错误五个可交互示例
 
@@ -32,6 +32,7 @@ ECharts / Mermaid 实际渲染，支持源码切换和放大查看；文件预�
 
 Button、Tabs 和 Card 的变体集中展示，旧预览链接仍可访问
 Primary 和 Secondary 普通按钮默认同为 32px 高、上下 5px 内边距，图标按钮保持 28px
+透明 Icon Button 通过 hoverEffect 选择 background（默认，悬停显示背景）或 icon（仅高亮图标）；两种模式共用尺寸和主题 tokens，会话尾部不覆盖 Button 的图标、圆角或 hover 样式
 示例按 Figma 画布尺寸展示；示例数据和页面导航不属于组件 API
 ModalLayout 提供 header、空白 body 插槽和 footer，实际遮罩与焦点管理由使用方提供
 FormLabel 的 required 表示必填标记，表单控件需要同时设置原生 required 属性
@@ -39,7 +40,7 @@ Textarea 的 counter 为独立插槽，预览保留原稿计数
 
 ## 主题与动效
 
-侧栏可切换明暗模式，默认浅色并保存选择，浅色页面背景为极淡冷灰 #f8f9fb，侧栏为 #f3f4f7，卡片与输入框保留白色
+侧栏可切换明暗模式，默认深色并保存选择，浅色页面背景为极淡冷灰 #f8f9fb，侧栏为 #f3f4f7，卡片与输入框保留白色
 文字与边框沿用 Figma 的轻微冷蓝灰倾向，Token 页面展示 66 个语义颜色及对应的明暗色值
 主题定义位于 `components/tokens/theme.css` 和 `component-themes.css`，通过根元素 `data-theme` 切换
 深色以提供的 Figma 节点为基准，浅色为同风格适配，保留尺寸、字体和品牌资产
@@ -47,10 +48,10 @@ Textarea 的 counter 为独立插槽，预览保留原稿计数
 Hover 主要调整颜色、背景和细边框，保持尺寸、字重与位置稳定；侧栏长标题保留独立滚动行为
 Select 提供同宽矩形下拉面板，支持方向键、Enter、Escape、输入匹配和原生表单值
 SelectOption 的 description 可提供副标题，仅在下拉列表内显示；单行选项高 28px，双行高 48px，项间距为 4px，选中后的输入框只显示 label
-Menu 使用文字与向下箭头作为触发按钮，点击展开面板，支持可选图标、分组、分割线和多级子菜单，复用 ScrollArea 处理长菜单
+Menu 默认使用文字与向下箭头作为触发按钮，也提供 icon、account 和 avatar 入口，点击展开面板，支持可选图标、分组、分割线和多级子菜单，复用 ScrollArea 处理长菜单
 openOnHover 默认 false，开启后悬停入口即可展开，同时保留点击与键盘操作；预览提供独立的悬停展开示例
 菜单根据按钮位置与可用空间自动调整上下方向、左右对齐和子菜单展开方向；align 设置优先对齐方式，滚动及窗口变化时继续跟随按钮
-MenuEntry 由 MenuItem、MenuGroup 和 MenuSeparator 组成；MenuItem.children 继续嵌套菜单，MenuGroup.items 定义组内内容，末级选择通过 onSelect 返回 id 与菜单项
+MenuEntry 由 MenuItem、MenuGroup、MenuSeparator 和 MenuRadioGroup 组成；MenuItem.children 继续嵌套菜单，MenuGroup.items 定义组内内容，末级选择通过 onSelect 返回 id 与菜单项
 预览提供基础、分组、多级、禁用及空菜单示例，以及组件参数和菜单数据字段表
 
 Toast 复用中性面板、状态色和 Button，支持提示、成功、警告、错误，以及自定义操作内容
@@ -80,7 +81,11 @@ CodeBlock 的 language 默认为 auto，字符串行自动高亮，已有手动�
 FileUpload 复用 DashedZone，支持点击或拖拽选择、文件列表和移除，以及 accept、maxSize、maxFiles 校验；通过 onFilesChange 提供文件，业务负责上传，组件不会自行请求接口
 Slider 复用原生 range 的拖动和键盘行为，支持范围、步长、受控值及数值格式化，名称和数值分列显示
 DatePicker 位于基础组件，提供日期和日期时间选择、范围限制、时区与只读/禁用状态，返回当地日期字符串
-Sidebar 的会话示例保留在复合组件的「Sidebar / 会话」入口下，包含长标题渐隐滚动和尾部图标操作
+Sidebar 的完整示例与条目状态统一放在复合组件的「Sidebar / 会话」入口下，包含品牌、导航、Admin、Recent 和账号菜单
+Sidebar.tsx 与 Sidebar.css 统一维护完整侧栏；AppLayout 直接复用 Sidebar，两个展示区共用侧栏示例数据与交互
+侧栏在 240px 与 56px 之间平滑切换，AppLayout 的主内容区使用同一动效 token 同步过渡；收起时保留会话滚动位置并关闭会话菜单，隐藏内容不可聚焦，减少动态效果时直接切换
+会话分组标题固定在 ScrollArea 外，仅组内会话条目滚动；空、加载和错误状态也保留分组标题
+ScrollArea 的 fadeEdges 默认关闭，Sidebar 会话区开启；上下渐隐仅在对应方向还有内容时出现，不影响固定标题，自动适配明暗背景
 IndexLayout 位于布局分组，复用 GlassTabs、PromptInput 与 compact Item 组合首页内容，不包含产品 Sidebar；示例共享 PromptInput 的轮播提示词，每 3 秒上滑淡变，输入后隐藏，清空后恢复
 
 Button 的 loading 自动禁用按钮，只显示居中的 Ring 图标；保留原内容占位稳定宽高，并保留原无障碍名称，预览包含静态状态和点击加载示例
@@ -147,3 +152,31 @@ SidebarItemWithIcon 的长标题默认尾部渐隐，悬停后缓慢滚到末尾
 Radio 按 Figma 740:296852 内的单选控件实现，16 × 16px，未选中白色圆底，选中深色圆底与 6px 白点；使用原生单选输入，同 name 互斥，支持可选标签与受控值
 RadioCard 复现该节点的完整卡片，默认 472 × 68px，包含 44px 图标容器、20px 图标、标题、副标题和右侧 Radio，整张卡片可点击；预览三张卡片间距为 12px
 FormField 的 tip 显示控件下方输入规则，error 优先替换为红色提示，并为对应输入框或文本域显示红边；htmlFor 与控件 id 关联标签和描述，校验规则由调用方负责
+
+
+## 完整侧栏与应用布局
+
+布局分组的 App layout 提供完整侧栏示例；`?fullscreen=app-layout#app-layout` 可打开全屏预览
+支持切换火山引擎 / BytePlus 示例品牌、会话加载 / 空 / 错误状态、选中与删除
+示例操作只修改预览数据，业务页面与接口没有接入
+
+- `AppLayout` 管理 240px 侧栏与独立滚动的主要内容，折叠宽度为 56px，支持受控和非受控折叠
+- `Sidebar` 接收品牌、导航、会话分组、账号数据与回调，品牌、主导航、Admin 和底部账号固定，仅 Recent 会话区域复用 ScrollArea 独立滚动，不启用分页加载或显示列表末尾提示
+- `SidebarItem` 和 `SidebarItemWithIcon` 使用 `selected` 表达持久选中态，同时提供 `aria-current`，不依赖 hover
+- `SidebarAccount` 复用 Menu、Button，头像 / 名称打开账号菜单，通知使用图标按钮，Update 使用正式的 `pill` 变体
+- 折叠时账号入口保留头像，通知和 Update 移入账号菜单
+- 账号信息使用 Menu 的 `header`；`MenuRadioGroup` 提供受控单选和对勾，`destructive` 标记删除 / 退出操作
+- 账号菜单内的外观选择复用 `components/tokens/theme.ts`，默认 Dark，使用原有 `studio-components-theme` 保存偏好
+- 应用入口调用 `applyStudioTheme(readStudioTheme())`；`useStudioTheme()` 订阅同页及其他标签页变化，根元素切换同时覆盖 Portal 内的菜单、Modal 与 Drawer
+- 组件只接收内容、状态与回调，不请求账号、会话或云平台接口；权限判断和业务行为由接入方保留
+- `DetailPageSidebar` 旧导出现在指向同一个 Sidebar，需要传入相同的数据与回调，不再内置示例用户和项目
+
+完整侧栏直接使用 SidebarItem 和 SidebarItemWithIcon 的原有外观；选中态沿用既有高亮，会话尾部使用原有 trailing / hoverTrailing 插槽，不另加竖线、底色或默认前置图标
+Sidebar 单项预览按组件自身的 224px 宽度展示，与 240px 侧栏的内容区一致，不通过预览 CSS 改写组件宽度
+
+Admin 分组使用原有 SidebarItem 展示 Review Center 和 Users，Recent 中的会话没有默认前置图标
+SidebarItemWithIcon 的 loading 与更多按钮共用 28px 尾部操作位；默认显示加载动画，悬停或键盘聚焦时通过 hoverTrailing 替换为更多按钮，菜单打开时保持入口
+Sidebar 会话尾部按钮使用 Hover icon highlight；Menu 通过 triggerHoverEffect 透传 Button 的既有属性，不附加背景或覆盖样式
+
+侧栏默认 Logo 直接复用 Figma 813:398706 的 22×22px 资产，标题使用 Didact Gothic Regular 18px / 1.4，图文间距为 6px
+通知入口使用 Button 的默认 28px iconOnly 规格，图标为 16px；首页快捷卡片沿用 Index layout 示例中的 blocks / code / codepen 资产

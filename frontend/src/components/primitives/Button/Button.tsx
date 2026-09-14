@@ -3,7 +3,7 @@ import { Loading } from "../Loading";
 import "./Button.css";
 
 export type ButtonProps = ComponentProps<"button"> & {
-  variant?: "primary" | "secondary" | "outline" | "ghost" | "link";
+  variant?: "primary" | "secondary" | "outline" | "ghost" | "link" | "pill";
   /** default 保留各变体尺寸；large 为 36px；compact 用于 20px 无内边距图标按钮 */
   size?: "default" | "large" | "compact";
   startIcon?: ReactNode;
@@ -11,6 +11,8 @@ export type ButtonProps = ComponentProps<"button"> & {
   endIcon?: ReactNode;
   /** 纯图标按钮，使用 startIcon 提供图标，并设置 aria-label */
   iconOnly?: boolean;
+  /** ghost 纯图标按钮的悬停反馈：background 显示背景，icon 仅高亮图标 */
+  hoverEffect?: "background" | "icon";
   /** 显示旋转加载图标并禁用按钮 */
   loading?: boolean;
 };
@@ -23,6 +25,7 @@ export function Button({
   startIcon,
   endIcon,
   iconOnly = false,
+  hoverEffect = "background",
   loading = false,
   disabled,
   children,
@@ -34,6 +37,7 @@ export function Button({
       type={type}
       disabled={disabled || loading}
       aria-busy={loading || props["aria-busy"]}
+      data-hover-effect={iconOnly ? hoverEffect : undefined}
       className={`studio-button studio-button--${variant} studio-button--size-${size}${iconOnly ? " studio-button--icon-only" : ""}${loading ? " studio-button--loading" : ""} ${className}`.trim()}
     >
       {startIcon && <span className="studio-button__icon" aria-hidden="true">{startIcon}</span>}

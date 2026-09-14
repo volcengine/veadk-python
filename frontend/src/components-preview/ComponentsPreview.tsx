@@ -21,12 +21,14 @@ import { DropdownPreview } from "./examples/DropdownPreview";
 import { MenuPreview } from "./examples/MenuPreview";
 import { PromptInputPreview } from "./examples/PromptInputPreview";
 import { ConversationFlowPreview } from "./examples/ConversationFlowPreview";
-import { useState, useSyncExternalStore } from "react";
+import { useSyncExternalStore } from "react";
 import { ButtonsPreview, CardsPreview, TabsPreview, InputWithTailIconPreview, ItemPreview, LabelPreview, SidebarPreview, SwitchPreview, CheckboxPreview, FormFieldPreview, DashedZonePreview, CodeBlockPreview, ModalLayoutPreview, HeaderPreview, PillTagPreview, FormLabelPreview, ResourcePageLayoutPreview, DetailPageLayoutPreview, TextareaPreview, SelectPreview, BasicNodePreview, AgentNodePreview, CanvasBackgroundPreview, TokensPreview } from "./examples";
-import { applyPreviewTheme, readPreviewTheme, type PreviewTheme } from "./theme";
+import { useStudioTheme } from "../components/tokens/theme";
+import { AppLayoutPreview } from "./examples/AppLayoutPreview";
 import "./components-preview.css";
 
 const examples = [
+  { id: "app-layout", label: "App layout / 完整侧栏", Preview: AppLayoutPreview, group: "layouts" },
   { id: "date-picker", label: "Date Picker", Preview: DatePickerPreview, group: "primitives" },
   { id: "index-layout", label: "Index layout", Preview: IndexLayoutPreview, group: "layouts" },
   { id: "slider", label: "Slider", Preview: SliderPreview, group: "primitives" },
@@ -98,14 +100,11 @@ function getSelectedExample() {
 }
 
 export function ComponentsPreview() {
-  const [theme, setTheme] = useState(readPreviewTheme);
-  function changeTheme(next: PreviewTheme) {
-    applyPreviewTheme(next);
-    setTheme(next);
-  }
+  const [theme, changeTheme] = useStudioTheme();
   const selectedId = useSyncExternalStore(subscribeToHash, getSelectedExample, () => "button");
   const selected = examples.find((example) => example.id === selectedId) ?? examples.find((example) => example.id === "button")!;
   const Preview = selected.Preview;
+  if (new URLSearchParams(window.location.search).get("fullscreen") === "app-layout") return <AppLayoutPreview fullscreen />;
 
   return (
     <div className="components-preview">

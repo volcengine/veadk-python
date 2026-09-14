@@ -155,6 +155,7 @@ const componentNotes: Record<string, Record<string, string>> = {
     variant: "primary 主按钮、secondary 次按钮、outline 半透明描边按钮，默认高度统一为 32px；ghost 透明按钮、link 链接样式按钮",
     size: "default 保留各变体原始尺寸；large 为 36px，Header 的两个按钮共用；compact 仅用于 iconOnly，20 × 20px 且无内边距，Modal 关闭按钮复用",
     iconOnly: "纯图标按钮，默认 28 × 28px，large 为 36 × 36px；图标通过 startIcon 传入，需提供 aria-label，可组合不同 variant",
+    hoverEffect: "ghost 纯图标按钮支持 background（默认，悬停显示背景）与 icon（仅高亮图标，悬停和按下均保持透明背景），两种使用相同尺寸与明暗主题 tokens",
     endIcon: "右侧图标；link 样式下尺寸跟随字号，悬停或键盘聚焦时与文字下方虚线一起淡入，移开淡出",
   },
   Radio: {
@@ -186,6 +187,7 @@ const componentNotes: Record<string, Record<string, string>> = {
   Select: { options: "选项数组：value、label 必填；icon、description、disabled 可选；description 在下拉列表中显示为副标题，选中后输入框只显示 label", defaultValue: "非受控初始值，未设置时选择第一个未禁用选项" },
   Menu: {
     label: "触发按钮的文字或 React 内容，右侧显示向下箭头",
+    triggerHoverEffect: "图标入口复用 Button 的 hoverEffect，background 默认显示背景，icon 仅高亮图标；Sidebar 会话尾部使用 icon",
     items: "菜单结构，支持普通菜单项、分组和分割线，children 可继续嵌套；字段见下方 MenuEntry 表格",
     onSelect: "末级菜单项选中时调用，参数为 id 和完整 MenuItem；选中后关闭菜单",
     openOnHover: "默认 false，启用后悬停入口即可展开，点击和键盘仍可用",
@@ -220,6 +222,7 @@ const componentNotes: Record<string, Record<string, string>> = {
   Divider: { role: "固定为 separator", "aria-orientation": "固定为 horizontal" },
   ScrollArea: {
     orientation: "vertical 纵向、horizontal 横向、both 双向滚动，均保留原生滚动行为",
+    fadeEdges: "默认关闭；开启后按滚动位置显示上下渐隐，到顶或到底时撤去对应渐隐，内容未溢出或仅横向滚动时不显示",
     hideScrollbar: "始终隐藏滚动条；未隐藏时，鼠标移入区域淡入、移出淡出，键盘聚焦时显示",
     maxHeight: "滚动区域最大高度，数字单位为 px，超出后纵向滚动",
   },

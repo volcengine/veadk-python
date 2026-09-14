@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ComponentProps, type CSSProperties } from "react";
+import { useCallback, useEffect, useImperativeHandle, useRef, useState, type ComponentProps, type CSSProperties } from "react";
 import { Loading } from "../Loading";
 import "./ScrollArea.css";
 
@@ -9,6 +9,8 @@ export type ScrollAreaProps = ComponentProps<"div"> & {
   maxHeight?: CSSProperties["maxHeight"];
   /** 完全隐藏滚动条，保留原生滚动；默认随鼠标进入/离开区域淡入淡出 */
   hideScrollbar?: boolean;
+  /** 开启上下渐隐，仅在对应方向还有可滚动内容时显示；横向滚动不启用 */
+  fadeEdges?: boolean;
   /** 是否还有更多内容，与 onLoadMore 配合使用 */
   hasMore?: boolean;
   /** 触底加载回调，失败时抛出异常；卸载时 signal 会取消 */
@@ -19,11 +21,35 @@ export type ScrollAreaProps = ComponentProps<"div"> & {
   contentClassName?: string;
 };
 
-export function ScrollArea({ orientation = "vertical", maxHeight, hideScrollbar = false, contentClassName = "", className = "", style, children, hasMore = false, onLoadMore, threshold = 24, onScroll, ...props }: ScrollAreaProps) {
+export function ScrollArea({ orientation = "vertical", maxHeight, hideScrollbar = false, fadeEdges = false, contentClassName = "", className = "", style, children, hasMore = false, onLoadMore, threshold = 24, onScroll, ref, ...props }: ScrollAreaProps) {
   const [loading, setLoading] = useState(false);
   const [failed, setFailed] = useState(false);
+  const [edges, setEdges] = useState({ top: false, bottom: false });
+  const areaRef = useRef<HTMLDivElement>(null);
   const request = useRef<AbortController | null>(null);
+  const fading = fadeEdges && orientation !== "horizontal";
+  const hasFooter = !!onLoadMore && orientation !== "horizontal";
+  useImperativeHandle(ref, () => areaRef.current!, []);
   useEffect(() => () => { request.current?.abort(); }, []);
+
+  const updateEdges = useCallback(() => {
+    const area = areaRef.current;
+    if (!fading || !area) return;
+    const overflow = area.scrollHeight - area.clientHeight;
+    const top = overflow > 1 && area.scrollTop > 1;
+    const bottom = overflow > 1 && overflow - area.scrollTop > 1;
+    setEdges(current => current.top === top && current.bottom === bottom ? current : { top, bottom });
+  }, [fading]);
+
+  useEffect(() => {
+    const area = areaRef.current;
+    if (!fading || !area) return;
+    const observer = new ResizeObserver(updateEdges);
+    observer.observe(area);
+    for (const child of area.children) observer.observe(child);
+    updateEdges();
+    return () => observer.disconnect();
+  }, [fading, hasFooter, updateEdges]);
 
   async function load() {
     if (!onLoadMore || !hasMore || request.current) return;
@@ -41,8 +67,12 @@ export function ScrollArea({ orientation = "vertical", maxHeight, hideScrollbar 
     }
   }
 
-  return <div {...props} className={`studio-scroll-area ${className}`.trim()} data-orientation={orientation} data-hide-scrollbar={hideScrollbar || undefined} style={{ maxHeight, ...style }} onScroll={event => {
+  return <div {...props} ref={areaRef} className={`studio-scroll-area ${className}`.trim()} data-orientation={orientation} data-hide-scrollbar={hideScrollbar || undefined}
+    data-fade-edges={fading && (edges.top || edges.bottom) || undefined}
+    data-fade-top={fading && edges.top || undefined} data-fade-bottom={fading && edges.bottom || undefined}
+    style={{ maxHeight, ...style }} onScroll={event => {
     onScroll?.(event);
+    updateEdges();
     const area = event.currentTarget;
     if (!event.defaultPrevented && orientation !== "horizontal" && !failed && area.scrollTop > 0 && area.scrollHeight - area.clientHeight - area.scrollTop <= Math.max(0, threshold)) void load();
   }}>

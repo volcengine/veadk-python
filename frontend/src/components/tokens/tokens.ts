@@ -9,6 +9,8 @@ export type StudioToken = {
 };
 
 export const studioTokens: readonly StudioToken[] = [
+  { name: "--studio-size-sidebar-collapsed", label: "折叠侧栏宽度", value: "56px", category: "size" },
+  { name: "--studio-size-control-pill", label: "紧凑胶囊按钮高度", value: "22px", category: "size" },
   {
     "name": "--studio-bg-canvas",
     "label": "画布背景",
