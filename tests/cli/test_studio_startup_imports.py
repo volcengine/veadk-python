@@ -29,6 +29,7 @@ for module in (
     "frontend.server.user_management.directory",
     "frontend.server.skills.reviewer_profiles",
     "veadk.cli.studio_vpc_network",
+    "veadk.integrations.agentkit.studio_routes.protocol",
 ):
     importlib.import_module(module)
 
@@ -43,6 +44,8 @@ unexpected = sorted(
 )
 if unexpected:
     raise SystemExit("generated cloud SDKs loaded during Studio startup")
+if "veadk.integrations.agentkit.app" in sys.modules:
+    raise SystemExit("AgentKit application loaded by a protocol-only import")
 """
 
     subprocess.run(

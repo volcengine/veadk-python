@@ -14,9 +14,31 @@
 
 """Public helpers for serving VeADK agents on AgentKit."""
 
-from veadk.integrations.agentkit.app import (
-    create_agentkit_app,
-    run_agentkit_app,
-)
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from veadk.integrations.agentkit.app import (
+        create_agentkit_app,
+        run_agentkit_app,
+    )
 
 __all__ = ["create_agentkit_app", "run_agentkit_app"]
+
+
+def __getattr__(name: str) -> Any:
+    """Keep protocol-only imports from initializing the full AgentKit server."""
+    if name not in __all__:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    from veadk.integrations.agentkit.app import (
+        create_agentkit_app,
+        run_agentkit_app,
+    )
+
+    return {
+        "create_agentkit_app": create_agentkit_app,
+        "run_agentkit_app": run_agentkit_app,
+    }[name]
+
+
+def __dir__() -> list[str]:
+    return sorted((*globals(), *__all__))
