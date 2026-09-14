@@ -2394,7 +2394,11 @@ def test_studio_deploy_run_script_allows_generated_agent_debug() -> None:
     run_script = _studio_deploy_run_script("site-logo.png")
 
     assert "HOST=0.0.0.0" in run_script
-    assert "studio --provider volcengine --auth-mode frontend" in run_script
+    assert (
+        "veadk.cli.studio_start --provider volcengine --auth-mode frontend"
+        in run_script
+    )
+    assert "veadk.cli.cli studio" not in run_script
     assert '--site-logo "$ROOT_DIR/site-logo.png"' in run_script
     assert "--allow-remote-generated-agent-test-run" not in run_script
 

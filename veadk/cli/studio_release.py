@@ -558,6 +558,7 @@ def build_studio_release(
             frontend_assets=resolved_frontend_assets,
             dependency_wheels=dependency_wheels,
             provider="byteplus",
+            optimize_cold_start=True,
         )
         write_studio_package(
             package_dir,

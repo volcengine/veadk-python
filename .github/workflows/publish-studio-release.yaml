@@ -215,11 +215,26 @@ jobs:
           VOLCENGINE_SECRET_KEY: smoke
         run: |
           set -euo pipefail
-          package_dir="$RUNNER_TEMP/studio-release-package"
-          runtime_venv="$RUNNER_TEMP/studio-release-runtime"
-          export package_dir runtime_venv
+          test "$(uname -s)" = "Linux"
+          test "$(uname -m)" = "x86_64"
+          test "$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')" = "3.12"
+          COLD_START_DEADLINE_SECONDS=90
+          STUDIO_MAX_BUNDLE_BYTES=$((256 * 1024 * 1024))
+          bundle=("$RUNNER_TEMP"/studio-release-output/studio-bundle-*.zip)
+          test "${#bundle[@]}" -eq 1
+          test "$(stat -c %s "${bundle[0]}")" -lt "$STUDIO_MAX_BUNDLE_BYTES"
 
-          uv run --frozen --group dev python - <<'PY'
+          smoke_studio() {
+            provider="$1"
+            port="$2"
+            package_dir="$RUNNER_TEMP/studio-release-package-${provider}"
+            runtime_venv="$RUNNER_TEMP/studio-release-runtime-${provider}"
+            log="$RUNNER_TEMP/studio-${provider}.log"
+            response="$RUNNER_TEMP/studio-${provider}-ui-config.json"
+            export package_dir
+            test ! -e "$package_dir"
+            test ! -e "$runtime_venv"
+            uv run --frozen --group dev python - <<'PY'
           import os
           from pathlib import Path
 
@@ -229,37 +244,11 @@ jobs:
           bundle = next(output_dir.glob("studio-bundle-*.zip"))
           extract_studio_bundle(bundle, Path(os.environ["package_dir"]))
           PY
-
-          uv venv "$runtime_venv"
-          (
-            cd "$package_dir"
-            uv pip install --python "$runtime_venv/bin/python" -r requirements.txt
-          )
-
-          (
-            cd "$package_dir"
-            "$runtime_venv/bin/python" - <<'PY'
-          from pathlib import Path
-
-          import frontend
-          import veadk
-          import frontend.server.cronjobs
-          import frontend.service.studio_release_server
-          import frontend.service.studio_scheduler
-
-          runtime_root = Path(veadk.__file__).resolve().parents[1]
-          assert Path(frontend.__file__).resolve().is_relative_to(runtime_root)
-          webui = Path(veadk.__file__).resolve().parent / "webui" / "index.html"
-          assert webui.is_file()
-          print(f"Validated installed Studio packages from {runtime_root}")
-          PY
-          )
-
-          smoke_studio() {
-            provider="$1"
-            port="$2"
-            log="$RUNNER_TEMP/studio-${provider}.log"
-            response="$RUNNER_TEMP/studio-${provider}-ui-config.json"
+            uv venv --python 3.12 "$runtime_venv"
+            (
+              cd "$package_dir"
+              uv pip install --python "$runtime_venv/bin/python" -r requirements.txt
+            )
             (
               cd "$package_dir"
               PATH="$runtime_venv/bin:$PATH" \
@@ -269,7 +258,8 @@ jobs:
                 ./run.sh
             ) >"$log" 2>&1 &
             pid=$!
-            for _ in {1..60}; do
+            started=$SECONDS
+            while (( SECONDS - started < COLD_START_DEADLINE_SECONDS )); do
               if ! kill -0 "$pid" 2>/dev/null; then
                 cat "$log"
                 return 1
@@ -297,6 +287,27 @@ jobs:
 
           smoke_studio byteplus 18877
           smoke_studio volcengine 18878
+
+          package_dir="$RUNNER_TEMP/studio-release-package-volcengine"
+          runtime_venv="$RUNNER_TEMP/studio-release-runtime-volcengine"
+          (
+            cd "$package_dir"
+            "$runtime_venv/bin/python" - <<'PY'
+          from pathlib import Path
+
+          import frontend
+          import veadk
+          import frontend.server.cronjobs
+          import frontend.service.studio_release_server
+          import frontend.service.studio_scheduler
+
+          runtime_root = Path(veadk.__file__).resolve().parents[1]
+          assert Path(frontend.__file__).resolve().is_relative_to(runtime_root)
+          webui = Path(veadk.__file__).resolve().parent / "webui" / "index.html"
+          assert webui.is_file()
+          print(f"Validated installed Studio packages from {runtime_root}")
+          PY
+          )
 
   release-context:
     if: >-

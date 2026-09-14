@@ -63,6 +63,34 @@ def _verification_script() -> str:
     return step["run"].split("<<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
 
 
+def _smoke_script() -> str:
+    workflow_path = (
+        Path(__file__).parents[1]
+        / ".github"
+        / "workflows"
+        / "publish-studio-release.yaml"
+    )
+    workflow = yaml.safe_load(workflow_path.read_text(encoding="utf-8"))
+    step = next(
+        step
+        for step in workflow["jobs"]["verify"]["steps"]
+        if step.get("name") == "Simulate customer update and smoke-test Studio"
+    )
+    return step["run"]
+
+
+def test_smoke_gate_is_fresh_amd64_and_runs_before_import_validation() -> None:
+    script = _smoke_script()
+
+    assert 'test "$(uname -s)" = "Linux"' in script
+    assert 'test "$(uname -m)" = "x86_64"' in script
+    assert "COLD_START_DEADLINE_SECONDS=90" in script
+    assert "STUDIO_MAX_BUNDLE_BYTES=$((256 * 1024 * 1024))" in script
+    assert script.index("smoke_studio byteplus") < script.index("import frontend")
+    assert script.index("smoke_studio volcengine") < script.index("import frontend")
+    assert 'runtime_venv="$RUNNER_TEMP/studio-release-runtime-${provider}"' in script
+
+
 def test_verification_reuses_checked_inputs_and_rebuilds_current_source(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
