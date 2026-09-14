@@ -147,6 +147,26 @@ if "veadk.agent" in sys.modules:
     )
 
 
+def test_generated_agent_planner_defers_model_runtime_until_first_call() -> None:
+    root = Path(__file__).resolve().parents[2]
+    script = """
+import sys
+
+import veadk.cli.generated_agent_planner
+
+if "veadk.agent" in sys.modules:
+    raise SystemExit("generated Agent planner loaded model runtime at startup")
+"""
+
+    subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
 def test_knowledge_routes_defer_document_extraction_stack() -> None:
     root = Path(__file__).resolve().parents[2]
     script = """
