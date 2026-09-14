@@ -97,7 +97,13 @@ class RetryingLiteLlm(LiteLlm):
         llm_request: LlmRequest,
         stream: bool = False,
     ) -> AsyncGenerator[LlmResponse, None]:
-        retry_request = copy.deepcopy(llm_request)
+        # Tools are live runtime objects and may own sessions, locks or Futures.
+        # Preserve their identity while isolating request data and the tool map
+        # from mutations made by the first attempt.
+        retry_request = copy.deepcopy(
+            llm_request,
+            memo={id(tool): tool for tool in llm_request.tools_dict.values()},
+        )
         emitted = False
         try:
             self._refresh_fallbacks()
