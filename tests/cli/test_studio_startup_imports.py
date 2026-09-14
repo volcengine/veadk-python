@@ -81,3 +81,47 @@ if "veadk.agent" in sys.modules:
         capture_output=True,
         text=True,
     )
+
+
+def test_frontend_branding_defers_optional_logo_network_stack() -> None:
+    root = Path(__file__).resolve().parents[2]
+    script = """
+import sys
+
+from veadk.cli.frontend_branding import normalize_site_title
+
+assert normalize_site_title(None) == "AgentKit Studio"
+for module in ("filetype", "httpx"):
+    if module in sys.modules:
+        raise SystemExit(f"optional branding dependency loaded at startup: {module}")
+"""
+
+    subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_logger_import_does_not_load_general_network_helpers() -> None:
+    root = Path(__file__).resolve().parents[2]
+    script = """
+import sys
+
+from veadk.utils.logger import get_logger
+
+assert get_logger("startup").name == "veadk.startup"
+for module in ("requests", "yaml"):
+    if module in sys.modules:
+        raise SystemExit(f"general utility dependency loaded by logger: {module}")
+"""
+
+    subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
