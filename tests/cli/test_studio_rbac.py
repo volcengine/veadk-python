@@ -454,10 +454,13 @@ def test_migration_model_defaults_follow_studio_provider(
     }
 
 
-def test_managed_sidecar_runtime_envs_fail_before_build_without_mcp_upstream() -> None:
+def test_managed_sidecar_runtime_envs_allow_zero_mcp_without_legacy_fallback() -> None:
     runtime_envs = {
         "MODEL_AGENT_API_BASE": "https://ark.cn-beijing.volces.com/api/v3",
         "MODEL_AGENT_API_KEY": "model-key-from-test-fixture",
+        "MCP_SERVERS_JSON": "[]",
+        "MCP_URLS": "https://stale-mcp.example.com/mcp",
+        "MCP_API_KEY": "stale-test-key",
     }
 
     error = _prepare_managed_sidecar_runtime_envs(
@@ -466,12 +469,37 @@ def test_managed_sidecar_runtime_envs_fail_before_build_without_mcp_upstream() -
         {"effectiveComponents": ["context_engine", "mcp_resilience"]},
     )
 
-    assert error == (
-        "已选择 MCP 稳定性治理，请在“添加 MCP 工具”中配置至少一个 HTTP MCP "
-        "服务地址后重新发布；Bearer Token 仅在该服务需要认证时配置。"
-    )
+    assert error is None
     assert runtime_envs["MODEL_AGENT_NAME"]
     assert runtime_envs["MODEL_NAME"] == runtime_envs["MODEL_AGENT_NAME"]
+    assert runtime_envs["AGENTKIT_HARNESS_RUNTIME_COMMAND"]
+    assert "MCP_SERVERS_JSON" not in runtime_envs
+    assert "MCP_URLS" not in runtime_envs
+    assert "MCP_API_KEY" not in runtime_envs
+
+
+@pytest.mark.parametrize(
+    "raw_mcp",
+    ["not-json", "{}", json.dumps([{}] * 33)],
+    ids=["malformed", "not-list", "too-many"],
+)
+def test_managed_sidecar_runtime_envs_reject_invalid_mcp_state(
+    raw_mcp: str,
+) -> None:
+    runtime_envs = {
+        "MODEL_AGENT_API_BASE": "https://ark.cn-beijing.volces.com/api/v3",
+        "MODEL_AGENT_API_KEY": "model-key-from-test-fixture",
+        "MCP_SERVERS_JSON": raw_mcp,
+    }
+
+    error = _prepare_managed_sidecar_runtime_envs(
+        runtime_envs,
+        "volcengine",
+        {"effectiveComponents": ["mcp_resilience"]},
+    )
+
+    assert error == "Harness Sidecar MCP 配置无效，请检查名称、地址与认证后重试。"
+    assert "AGENTKIT_HARNESS_RUNTIME_COMMAND" not in runtime_envs
 
 
 def test_migration_model_defaults_preserve_custom_endpoint() -> None:
@@ -5404,9 +5432,15 @@ def test_source_preserving_update_ignores_browser_source_and_keeps_secrets_out_o
     assert update_tags["veadk:build-resource:cr-repository"] == expected_repository
 
 
+@pytest.mark.parametrize(
+    "has_user_mcp",
+    [False, True],
+    ids=["no-user-mcp", "stored-user-mcp"],
+)
 def test_source_preserving_legacy_ops_update_migrates_output_repository_via_sdk(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    has_user_mcp: bool,
 ) -> None:
     from agentkit.sdk.runtime.client import AgentkitRuntimeClient
 
@@ -5421,6 +5455,17 @@ def test_source_preserving_legacy_ops_update_migrates_output_repository_via_sdk(
     runtime.role_name = "runtime-role"
     runtime.artifact_url = (
         "example-registry-cn-shanghai.cr.volces.com/agentkit/sidecar:v9"
+    )
+    mcp_servers = (
+        [
+            {
+                "name": "orders",
+                "url": "https://mcp.example.com/orders",
+                "headers": {"Authorization": "Bearer sidecar-test-secret"},
+            }
+        ]
+        if has_user_mcp
+        else []
     )
     runtime.envs = [
         SimpleNamespace(key="HARNESS_SIDECAR_ENABLED", value="true"),
@@ -5446,15 +5491,7 @@ def test_source_preserving_legacy_ops_update_migrates_output_repository_via_sdk(
         ),
         SimpleNamespace(
             key="MCP_SERVERS_JSON",
-            value=json.dumps(
-                [
-                    {
-                        "name": "orders",
-                        "url": "https://mcp.example.com/orders",
-                        "headers": {"Authorization": "Bearer sidecar-test-secret"},
-                    }
-                ]
-            ),
+            value=json.dumps(mcp_servers),
         ),
         SimpleNamespace(
             key="MODEL_AGENT_API_BASE",
@@ -5631,8 +5668,11 @@ def test_source_preserving_legacy_ops_update_migrates_output_repository_via_sdk(
             "long_run_control": False,
             "mcp_resilience": True,
         }
-        assert "authToken" not in draft["mcpTools"][0]
-        assert "sidecar-test-secret" not in capability.text
+        if has_user_mcp:
+            assert "authToken" not in draft["mcpTools"][0]
+            assert "sidecar-test-secret" not in capability.text
+        else:
+            assert draft["mcpTools"] == []
         submitted_sidecar = {
             **draft["harnessSidecar"],
             "componentOverrides": {
@@ -5709,7 +5749,12 @@ def test_source_preserving_legacy_ops_update_migrates_output_repository_via_sdk(
     assert json.loads(captured["mcp"]) == {}
     assert "sidecar-test-secret" not in captured["persisted_config"]
     runtime_envs = captured["config"]["launch_types"]["cloud"]["runtime_envs"]
-    assert "sidecar-test-secret" in runtime_envs["MCP_SERVERS_JSON"]
+    if has_user_mcp:
+        assert "sidecar-test-secret" in runtime_envs["MCP_SERVERS_JSON"]
+    else:
+        assert "MCP_SERVERS_JSON" not in runtime_envs
+        assert "MCP_URLS" not in runtime_envs
+        assert "MCP_API_KEY" not in runtime_envs
     assert runtime_envs["AGENTKIT_HARNESS_RUNTIME_COMMAND"]
     assert runtime_envs["HARNESS_SIDECAR_ENABLED"] == "true"
     assert runtime_envs["HARNESS_SIDECAR_EXPECTED_PLAN_HASH"] == ("sha256:test-plan")
