@@ -51,7 +51,7 @@ test("shows Agent tools, skills, and a fullscreen execution canvas", () => {
   assert.match(railSource, /className="topo-module-card topo-tools-card"/);
   assert.match(railSource, /className="topo-module-card topo-skills-card"/);
   assert.match(railSource, /className="topo-module-card topo-topology" aria-label=\{t\("agentTopology\.agentCanvas"\)\}/);
-  assert.match(railSource, /<ModuleTitle title=\{t\("agentTopology\.topology"\)\} count=\{totalNodes\(graph\)\} \/>/);
+  assert.match(railSource, /<ModuleTitle title=\{t\("agentTopology\.topology"\)\} count=\{topologyNodeCount\} \/>/);
   assert.match(
     railSource,
     /<AgentBuildCanvas[\s\S]*?direction="horizontal"[\s\S]*?readOnly[\s\S]*?interactivePreview/,
@@ -198,11 +198,16 @@ test("mixes selected Studio tools into the existing tool list", () => {
   assert.doesNotMatch(appSource, /SessionCapabilities|sessionCapabilities/);
 });
 
-test("offers only the Studio BFF tool control in the information rail", () => {
+test("offers Session-level Studio tool and Skill Space controls in the information rail", () => {
   assert.match(railSource, /t\("agentTopology\.addStudioToolHere"\)/);
-  assert.doesNotMatch(railSource, /t\("agentTopology\.addSkill"\)/);
+  assert.match(railSource, /t\("agentTopology\.addSkillHere"\)/);
   assert.match(railSource, /className="topo-capability-add-slot"/);
   assert.match(railSource, /<StudioToolDialog/);
+  assert.match(railSource, /<SkillSpacePicker/);
+  assert.match(
+    railSource,
+    /dialog === "skill"[\s\S]*?className="studio-tool-dialog-head is-iconless"/,
+  );
   assert.doesNotMatch(railSource, /<SkillCapabilityDialog/);
   assert.match(appSource, /<AgentInfoPanel[\s\S]*?onStudioToolsChange=/);
   assert.doesNotMatch(appSource, /<AgentInfoDrawer\b/);
@@ -219,7 +224,7 @@ test("offers only the Studio BFF tool control in the information rail", () => {
   );
   assert.equal(
     (railSource.match(/className="topo-capability-add-dock"/g) ?? []).length,
-    1,
+    2,
   );
   assert.match(
     railStyles,
@@ -244,4 +249,16 @@ test("uses a searchable Studio BFF tool dialog without dynamic Skills", () => {
     stylesSource,
     /\.studio-tool-search\s*\{[\s\S]*?flex:\s*0 0 40px;[\s\S]*?height:\s*40px;[\s\S]*?border-radius:\s*6px;/,
   );
+});
+
+test("renders configured runtime and mounted Session resources in one topology", () => {
+  assert.ok(railSource.includes("info.resourceTopology?.nodes"));
+  assert.ok(railSource.includes("selectedEnvironments.map"));
+  assert.ok(railSource.includes("selectedStudioTools.map"));
+  assert.ok(railSource.includes("selectedSessionSkills.map"));
+  assert.ok(railSource.includes("topo-runtime-flow"));
+  assert.ok(railSource.includes("node.kind"));
+  assert.ok(railSource.includes("topologyNodeCount"));
+  assert.ok(railSource.includes("agentTopology.nodeKinds."));
+  assert.ok(railSource.includes("agentTopology.nodeStatuses."));
 });

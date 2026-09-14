@@ -143,7 +143,12 @@ test("upserts reasoning and keeps ordered detailed Codex output", () => {
     items: [
       {
         id: "reasoning-1",
-        block: { kind: "thinking", text: "检查项目结构", done: true },
+        block: {
+          kind: "thinking",
+          text: "检查项目结构",
+          done: true,
+          thoughtKind: "thought",
+        },
       },
       {
         id: "files-1",

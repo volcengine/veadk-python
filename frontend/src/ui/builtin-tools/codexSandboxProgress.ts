@@ -132,7 +132,16 @@ function parseNormalizedEvent(
 
   if (kind === "thinking" || kind === "reasoning") {
     return text
-      ? { id, block: { kind: "thinking", text, done: status !== "running" }, appendText }
+      ? {
+          id,
+          block: {
+            kind: "thinking",
+            text,
+            done: status !== "running",
+            thoughtKind: kind === "reasoning" ? "reasoning" : "thought",
+          },
+          appendText,
+        }
       : null;
   }
   if (kind === "commentary") {
@@ -214,7 +223,7 @@ function parseRawCodexEvent(
     return {
       id,
       block: itemType === "reasoning"
-        ? { kind: "thinking", text, done: status !== "running" }
+        ? { kind: "thinking", text, done: status !== "running", thoughtKind: "reasoning" }
         : { kind: "text", text },
       ...(itemType === "agent_message" && item?.phase !== "commentary"
         ? { finalAnswer: true }

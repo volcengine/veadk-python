@@ -1919,6 +1919,90 @@ def test_byteplus_runtime_detail_coerces_volcengine_region(
     assert calls == ["ap-southeast-1"]
 
 
+def test_runtime_detail_never_returns_secret_env_values(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path)
+
+    class _FakeRuntimeClient:
+        def __init__(self, **kwargs: Any) -> None:
+            del kwargs
+
+        def get_runtime(self, request: Any) -> SimpleNamespace:
+            return SimpleNamespace(
+                runtime_id=getattr(request, "runtime_id", ""),
+                name="runtime",
+                status="Ready",
+                network_configurations=[],
+                tags=[],
+                envs=[
+                    SimpleNamespace(key="PUBLIC_NAME", value="visible"),
+                    SimpleNamespace(key="MODEL_API_KEY", value="must-not-leak"),
+                ],
+            )
+
+    monkeypatch.setattr(
+        "agentkit.sdk.runtime.client.AgentkitRuntimeClient", _FakeRuntimeClient
+    )
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/web/runtime-detail",
+            params={"runtimeId": "runtime-id", "region": "cn-beijing"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["envs"] == [
+        {
+            "key": "PUBLIC_NAME",
+            "value": "visible",
+            "sensitive": False,
+            "configured": True,
+        },
+        {"key": "MODEL_API_KEY", "value": "", "sensitive": True, "configured": True},
+    ]
+    assert "must-not-leak" not in response.text
+
+
+def test_runtime_secret_copy_is_explicit_and_no_store(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path)
+
+    class _FakeRuntimeClient:
+        def __init__(self, **kwargs: Any) -> None:
+            del kwargs
+
+        def get_runtime(self, request: Any) -> SimpleNamespace:
+            return SimpleNamespace(
+                runtime_id=getattr(request, "runtime_id", ""),
+                name="runtime",
+                status="Ready",
+                network_configurations=[],
+                tags=[],
+                envs=[SimpleNamespace(key="MODEL_API_KEY", value="copy-only-secret")],
+            )
+
+    monkeypatch.setattr(
+        "agentkit.sdk.runtime.client.AgentkitRuntimeClient", _FakeRuntimeClient
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/web/runtime-env/copy",
+            params={
+                "runtimeId": "runtime-id",
+                "region": "cn-beijing",
+                "key": "MODEL_API_KEY",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"value": "copy-only-secret"}
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["pragma"] == "no-cache"
+
+
 def test_ui_config_serves_custom_branding(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -2048,6 +2132,11 @@ def test_runtime_list_paginates_across_regions(
                         description=f"Description for {name}",
                         cpu_milli=1000,
                         memory_mb=2048,
+                        artifact_url=(
+                            "registry.example/agentkit/mpa_agent_studio:test"
+                            if name == "shanghai-new"
+                            else "registry.example/agentkit/general_agent:test"
+                        ),
                         tags=[],
                     )
                     for name, created_at in page
@@ -2092,6 +2181,8 @@ def test_runtime_list_paginates_across_regions(
     )
     assert first.json()["runtimes"][0]["cpuMilli"] == 1000
     assert first.json()["runtimes"][0]["memoryMb"] == 2048
+    assert first.json()["runtimes"][0]["agentCategory"] == "mpa"
+    assert first.json()["runtimes"][1]["agentCategory"] == "general"
     assert sorted(first_calls) == [
         ("cn-beijing", "0", 2),
         ("cn-shanghai", "0", 2),
@@ -3080,6 +3171,18 @@ def test_runtime_proxy_bridges_a2a_only_runtime_for_studio_chat(
     app = _create_frontend_app(monkeypatch, tmp_path)
     requests: list[dict[str, Any]] = []
 
+    class _ActivatedCatalog:
+        async def list_options(self):
+            return SimpleNamespace(
+                models=[
+                    SimpleNamespace(id="model-default", available=True),
+                    SimpleNamespace(id="model-alt", available=True),
+                    SimpleNamespace(id="model-disabled", available=False),
+                ]
+            )
+
+    app.state.studio_model_catalog_service = _ActivatedCatalog()
+
     class _FakeRuntimeClient:
         def __init__(self, **kwargs: Any) -> None:
             del kwargs
@@ -3166,7 +3269,62 @@ def test_runtime_proxy_bridges_a2a_only_runtime_for_studio_chat(
                             "description": "mpa-agent",
                             "url": "https://runtime.example/a2a/jsonrpc",
                             "version": "0.0.1",
-                            "capabilities": {"streaming": bool(streaming)},
+                            "capabilities": {
+                                "streaming": bool(streaming),
+                                "extensions": [
+                                    {
+                                        "uri": "urn:veadk:mpa:model-selection:v1",
+                                        "params": {
+                                            "defaultModel": "model-default",
+                                            "models": [
+                                                "model-default",
+                                                "model-alt",
+                                                "model-disabled",
+                                            ],
+                                        },
+                                    },
+                                    {
+                                        "uri": "urn:veadk:mpa:turn-lifecycle-control:v1",
+                                        "params": {
+                                            "actions": [
+                                                "pause",
+                                                "resume",
+                                                "cancel",
+                                                "interrupt",
+                                            ],
+                                            "pauseMode": "cooperative-safe-point",
+                                            "processReplacementResume": False,
+                                        },
+                                    },
+                                    {
+                                        "uri": "urn:veadk:mpa:resource-topology:v1",
+                                        "params": {
+                                            "nodes": [
+                                                {
+                                                    "id": "agent:default",
+                                                    "kind": "agent",
+                                                    "name": "default",
+                                                    "status": "configured",
+                                                },
+                                                {
+                                                    "id": "sandbox:tool-1",
+                                                    "kind": "sandbox",
+                                                    "name": "Codex Sandbox",
+                                                    "status": "configured",
+                                                    "resourceId": "tool-1",
+                                                },
+                                            ],
+                                            "edges": [
+                                                {
+                                                    "source": "agent:default",
+                                                    "target": "sandbox:tool-1",
+                                                    "relation": "delegates-to",
+                                                }
+                                            ],
+                                        },
+                                    },
+                                ],
+                            },
                         }
                     ).encode(),
                 )
@@ -3282,6 +3440,10 @@ def test_runtime_proxy_bridges_a2a_only_runtime_for_studio_chat(
         list_response = client.get(
             "/web/runtime-proxy/runtime-1/list-apps?_runtime_region=cn-beijing"
         )
+        info_response = client.get(
+            "/web/runtime-proxy/runtime-1/web/agent-info/a2a-default"
+            "?_runtime_region=cn-beijing"
+        )
         create_session = client.post(
             "/web/runtime-proxy/runtime-1/apps/a2a-default/users/user/sessions"
             "?_runtime_region=cn-beijing"
@@ -3296,6 +3458,19 @@ def test_runtime_proxy_bridges_a2a_only_runtime_for_studio_chat(
                 "app_name": "a2a-default",
                 "user_id": "user",
                 "session_id": "sid",
+                "model_id": "model-alt",
+                "custom_metadata": {
+                    "veadkInvocation": {
+                        "skills": [
+                            {
+                                "name": "review-code",
+                                "skillSpaceId": "space-1",
+                                "skillId": "skill-1",
+                                "version": "v3",
+                            }
+                        ]
+                    }
+                },
                 "new_message": {"role": "user", "parts": [{"text": "hello"}]},
             },
         )
@@ -3310,6 +3485,40 @@ def test_runtime_proxy_bridges_a2a_only_runtime_for_studio_chat(
 
     assert list_response.status_code == 200
     assert list_response.json() == ["a2a-default"]
+    assert info_response.status_code == 200
+    assert info_response.json()["selectableModels"] == [
+        "model-default",
+        "model-alt",
+    ]
+    assert info_response.json()["turnLifecycleControl"] == {
+        "actions": ["pause", "resume", "cancel", "interrupt"],
+        "pauseMode": "cooperative-safe-point",
+        "processReplacementResume": False,
+    }
+    assert info_response.json()["resourceTopology"] == {
+        "nodes": [
+            {
+                "id": "agent:default",
+                "kind": "agent",
+                "name": "default",
+                "status": "configured",
+            },
+            {
+                "id": "sandbox:tool-1",
+                "kind": "sandbox",
+                "name": "Codex Sandbox",
+                "status": "configured",
+                "resourceId": "tool-1",
+            },
+        ],
+        "edges": [
+            {
+                "source": "agent:default",
+                "target": "sandbox:tool-1",
+                "relation": "delegates-to",
+            }
+        ],
+    }
     assert create_session.status_code == 200
     assert create_session.json()["id"]
     assert get_session.status_code == 200
@@ -3342,6 +3551,23 @@ def test_runtime_proxy_bridges_a2a_only_runtime_for_studio_chat(
         }
     ]
     assert len(runtime_requests) == (2 if streaming == "fallback" else 1)
+    assert all(
+        json.loads(request["content"])["params"]["metadata"]
+        == {
+            "modelId": "model-alt",
+            "veadkInvocation": {
+                "skills": [
+                    {
+                        "name": "review-code",
+                        "skillSpaceId": "space-1",
+                        "skillId": "skill-1",
+                        "version": "v3",
+                    }
+                ]
+            },
+        }
+        for request in runtime_requests
+    )
 
 
 def test_runtime_proxy_resolves_studio_media_before_forwarding(

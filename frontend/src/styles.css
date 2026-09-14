@@ -3031,6 +3031,7 @@ body {
     0 8px 32px rgb(0 0 0 / 0.028),
     0 24px 72px 8px rgb(0 0 0 / 0.02);
 }
+.composer--new-chat .composer-box--has-model { padding-bottom: 56px; }
 .composer-input-stack {
   position: relative;
   display: flex;
@@ -3153,11 +3154,7 @@ body {
   opacity: 1;
   transform: scale(1);
 }
-.composer--new-chat .comp-send {
-  position: absolute;
-  right: 10px;
-  bottom: 10px;
-}
+.composer--new-chat .comp-send { position: static; }
 .composer--new-chat .comp-send .icon {
   width: 20px;
   height: 20px;
@@ -3440,7 +3437,82 @@ body {
   height: 36px;
   flex-shrink: 0;
 }
-.composer--new-chat .composer-submit-actions { display: contents; }
+
+.composer-model-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: hsl(var(--muted-foreground));
+  font-size: 11px;
+}
+.composer-turn-status { display: inline-flex; min-width: 0; align-items: center; }
+.composer-turn-state { color: hsl(var(--muted-foreground)); font-size: 11px; }
+
+.composer-model-select .new-chat-compact-select {
+  width: min(260px, 30vw);
+  max-width: 260px;
+}
+
+.composer-model-select .new-chat-compact-select__trigger {
+  width: 100%;
+  max-width: none;
+  min-height: 36px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+  padding: 0 8px;
+  font: inherit;
+  font-size: 13px;
+}
+
+.composer-model-select .new-chat-compact-select__menu {
+  right: 0;
+  bottom: calc(100% + 6px);
+  left: auto;
+  width: min(360px, calc(100vw - 32px));
+}
+.composer--new-chat .composer-submit-actions {
+  position: absolute;
+  z-index: 5;
+  left: auto;
+  right: 10px;
+  bottom: 10px;
+  display: flex;
+  width: auto;
+  max-width: calc(100% - 300px);
+  min-width: 0;
+  pointer-events: none;
+}
+.composer--new-chat .composer-submit-actions > * { pointer-events: auto; }
+.composer--new-chat .composer-model-select {
+  min-width: 0;
+  margin-left: auto;
+}
+.composer--new-chat .composer-model-select .new-chat-compact-select__trigger {
+  width: min(260px, 30vw);
+  min-width: 0;
+}
+@media (max-width: 640px) {
+  .composer--new-chat .new-chat-agent-picker { bottom: 54px; }
+  .composer--new-chat .composer-box--has-model { padding-bottom: 96px; }
+  .composer--new-chat .composer-submit-actions {
+    left: 10px;
+    right: 10px;
+    width: calc(100% - 20px);
+    max-width: none;
+    justify-content: flex-end;
+  }
+  .composer--new-chat .composer-model-select {
+    margin-left: 0;
+    margin-right: auto;
+  }
+  .composer--new-chat .composer-model-select,
+  .composer--new-chat .composer-model-select .new-chat-compact-select {
+    width: min(210px, 52vw);
+    max-width: min(210px, 52vw);
+  }
+}
 .comp-send {
   flex-shrink: 0;
   display: flex; align-items: center; justify-content: center;
@@ -3684,6 +3756,11 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.token-usage-detail { margin-top: 10px; border-top: 1px solid hsl(var(--border)); padding-top: 8px; }
+.token-usage-detail__head, .token-usage-detail__row { display: grid; grid-template-columns: minmax(84px, 1fr) auto auto; gap: 12px; align-items: baseline; }
+.token-usage-detail__head { color: hsl(var(--muted-foreground)); font-size: 10px; margin-bottom: 4px; }
+.token-usage-detail__row { font-size: 11px; padding: 2px 0; }
+.token-usage-detail__row strong { font-variant-numeric: tabular-nums; text-align: right; }
 
 @media (prefers-reduced-motion: reduce) {
   .token-usage-indicator,
@@ -6350,6 +6427,11 @@ a.search-result { text-decoration: none; color: inherit; }
   border-radius: 12px;
   background: hsl(var(--background));
 }
+.topo-runtime-flow { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 12px; }
+.topo-runtime-node { position: relative; display: grid; gap: 3px; min-width: 112px; max-width: 180px; padding: 10px; border: 1px solid hsl(var(--border)); border-radius: 9px; background: hsl(var(--panel)); }
+.topo-runtime-node strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.topo-runtime-node small, .topo-runtime-kind { color: hsl(var(--muted-foreground)); font-size: 10px; }
+.topo-runtime-edge { position: absolute; left: -12px; top: 50%; transform: translateY(-50%); color: hsl(var(--muted-foreground)); }
 .topo-canvas-preview .abc-root,
 .topo-canvas-dialog-body .abc-root {
   width: 100%;

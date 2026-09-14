@@ -80,6 +80,110 @@ test("presents command execution without exposing JSON as primary content", () =
   assert.equal(presentation.defaultOpen, false);
 });
 
+test("extracts human-readable subjects from nested runtime tool payloads", () => {
+  const goal = presentToolActivity({
+    name: "create_goal",
+    args: { payload: { objective: "Review the latest two tags" } },
+    response: { goal: { objective: "Review the latest two tags", status: "active" } },
+    done: true,
+  });
+  const command = presentToolActivity({
+    name: "exec_command",
+    args: { payload: { cmd: "git log --oneline -2", cwd: "/workspace" } },
+    response: { display: { durationMs: 3100 }, exitCode: 0 },
+    done: true,
+  });
+  const workerCommand = presentToolActivity({
+    name: "commandExecution",
+    args: {
+      safeCommandSummary: {
+        commandPreview: "git diff --stat",
+        binary: "git",
+      },
+    },
+    done: true,
+  });
+  const unknown = presentToolActivity({
+    name: "custom_release_gate",
+    args: {},
+    done: true,
+  });
+
+  assert.equal(goal.titleKey, "goal.completed");
+  assert.equal(goal.summary, "Review the latest two tags");
+  assert.equal(command.titleKey, "command.completed");
+  assert.equal(command.summary, "git log --oneline -2");
+  assert.equal(command.cwd, "/workspace");
+  assert.equal(workerCommand.summary, "git diff --stat");
+  assert.equal(workerCommand.command, "git diff --stat");
+  assert.equal(unknown.titleKey, "generic.named.completed");
+  assert.equal(unknown.titleParams.tool, "custom_release_gate");
+});
+
+test("keeps complete sanitized raw data while bounding its rendered preview", () => {
+  const long = "x".repeat(20_000);
+  const presentation = presentToolActivity({
+    name: "create_goal",
+    args: { objective: long, apiKey: "secret-value" },
+    done: true,
+  });
+
+  assert.equal(presentation.rawArgs.objective.length, 20_000);
+  assert.equal(presentation.rawArgs.apiKey, "••••••••");
+  assert.ok(
+    presentation.rawArgsPreview.omittedCharacters > 0 ||
+      presentation.rawArgsPreview.omittedLines > 0,
+  );
+  assert.ok(presentation.rawArgsPreview.text.length < 20_000);
+});
+
+test("uses worker safe command previews for human-readable command rows", () => {
+  const presentation = presentToolActivity({
+    name: "commandExecution",
+    args: {
+      safeCommandSummary: {
+        commandPreview: "git diff --stat",
+        binary: "git",
+      },
+    },
+    done: true,
+  });
+
+  assert.equal(presentation.summary, "git diff --stat");
+  assert.equal(presentation.command, "git diff --stat");
+});
+
+test("preserves reasoning and agent thought as distinct block kinds", () => {
+  let accumulator = applyEvent(emptyAcc(), {
+    partial: true,
+    customMetadata: { thoughtKind: "reasoning" },
+    content: { parts: [{ text: "inspect evidence", thought: true }] },
+  });
+  accumulator = applyEvent(accumulator, {
+    partial: true,
+    customMetadata: { thoughtKind: "thought" },
+    content: { parts: [{ text: "waiting for approval", thought: true }] },
+  });
+
+  assert.deepEqual(
+    accumulator.blocks.map((block) => [block.kind, block.thoughtKind, block.text]),
+    [
+      ["thinking", "reasoning", "inspect evidence"],
+      ["thinking", "thought", "waiting for approval"],
+    ],
+  );
+});
+
+test("treats an unclassified ADK thought as model reasoning", () => {
+  const accumulator = applyEvent(emptyAcc(), {
+    partial: true,
+    content: { parts: [{ text: "inspect evidence", thought: true }] },
+  });
+
+  assert.equal(accumulator.blocks[0].kind, "thinking");
+  assert.equal(accumulator.blocks[0].thoughtKind, "reasoning");
+});
+
 test("keeps failures open and masks sensitive raw values", () => {
   const presentation = presentToolActivity({
     name: "exec_command",

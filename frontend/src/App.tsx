@@ -29,6 +29,7 @@ import {
   downloadArtifact,
   previewArtifact,
   getAgentInfo,
+  getTurnControl,
   getAutomaticEvaluationStatuses,
   getSessionTrace,
   getSession,
@@ -43,6 +44,7 @@ import {
   prepareSessionEnvironmentMounts,
   runSseIncompleteResponseError,
   runSSE,
+  controlTurn,
   refreshAgentFeedbackCases,
   submitIssueFeedback,
   submitMessageFeedback,
@@ -66,10 +68,13 @@ import {
   type StudioAccess,
   type StudioEnvironment,
   type StudioWorkspace,
+  type TurnControlState,
+  TurnControlConflictError,
   type UiConfig,
   type UiFeatures,
 } from "./adk/client";
 import type { RuntimeLogTarget } from "./adk/runtimeLogs";
+import type { SelectedSkill } from "./create/skills/types";
 import {
   addTokenUsage,
   aggregateTokenUsage,
@@ -297,6 +302,14 @@ function issueFeedbackModuleForPage(page: string): IssueFeedbackModule {
   return "other";
 }
 
+function isOptionalStudioStorageUnavailable(cause: unknown): boolean {
+  const message = cause instanceof Error ? cause.message : String(cause ?? "");
+  return message.includes("HTTP 503") && (
+    message.includes("未配置持久化存储") ||
+    message.includes("storage is not configured")
+  );
+}
+
 interface NewChatCapabilitiesState {
   agentId?: string;
   ready?: boolean;
@@ -409,6 +422,8 @@ const ENVIRONMENT_STUDIO_TOOL_IDS = [
   "delegate_to_codex_sandbox",
 ] as const;
 const SESSION_ENVIRONMENT_STORAGE_KEY = "veadk.sessionEnvironmentMounts.v1";
+const SESSION_SKILL_STORAGE_KEY = "veadk.sessionSkillMounts.v1";
+const SESSION_TOOL_STORAGE_KEY = "veadk.sessionStudioToolMounts.v1";
 
 interface StoredSessionEnvironmentState {
   mounts: Record<string, SessionEnvironmentMountSelection[]>;
@@ -479,6 +494,72 @@ function persistSessionEnvironmentState(
       SESSION_ENVIRONMENT_STORAGE_KEY,
       JSON.stringify({ mounts, workspaceIds }),
     );
+  } catch {
+    // Storage can be unavailable in private or quota-restricted browsers.
+  }
+}
+
+function loadStoredSessionSkills(): Record<string, SelectedSkill[]> {
+  if (typeof localStorage === "undefined") return {};
+  try {
+    const raw = JSON.parse(localStorage.getItem(SESSION_SKILL_STORAGE_KEY) ?? "{}");
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+    return Object.fromEntries(
+      Object.entries(raw as Record<string, unknown>).slice(-200).map(([key, value]) => [
+        key,
+        Array.isArray(value)
+          ? value.slice(0, 20).filter((item): item is SelectedSkill => (
+              Boolean(item)
+              && typeof item === "object"
+              && !Array.isArray(item)
+              && (item as SelectedSkill).source === "skillspace"
+              && typeof (item as SelectedSkill).name === "string"
+              && typeof (item as SelectedSkill).folder === "string"
+              && typeof (item as SelectedSkill).skillSpaceId === "string"
+              && typeof (item as SelectedSkill).skillId === "string"
+              && typeof (item as SelectedSkill).version === "string"
+            ))
+          : [],
+      ]),
+    );
+  } catch {
+    return {};
+  }
+}
+
+function persistSessionSkills(skills: Record<string, SelectedSkill[]>) {
+  if (typeof localStorage === "undefined") return;
+  try {
+    localStorage.setItem(SESSION_SKILL_STORAGE_KEY, JSON.stringify(skills));
+  } catch {
+    // Storage can be unavailable in private or quota-restricted browsers.
+  }
+}
+
+function loadStoredSessionTools(): Record<string, string[]> {
+  if (typeof localStorage === "undefined") return {};
+  try {
+    const raw = JSON.parse(localStorage.getItem(SESSION_TOOL_STORAGE_KEY) ?? "{}");
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+    return Object.fromEntries(
+      Object.entries(raw as Record<string, unknown>).slice(-200).map(([key, value]) => [
+        key,
+        Array.isArray(value)
+          ? value.filter((item): item is string => (
+              typeof item === "string" && Boolean(item.trim())
+            )).slice(0, 50)
+          : [],
+      ]),
+    );
+  } catch {
+    return {};
+  }
+}
+
+function persistSessionTools(tools: Record<string, string[]>) {
+  if (typeof localStorage === "undefined") return;
+  try {
+    localStorage.setItem(SESSION_TOOL_STORAGE_KEY, JSON.stringify(tools));
   } catch {
     // Storage can be unavailable in private or quota-restricted browsers.
   }
@@ -1450,7 +1531,12 @@ export default function App() {
   const [draftStudioToolIds, setDraftStudioToolIds] = useState<string[]>([]);
   const [studioToolIdsBySession, setStudioToolIdsBySession] = useState<
     Record<string, string[]>
-  >({});
+  >(() => loadStoredSessionTools());
+  useEffect(() => persistSessionTools(studioToolIdsBySession), [studioToolIdsBySession]);
+  const [sessionSkillsBySession, setSessionSkillsBySession] = useState<
+    Record<string, SelectedSkill[]>
+  >(() => loadStoredSessionSkills());
+  useEffect(() => persistSessionSkills(sessionSkillsBySession), [sessionSkillsBySession]);
   const [sessionEnvironments, setSessionEnvironments] = useState<StudioEnvironment[]>([]);
   const [sessionWorkspaces, setSessionWorkspaces] = useState<StudioWorkspace[]>([]);
   const [sessionEnvironmentsLoading, setSessionEnvironmentsLoading] = useState(false);
@@ -1478,6 +1564,12 @@ export default function App() {
     Record<string, RuntimeLogTarget>
   >({});
   const [agentInfo, setAgentInfo] = useState<AgentInfo | null>(null);
+  const [turnControlBySession, setTurnControlBySession] = useState<Record<string, TurnControlState>>({});
+  const turnControlBySessionRef = useRef<Record<string, TurnControlState>>({});
+  const [turnControlBusy, setTurnControlBusy] = useState(false);
+  const [selectedModelBySession, setSelectedModelBySession] = useState<
+    Record<string, string>
+  >({});
   const [agentInfoRefreshKey, setAgentInfoRefreshKey] = useState(0);
   const [capabilitiesLoading, setCapabilitiesLoading] = useState(false);
   const removedAttachmentIdsRef = useRef<Set<string>>(new Set());
@@ -5095,21 +5187,97 @@ export default function App() {
     );
   }
 
+  const activeTurnControl = sessionId ? turnControlBySession[sessionId] ?? null : null;
+  const activeTurnIsControllable = Boolean(
+    activeTurnControl?.allowedActions.length
+    || ["running", "pausing", "paused", "resuming", "interrupting", "cancelling"]
+      .includes(activeTurnControl?.state ?? ""),
+  );
+
+  async function applyTurnControl(action: "pause" | "resume") {
+    if (!sessionId || !appName || !activeTurnControl) return;
+    setTurnControlBusy(true);
+    try {
+      const next = await controlTurn(
+        appName, sessionId, action, activeTurnControl.generation,
+      );
+      if (action === "resume" && next.resumeDisposition === "new_turn_required") {
+        const originalTask = typeof next.checkpoint?.originalTask === "string"
+          ? next.checkpoint.originalTask.trim()
+          : "";
+        streamAbortsRef.current.get(sessionId)?.abort();
+        await send(
+          [next.continuationPrompt, originalTask && `Original task: ${originalTask}`]
+            .filter(Boolean)
+            .join("\n\n"),
+          [],
+          emptyInvocation(),
+          "composer",
+          selectedStudioToolIds,
+          true,
+        );
+        return;
+      }
+      setTurnControlBySession((current) => ({ ...current, [sessionId]: next }));
+      turnControlBySessionRef.current = {
+        ...turnControlBySessionRef.current,
+        [sessionId]: next,
+      };
+    } catch (cause) {
+      if (cause instanceof TurnControlConflictError) {
+        const next = cause.authoritativeState;
+        setTurnControlBySession((current) => ({ ...current, [sessionId]: next }));
+        turnControlBySessionRef.current = {
+          ...turnControlBySessionRef.current,
+          [sessionId]: next,
+        };
+        return;
+      }
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setTurnControlBusy(false);
+    }
+  }
+
   async function send(
     text: string,
     atts: Attachment[] = [],
     selectedInvocation: FrontendInvocation = emptyInvocation(),
     messageSource: AgentMessageSource = "composer",
     selectedPlatformTools?: readonly string[],
+    allowWhileBusy = false,
   ) {
     // `busy` here = the CURRENT session is already streaming (can't double-send
     // to it). Other sessions can stream concurrently.
     if (
       (!text.trim() && atts.length === 0) ||
-      conversationBusy ||
+      (!allowWhileBusy && conversationBusy) ||
       !appName ||
       !userId
     ) return;
+    const selectableModels = agentInfo?.selectableModels ?? [];
+    const modelSelectionKey = sessionId || `new:${appName}`;
+    const selectedModel = selectedModelBySession[modelSelectionKey] || "";
+    const requestedModel = selectableModels.length > 1
+      ? selectableModels.includes(selectedModel)
+        ? selectedModel
+        : agentInfo?.model || selectableModels[0] || ""
+      : "";
+    const mountedSkillInvocation = {
+      ...selectedInvocation,
+      skills: [
+        ...selectedInvocation.skills,
+        ...selectedSessionSkills.map((skill) => ({
+          name: skill.name,
+          description: skill.description ?? "",
+          skillSpaceId: skill.skillSpaceId,
+          skillId: skill.skillId,
+          version: skill.version,
+        })),
+      ].filter((skill, index, values) => (
+        values.findIndex((candidate) => candidate.name === skill.name) === index
+      )),
+    };
     setError("");
     const createsSession = !sessionId;
     let platformTools = [...(selectedPlatformTools ?? selectedStudioToolIds)];
@@ -5134,8 +5302,8 @@ export default function App() {
       : null;
 
     const userBlocks: Turn["blocks"] = [];
-    if (selectedInvocation.skills.length > 0 || selectedInvocation.targetAgent) {
-      userBlocks.push({ kind: "invocation", value: selectedInvocation });
+    if (mountedSkillInvocation.skills.length > 0 || mountedSkillInvocation.targetAgent) {
+      userBlocks.push({ kind: "invocation", value: mountedSkillInvocation });
     }
     if (atts.length)
       userBlocks.push({
@@ -5240,6 +5408,13 @@ export default function App() {
       }
       viewSidRef.current = sid;
       setSessionId(sid);
+      if (requestedModel && createsSession) {
+        setSelectedModelBySession((current) => ({
+          ...current,
+          [sid]: requestedModel,
+          [modelSelectionKey]: "",
+        }));
+      }
       setPendingTurns([]);
       setInitializingSession(false);
     }
@@ -5248,6 +5423,17 @@ export default function App() {
     const ctrl = new AbortController();
     streamAbortsRef.current.set(sid, ctrl);
     setStreaming(sid, true);
+    if (agentInfo?.turnLifecycleControl && currentRuntime) {
+      setTurnControlBySession((current) => {
+        if (!current[sid]) return current;
+        const next = { ...current };
+        delete next[sid];
+        return next;
+      });
+      const nextTurnControls = { ...turnControlBySessionRef.current };
+      delete nextTurnControls[sid];
+      turnControlBySessionRef.current = nextTurnControls;
+    }
     startStreamPresentation(sid);
     viewSidRef.current = sid;
 
@@ -5269,8 +5455,9 @@ export default function App() {
         userId,
         sessionId: sid,
         text,
+        modelId: requestedModel,
         attachments: atts,
-        invocation: selectedInvocation,
+        invocation: mountedSkillInvocation,
         platformTools: studioToolRuntime ? platformTools : undefined,
         environmentMounts: studioToolRuntime && environmentMounts.length > 0
           ? environmentMounts
@@ -5368,9 +5555,11 @@ export default function App() {
       ) {
         setInput((current) => current.trim() ? current : text);
       }
-      if (streamAbortsRef.current.get(sid) === ctrl) streamAbortsRef.current.delete(sid);
-      setStreaming(sid, false);
-      finishStreamPresentation(sid);
+      if (streamAbortsRef.current.get(sid) === ctrl) {
+        streamAbortsRef.current.delete(sid);
+        setStreaming(sid, false);
+        finishStreamPresentation(sid);
+      }
       setActiveAgentBySession((m) => ({ ...m, [sid]: "" }));
       setExecPathBySession((m) => ({ ...m, [sid]: [] }));
     }
@@ -5536,6 +5725,54 @@ export default function App() {
           region: currentConn.region,
         }
       : undefined;
+  useEffect(() => {
+    if (
+      !sessionId ||
+      !appName ||
+      !currentRuntime ||
+      !agentInfo?.turnLifecycleControl
+    ) return;
+    let cancelled = false;
+    const refresh = () => {
+      void getTurnControl(appName, sessionId)
+        .then((state) => {
+          if (!cancelled) {
+            setTurnControlBySession((current) => (
+              current[sessionId]?.taskId === state.taskId
+              && current[sessionId]?.state === state.state
+              && current[sessionId]?.generation === state.generation
+              && current[sessionId]?.allowedActions.join("\0")
+                === state.allowedActions.join("\0")
+                ? current
+                : { ...current, [sessionId]: state }
+            ));
+            turnControlBySessionRef.current = {
+              ...turnControlBySessionRef.current,
+              [sessionId]: state,
+            };
+          }
+        })
+        .catch(() => {
+          if (!cancelled && !streamingSids.has(sessionId)) {
+            setTurnControlBySession((current) => {
+              const next = { ...current };
+              delete next[sessionId];
+              return next;
+            });
+            const next = { ...turnControlBySessionRef.current };
+            delete next[sessionId];
+            turnControlBySessionRef.current = next;
+          }
+        });
+    };
+    refresh();
+    const timer = window.setInterval(() => {
+      const current = turnControlBySessionRef.current[sessionId];
+      if (current && ["completed", "failed", "rejected", "cancelled", "canceled", "interrupted", "orphaned"].includes(current.state)) return;
+      refresh();
+    }, 1000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [agentInfo?.turnLifecycleControl, appName, currentRuntime, sessionId]);
   const selectedDraftStudioRuntime =
     draftStudioRuntime?.appName === appName ? draftStudioRuntime : undefined;
   // Local Agents execute through this Studio process, so use the synthetic
@@ -5601,11 +5838,23 @@ export default function App() {
     setSessionEnvironmentsLoading(true);
     setSessionEnvironmentsError("");
     try {
-      const [items, workspaces] = await Promise.all([
+      const environmentResults = await Promise.allSettled([
         listEnvironments(controller.signal),
         listWorkspaces(controller.signal),
       ]);
       if (controller.signal.aborted) return;
+      const items = environmentResults[0].status === "fulfilled"
+        ? environmentResults[0].value
+        : [];
+      const workspaces = environmentResults[1].status === "fulfilled"
+        ? environmentResults[1].value
+        : [];
+      const environmentErrors = environmentResults.flatMap((result) =>
+        result.status === "rejected" &&
+        !isOptionalStudioStorageUnavailable(result.reason)
+          ? [result.reason instanceof Error ? result.reason.message : String(result.reason)]
+          : []
+      );
       const availableEnvironments = items.filter((environment) =>
         ["aio-sandbox", "codex-sandbox"].includes(environment.baseEnvironment) &&
         environment.latestVersion?.status === "available" &&
@@ -5623,6 +5872,7 @@ export default function App() {
       // workspaces disappear from both the picker and existing Session mounts.
       setSessionEnvironments(availableEnvironments);
       setSessionWorkspaces(workspaces);
+      setSessionEnvironmentsError(environmentErrors.join("\n"));
       setEnvironmentMountsBySession((current) => Object.fromEntries(
         Object.entries(current).map(([key, selections]) => [
           key,
@@ -5760,6 +6010,9 @@ export default function App() {
   const selectedEnvironmentMounts = sessionId
     ? environmentMountsBySession[activeStudioToolSelectionKey] ?? []
     : [];
+  const selectedSessionSkills = sessionId
+    ? sessionSkillsBySession[activeStudioToolSelectionKey] ?? []
+    : [];
   const selectedEnvironmentWorkspaceIds = sessionId
     ? environmentWorkspaceIdsBySession[activeStudioToolSelectionKey] ?? []
     : [];
@@ -5791,6 +6044,13 @@ export default function App() {
     setStudioToolIdsBySession((current) => ({
       ...current,
       [activeStudioToolSelectionKey]: next,
+    }));
+  };
+  const updateSelectedSessionSkills = (skills: SelectedSkill[]) => {
+    if (!sessionId) return;
+    setSessionSkillsBySession((current) => ({
+      ...current,
+      [activeStudioToolSelectionKey]: skills,
     }));
   };
   const updateSelectedEnvironments = async (
@@ -6145,6 +6405,7 @@ export default function App() {
         .filter((status) => status.state === "running")
         .map((status) => status.sessionId) ?? [],
     ));
+    startNewChat();
     setAppName(id);
     exitAgentDetailContext();
     setFocusedDeploymentTaskId("");
@@ -6157,7 +6418,6 @@ export default function App() {
     setIntelligentDeployment(null);
     setWorkspaceView(false);
     setEnvironmentView(false);
-    startNewChat();
   };
 
   const openIntelligentDeploymentChat = async (agentId: string) => {
@@ -6840,7 +7100,7 @@ export default function App() {
                 );
                 releaseAttachmentPreviews(atts);
               }}
-              onStop={busy ? stopCurrentGeneration : undefined}
+              onStop={busy && !agentInfo?.turnLifecycleControl ? stopCurrentGeneration : undefined}
               disabled={
                 sandboxSession
                   ? false
@@ -6868,6 +7128,23 @@ export default function App() {
               modelName={
                 modelNameFromRuntime(agentInfo?.model) || activeTokenUsage.modelName
               }
+              selectableModels={agentInfo?.selectableModels}
+              selectedModel={
+                agentInfo?.selectableModels?.includes(
+                    selectedModelBySession[sessionId || `new:${appName}`] || "",
+                  )
+                  ? selectedModelBySession[sessionId || `new:${appName}`]
+                  : agentInfo?.model || agentInfo?.selectableModels?.[0] || ""
+              }
+              onSelectedModelChange={(model) => {
+                setSelectedModelBySession((current) => ({
+                  ...current,
+                  [sessionId || `new:${appName}`]: model,
+                }));
+              }}
+              turnControl={activeTurnIsControllable ? activeTurnControl : null}
+              turnControlBusy={turnControlBusy}
+              onTurnControl={(action) => void applyTurnControl(action)}
               tokenUsage={activeTokenUsage}
               systemTokenEstimate={systemTokenEstimate}
               allowAttachments={!sandboxSession}
@@ -7999,6 +8276,8 @@ export default function App() {
                     onStudioToolsChange={
                       studioToolRuntime ? updateSelectedStudioToolIds : undefined
                     }
+                    selectedSessionSkills={selectedSessionSkills}
+                    onSessionSkillsChange={sessionId ? updateSelectedSessionSkills : undefined}
                     environments={sessionEnvironments}
                     workspaces={sessionWorkspaces}
                     selectedEnvironments={selectedEnvironmentMounts}

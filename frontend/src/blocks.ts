@@ -95,7 +95,12 @@ export interface CodexSandboxActivity {
 export type Block =
   | { kind: "progress"; text: string }
   | { kind: "activity-source"; label: string }
-  | { kind: "thinking"; text: string; done: boolean }
+  | {
+      kind: "thinking";
+      text: string;
+      done: boolean;
+      thoughtKind?: "reasoning" | "thought";
+    }
   | { kind: "text"; text: string }
   | {
       kind: "tool";
@@ -483,13 +488,34 @@ function appendArtifacts(
   blocks.push({ kind: "artifact", files });
 }
 
-function appendText(blocks: Block[], kind: "thinking" | "text", text: string) {
+function appendText(
+  blocks: Block[],
+  kind: "thinking" | "text",
+  text: string,
+  thoughtKind?: "reasoning" | "thought",
+) {
   const last = blocks[blocks.length - 1];
-  if (last && last.kind === kind) last.text += text;
+  if (
+    last &&
+    last.kind === kind &&
+    (last.kind !== "thinking" || last.thoughtKind === thoughtKind)
+  )
+    last.text += text;
   else
     blocks.push(
-      kind === "thinking" ? { kind, text, done: false } : { kind, text },
+      kind === "thinking"
+        ? { kind, text, done: false, thoughtKind }
+        : { kind, text },
     );
+}
+
+function thoughtKindOf(event: AdkEvent): "reasoning" | "thought" {
+  const metadata = event.customMetadata ?? event.custom_metadata;
+  if (metadata && typeof metadata === "object") {
+    const value = (metadata as Record<string, unknown>).thoughtKind;
+    if (value === "reasoning" || value === "thought") return value;
+  }
+  return "reasoning";
 }
 
 function closeThinking(blocks: Block[]) {
@@ -554,7 +580,12 @@ export function applyEvent(acc: Acc, ev: AdkEvent): Acc {
     for (const p of parts) {
       const text = visiblePartText(p);
       if (typeof text === "string" && text)
-        appendText(blocks, p.thought ? "thinking" : "text", text);
+        appendText(
+          blocks,
+          p.thought ? "thinking" : "text",
+          text,
+          p.thought ? thoughtKindOf(ev) : undefined,
+        );
     }
     return { blocks, liveStart, pendingCodexProgress };
   }
@@ -568,7 +599,12 @@ export function applyEvent(acc: Acc, ev: AdkEvent): Acc {
     const files = attachmentsFromParts([p]);
     const text = visiblePartText(p);
     if (typeof text === "string" && text) {
-      appendText(blocks, p.thought ? "thinking" : "text", text);
+      appendText(
+        blocks,
+        p.thought ? "thinking" : "text",
+        text,
+        p.thought ? thoughtKindOf(ev) : undefined,
+      );
     } else if (files.length) {
       closeThinking(blocks);
       appendAttachments(blocks, files);
@@ -914,7 +950,9 @@ export function createAssistantEventProjector(
     finish(): Turn[] {
       const turns = [...active.values()].map((state): Turn => ({
         role: "assistant",
-        blocks: state.acc.blocks,
+        blocks: state.acc.blocks.map((block) =>
+          block.kind === "thinking" ? { ...block, done: true } : block
+        ),
         meta: { ...state.meta, streaming: false },
       }));
       active.clear();

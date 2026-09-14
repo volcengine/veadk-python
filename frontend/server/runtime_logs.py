@@ -277,10 +277,11 @@ class RuntimeLogService:
             runtime_types.GetRuntimeInstanceLogsRequest(
                 RuntimeId=runtime_id,
                 InstanceName=instance_name,
-                Limit=500,
+                Limit=1000,
             ),
         )
-        return self._sanitize(str(response.logs or ""))
+        sanitized = self._sanitize(str(response.logs or ""))
+        return "\n".join(sanitized.splitlines()[-1000:])
 
     async def snapshot(
         self,
