@@ -91,6 +91,7 @@ export interface MyAgentCardData {
 
 export type AgentType =
   | "general"
+  | "mpa"
   | "codex"
   | "deepseek-harness"
   | "openclaw"
@@ -98,11 +99,17 @@ export type AgentType =
 
 const AGENT_TYPES: AgentType[] = [
   "general",
+  "mpa",
   "codex",
   "deepseek-harness",
   "openclaw",
   "hermes",
 ];
+type RuntimeAgentType = Extract<AgentType, "general" | "mpa">;
+type SandboxMyAgentType = Exclude<AgentType, RuntimeAgentType>;
+function isSandboxMyAgentType(type: AgentType): type is SandboxMyAgentType {
+  return type !== "general" && type !== "mpa";
+}
 const RUNTIME_PAGE_SIZE = 24;
 const RUNTIME_PAGE_CACHE_TTL_MS = 30_000;
 const RUNTIME_COMPATIBILITY_TIMEOUT_MS = 7_000;
@@ -201,7 +208,7 @@ function HandoffIcon(props: SVGProps<SVGSVGElement>) {
 }
 
 function AgentTypeIcon({ type }: { type: AgentType }) {
-  if (type === "general") return <AgentFaceIcon />;
+  if (type === "general" || type === "mpa") return <AgentFaceIcon />;
   return <SandboxAgentIcon kind={type} />;
 }
 
@@ -314,6 +321,7 @@ function resolveAgentRegion(
 }
 
 async function loadRuntimeAgents(
+  agentCategory: RuntimeAgentType,
   runtimeScope: RuntimeScope,
   region: string,
   nextToken: string,
@@ -321,7 +329,7 @@ async function loadRuntimeAgents(
   t: TFunction<"ui">,
   signal?: AbortSignal,
 ): Promise<string> {
-  const requestKey = `${runtimeScope}:${region}:${nextToken}`;
+  const requestKey = `${agentCategory}:${runtimeScope}:${region}:${nextToken}`;
   const cached = runtimePageCache.get(requestKey);
   if (cached && cached.expiresAt > Date.now()) {
     onList(cached.page.runtimes.map((runtime) => runtimeToAgent(runtime, t)));
@@ -331,6 +339,7 @@ async function loadRuntimeAgents(
   let request = runtimePageRequests.get(requestKey);
   if (!request) {
     request = getRuntimesWithTimeoutRetry({
+      agentCategory,
       scope: runtimeScope,
       region,
       pageSize: RUNTIME_PAGE_SIZE,
@@ -784,7 +793,8 @@ export function MyAgents({
     const requestId = ++runtimeRequestRef.current;
     setLoadingRuntimes(true);
     setRuntimeError("");
-    return loadRuntimeAgents(ownership, region, token, (agents) => {
+    const runtimeAgentType: RuntimeAgentType = activeType === "mpa" ? "mpa" : "general";
+    return loadRuntimeAgents(runtimeAgentType, ownership, region, token, (agents) => {
       if (runtimeRequestRef.current !== requestId) return;
       setRuntimeAgents((current) => reset ? agents : [...current, ...agents]);
     }, t, controller.signal)
@@ -802,10 +812,10 @@ export function MyAgents({
           runtimeListAbortRef.current = null;
         }
       });
-  }, [ownership, region, t]);
+  }, [activeType, ownership, region, t]);
 
   useEffect(() => {
-    if (activeType !== "general") return;
+    if (activeType !== "general" && activeType !== "mpa") return;
     setRuntimeAgents([]);
     setRuntimeNextToken("");
     void fetchRuntimePage("", true);
@@ -818,7 +828,7 @@ export function MyAgents({
   }, [activeType, fetchRuntimePage]);
 
   useEffect(() => {
-    if (activeType !== "general") {
+    if (activeType !== "general" && activeType !== "mpa") {
       for (const controller of runtimeCompatibilityAbortRef.current.values()) {
         controller.abort();
       }
@@ -922,7 +932,7 @@ export function MyAgents({
     runtimeCompatibilityAbortRef.current.clear();
   }, []);
 
-  const fetchSandboxAgents = useCallback(async (type: Exclude<AgentType, "general">) => {
+  const fetchSandboxAgents = useCallback(async (type: SandboxMyAgentType) => {
     sandboxAbortRef.current?.abort();
     const controller = new AbortController();
     sandboxAbortRef.current = controller;
@@ -960,7 +970,7 @@ export function MyAgents({
 
   function selectAgentType(type: AgentType) {
     if (type === activeType) return;
-    if (type === "general") {
+    if (type === "general" || type === "mpa") {
       runtimeRequestRef.current += 1;
       setRuntimeAgents([]);
       setRuntimeNextToken("");
@@ -978,7 +988,7 @@ export function MyAgents({
   }
 
   function resetRuntimePagination() {
-    if (activeType !== "general") return;
+    if (activeType !== "general" && activeType !== "mpa") return;
     runtimeRequestRef.current += 1;
     setRuntimeAgents([]);
     setRuntimeNextToken("");
@@ -999,7 +1009,7 @@ export function MyAgents({
   }
 
   useEffect(() => {
-    if (activeType === "general") {
+    if (activeType === "general" || activeType === "mpa") {
       sandboxAbortRef.current?.abort();
       sandboxAbortRef.current = null;
       sandboxRequestRef.current += 1;
@@ -1016,7 +1026,7 @@ export function MyAgents({
   useEffect(() => {
     const target = loadMoreRef.current;
     const root = resultsRef.current;
-    if (!target || !root || activeType !== "general" || !runtimeNextToken || loadingRuntimes) {
+    if (!target || !root || (activeType !== "general" && activeType !== "mpa") || !runtimeNextToken || loadingRuntimes) {
       return;
     }
     const observer = new IntersectionObserver(
@@ -1103,7 +1113,7 @@ export function MyAgents({
 
   const visibleAgents = useMemo(() => {
     const normalizedQuery = query.trim().toLocaleLowerCase();
-    const source = activeType === "general"
+    const source = activeType === "general" || activeType === "mpa"
       ? [...draftAgents, ...runtimeAgents]
       : sandboxAgents;
     const matchingOwnership = ownership === "mine"
@@ -1118,7 +1128,7 @@ export function MyAgents({
           agent.name.toLocaleLowerCase().includes(normalizedQuery),
         )
       : matchingRegion;
-    if (activeType !== "general") return matchingAgents;
+    if (activeType !== "general" && activeType !== "mpa") return matchingAgents;
     const availableAgents = hiddenRuntimeIds.size > 0
       ? matchingAgents.filter((agent) =>
           !agent.runtime || !hiddenRuntimeIds.has(agent.runtime.runtimeId),
@@ -1146,7 +1156,7 @@ export function MyAgents({
   ]);
 
   useEffect(() => {
-    if (!canUpdate || activeType !== "general") return;
+    if (!canUpdate || (activeType !== "general" && activeType !== "mpa")) return;
     const targets = visibleAgents
       .filter((agent) => Boolean(agent.runtime))
       .filter((agent) => !deploymentTaskForAgent(agent))
@@ -1183,18 +1193,16 @@ export function MyAgents({
   const activeLabel = t(`myAgents.agentTypes.${activeType}`, {
     defaultValue: t("myAgents.agent"),
   });
-  const showInitialLoading = activeType === "general"
+  const showInitialLoading = activeType === "general" || activeType === "mpa"
     ? loadingRuntimes && runtimeAgents.length === 0 && draftAgents.length === 0
     : loadingSandboxAgents && sandboxAgents.length === 0;
   const showEmpty = !showInitialLoading && visibleAgents.length === 0;
-  const canCreateActiveAgent = activeType === "general"
-    ? canCreateRuntimeAgents
-    : canCreatePersonalAgents;
-  const createAgent = canCreateActiveAgent
-    ? activeType === "general"
-      ? () => onCreateAgent(region)
-      : () => onCreateSandboxAgent(activeType)
-    : undefined;
+  let createAgent: (() => void) | undefined;
+  if (activeType === "general" && canCreateRuntimeAgents) {
+    createAgent = () => onCreateAgent(region);
+  } else if (isSandboxMyAgentType(activeType) && canCreatePersonalAgents) {
+    createAgent = () => onCreateSandboxAgent(activeType);
+  }
   const showCodexProjectUpload =
     activeType === "codex" &&
     canCreatePersonalAgents &&
@@ -1257,13 +1265,13 @@ export function MyAgents({
       >
         {showInitialLoading ? (
           <ResourceLoadingState />
-        ) : (activeType === "general" ? runtimeError : sandboxError) && visibleAgents.length === 0 ? (
+        ) : ((activeType === "general" || activeType === "mpa") ? runtimeError : sandboxError) && visibleAgents.length === 0 ? (
           <div className="my-agent-empty" role="alert">
-            <p>{activeType === "general" ? runtimeError : sandboxError}</p>
+            <p>{(activeType === "general" || activeType === "mpa") ? runtimeError : sandboxError}</p>
             <button
               type="button"
               onClick={() => {
-                if (activeType === "general") {
+                if (activeType === "general" || activeType === "mpa") {
                   void fetchRuntimePage("", true);
                 } else {
                   void fetchSandboxAgents(activeType);
@@ -1310,7 +1318,7 @@ export function MyAgents({
           )
         ) : (
           <>
-            {activeType === "general" && runtimeError ? (
+            {(activeType === "general" || activeType === "mpa") && runtimeError ? (
               <div className="my-agent-inline-error" role="alert">
                 <span>{runtimeError}</span>
                 <button type="button" onClick={() => void fetchRuntimePage("", true)}>
@@ -1367,7 +1375,7 @@ export function MyAgents({
           </>
         )}
 
-        {activeType === "general" && !runtimeError && !showInitialLoading &&
+        {(activeType === "general" || activeType === "mpa") && !runtimeError && !showInitialLoading &&
           (visibleAgents.length > 0 || Boolean(runtimeNextToken)) && (
           <div className="my-agent-load-more" ref={loadMoreRef} aria-live="polite">
             {loadingRuntimes ? (

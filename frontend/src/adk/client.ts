@@ -4411,6 +4411,7 @@ export class RuntimeListError extends Error {
  *  page continues pagination; the server derives ownership from identity. */
 export async function getRuntimes(
   opts: {
+    agentCategory?: "general" | "mpa";
     nextToken?: string;
     pageSize?: number;
     region?: string;
@@ -4423,6 +4424,7 @@ export async function getRuntimes(
     page_size: String(opts.pageSize ?? 30),
     region: opts.region ?? "all",
   });
+  if (opts.agentCategory) p.set("agentCategory", opts.agentCategory);
   if (opts.nextToken) p.set("next_token", opts.nextToken);
   const res = await apiFetch(`/web/runtimes?${p.toString()}`, {
     signal: opts.signal,

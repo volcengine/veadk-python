@@ -26,6 +26,7 @@
 - `CON-12`：工具活动展示工具特定的安全动作和对象；未知工具展示具体名称，不使用通用完成标签。
 - `CON-13`：已脱敏工具输入/结果可通过显式复制/下载完整获取；预览渲染有界、截断有提示，所有详情路径共享同一脱敏规则。
 - `CON-14`：Turn 模型选择支持搜索和键盘访问，并在非终态 Turn 拥有不可变模型快照期间保持禁用。
+- `CON-15`：Runtime 列表暴露 `agentCategory`，并接受 `agentCategory=general|mpa` 在可见分页前执行服务端分类过滤。MPA 的权威且唯一来源是 Runtime 标签 `veadk:agent-type=mpa`；镜像名和 artifact URL 不参与分类。
 
 ## 状态与数据
 
@@ -44,5 +45,5 @@
 
 ## 验证
 
-契约测试覆盖状态转换、幂等、竞态、模型快照、已提交挂载、拓扑、鉴权和脱敏。浏览器测试覆盖响应式布局、唯一动态主按钮、模型筛选、Skill Space 发现和终态控制清理。真实 Runtime 测试已证明模型目录、不可变请求模型、生命周期状态/控制路径、配置态 Agent 到 Sandbox 拓扑及真实 Skill Space 发现。主 Agent/worker Skill 传递由目标契约测试覆盖。完整的真实 worker pause/resume、五分钟增量续跑、刷新恢复及失效资源执行门禁仍需后续验证。
+契约测试覆盖状态转换、幂等、竞态、模型快照、已提交挂载、拓扑、鉴权、脱敏和 Runtime 分类过滤。浏览器测试覆盖响应式布局、唯一动态主按钮、模型筛选、MPA 分类选择、Skill Space 发现和终态控制清理。真实 Runtime 测试已证明模型目录、不可变请求模型、生命周期状态/控制路径、配置态 Agent 到 Sandbox 拓扑及真实 Skill Space 发现。主 Agent/worker Skill 传递由目标契约测试覆盖。完整的真实 worker pause/resume、五分钟增量续跑、刷新恢复及失效资源执行门禁仍需后续验证。
 会话投影测试还覆盖 status/artifact 重放、合法重复措辞、reasoning/thought 语义区分、嵌套工具 payload、大型脱敏值、已知/未知工具标签，以及可搜索模型的键盘行为。

@@ -1393,6 +1393,7 @@
     "agent": "Agents",
     "agentTypes": {
       "general": "General Agents",
+      "mpa": "MPA Agents",
       "codex": "Codex",
       "deepseek-harness": "DeepSeek",
       "openclaw": "OpenClaw",

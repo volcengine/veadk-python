@@ -25,6 +25,7 @@ This component converts `veadk mpa create` inputs into one recoverable AgentKit 
 - `CON-3`: AgentKit Runtime create and convergent update set `ApmplusEnable=true`. Trace content remains disabled by `APMPLUS_TRACE_CONTENT=false` unless the operator explicitly overrides it.
 - `CON-4`: Phase one writes placeholders before startup; phase two overwrites them only with non-empty authoritative Runtime values. A phase-two deployment failure is reported as failure, not partial success.
 - `CON-5`: Explicit caller `extra_env` remains last-wins, including an intentional override of VeADK profile defaults.
+- `CON-6`: AgentKit Runtime create and convergent update persist `veadk:agent-type=mpa` as the stable Studio classification tag. Untagged Runtime resources remain outside the MPA filter until an explicit tag repair is performed.
 
 ## State, security, and compatibility
 
@@ -39,5 +40,5 @@ Missing endpoint, key, Runtime ID, or APIG ID blocks metadata finalization. Runt
 | Contract | Validation |
 | --- | --- |
 | `CON-1`, `CON-2`, `CON-5` | `uv run --extra dev pytest tests/integrations/test_mpa_provision_env.py tests/cli/test_cli_mpa.py` |
-| `CON-2`, `CON-3`, `CON-4` | `uv run --extra dev pytest tests/integrations/test_mpa_runtime.py` |
+| `CON-2`, `CON-3`, `CON-4`, `CON-6` | `uv run --extra dev pytest tests/integrations/test_mpa_runtime.py` |
 | End-to-end | Create/reuse an isolated Runtime, inspect metadata without printing keys, invoke A2A and built-in MCP, and observe two MCP-cache intervals |

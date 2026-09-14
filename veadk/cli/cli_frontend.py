@@ -9360,17 +9360,71 @@ def _run_frontend_server(
             for tag in (getattr(runtime, "tags", None) or [])
         }
 
+    def _runtime_account_id(runtime: Any) -> str:
+        configured = os.getenv("VEADK_STUDIO_ACCOUNT_ID", "").strip()
+        if configured:
+            return configured
+        artifact_url = str(getattr(runtime, "artifact_url", "") or "")
+        match = re.search(r"agentkit-platform-([0-9]+)-[^./]+\.cr\.", artifact_url)
+        return match.group(1) if match else ""
+
+    def _runtime_resource_tags(
+        region: str, runtimes: list[Any]
+    ) -> dict[str, dict[str, str]]:
+        requests: dict[str, str] = {}
+        for runtime in runtimes:
+            runtime_id = str(getattr(runtime, "runtime_id", "") or "")
+            account_id = _runtime_account_id(runtime)
+            if runtime_id and account_id:
+                requests[runtime_id] = (
+                    f"trn:agentkit:{region}:{account_id}:runtime/{runtime_id}"
+                )
+        if not requests:
+            return {}
+        try:
+            import volcenginesdkcore
+            import volcenginesdktag
+
+            ak, sk, token = _resolve_ve_credentials()
+            configuration = volcenginesdkcore.Configuration()
+            configuration.ak = ak
+            configuration.sk = sk
+            configuration.session_token = token or ""
+            configuration.region = region
+            configuration.client_side_validation = True
+            client = volcenginesdktag.TAGApi(volcenginesdkcore.ApiClient(configuration))
+            response = client.get_resources(
+                volcenginesdktag.GetResourcesRequest(
+                    resource_trn_list=list(requests.values()),
+                    max_results=len(requests),
+                )
+            )
+        except Exception as error:
+            logger.warning(
+                "runtime tag service lookup failed region=%s error=%s",
+                region,
+                _safe_exception_detail(error, secrets=_resolve_ve_credentials()),
+            )
+            return {}
+
+        result: dict[str, dict[str, str]] = {}
+        for item in getattr(response, "resource_tag_mapping_list", None) or []:
+            runtime_id = str(getattr(item, "resource_id", "") or "")
+            if not runtime_id:
+                continue
+            result[runtime_id] = {
+                str(getattr(tag, "key", "") or ""): str(getattr(tag, "value", "") or "")
+                for tag in (getattr(item, "tags", None) or [])
+                if getattr(tag, "key", None)
+            }
+        return result
+
     def _runtime_agent_category(runtime: Any, tags: Mapping[str, str]) -> str:
-        """Classify Runtime products without exposing image details to Studio."""
+        """Classify Runtime products from explicit, persisted Runtime tags."""
         tagged = str(tags.get("veadk:agent-type") or "").strip().lower()
         if tagged == "mpa":
             return "mpa"
-        artifact_url = str(getattr(runtime, "artifact_url", "") or "").lower()
-        return (
-            "mpa"
-            if re.search(r"/mpa_agent(?:[-_][^/:]+)*:", artifact_url)
-            else "general"
-        )
+        return "general"
 
     def _get_runtime(runtime_id: str, region: str) -> Any:
         from agentkit.sdk.runtime import types as _rt
@@ -9928,6 +9982,7 @@ def _run_frontend_server(
         page_size: int = 30,
         next_token: str = "",
         region: str = "all",
+        agentCategory: str = "",
     ):
         """One page of AgentKit runtimes for the agent selector. Lists ALL
         runtimes (server-side paginated); each item is flagged `isMine` when its
@@ -9939,7 +9994,13 @@ def _run_frontend_server(
         ak, sk, svc_token = _resolve_ve_credentials()
         regions = _runtime_regions(provider, region)
         page_size = max(1, min(page_size, 100))
-        restrict_to_owner = scope == "mine"
+        normalized_agent_category = agentCategory.strip().lower()
+        if normalized_agent_category not in {"", "general", "mpa"}:
+            raise HTTPException(
+                status_code=400,
+                detail="invalid runtime agent category",
+            )
+        restrict_to_owner = scope == "mine" or role != StudioRole.ADMIN
         principal_key = (
             getattr(principal, "owner_id", ""),
             getattr(principal, "display_name", ""),
@@ -9951,6 +10012,7 @@ def _run_frontend_server(
             page_size,
             next_token,
             region,
+            normalized_agent_category,
         )
         cached = _runtime_list_cache.get(cache_key)
         if cached and monotonic() - cached[0] < _runtime_list_cache_ttl_seconds:
@@ -9992,8 +10054,18 @@ def _run_frontend_server(
                     client.list_runtimes,
                     request,
                 )
-                for runtime in resp.agent_kit_runtimes or []:
-                    tags = _runtime_tags(runtime)
+                runtime_page = list(resp.agent_kit_runtimes or [])
+                resource_tags = await asyncio.to_thread(
+                    _runtime_resource_tags,
+                    reg,
+                    runtime_page,
+                )
+                for runtime in runtime_page:
+                    runtime_id = str(getattr(runtime, "runtime_id", "") or "")
+                    tags = {
+                        **_runtime_tags(runtime),
+                        **resource_tags.get(runtime_id, {}),
+                    }
                     is_mine = runtime_belongs_to(tags, principal)
                     if scope == "mine" and not is_mine:
                         continue
@@ -10001,6 +10073,12 @@ def _run_frontend_server(
                         not role.is_admin
                         and not is_mine
                         and not (principal is not None and enterprise_visible(tags))
+                    ):
+                        continue
+                    agent_category = _runtime_agent_category(runtime, tags)
+                    if (
+                        normalized_agent_category
+                        and agent_category != normalized_agent_category
                     ):
                         continue
                     can_delete = (
@@ -10020,7 +10098,7 @@ def _run_frontend_server(
                             "currentVersion": getattr(
                                 runtime, "current_version_number", None
                             ),
-                            "agentCategory": _runtime_agent_category(runtime, tags),
+                            "agentCategory": agent_category,
                             "region": reg,
                             "author": tags.get("veadk:author", ""),
                             "isMine": is_mine,

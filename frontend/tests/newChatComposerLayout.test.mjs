@@ -958,6 +958,14 @@ test("keeps the Turn model controls separate from the new-chat Agent picker", ()
     stylesSource,
     /\.composer-model-select \.new-chat-compact-select\s*\{[\s\S]*?width:\s*min\(260px, 30vw\);[\s\S]*?max-width:\s*260px;/,
   );
+  assert.match(
+    stylesSource,
+    /\.composer-model-select \.new-chat-compact-select__menu\s*\{[\s\S]*?top:\s*auto;[\s\S]*?right:\s*0;[\s\S]*?bottom:\s*calc\(100% \+ 6px\);[\s\S]*?left:\s*auto;/,
+  );
+  assert.match(
+    stylesSource,
+    /\.composer-model-select \.new-chat-compact-select__list\s*\{[\s\S]*?max-height:\s*min\(260px, calc\(100dvh - 220px\)\);/,
+  );
 });
 
 test("reveals feature details on hover or keyboard focus", () => {

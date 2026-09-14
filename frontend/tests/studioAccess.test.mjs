@@ -90,8 +90,9 @@ test("only administrators and developers receive Agent deployment controls", () 
     myAgentsSource,
     /\{createAgent \? \([\s\S]*?className="my-agent-create-card"/,
   );
-  assert.match(myAgentsSource, /const canCreateActiveAgent = activeType === "general"[\s\S]*?canCreateRuntimeAgents[\s\S]*?canCreatePersonalAgents/);
-  assert.match(myAgentsSource, /const createAgent = canCreateActiveAgent/);
+  assert.match(myAgentsSource, /if \(activeType === "general" && canCreateRuntimeAgents\)[\s\S]*?createAgent = \(\) => onCreateAgent\(region\)/);
+  assert.match(myAgentsSource, /else if \(isSandboxMyAgentType\(activeType\) && canCreatePersonalAgents\)[\s\S]*?createAgent = \(\) => onCreateSandboxAgent\(activeType\)/);
+  assert.match(myAgentsSource, /activeType === "mpa"[\s\S]*?loadingRuntimes/);
 });
 
 test("regular users receive personal Agent creation without Runtime deployment access", () => {
@@ -100,7 +101,7 @@ test("regular users receive personal Agent creation without Runtime deployment a
   assert.match(clientSource, /typeof access\.capabilities\?\.createPersonalAgents !== "boolean"/);
   assert.match(appSource, /const canCreatePersonalAgents = access\.capabilities\.createPersonalAgents/);
   assert.match(appSource, /if \(!canCreatePersonalAgents\)[\s\S]*?appText\("errors\.noCreateAgentPermission"\)/);
-  assert.match(myAgentsSource, /activeType === "general"[\s\S]*?canCreateRuntimeAgents[\s\S]*?canCreatePersonalAgents/);
+  assert.match(myAgentsSource, /isSandboxMyAgentType\(activeType\) && canCreatePersonalAgents/);
 });
 
 test("runtime authorization failures are not reported as unsupported", () => {

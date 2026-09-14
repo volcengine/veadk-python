@@ -26,6 +26,7 @@ Own the Studio-to-mpa-agent contract for Ark model discovery, immutable Turn sna
 - `CON-12`: Tool activity exposes a tool-specific safe action and subject. Unknown tools expose their concrete name rather than a generic completed label.
 - `CON-13`: Sanitized tool inputs/results remain completely retrievable by an explicit copy/download action. Preview rendering is bounded, truncation is disclosed, and all detail paths share the same redaction rules.
 - `CON-14`: Turn model selection is searchable and keyboard accessible, and remains disabled while a non-terminal Turn owns an immutable model snapshot.
+- `CON-15`: Runtime listing exposes `agentCategory` and accepts `agentCategory=general|mpa` for server-side category filtering before visible pagination. The authoritative and only MPA source is Runtime tag `veadk:agent-type=mpa`; image names and artifact URLs are not category inputs.
 
 ## State and data
 
@@ -44,5 +45,5 @@ Old agents keep one default model and their existing non-MPA stop behavior, hide
 
 ## Verification
 
-Contract tests cover state transitions, idempotency, races, model snapshots, submitted mounts, topology, authorization, and redaction. Browser tests cover responsive layout, the single dynamic primary button, model filtering, Skill Space discovery, and terminal control cleanup. Live Runtime tests prove the model catalog, immutable request model, lifecycle status/control path, configured Agent-to-Sandbox topology, and real Skill Space discovery. Main/worker Skill propagation is covered by targeted contract tests. Full live worker pause/resume, five-minute incremental continuation, refresh recovery, and invalid-resource execution gates remain follow-up verification.
+Contract tests cover state transitions, idempotency, races, model snapshots, submitted mounts, topology, authorization, redaction, and Runtime category filtering. Browser tests cover responsive layout, the single dynamic primary button, model filtering, MPA category selection, Skill Space discovery, and terminal control cleanup. Live Runtime tests prove the model catalog, immutable request model, lifecycle status/control path, configured Agent-to-Sandbox topology, and real Skill Space discovery. Main/worker Skill propagation is covered by targeted contract tests. Full live worker pause/resume, five-minute incremental continuation, refresh recovery, and invalid-resource execution gates remain follow-up verification.
 Conversation projection tests additionally cover status/artifact replay, legitimate repeated prose, semantic reasoning/thought separation, nested tool payloads, large sanitized values, specific and unknown tool labels, and searchable model keyboard behavior.
