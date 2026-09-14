@@ -2137,7 +2137,9 @@ def test_runtime_list_paginates_across_regions(
                             if name == "shanghai-new"
                             else "registry.example/agentkit/general_agent:test"
                         ),
-                        tags=[],
+                        tags=[SimpleNamespace(key="veadk:agent-type", value="mpa")]
+                        if name == "shanghai-new"
+                        else [],
                     )
                     for name, created_at in page
                 ],
@@ -2197,6 +2199,106 @@ def test_runtime_list_paginates_across_regions(
     assert second.json()["nextToken"] == "all:4"
     assert [item["name"] for item in third.json()["runtimes"]] == ["beijing-old"]
     assert third.json()["nextToken"] == ""
+
+
+def test_runtime_list_filters_agent_category_before_pagination(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path)
+    calls: list[tuple[str, str, int]] = []
+    runtimes = [
+        ("general-new", "2026-07-21T05:00:00Z", []),
+        ("mpa-tagged", "2026-07-21T04:00:00Z", []),
+        ("general-old", "2026-07-21T03:00:00Z", []),
+        ("mpa-legacy", "2026-07-21T02:00:00Z", []),
+    ]
+
+    class _FakeRuntimeClient:
+        def __init__(self, **kwargs: Any) -> None:
+            self.region = kwargs["region"]
+
+        def list_runtimes(self, request: Any) -> SimpleNamespace:
+            offset = int(getattr(request, "next_token", "") or 0)
+            page_size = request.max_results
+            calls.append((self.region, str(offset), page_size))
+            page = runtimes[offset : offset + page_size]
+            page_end = offset + len(page)
+            return SimpleNamespace(
+                agent_kit_runtimes=[
+                    SimpleNamespace(
+                        name=name,
+                        runtime_id=f"runtime-{name}",
+                        status="Ready",
+                        created_at=created_at,
+                        artifact_url=(
+                            "agentkit-platform-2112682748-cn-beijing.cr.volces.com"
+                            f"/agentkit/{name}:test"
+                        ),
+                        tags=tags,
+                    )
+                    for name, created_at, tags in page
+                ],
+                next_token=str(page_end) if page_end < len(runtimes) else "",
+            )
+
+    monkeypatch.setattr(
+        "agentkit.sdk.runtime.client.AgentkitRuntimeClient", _FakeRuntimeClient
+    )
+
+    class _FakeTagApi:
+        def __init__(self, _api_client: object) -> None:
+            pass
+
+        def get_resources(self, request: Any) -> SimpleNamespace:
+            trns = set(getattr(request, "resource_trn_list", []) or [])
+            tagged_trn = "trn:agentkit:cn-beijing:2112682748:runtime/runtime-mpa-tagged"
+            if tagged_trn not in trns:
+                return SimpleNamespace(resource_tag_mapping_list=[])
+            return SimpleNamespace(
+                resource_tag_mapping_list=[
+                    SimpleNamespace(
+                        resource_id="runtime-mpa-tagged",
+                        tags=[
+                            SimpleNamespace(
+                                key="veadk:agent-type",
+                                value="mpa",
+                            )
+                        ],
+                    )
+                ]
+            )
+
+    monkeypatch.setattr("volcenginesdktag.TAGApi", _FakeTagApi)
+
+    with TestClient(app) as client:
+        mpa = client.get(
+            "/web/runtimes",
+            params={"region": "cn-beijing", "page_size": 2, "agentCategory": "mpa"},
+        )
+        general = client.get(
+            "/web/runtimes",
+            params={
+                "region": "cn-beijing",
+                "page_size": 2,
+                "agentCategory": "general",
+            },
+        )
+        invalid = client.get(
+            "/web/runtimes",
+            params={"region": "cn-beijing", "agentCategory": "sandbox"},
+        )
+
+    assert mpa.status_code == 200
+    assert [item["name"] for item in mpa.json()["runtimes"]] == ["mpa-tagged"]
+    assert {item["agentCategory"] for item in mpa.json()["runtimes"]} == {"mpa"}
+    assert [item["name"] for item in general.json()["runtimes"]] == [
+        "general-new",
+        "general-old",
+    ]
+    assert {item["agentCategory"] for item in general.json()["runtimes"]} == {"general"}
+    assert invalid.status_code == 400
+    assert ("cn-beijing", "0", 2) in calls
+    assert ("cn-beijing", "2", 1) in calls
 
 
 @pytest.mark.parametrize("scope", ["all", "mine"])

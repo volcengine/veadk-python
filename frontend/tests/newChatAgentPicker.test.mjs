@@ -60,10 +60,13 @@ test("renders a two-level Agent type and runtime menu", () => {
   assert.match(pickerSource, /labelKey: "agentPicker\.types\.hermes"/);
   assert.match(pickerSource, /aria-label=\{t\("agentPicker\.typesLabel"\)\}/);
   assert.match(pickerSource, /aria-label=\{t\("agentPicker\.listLabel", \{ type: activeTypeLabel \}\)\}/);
-  assert.match(pickerSource, /getRuntimes\(\{[\s\S]*?region: "all"[\s\S]*?pageSize: PAGE_SIZE/);
+  assert.match(pickerSource, /getRuntimes\(\{[\s\S]*?agentCategory: activeType === "mpa" \? "mpa" : "general"[\s\S]*?region: "all"[\s\S]*?pageSize: PAGE_SIZE/);
+  assert.match(pickerSource, /const \[loadedRuntimeType, setLoadedRuntimeType\] = useState<"general" \| "mpa" \| null>\(null\)/);
+  assert.match(pickerSource, /setLoadedRuntimeType\(activeType === "mpa" \? "mpa" : "general"\)/);
+  assert.match(pickerSource, /loadedRuntimeType === activeType/);
   assert.match(pickerSource, /onSelectRuntime\(runtime\)/);
-  assert.match(pickerSource, /runtime\.agentCategory === "mpa"/);
-  assert.match(pickerSource, /runtime\.agentCategory !== "mpa"/);
+  assert.doesNotMatch(pickerSource, /runtime\.agentCategory === "mpa"/);
+  assert.doesNotMatch(pickerSource, /runtime\.agentCategory !== "mpa"/);
   assert.match(pickerSource, /sandboxClient\.listSessions/);
   assert.match(pickerSource, /sandboxClient\.listAgentSessions/);
   assert.match(pickerSource, /onSelectSandboxSession\(session\)/);
@@ -77,7 +80,9 @@ test("renders a two-level Agent type and runtime menu", () => {
 test("lists local apps in the general Agent menu when Studio uses local agents", () => {
   assert.match(pickerSource, /agentsSource\?: "local" \| "cloud"/);
   assert.match(pickerSource, /localApps\?: string\[\]/);
-  assert.match(pickerSource, /agentsSource === "local" \|\| !open/);
+  assert.match(pickerSource, /agentsSource === "local" && activeType === "general"/);
+  assert.match(pickerSource, /const showingLocalApps = activeType === "general" && agentsSource === "local"/);
+  assert.doesNotMatch(pickerSource, /agentsSource === "local" \? localApps\.length : visibleRuntimes\.length/);
   assert.match(pickerSource, /localApps\.map\(\(app, index\) =>/);
   assert.match(pickerSource, /onSelectLocalApp\(app\)/);
   assert.match(pickerSource, /t\("agentPicker\.emptyLocal"\)/);

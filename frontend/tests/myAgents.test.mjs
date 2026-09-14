@@ -187,11 +187,11 @@ test("clears stale sandbox cards as soon as the Agent type changes", () => {
   );
   assert.match(
     pageSource,
-    /type === "general"[\s\S]*?runtimeRequestRef\.current \+= 1[\s\S]*?setRuntimeAgents\(\[\]\)[\s\S]*?setLoadingRuntimes\(true\)/,
+    /type === "general" \|\| type === "mpa"[\s\S]*?runtimeRequestRef\.current \+= 1[\s\S]*?setRuntimeAgents\(\[\]\)[\s\S]*?setLoadingRuntimes\(true\)/,
   );
   assert.match(
     pageSource,
-    /useEffect\(\(\) => \{[\s\S]*?activeType !== "general"[\s\S]*?fetchRuntimePage\("", true\)[\s\S]*?\[activeType, fetchRuntimePage\]/,
+    /useEffect\(\(\) => \{[\s\S]*?activeType !== "general" && activeType !== "mpa"[\s\S]*?fetchRuntimePage\("", true\)[\s\S]*?\[activeType, fetchRuntimePage\]/,
   );
 });
 
@@ -450,7 +450,7 @@ test("loads Runtime pages by the selected ownership and region", () => {
   assert.match(pageSource, /const \[region, setRegion\] = useState\(configuredRegion\)/);
   assert.match(pageSource, /function resolveAgentRegion\([\s\S]*?studioRegion\.trim\(\) \|\| defaultCloudRegion\(cloudProvider\)/);
   assert.doesNotMatch(pageSource, /label: "全部区域"/);
-  assert.match(pageSource, /scope: runtimeScope,[\s\S]*?region,[\s\S]*?pageSize: RUNTIME_PAGE_SIZE/);
+  assert.match(pageSource, /agentCategory,[\s\S]*?scope: runtimeScope,[\s\S]*?region,[\s\S]*?pageSize: RUNTIME_PAGE_SIZE/);
   assert.match(pageSource, /ariaLabel=\{t\("myAgents\.creatorFilter"\)\}/);
   assert.match(pageSource, /id="my-agent-region-filter"[\s\S]*?ariaLabel=\{t\("myAgents\.region"\)\}[\s\S]*?onChange=\{selectRegion\}/);
   assert.match(pageSource, /cloudRegionOptions\(cloudProvider\)/);
@@ -466,7 +466,7 @@ test("loads Runtime pages by the selected ownership and region", () => {
   assert.match(pageSource, /onList\(page\.runtimes\.map\(\(runtime\) => runtimeToAgent\(runtime, t\)\)\)/);
   assert.match(pageSource, /runtimeRequestRef\.current !== requestId/);
   assert.match(pageSource, /const runtimePageRequests = new Map/);
-  assert.match(pageSource, /const requestKey = `\$\{runtimeScope\}:\$\{region\}:\$\{nextToken\}`/);
+  assert.match(pageSource, /const requestKey = `\$\{agentCategory\}:\$\{runtimeScope\}:\$\{region\}:\$\{nextToken\}`/);
   assert.match(pageSource, /runtimePageRequests\.get\(requestKey\)/);
   assert.match(pageSource, /runtimePageRequests\.set\(requestKey, request\)/);
   assert.match(pageSource, /const RUNTIME_PAGE_CACHE_TTL_MS = 30_000/);
@@ -649,19 +649,20 @@ test("keeps all requested type filters without nested category sections", () => 
   assert.match(pageSource, /onCreateSandboxAgent/);
   assert.match(appSource, /onCreateSandboxAgent=\{openSandboxAgentCreate\}/);
   assert.match(pageSource, /AGENT_TYPES\.map/);
+  assert.match(pageSource, /"mpa"/);
   assert.match(pageSource, /label: t\(`myAgents\.agentTypes\.\$\{id\}`\)/);
   assert.doesNotMatch(pageSource, /AgentSection|my-agents-section|comingSoon/);
   assert.match(pageSource, /<EmptyMessage\.Title className="my-agent-sandbox-empty-title">[\s\S]*?t\("myAgents\.noAgentType", \{ type: activeLabel \}\)[\s\S]*?<\/EmptyMessage\.Title>/);
   assert.match(pageStyles, /\.my-agent-sandbox-empty-title\s*\{[\s\S]*?max-width: none;[\s\S]*?white-space: nowrap;[\s\S]*?text-wrap: nowrap;/);
-  assert.match(pageSource, /activeType === "general"[\s\S]*?t\("myAgents\.noMatchingAgents"\)/);
+  assert.match(pageSource, /activeType !== "general"[\s\S]*?t\("myAgents\.noAgentType"/);
   assert.doesNotMatch(pageStyles, /\.my-agent-empty\s*\{[^}]*border:/);
   assert.doesNotMatch(pageStyles, /\.my-agent-empty\s*\{[^}]*background:/);
   assert.match(pageSource, /<EmptyMessage[\s\S]*?<EmptyMessage\.Icon/);
   assert.match(pageSource, /<AgentTypeIcon type=\{activeType\} \/>/);
-  assert.match(pageSource, /type === "general"\) return <AgentFaceIcon \/>/);
+  assert.match(pageSource, /type === "general" \|\| type === "mpa"\) return <AgentFaceIcon \/>/);
   assert.match(pageSource, /return <SandboxAgentIcon kind=\{type\} \/>/);
   assert.doesNotMatch(pageSource, /开始使用 AgentKit Session/);
-  assert.match(pageSource, /: \(\) => onCreateSandboxAgent\(activeType\)/);
+  assert.match(pageSource, /isSandboxMyAgentType\(activeType\)[\s\S]*?onCreateSandboxAgent\(activeType\)/);
 });
 
 test("uses the official EmptyMessage when creation is unavailable", () => {
@@ -694,11 +695,11 @@ test("integrates Tailwind 4 and the Apps SDK UI foundation styles", () => {
 });
 
 test("keeps Runtime failures distinct from successful empty states", () => {
-  assert.match(pageSource, /activeType === "general" \? runtimeError : sandboxError/);
+  assert.match(pageSource, /\(\(activeType === "general" \|\| activeType === "mpa"\) \? runtimeError : sandboxError\)/);
   assert.match(pageSource, /className="my-agent-empty" role="alert"/);
   assert.match(pageSource, />\s*\{t\("common\.reload"\)\}\s*<\/button>/);
   const errorBranch = pageSource.slice(
-    pageSource.indexOf('(activeType === "general" ? runtimeError : sandboxError)'),
+    pageSource.indexOf('((activeType === "general" || activeType === "mpa") ? runtimeError : sandboxError)'),
     pageSource.indexOf(": showEmpty && !createAgent ?"),
   );
   assert.doesNotMatch(errorBranch, /<EmptyMessage/);

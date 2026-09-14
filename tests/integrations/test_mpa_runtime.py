@@ -142,6 +142,8 @@ def test_create_runtime_passes_envs_and_tool_id_never_to_release() -> None:
     env_keys = {e.key for e in (req.envs or [])}
     assert {"MPA_AGENT_ID", "PGHOST"}.issubset(env_keys)
     assert req.apmplus_enable is True
+    tags = {item.key: item.value for item in (req.tags or [])}
+    assert tags["veadk:agent-type"] == "mpa"
     # No explicit release while auto-release is in progress.
     assert client.release_calls == 0
     assert client.release_request is None
@@ -166,6 +168,8 @@ def test_update_public_url_uses_update_runtime_not_release() -> None:
     updated_env = {e.key: e.value for e in client.update_request.envs or []}
     assert updated_env["CODEX_MCP_RUNTIME_API_KEY"] == "rk-1"
     assert client.update_request.apmplus_enable is True
+    tags = {item.key: item.value for item in (client.update_request.tags or [])}
+    assert tags["veadk:agent-type"] == "mpa"
 
 
 def test_runtime_never_ready_raises() -> None:
@@ -208,6 +212,8 @@ def test_existing_runtime_with_exact_name_is_reused() -> None:
     assert client.list_calls == 1
     assert client.create_calls == 0
     assert result["runtime_id"] == "r-existing"
+    tags = {item.key: item.value for item in (client.update_request.tags or [])}
+    assert tags["veadk:agent-type"] == "mpa"
 
 
 def test_duplicate_runtime_names_fail_instead_of_reusing_arbitrarily() -> None:

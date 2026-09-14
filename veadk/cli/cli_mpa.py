@@ -579,6 +579,7 @@ def create(  # noqa: PLR0913 - explicit CLI options are clearer than a config bl
             max_instance=max_instance,
             resolve_apig_instance_id=_resolve_apig_instance_id(region),
             reinject_public_url=True,
+            tags={"veadk:agent-type": "mpa"},
         )
         if apig_instance_id:
             resource["apig_instance_id"] = apig_instance_id.strip()

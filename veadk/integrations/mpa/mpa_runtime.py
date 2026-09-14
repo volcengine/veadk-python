@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import secrets
 import time
+from collections.abc import Mapping
 from typing import Any, Callable
 
 # Verified against existing mpa_agent runtimes on account 2112682748:
@@ -183,6 +184,7 @@ def provision_runtime(
     resolve_apig_instance_id: Callable[[str], str] | None = None,
     reinject_public_url: bool = False,
     enable_apmplus: bool = True,
+    tags: Mapping[str, str] | None = None,
     ready_timeout: float = _READY_TIMEOUT_SECONDS,
     poll_interval: float = _READY_POLL_SECONDS,
 ) -> dict[str, str]:
@@ -205,6 +207,7 @@ def provision_runtime(
         reinject_public_url: When True, after the endpoint is known, re-inject
             ``A2A_PUBLIC_URL`` via ``UpdateRuntime(envs=...)`` (never Release).
         enable_apmplus: Enable APMPlus tracing on the Runtime resource.
+        tags: Stable Runtime tags used by Studio and control-plane filters.
 
     Returns:
         ``{public_endpoint, apig_instance_id, runtime_api_key, runtime_id}``.
@@ -224,6 +227,22 @@ def provision_runtime(
                 api_key_location="Header",
             )
         )
+    runtime_tags = {"veadk:agent-type": "mpa"}
+    runtime_tags.update(
+        {
+            str(key): str(value)
+            for key, value in (tags or {}).items()
+            if str(key).strip() and str(value).strip()
+        }
+    )
+    create_tags = [
+        rt.TagsItemForCreateRuntime.model_validate({"Key": key, "Value": value})
+        for key, value in runtime_tags.items()
+    ]
+    update_tags = [
+        rt.TagsItemForUpdateRuntime.model_validate({"Key": key, "Value": value})
+        for key, value in runtime_tags.items()
+    ]
 
     runtime_id = _find_runtime_by_name(client, name)
     reused = bool(runtime_id)
@@ -244,6 +263,7 @@ def provision_runtime(
                 MaxInstance=max_instance,
                 ApmplusEnable=enable_apmplus,
                 Envs=_update_envs_items(envs),
+                Tags=update_tags,
                 ReleaseEnable=True,
             )
         )
@@ -266,6 +286,7 @@ def provision_runtime(
                     enable_private_network=False,
                 ),
                 Envs=_envs_items(envs),
+                Tags=create_tags,
             )
         )
         runtime_id = str(getattr(create, "runtime_id", "") or "")
@@ -299,6 +320,7 @@ def provision_runtime(
                 RuntimeId=runtime_id,
                 Envs=_update_envs_items(merged),
                 ApmplusEnable=enable_apmplus,
+                Tags=update_tags,
                 ReleaseEnable=True,
             )
         )
