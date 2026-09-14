@@ -10,18 +10,6 @@ const railSource = readFileSync(
   new URL("../src/ui/AgentTopology.tsx", import.meta.url),
   "utf8",
 );
-const capabilityDialogsSource = readFileSync(
-  new URL("../src/ui/StudioToolDialog.tsx", import.meta.url),
-  "utf8",
-);
-const clientSource = readFileSync(
-  new URL("../src/adk/client.ts", import.meta.url),
-  "utf8",
-);
-const skillspaceClientSource = readFileSync(
-  new URL("../src/create/skills/skillspace.ts", import.meta.url),
-  "utf8",
-);
 const navbarSource = readFileSync(
   new URL("../src/ui/Navbar.tsx", import.meta.url),
   "utf8",
@@ -42,29 +30,23 @@ test("reuses loaded Agent metadata for the conversation information rail", () =>
   assert.doesNotMatch(railSource, /getAgentInfo/);
 });
 
-test("shows Agent tools, skills, and a fullscreen execution canvas", () => {
+test("shows only AGENTS.md, skills, and environment configuration in the rail", () => {
   assert.match(railSource, /useTranslation\("workspaceTools"\)/);
-  assert.match(railSource, /title=\{t\("agentTopology\.tools"\)\}/);
+  assert.match(railSource, /title=\{t\("agentTopology\.agentsMd"\)\}/);
   assert.match(railSource, /title=\{t\("agentTopology\.skills"\)\}/);
   assert.match(railSource, /t\("agentTopology\.notConfigured"\)/);
-  assert.doesNotMatch(railSource, /const hasTopology/);
-  assert.match(railSource, /className="topo-module-card topo-tools-card"/);
+  assert.match(railSource, /className="topo-module-card topo-agents-md-card"/);
   assert.match(railSource, /className="topo-module-card topo-skills-card"/);
-  assert.match(railSource, /className="topo-module-card topo-topology" aria-label=\{t\("agentTopology\.agentCanvas"\)\}/);
-  assert.match(railSource, /<ModuleTitle title=\{t\("agentTopology\.topology"\)\} count=\{topologyNodeCount\} \/>/);
-  assert.match(
-    railSource,
-    /<AgentBuildCanvas[\s\S]*?direction="horizontal"[\s\S]*?readOnly[\s\S]*?interactivePreview/,
-  );
-  assert.match(railSource, /aria-label=\{t\("agentTopology\.viewCanvasFullscreen"\)\}/);
-  assert.match(railSource, /createPortal\([\s\S]*?role="dialog"[\s\S]*?aria-label=\{t\("agentTopology\.fullscreenExecutionCanvas"\)\}/);
-  assert.match(railSource, /event\.key === "Escape"/);
-  assert.match(railStyles, /\.topo-canvas-preview[\s\S]*?border-radius:\s*12px/);
-  assert.match(railStyles, /\.topo-canvas-dialog\s*\{[\s\S]*?position:\s*fixed;[\s\S]*?inset:\s*0;/);
+  assert.match(railSource, /className="topo-module-card topo-environment-card"/);
+  assert.doesNotMatch(railSource, /className="topo-module-card topo-tools-card"/);
+  assert.doesNotMatch(railSource, /className="topo-module-card topo-topology"/);
+  assert.doesNotMatch(railSource, /<AgentBuildCanvas/);
+  assert.doesNotMatch(railSource, /info\.resourceTopology\?\.nodes/);
+  assert.doesNotMatch(railSource, /topo-runtime-flow/);
   assert.doesNotMatch(railSource, /className="topo-kicker"/);
-  assert.match(railSource, /className="topo-module-scroll topo-tools-scroll"/);
+  assert.match(railSource, /className="topo-module-scroll topo-agents-md-scroll"/);
+  assert.match(railSource, /className="topo-agents-md-content"/);
   assert.match(railSource, /className="topo-module-scroll topo-skills-scroll"/);
-  assert.match(railSource, /aria-label=\{t\("agentTopology\.toolList"\)\}[\s\S]*?tabIndex=\{0\}/);
   assert.match(railSource, /aria-label=\{t\("agentTopology\.skillList"\)\}[\s\S]*?tabIndex=\{0\}/);
   assert.match(railSource, /className="topo-skill-name"/);
   assert.doesNotMatch(railSource, /<strong>\{skill\.name\}<\/strong>/);
@@ -73,10 +55,6 @@ test("shows Agent tools, skills, and a fullscreen execution canvas", () => {
     /className="topo-module-label"[\s\S]*?className="topo-section-count"[\s\S]*?\{count\}/,
   );
   assert.match(railSource, /aria-label=\{t\("agentTopology\.itemCount", \{ count \}\)\}/);
-  assert.match(
-    railStyles,
-    /\.topo-capability-name\s*\{[^}]*font-size:\s*13px;/,
-  );
   assert.match(
     railStyles,
     /\.topo-skill-name\s*\{[^}]*font-size:\s*13px;/,
@@ -88,11 +66,11 @@ test("shows Agent tools, skills, and a fullscreen execution canvas", () => {
   );
   assert.doesNotMatch(agentCard, /AgentIdentityIcon|topo-identity-mark/);
 
-  const toolsIndex = railSource.indexOf('title={t("agentTopology.tools")}');
+  const agentsMdIndex = railSource.indexOf('title={t("agentTopology.agentsMd")}');
   const skillsIndex = railSource.indexOf('title={t("agentTopology.skills")}');
-  const topologyIndex = railSource.indexOf('className="topo-module-card topo-topology"');
-  assert.ok(toolsIndex > -1 && skillsIndex > toolsIndex);
-  assert.ok(topologyIndex > skillsIndex);
+  const environmentIndex = railSource.indexOf('title={t("agentTopology.environment")}');
+  assert.ok(agentsMdIndex > -1 && skillsIndex > agentsMdIndex);
+  assert.ok(environmentIndex > skillsIndex);
 });
 
 test("keeps Agent information out of the new-session empty state", () => {
@@ -125,15 +103,15 @@ test("places the rail on the right and protects the conversation column", () => 
   assert.match(railStyles, /\.topo-section-count\s*\{[\s\S]*?font-size:\s*11px;/);
   assert.match(railStyles, /\.topo-skill-name\s*\{[\s\S]*?font-weight:\s*500;/);
   assert.doesNotMatch(railStyles, /\.topo-section-count\s*\{[^}]*position:\s*absolute;/);
-  assert.match(railStyles, /\.topo-tools-scroll\s*\{\s*max-height:/);
+  assert.match(railStyles, /\.topo-agents-md-scroll\s*\{\s*max-height:/);
   assert.match(railStyles, /\.topo-skills-scroll\s*\{\s*max-height:/);
-  assert.match(railStyles, /\.topo-canvas-preview\s*\{[\s\S]*?min-height:\s*120px;/);
   assert.match(railStyles, /\.topo-module-scroll\s*\{[^}]*padding-top:\s*9px;/);
-  assert.match(railStyles, /\.topo-tool:first-child\s*\{\s*padding-top:\s*0;/);
   assert.match(railStyles, /\.topo-skill:first-child\s*\{\s*padding-top:\s*0;/);
   assert.match(railStyles, /\.topo-module-scroll:focus-visible/);
   assert.match(railStyles, /\.topo\s*\{[\s\S]*?overflow:\s*hidden;/);
   assert.match(railStyles, /\.topo-module-stack\s*\{[\s\S]*?grid-template-rows:/);
+  assert.doesNotMatch(railStyles, /\.topo-topology/);
+  assert.doesNotMatch(railStyles, /\.topo-runtime-flow/);
   assert.doesNotMatch(railStyles, /\.topo\s*\{[^}]*left:\s*18px;/);
   assert.match(railStyles, /\.main:has\(> \.topo\) > \.transcript/);
   assert.match(appSource, /className="conversation-composer-slot"/);
@@ -176,42 +154,32 @@ test("keeps capability section titles text-only", () => {
   assert.doesNotMatch(railSource, /SkillCapabilityIcon/);
   assert.doesNotMatch(railSource, /topo-section-icon/);
   assert.doesNotMatch(railStyles, /\.topo-section-icon/);
-  assert.match(railSource, /import \{ Maximize2, X \} from "lucide-react"/);
+  assert.match(railSource, /import \{ X \} from "lucide-react"/);
 });
 
-test("mixes selected Studio tools into the existing tool list", () => {
-  assert.match(railSource, /const selectedStudioTools = studioTools/);
-  assert.match(
-    railSource,
-    /INTERNAL_AGENT_TOOL_NAMES = new Set\(\["StudioExternalToolset"\]\)/,
-  );
-  assert.match(
-    railSource,
-    /\.filter\(\(name\) => !INTERNAL_AGENT_TOOL_NAMES\.has\(name\)\)/,
-  );
-  assert.match(railSource, /selectedIds\.has\(tool\.id\)/);
-  assert.match(railSource, /tool\.custom && <span className="topo-custom-badge">\{t\("agentTopology\.studioTool"\)\}<\/span>/);
-  assert.match(railSource, /tool\.custom && tool\.removable && \([\s\S]*?topo-remove-capability/);
-  assert.doesNotMatch(railSource, /skill\.custom/);
-  assert.match(appSource, /studioTools=\{visibleStudioTools\}/);
-  assert.match(appSource, /selectedStudioToolIds=\{selectedStudioToolIds\}/);
+test("removes generic Session Studio tool configuration from the rail", () => {
+  assert.doesNotMatch(railSource, /const selectedStudioTools = studioTools/);
+  assert.doesNotMatch(railSource, /addStudioToolHere/);
+  assert.doesNotMatch(railSource, /<StudioToolDialog/);
+  assert.doesNotMatch(appSource, /studioTools=\{visibleStudioTools\}/);
+  assert.doesNotMatch(appSource, /onStudioToolsChange=/);
+  assert.doesNotMatch(appSource, /veadk\.sessionStudioToolMounts\.v1/);
+  assert.doesNotMatch(railStyles, /\.topo-custom-badge/);
+  assert.doesNotMatch(railStyles, /\.topo-remove-capability/);
   assert.doesNotMatch(appSource, /SessionCapabilities|sessionCapabilities/);
 });
 
-test("offers Session-level Studio tool and Skill Space controls in the information rail", () => {
-  assert.match(railSource, /t\("agentTopology\.addStudioToolHere"\)/);
+test("offers Session-level Skill Space controls in the information rail", () => {
   assert.match(railSource, /t\("agentTopology\.addSkillHere"\)/);
   assert.match(railSource, /className="topo-capability-add-slot"/);
-  assert.match(railSource, /<StudioToolDialog/);
   assert.match(railSource, /<SkillSpacePicker/);
   assert.match(
     railSource,
     /dialog === "skill"[\s\S]*?className="studio-tool-dialog-head is-iconless"/,
   );
   assert.doesNotMatch(railSource, /<SkillCapabilityDialog/);
-  assert.match(appSource, /<AgentInfoPanel[\s\S]*?onStudioToolsChange=/);
+  assert.doesNotMatch(appSource, /<AgentInfoPanel[\s\S]*?onStudioToolsChange=/);
   assert.doesNotMatch(appSource, /<AgentInfoDrawer\b/);
-  assert.match(railStyles, /\.topo-custom-badge/);
   assert.match(
     railStyles,
     /\.topo-skill-name\s*\{[^}]*font-family:\s*-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;/,
@@ -224,41 +192,10 @@ test("offers Session-level Studio tool and Skill Space controls in the informati
   );
   assert.equal(
     (railSource.match(/className="topo-capability-add-dock"/g) ?? []).length,
-    2,
+    1,
   );
   assert.match(
     railStyles,
     /\.topo-capability-add-dock\s*\{[^}]*flex:\s*0 0 auto;/,
   );
-  assert.match(railStyles, /\.topo-remove-capability/);
-});
-
-test("uses a searchable Studio BFF tool dialog without dynamic Skills", () => {
-  assert.match(capabilityDialogsSource, /get_city_weather: "studioTools\.labels\.get_city_weather"/);
-  assert.match(capabilityDialogsSource, /get_location_weather: "studioTools\.labels\.get_location_weather"/);
-  assert.match(capabilityDialogsSource, /<h2 id=\{titleId\.current\}>\{t\("studioTools\.title"\)\}<\/h2>/);
-  assert.match(capabilityDialogsSource, /aria-label=\{t\("studioTools\.searchAria"\)\}/);
-  assert.match(capabilityDialogsSource, /t\("studioTools\.description", \{ agentName \}\)/);
-  assert.match(capabilityDialogsSource, /onChange\(\[\.\.\.next\]\)/);
-  assert.doesNotMatch(capabilityDialogsSource, /Skill Hub|SkillCapabilityDialog/);
-  assert.doesNotMatch(clientSource, /SessionCapabilities|sessionCapabilitiesPath/);
-  assert.match(skillspaceClientSource, /"\/web\/skill-spaces"/);
-  assert.doesNotMatch(skillspaceClientSource, /"\/web\/skill-spaces\?region=all"/);
-  assert.match(stylesSource, /\.studio-tool-dialog-layer\s*\{[\s\S]*?z-index:\s*110;/);
-  assert.match(
-    stylesSource,
-    /\.studio-tool-search\s*\{[\s\S]*?flex:\s*0 0 40px;[\s\S]*?height:\s*40px;[\s\S]*?border-radius:\s*6px;/,
-  );
-});
-
-test("renders configured runtime and mounted Session resources in one topology", () => {
-  assert.ok(railSource.includes("info.resourceTopology?.nodes"));
-  assert.ok(railSource.includes("selectedEnvironments.map"));
-  assert.ok(railSource.includes("selectedStudioTools.map"));
-  assert.ok(railSource.includes("selectedSessionSkills.map"));
-  assert.ok(railSource.includes("topo-runtime-flow"));
-  assert.ok(railSource.includes("node.kind"));
-  assert.ok(railSource.includes("topologyNodeCount"));
-  assert.ok(railSource.includes("agentTopology.nodeKinds."));
-  assert.ok(railSource.includes("agentTopology.nodeStatuses."));
 });

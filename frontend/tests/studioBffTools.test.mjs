@@ -8,7 +8,6 @@ const clientSource = source("../src/adk/client.ts");
 const appSource = source("../src/App.tsx");
 const composerSource = source("../src/ui/Composer.tsx");
 const railSource = source("../src/ui/AgentTopology.tsx");
-const dialogSource = source("../src/ui/StudioToolDialog.tsx");
 const blocksSource = source("../src/ui/Blocks.tsx");
 const stylesSource = source("../src/styles.css");
 
@@ -30,13 +29,13 @@ test("A2A model selection is request scoped and capability gated", () => {
   assert.match(composerSource, /disabled=\{busy\}/);
 });
 
-test("Studio keeps BFF tool selection separate per session", () => {
-  assert.match(appSource, /studioToolIdsBySession/);
-  assert.match(appSource, /veadk\.sessionStudioToolMounts\.v1/);
-  assert.match(appSource, /persistSessionTools\(studioToolIdsBySession\)/);
-  assert.match(appSource, /studioToolSelectionKey\(appName, userId, sessionId\)/);
+test("Studio sends BFF tools only as implementation support for environment mounts", () => {
+  assert.doesNotMatch(appSource, /veadk\.sessionStudioToolMounts\.v1/);
+  assert.doesNotMatch(appSource, /studioToolIdsBySession/);
+  assert.match(appSource, /const canMountSessionEnvironment = ENVIRONMENT_STUDIO_TOOL_IDS\.every/);
+  assert.match(appSource, /ENVIRONMENT_STUDIO_TOOL_IDS/);
   assert.match(appSource, /platformTools: studioToolRuntime \? platformTools : undefined/);
-  assert.match(railSource, /selectedStudioToolIds=\{selectedStudioToolIds\}/);
+  assert.doesNotMatch(railSource, /selectedStudioToolIds/);
 });
 
 test("BFF tool discovery keeps a stable hook order across login", () => {
@@ -50,11 +49,9 @@ test("BFF tool discovery keeps a stable hook order across login", () => {
   assert.ok(capabilityCall < authenticationReturn);
 });
 
-test("Agent information owns BFF tool selection and Composer stays unchanged", () => {
-  assert.match(railSource, /<StudioToolDialog/);
-  assert.match(railSource, /t\("agentTopology\.addStudioToolHere"\)/);
-  assert.match(dialogSource, /aria-label=\{t\("studioTools\.searchAria"\)\}/);
-  assert.match(dialogSource, /aria-pressed=\{active\}/);
+test("Agent information omits generic BFF tool selection and Composer stays unchanged", () => {
+  assert.doesNotMatch(railSource, /<StudioToolDialog/);
+  assert.doesNotMatch(railSource, /addStudioToolHere/);
   assert.doesNotMatch(composerSource, /StudioToolPicker|StudioToolChips|studioTools/);
 });
 
