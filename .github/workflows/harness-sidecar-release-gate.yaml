@@ -13,6 +13,7 @@ on:
       - 'tests/cli/test_generated_agent_sidecar_runtime.py'
       - 'tests/cli/test_generated_agent_mcp.py'
       - 'tests/cli/test_studio_rbac.py'
+      - 'tests/cli/test_studio_startup_imports.py'
       - 'tests/frontend/server/test_runtime_iam.py'
       - 'tests/extensions/harness/**'
       - 'tests/integrations/agentkit/test_app.py'
@@ -26,6 +27,7 @@ on:
       - 'veadk/cli/agentkit_cli.py'
       - 'veadk/cli/managed_sidecar_source.py'
       - 'veadk/cli/legacy_runtime_recovery.py'
+      - 'veadk/cli/studio_vpc_network.py'
       - 'veadk/extensions/harness/**'
       - 'veadk/integrations/agentkit/app.py'
       - 'pyproject.toml'
@@ -40,6 +42,7 @@ on:
       - 'tests/cli/test_generated_agent_sidecar_runtime.py'
       - 'tests/cli/test_generated_agent_mcp.py'
       - 'tests/cli/test_studio_rbac.py'
+      - 'tests/cli/test_studio_startup_imports.py'
       - 'tests/frontend/server/test_runtime_iam.py'
       - 'tests/extensions/harness/**'
       - 'tests/integrations/agentkit/test_app.py'
@@ -53,6 +56,7 @@ on:
       - 'veadk/cli/agentkit_cli.py'
       - 'veadk/cli/managed_sidecar_source.py'
       - 'veadk/cli/legacy_runtime_recovery.py'
+      - 'veadk/cli/studio_vpc_network.py'
       - 'veadk/extensions/harness/**'
       - 'veadk/integrations/agentkit/app.py'
       - 'pyproject.toml'
@@ -93,6 +97,7 @@ jobs:
               tests/cli/test_generated_agent_harness_sidecar.py \
               tests/cli/test_generated_agent_sidecar_runtime.py \
               tests/cli/test_managed_sidecar_source.py \
+              tests/cli/test_studio_startup_imports.py \
               tests/integrations/agentkit/test_app.py \
               tests/cli/test_studio_rbac.py::test_sidecar_deployment_uses_agentkit_cli_structured_release \
               tests/cli/test_generated_agent_backend_codegen_extended.py::test_generated_agent_sidecar_debug_uses_runtime_apig_and_active_plan \

@@ -21,10 +21,6 @@ import os
 from collections.abc import Mapping
 from typing import Any
 
-import volcenginesdkcore
-import volcenginesdkvefaas
-import volcenginesdkvpc
-
 from veadk.utils.cloud_provider import CloudProvider, vefaas_openapi_host
 
 IpNetwork = ipaddress.IPv4Network | ipaddress.IPv6Network
@@ -57,7 +53,9 @@ def _configuration(
     session_token: str | None,
     region: str,
     host: str | None = None,
-) -> volcenginesdkcore.Configuration:
+) -> Any:
+    import volcenginesdkcore
+
     configuration = volcenginesdkcore.Configuration()
     configuration.ak = access_key
     configuration.sk = secret_key
@@ -77,6 +75,9 @@ def _vefaas_client(
     secret_key: str,
     session_token: str | None,
 ) -> Any:
+    import volcenginesdkcore
+    import volcenginesdkvefaas
+
     configuration = _configuration(
         access_key=access_key,
         secret_key=secret_key,
@@ -97,6 +98,9 @@ def _vpc_client(
     secret_key: str,
     session_token: str | None,
 ) -> Any:
+    import volcenginesdkcore
+    import volcenginesdkvpc
+
     configuration = _configuration(
         access_key=access_key,
         secret_key=secret_key,
@@ -143,6 +147,9 @@ def discover_studio_vpc_networks(
         raise StudioVpcDiscoveryError("The current VeFaaS function ID is unavailable.")
 
     try:
+        import volcenginesdkvefaas
+        import volcenginesdkvpc
+
         function_client = vefaas_client or _vefaas_client(
             provider=provider,
             region=region,
