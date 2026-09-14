@@ -439,6 +439,7 @@
   "environmentCenter": {
     "title": "环境",
     "loadFailed": "环境加载失败，请检查存储配置后重试。",
+    "storageUnavailable": "管理员未配置持久化存储，环境管理暂不可用。",
     "create": "新建环境",
     "configure": "配置环境",
     "details": "环境详情",
@@ -1158,6 +1159,7 @@
   },
   "workspace": {
     "title": "工作区",
+    "storageUnavailable": "管理员未配置持久化存储，工作区管理暂不可用。",
     "detail": "工作区详情",
     "create": "新建工作区",
     "editorDescription": "将常用环境组合在一起；同一个环境可以加入多个工作区。",
@@ -1233,6 +1235,24 @@
     }
   },
   "composer": {
+    "model": "模型",
+    "turnControls": "流程控制",
+    "pause": "暂停",
+    "resume": "恢复",
+    "interrupt": "中断",
+    "cancel": "取消",
+    "pauseTurn": "在安全点暂停完整流程",
+    "resumeTurn": "恢复完整流程",
+    "interruptTurn": "中断当前流程并保留会话上下文",
+    "cancelTurn": "取消当前流程且不可恢复",
+    "turnState": {
+      "running": "运行中",
+      "pausing": "正在到达安全点",
+      "paused": "已暂停",
+      "resuming": "正在恢复",
+      "interrupting": "正在中断",
+      "cancelling": "正在取消"
+    },
     "tasks": {
       "ppt": "PPT",
       "image": "图片生成",

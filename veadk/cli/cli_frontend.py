@@ -2711,12 +2711,14 @@ def _run_frontend_server(
         mount_model_catalog_routes,
     )
 
+    studio_model_catalog_service = build_model_catalog_service(
+        provider=provider,
+        resolve_credentials=_resolve_ve_credentials,
+    )
+    app.state.studio_model_catalog_service = studio_model_catalog_service
     mount_model_catalog_routes(
         app,
-        service=build_model_catalog_service(
-            provider=provider,
-            resolve_credentials=_resolve_ve_credentials,
-        ),
+        service=studio_model_catalog_service,
         authorize=_require_agent_management,
     )
 
@@ -9358,6 +9360,18 @@ def _run_frontend_server(
             for tag in (getattr(runtime, "tags", None) or [])
         }
 
+    def _runtime_agent_category(runtime: Any, tags: Mapping[str, str]) -> str:
+        """Classify Runtime products without exposing image details to Studio."""
+        tagged = str(tags.get("veadk:agent-type") or "").strip().lower()
+        if tagged == "mpa":
+            return "mpa"
+        artifact_url = str(getattr(runtime, "artifact_url", "") or "").lower()
+        return (
+            "mpa"
+            if re.search(r"/mpa_agent(?:[-_][^/:]+)*:", artifact_url)
+            else "general"
+        )
+
     def _get_runtime(runtime_id: str, region: str) -> Any:
         from agentkit.sdk.runtime import types as _rt
         from agentkit.sdk.runtime.client import AgentkitRuntimeClient
@@ -9732,10 +9746,21 @@ def _run_frontend_server(
                 auth_type = "none"
             else:
                 auth_type = "unknown"
-            envs = [
-                {"key": e.key, "value": e.value or ""}
-                for e in (getattr(r, "envs", None) or [])
-            ]
+            envs = []
+            for env in getattr(r, "envs", None) or []:
+                key = str(getattr(env, "key", "") or "")
+                value = str(getattr(env, "value", "") or "")
+                sensitive = bool(
+                    re.search(r"KEY|SECRET|TOKEN|PASSWORD|CREDENTIAL", key, re.I)
+                )
+                envs.append(
+                    {
+                        "key": key,
+                        "value": "" if sensitive else value,
+                        "sensitive": sensitive,
+                        "configured": bool(value),
+                    }
+                )
             return {
                 "runtimeId": getattr(r, "runtime_id", runtimeId),
                 "name": getattr(r, "name", "") or "",
@@ -9775,6 +9800,49 @@ def _run_frontend_server(
         except Exception as e:
             logger.error(f"get runtime detail failed: {e}", exc_info=True)
             raise HTTPException(status_code=502, detail=str(e))
+
+    @app.post("/web/runtime-env/copy")
+    async def _web_runtime_env_copy(
+        request: Request,
+        response: Response,
+        runtimeId: str = "",
+        region: str = "cn-beijing",
+        key: str = "",
+    ):
+        """Return one secret only for an explicit authorized copy gesture."""
+        role = _request_role(request)
+        if role not in {StudioRole.ADMIN, StudioRole.DEVELOPER}:
+            raise HTTPException(status_code=403, detail="secret copy is not permitted")
+        if not runtimeId or not key:
+            raise HTTPException(
+                status_code=400, detail="runtimeId and key are required"
+            )
+        runtime = _authorized_runtime(request, runtimeId, _coerce_cloud_region(region))
+        match = next(
+            (env for env in (getattr(runtime, "envs", None) or []) if env.key == key),
+            None,
+        )
+        if match is None or not re.search(
+            r"KEY|SECRET|TOKEN|PASSWORD|CREDENTIAL", key, re.I
+        ):
+            raise HTTPException(
+                status_code=404, detail="secret environment variable not found"
+            )
+        value = str(getattr(match, "value", "") or "")
+        if not value:
+            raise HTTPException(
+                status_code=404, detail="secret environment variable not found"
+            )
+        logger.info(
+            "runtime environment secret copied runtime_id=%s region=%s key=%s role=%s",
+            runtimeId,
+            region,
+            key,
+            role.value,
+        )
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Pragma"] = "no-cache"
+        return {"value": value}
 
     @app.post("/web/runtime-api-key/reveal")
     async def _web_runtime_api_key_reveal(
@@ -9952,6 +10020,7 @@ def _run_frontend_server(
                             "currentVersion": getattr(
                                 runtime, "current_version_number", None
                             ),
+                            "agentCategory": _runtime_agent_category(runtime, tags),
                             "region": reg,
                             "author": tags.get("veadk:author", ""),
                             "isMine": is_mine,
@@ -10313,6 +10382,33 @@ def _run_frontend_server(
                 text_parts.append({"kind": "text", "text": text})
         return text_parts
 
+    def _runtime_a2a_invocation_metadata(payload: Mapping[str, Any]) -> dict[str, Any]:
+        custom_metadata = payload.get("custom_metadata")
+        if not isinstance(custom_metadata, Mapping):
+            return {}
+        invocation = custom_metadata.get("veadkInvocation")
+        if not isinstance(invocation, Mapping):
+            return {}
+        safe_invocation: dict[str, Any] = {}
+        raw_skills = invocation.get("skills")
+        if isinstance(raw_skills, list):
+            skills = []
+            for item in raw_skills[:20]:
+                if not isinstance(item, Mapping):
+                    continue
+                name = str(item.get("name") or "").strip()
+                if not name:
+                    continue
+                skill = {"name": name}
+                for key in ("skillSpaceId", "skillId", "version"):
+                    value = str(item.get(key) or "").strip()
+                    if value:
+                        skill[key] = value
+                skills.append(skill)
+            if skills:
+                safe_invocation["skills"] = skills
+        return safe_invocation
+
     def _runtime_a2a_response_text(result: Any) -> str:
         def _part_texts(parts: Any) -> list[str]:
             texts: list[str] = []
@@ -10380,6 +10476,15 @@ def _run_frontend_server(
         }
         if session_id:
             message["contextId"] = session_id
+        invocation_metadata = _runtime_a2a_invocation_metadata(payload)
+        request_metadata = {
+            **(
+                {"modelId": str(payload["model_id"]).strip()}
+                if str(payload.get("model_id") or "").strip()
+                else {}
+            ),
+            **({"veadkInvocation": invocation_metadata} if invocation_metadata else {}),
+        }
         rpc_payload = {
             "jsonrpc": "2.0",
             "id": str(uuid4()),
@@ -10392,6 +10497,7 @@ def _run_frontend_server(
             "params": {
                 "message": message,
                 "configuration": {"blocking": True},
+                **({"metadata": request_metadata} if request_metadata else {}),
             },
         }
         client = httpx.AsyncClient(timeout=None)
@@ -11050,6 +11156,89 @@ def _run_frontend_server(
         # already-disconnected browser request after the control-plane lookup;
         # detail/list navigation deliberately cancels stale probes.
         body = b"" if upstream_method in {"GET", "HEAD"} else await request.body()
+        if (
+            upstream_method == "GET"
+            and path == f"web/agent-info/{_RUNTIME_A2A_VIRTUAL_APP}"
+        ):
+            a2a_card = await _runtime_a2a_agent_card(endpoint, headers)
+            if a2a_card is not None:
+                capabilities = a2a_card.get("capabilities")
+                extensions = (
+                    capabilities.get("extensions")
+                    if isinstance(capabilities, Mapping)
+                    else []
+                )
+                model_config = next(
+                    (
+                        item.get("params")
+                        for item in extensions or []
+                        if isinstance(item, Mapping)
+                        and item.get("uri") == "urn:veadk:mpa:model-selection:v1"
+                    ),
+                    {},
+                )
+                lifecycle_config = next(
+                    (
+                        item.get("params")
+                        for item in extensions or []
+                        if isinstance(item, Mapping)
+                        and item.get("uri") == "urn:veadk:mpa:turn-lifecycle-control:v1"
+                    ),
+                    None,
+                )
+                topology_config = next(
+                    (
+                        item.get("params")
+                        for item in extensions or []
+                        if isinstance(item, Mapping)
+                        and item.get("uri") == "urn:veadk:mpa:resource-topology:v1"
+                    ),
+                    None,
+                )
+                runtime_models = [
+                    str(model).strip()
+                    for model in (model_config or {}).get("models", [])
+                    if str(model).strip()
+                ]
+                selectable_models = runtime_models
+                model_catalog_service = getattr(
+                    app.state, "studio_model_catalog_service", None
+                )
+                if model_catalog_service is not None and runtime_models:
+                    try:
+                        model_options = await model_catalog_service.list_options()
+                        activated_ids = {
+                            model.id
+                            for model in model_options.models
+                            if model.available
+                        }
+                        selectable_models = [
+                            model for model in runtime_models if model in activated_ids
+                        ]
+                    except Exception:  # noqa: BLE001 - Runtime capability remains the fallback
+                        logger.warning(
+                            "failed to intersect Runtime models with the Studio account catalog",
+                            exc_info=True,
+                        )
+                default_model = str(
+                    (model_config or {}).get("defaultModel") or ""
+                ).strip()
+                if default_model and default_model not in selectable_models:
+                    selectable_models.insert(0, default_model)
+                return JSONResponse(
+                    {
+                        "name": a2a_card.get("name") or _RUNTIME_A2A_VIRTUAL_APP,
+                        "description": a2a_card.get("description") or "",
+                        "type": "a2a",
+                        "model": default_model,
+                        "selectableModels": selectable_models,
+                        "turnLifecycleControl": lifecycle_config,
+                        "resourceTopology": topology_config,
+                        "tools": [],
+                        "skills": [],
+                        "subAgents": [],
+                    }
+                )
         session_match = _RUNTIME_A2A_SESSION_PATH_RE.match(path)
         if session_match and session_match.group("app") == _RUNTIME_A2A_VIRTUAL_APP:
             user_id = session_match.group("user") or "user"
@@ -11713,6 +11902,16 @@ def _run_frontend_server(
         if upstream.status_code >= 400:
             # Buffer error responses so we can log the body and still forward it.
             body_bytes = await _runtime_proxy_buffer(upstream)
+            if (
+                upstream.status_code == 404
+                and upstream_method == "GET"
+                and path == "list-apps"
+            ):
+                await upstream.aclose()
+                await client.aclose()
+                a2a_card = await _runtime_a2a_agent_card(endpoint, headers)
+                if a2a_card is not None:
+                    return JSONResponse([_RUNTIME_A2A_VIRTUAL_APP])
             logger.warning(
                 "runtime-proxy %s %s -> %s (%s): %s",
                 upstream_method,
@@ -11726,14 +11925,6 @@ def _run_frontend_server(
             media = upstream.headers.get("content-type", "application/octet-stream")
             await upstream.aclose()
             await client.aclose()
-            if (
-                upstream.status_code == 404
-                and upstream_method == "GET"
-                and path == "list-apps"
-            ):
-                a2a_card = await _runtime_a2a_agent_card(endpoint, headers)
-                if a2a_card is not None:
-                    return JSONResponse([_RUNTIME_A2A_VIRTUAL_APP])
             return _Resp(
                 content=body_bytes,
                 status_code=upstream.status_code,

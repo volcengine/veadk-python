@@ -42,7 +42,8 @@
     "resourceCollectionExpiredHint": "提示：本次资源清单已失效，请重新发送任务；系统会重新收集资源后再创建 Agent。",
     "networkConfigurationHint": "提示：请检查共享公网出口等网络配置，然后重试。",
     "modelQuotaHint": "提示：模型当前触发了 TPM/RPM 配额限制，请稍后重试或提高模型配额。",
-    "rawResponseLabel": "原始响应："
+    "rawResponseLabel": "原始响应：",
+    "copySecretFailed": "复制敏感值失败"
   },
   "runtimeLogs": {
     "httpStatus": "HTTP 状态码：{{status}}",

@@ -73,6 +73,16 @@ async function renderBlocks(initialBlocks) {
     cancelAnimationFrame: dom.window.cancelAnimationFrame.bind(dom.window),
     IS_REACT_ACT_ENVIRONMENT: true,
   };
+  dom.window.matchMedia = () => ({
+    matches: true,
+    media: "",
+    onchange: null,
+    addListener() {},
+    removeListener() {},
+    addEventListener() {},
+    removeEventListener() {},
+    dispatchEvent() { return false; },
+  });
   for (const [name, value] of Object.entries(testGlobals)) {
     Object.defineProperty(globalThis, name, {
       configurable: true,
@@ -190,6 +200,48 @@ test("reports clipboard failures without an unhandled rejection", async () => {
       view.container.querySelector('[role="alert"]')?.textContent,
       "Copy failed. Try again.",
     );
+  } finally {
+    await view.cleanup();
+  }
+});
+
+test("renders semantic goal and reasoning labels instead of generic activity", async () => {
+  const view = await renderBlocks([
+    {
+      kind: "thinking",
+      thoughtKind: "reasoning",
+      text: "compare both tags",
+      done: true,
+    },
+    {
+      kind: "tool",
+      name: "create_goal",
+      callId: "goal-1",
+      args: { objective: "Review the latest two tags" },
+      response: { status: "active" },
+      done: true,
+    },
+  ]);
+  try {
+    assert.match(view.container.textContent ?? "", /Finished model reasoning/);
+    assert.match(view.container.textContent ?? "", /Created goal/);
+    assert.match(view.container.textContent ?? "", /Review the latest two tags/);
+  } finally {
+    await view.cleanup();
+  }
+});
+
+test("renders Agent working thought separately from model reasoning", async () => {
+  const view = await renderBlocks([
+    {
+      kind: "thinking",
+      thoughtKind: "thought",
+      text: "waiting for repository response",
+      done: true,
+    },
+  ]);
+  try {
+    assert.match(view.container.textContent ?? "", /Finished working thought/);
   } finally {
     await view.cleanup();
   }

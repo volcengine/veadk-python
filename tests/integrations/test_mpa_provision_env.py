@@ -16,6 +16,7 @@
 
 from veadk.integrations.mpa.mpa_provision import (
     MpaProvisionParams,
+    SECRET_ENV_KEYS,
     build_runtime_env,
     derive_claw_space_id,
     generate_mpa_agent_id,
@@ -95,6 +96,11 @@ def test_env_contains_startup_keys_and_identity_adaptation() -> None:
     # veadk has no arkclaw identity pools/TIP issuer; APIG key-auth remains the
     # outer access control for Studio and direct Runtime callers.
     assert env["A2A_TIP_VERIFY_ENABLED"] == "false"
+    assert env["MPA_LAZY_LOGIN"] == "false"
+    assert env["APPCENTER_RESOURCE_DISCOVERY_ENABLED"] == "false"
+    assert env["IM_GATEWAY_STARTUP_ENABLED"] == "false"
+    assert env["APMPLUS_TRACE_CONTENT"] == "false"
+    assert env["FORCE_APMPLUS_EXPORTER_REGISTRATION"] == "true"
     assert env["CLAW_SPACE_ID"] == "csi-2100000001"
     assert env["MPA_AGENT_ID"] == "mi-abc"
     # AgentKit
@@ -106,6 +112,15 @@ def test_env_uses_public_endpoint_for_codex_worker_preference() -> None:
     env = build_runtime_env(_params(), public_endpoint="https://app.example.com")
     assert env["MPA_CODEX_WORKER_ENDPOINT_PREFERENCE"] == "public"
     assert env["MPA_CODEX_WORKER_ALLOW_PUBLIC_FALLBACK"] == "true"
+
+
+def test_env_advertises_default_and_additional_selectable_models() -> None:
+    env = build_runtime_env(
+        _params(selectable_models=("doubao-seed", "doubao-alt")),
+        public_endpoint="https://app.example.com",
+    )
+
+    assert env["MPA_SELECTABLE_MODELS"] == "doubao-seed,doubao-alt"
 
 
 def test_env_openviking_included_only_when_provided() -> None:
@@ -150,3 +165,4 @@ def test_mask_secret_hides_middle() -> None:
     assert mask_secret("") == ""
     # Very short secrets are fully masked.
     assert set(mask_secret("ab")) == {"*"}
+    assert "CODEX_MCP_RUNTIME_API_KEY" in SECRET_ENV_KEYS

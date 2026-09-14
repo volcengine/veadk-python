@@ -914,7 +914,7 @@ function RuntimeDetailContent({ runtime }: { runtime: SelectedRuntime }) {
               {detail.envs.map((e) => (
                 <div key={e.key} className="agentsel-env">
                   <span className="agentsel-env-k">{e.key}</span>
-                  <span className="agentsel-env-v">{e.value}</span>
+                  <span className="agentsel-env-v">{e.sensitive ? "••••••••" : e.value}</span>
                 </div>
               ))}
             </div>

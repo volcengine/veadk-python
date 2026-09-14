@@ -37,6 +37,24 @@ function ExternalLinkIcon() {
   );
 }
 
+function DownloadIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M12 3v11" />
+      <path d="m7.5 10 4.5 4.5 4.5-4.5" />
+      <path d="M5 20h14" />
+    </svg>
+  );
+}
+
 function RuntimeLogErrorDetails({
   error,
   onRetry,
@@ -214,6 +232,21 @@ export function RuntimeLogsDialog({
       : ""
   );
   const statusLabel = t(`runtimeLogs.statuses.${status}`);
+  const downloadLogs = () => {
+    const snapshot = lines.map((line) => line.text).join("\n");
+    if (!snapshot) return;
+    const blobUrl = URL.createObjectURL(
+      new Blob([snapshot], { type: "text/plain;charset=utf-8" }),
+    );
+    const link = document.createElement("a");
+    const instance = resolvedInstanceName || target.runtimeId || "runtime";
+    link.href = blobUrl;
+    link.download = `${instance}-logs.log`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(blobUrl);
+  };
 
   if (!open) return null;
   return createPortal(
@@ -340,6 +373,15 @@ export function RuntimeLogsDialog({
 
         <footer className="runtime-logs-foot">
           <span>{t("runtimeLogs.retention", { count: MAX_RENDERED_LINES })}</span>
+          <button
+            type="button"
+            className="runtime-logs-download"
+            disabled={!logs}
+            onClick={downloadLogs}
+          >
+            <DownloadIcon />
+            {t("runtimeLogs.download")}
+          </button>
         </footer>
       </section>
     </div>,

@@ -33,6 +33,7 @@ SECRET_ENV_KEYS: frozenset[str] = frozenset(
         "MODEL_AGENT_API_KEY",
         "OPENVIKING_API_KEY",
         "FEISHU_APP_SECRET",
+        "CODEX_MCP_RUNTIME_API_KEY",
     }
 )
 
@@ -68,6 +69,7 @@ class MpaProvisionParams:
     openviking_api_key: str = ""
     feishu_app_id: str = ""
     feishu_app_secret: str = ""
+    selectable_models: tuple[str, ...] = ()
     extra_env: dict[str, str] = field(default_factory=dict)
 
 
@@ -145,6 +147,9 @@ def build_runtime_env(
         # preferred over MODEL_AGENT_NAME. Set it explicitly so delegated
         # worker turns use the same CLI-selected model as the primary agent.
         "MPA_CODEX_WORKER_DEFAULT_MODEL": params.model_name,
+        "MPA_SELECTABLE_MODELS": ",".join(
+            dict.fromkeys((params.model_name, *params.selectable_models))
+        ),
         # PostgreSQL session store
         "MPA_SESSION_MEMORY_BACKEND": "postgresql",
         "PGHOST": params.pg_host,
@@ -159,6 +164,14 @@ def build_runtime_env(
         "SCHEDULED_TASK_BACKEND": "postgresql",
         # Identity adaptation (FR-10): no arkclaw identity pools in this scenario.
         "IDENTITY_STARTUP_ENABLED": "false",
+        "MPA_LAZY_LOGIN": "false",
+        # VeADK uses external resources and only retains CLAW_SPACE_ID as a
+        # compatibility identifier. It must not query the ArkClaw registry.
+        "APPCENTER_RESOURCE_DISCOVERY_ENABLED": "false",
+        "IM_GATEWAY_STARTUP_ENABLED": "false",
+        # Keep trace timing and structured spans without exporting raw content.
+        "APMPLUS_TRACE_CONTENT": "false",
+        "FORCE_APMPLUS_EXPORTER_REGISTRATION": "true",
         # Without arkclaw userpool/client/workload resources there is no TIP
         # issuer for Studio. The Runtime remains protected by APIG key auth;
         # disable only the inner TIP gate so Studio A2A calls can reach it.

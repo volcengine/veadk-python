@@ -106,7 +106,10 @@ def _deploy_image(
     # Phase two: now that the public endpoint is known, re-release with the real
     # A2A_PUBLIC_URL so the agent-card advertises a reachable URL.
     if url and env.get("A2A_PUBLIC_URL") != url:
-        vefaas.update_function_envs_and_release(function_id, {"A2A_PUBLIC_URL": url})
+        phase_two_env = {"A2A_PUBLIC_URL": url}
+        if api_key:
+            phase_two_env["CODEX_MCP_RUNTIME_API_KEY"] = api_key
+        vefaas.update_function_envs_and_release(function_id, phase_two_env)
 
     return {
         "public_endpoint": url,
@@ -289,6 +292,15 @@ def _load_config_default_map(
 @click.option("--model-api-key", required=True)
 @click.option("--model-name", required=True)
 @click.option(
+    "--selectable-model",
+    "selectable_models",
+    multiple=True,
+    help=(
+        "Additional model ID selectable per Studio conversation. Repeat the "
+        "option; all models reuse the configured provider, endpoint, and key."
+    ),
+)
+@click.option(
     "--compute-plane",
     type=click.Choice(["runtime", "vefaas"]),
     default="runtime",
@@ -378,6 +390,7 @@ def create(  # noqa: PLR0913 - explicit CLI options are clearer than a config bl
     model_api_base: str,
     model_api_key: str,
     model_name: str,
+    selectable_models: tuple[str, ...],
     compute_plane: str,
     agentkit_tool_id: str,
     tool_image: str,
@@ -444,6 +457,7 @@ def create(  # noqa: PLR0913 - explicit CLI options are clearer than a config bl
         model_api_base=model_api_base,
         model_api_key=model_api_key,
         model_name=model_name,
+        selectable_models=selectable_models,
         agentkit_tool_id=agentkit_tool_id,
         agentkit_tool_region=agentkit_tool_region,
         skill_space_id=skill_space_id,

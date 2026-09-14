@@ -225,3 +225,22 @@ test("ignores control-only events after a completed response", () => {
   assert.equal(signal.ignored, true);
   assert.deepEqual(projector.finish(), []);
 });
+
+test("closes unfinished reasoning when the transport stream ends", () => {
+  const projector = createAssistantEventProjector("stream-end");
+  projector.project(event("default", "pwd returned /data/workspace.", {
+    partial: true,
+    thought: true,
+    id: "reasoning-delta",
+  }));
+
+  const [finished] = projector.finish();
+
+  assert.equal(finished.meta.streaming, false);
+  assert.deepEqual(finished.blocks, [{
+    kind: "thinking",
+    text: "pwd returned /data/workspace.",
+    done: true,
+    thoughtKind: "reasoning",
+  }]);
+});

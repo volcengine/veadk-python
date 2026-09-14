@@ -156,6 +156,37 @@ test("expands only the new-chat composer into a multiline input", () => {
   );
 });
 
+test("uses the searchable compact selector for Turn models", () => {
+  assert.match(
+    composerSource,
+    /<NewChatCompactSelect[\s\S]*?options=\{turnModelOptions\}[\s\S]*?searchable[\s\S]*?disabled=\{busy\}/,
+  );
+  assert.doesNotMatch(
+    composerSource,
+    /className="composer-model-select"[\s\S]*?<select/,
+  );
+});
+
+test("renders whole-Turn lifecycle controls from authoritative allowed actions", () => {
+  assert.ok(composerSource.includes('turnControl?.allowedActions.includes("pause")'));
+  assert.ok(composerSource.includes('turnControl?.allowedActions.includes("resume")'));
+  assert.doesNotMatch(composerSource, /onTurnControl\("interrupt"\)/);
+  assert.doesNotMatch(composerSource, /onTurnControl\("cancel"\)/);
+  assert.match(composerSource, /canPauseTurn[\s\S]*?onTurnControl\("pause"\)[\s\S]*?canResumeTurn[\s\S]*?onTurnControl\("resume"\)/);
+  assert.ok(appSource.includes('getTurnControl(appName, sessionId)'));
+  assert.ok(appSource.includes('activeTurnControl.generation'));
+  assert.ok(appSource.includes('activeTurnIsControllable'));
+  assert.ok(appSource.includes('turnControl={activeTurnIsControllable ? activeTurnControl : null}'));
+  assert.ok(appSource.includes('current[sessionId]?.state === state.state'));
+  assert.ok(appSource.includes('turnControlBySessionRef.current[sessionId]'));
+  assert.ok(appSource.includes('["completed", "failed", "rejected", "cancelled", "canceled", "interrupted", "orphaned"].includes(current.state)'));
+  assert.ok(stylesSource.includes('.composer-turn-status { display: inline-flex;'));
+  assert.ok(appSource.includes('cause instanceof TurnControlConflictError'));
+  assert.ok(appSource.includes('next.resumeDisposition === "new_turn_required"'));
+  assert.ok(appSource.includes('streamAbortsRef.current.get(sessionId)?.abort()'));
+  assert.ok(appSource.includes('delete nextTurnControls[sid]'));
+});
+
 test("keeps alternate chat modes hidden from the new-chat composer", () => {
   assert.match(appSource, /showModeSelector=\{false\}/);
   assert.match(
@@ -233,7 +264,7 @@ test("layers pill-shaped workspace tabs behind the new-chat input", () => {
   );
   assert.match(
     composerSource,
-    /<NewChatWorkspaceTabs[\s\S]*?<div[\s\S]*?className="composer-box"/,
+    /<NewChatWorkspaceTabs[\s\S]*?<div[\s\S]*?className=\{`composer-box/,
   );
   assert.match(
     workspaceTabsSource,
@@ -892,6 +923,40 @@ test("keeps the Agent picker aligned without extra highlighting or guidance", ()
   assert.doesNotMatch(
     newChatAgentPickerStylesSource,
     /new-chat-agent-picker-bounce/,
+  );
+});
+
+test("keeps the Turn model controls separate from the new-chat Agent picker", () => {
+  assert.match(composerSource, /composer-box--has-model/);
+  assert.match(stylesSource, /\.composer--new-chat \.composer-box--has-model\s*\{[^}]*padding-bottom:\s*56px/);
+  assert.match(
+    stylesSource,
+    /\.composer--new-chat \.composer-submit-actions\s*\{[\s\S]*?position:\s*absolute;[\s\S]*?right:\s*10px;[\s\S]*?bottom:\s*10px;[\s\S]*?display:\s*flex;/,
+  );
+  assert.match(
+    stylesSource,
+    /\.composer--new-chat \.comp-send\s*\{[\s\S]*?position:\s*static;/,
+  );
+  assert.match(
+    stylesSource,
+    /@media \(max-width:\s*640px\)[\s\S]*?\.composer--new-chat \.new-chat-agent-picker\s*\{[\s\S]*?bottom:\s*54px;/,
+  );
+  assert.doesNotMatch(
+    stylesSource,
+    /\.composer--new-chat \.composer-submit-actions\s*\{[^}]*display:\s*contents;/,
+  );
+  assert.match(
+    stylesSource,
+    /\.composer--new-chat \.composer-submit-actions\s*\{[\s\S]*?left:\s*auto;[\s\S]*?right:\s*10px;/,
+  );
+  assert.match(stylesSource, /\.composer--new-chat \.composer-model-select\s*\{[\s\S]*?margin-left:\s*auto/);
+  assert.match(
+    stylesSource,
+    /\.composer-model-select \.new-chat-compact-select__trigger\s*\{[\s\S]*?min-height:\s*36px;[\s\S]*?border:\s*0;[\s\S]*?background:\s*transparent;/,
+  );
+  assert.match(
+    stylesSource,
+    /\.composer-model-select \.new-chat-compact-select\s*\{[\s\S]*?width:\s*min\(260px, 30vw\);[\s\S]*?max-width:\s*260px;/,
   );
 });
 

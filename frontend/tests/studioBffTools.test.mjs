@@ -21,8 +21,19 @@ test("runSSE sends an explicit per-run platform tool selection", () => {
   );
 });
 
+test("A2A model selection is request scoped and capability gated", () => {
+  assert.match(clientSource, /modelId\?: string/);
+  assert.match(clientSource, /model_id: modelId\.trim\(\)/);
+  assert.match(appSource, /selectableModels\.length > 1/);
+  assert.match(appSource, /modelId: requestedModel/);
+  assert.match(composerSource, /selectableModels\.length > 1/);
+  assert.match(composerSource, /disabled=\{busy\}/);
+});
+
 test("Studio keeps BFF tool selection separate per session", () => {
   assert.match(appSource, /studioToolIdsBySession/);
+  assert.match(appSource, /veadk\.sessionStudioToolMounts\.v1/);
+  assert.match(appSource, /persistSessionTools\(studioToolIdsBySession\)/);
   assert.match(appSource, /studioToolSelectionKey\(appName, userId, sessionId\)/);
   assert.match(appSource, /platformTools: studioToolRuntime \? platformTools : undefined/);
   assert.match(railSource, /selectedStudioToolIds=\{selectedStudioToolIds\}/);
@@ -47,8 +58,10 @@ test("Agent information owns BFF tool selection and Composer stays unchanged", (
   assert.doesNotMatch(composerSource, /StudioToolPicker|StudioToolChips|studioTools/);
 });
 
-test("dynamic Skill mounting is absent while static Agent skills remain", () => {
-  assert.match(railSource, /const skills = uniqueSkills\(info\.skills\)/);
+test("Session Skill Space mounting augments static Agent skills", () => {
+  assert.match(railSource, /const skills = uniqueSkills\(\[/);
+  assert.match(railSource, /selectedSessionSkills\.map/);
+  assert.match(railSource, /<SkillSpacePicker/);
   assert.doesNotMatch(railSource, /SkillCapabilityDialog|onAddCapability/);
   assert.doesNotMatch(clientSource, /SessionCapabilities|addSessionCapability/);
   assert.doesNotMatch(appSource, /requiresSessionCapabilityRunner/);

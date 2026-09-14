@@ -50,6 +50,7 @@
     "connectingDescription": "Establishing a secure log stream through the Studio BFF.",
     "emptyTitle": "No logs yet",
     "emptyDescription": "Connected to the instance and waiting for new log output.",
+    "download": "Download logs",
     "retention": "Logs refresh automatically. Only the latest {{count}} lines are kept."
   },
   "trace": {
@@ -105,8 +106,10 @@
     "unsupportedComponent": "Unsupported component: {{component}}",
     "sandboxIdentity": "Codex Sandbox execution identifiers",
     "useSkill": "Use the {{name}} skill",
-    "thinkingDone": "Finished thinking",
-    "thinking": "Thinking",
+    "thinkingDone": "Finished working thought",
+    "thinking": "Working thought",
+    "reasoningDone": "Finished model reasoning",
+    "reasoning": "Model reasoning",
     "justNow": "Just now",
     "sourceUnavailable": "The generated source is temporarily unavailable. Please try again later.",
     "downloadStarted": "Download started",
@@ -242,6 +245,12 @@
         "completed": "Completed",
         "failed": "Failed"
       },
+      "goal": {
+        "queued": "Waiting to create goal",
+        "running": "Creating goal",
+        "completed": "Created goal",
+        "failed": "Failed to create goal"
+      },
       "command": {
         "queued": "Waiting to run command",
         "running": "Running command",
@@ -282,7 +291,13 @@
         "queued": "Waiting to call tool",
         "running": "Calling tool",
         "completed": "Called tool",
-        "failed": "Tool call failed"
+        "failed": "Tool call failed",
+        "named": {
+          "queued": "Waiting to call {{tool}}",
+          "running": "Calling {{tool}}",
+          "completed": "Called {{tool}}",
+          "failed": "{{tool}} call failed"
+        }
       },
       "exitCode": "exit {{code}}",
       "omittedLines": "… {{count}} lines omitted …",
@@ -319,6 +334,16 @@
     "summaryTokens": "<strong>{{used}}</strong> used, <strong>{{remaining}}</strong> remaining, <strong>{{total}}</strong> total",
     "overflow": "Context exceeded by {{count}} tokens",
     "title": "Context usage",
+    "category": "Category",
+    "currentTurn": "Current Turn",
+    "sessionTotal": "Session total",
+    "details": {
+      "input": "Input",
+      "output": "Output",
+      "reasoning": "Reasoning",
+      "cache": "Cache hit",
+      "total": "Total"
+    },
     "unknownModel": "The context window for this model is not available",
     "unknownRuntime": "The current runtime did not provide model information"
   },
@@ -335,7 +360,7 @@
     "connecting": "Connecting…",
     "connect": "Connect and add"
   },
-  "composer": { "placeholder": "Type a message…", "inputAria": "Message", "generating": "Generating", "send": "Send" },
+  "composer": { "placeholder": "Type a message…", "inputAria": "Message", "generating": "Generating", "send": "Send", "model": "Model" },
   "invocation": { "ariaLabel": "Invocation context for this turn", "removeSkill": "Remove skill {{name}}", "removeAgent": "Remove agent {{name}}" },
   "visualization": { "cardAria": "{{label}} chart", "viewAria": "{{label}} display mode", "preview": "Preview", "code": "Code", "invalidEcharts": "The ECharts configuration is not a valid, safe data object. Switch to Code to inspect it.", "renderFailed": "The chart cannot be rendered right now. Switch to Code to inspect it.", "echartsAria": "ECharts preview", "rendering": "Rendering chart…", "mermaidFailed": "The chart cannot be rendered right now. Switch to Code to inspect the Mermaid source.", "mermaidAria": "Mermaid preview" }
   ,"markdown": { "playVideo": "Play video: {{name}}", "enlargeImage": "Enlarge image preview: {{name}}", "image": "image", "enlargeVideo": "Enlarge video", "videoPreview": "Video preview", "downloadVideo": "Download video", "close": "Close" }

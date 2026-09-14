@@ -224,3 +224,4 @@ mpa-create.config*.yaml
 
 # PiAgent release archives are downloaded and verified during image builds.
 examples/piagent_with_mcp/vendor/pi-*.tar.gz
+.gstack/
