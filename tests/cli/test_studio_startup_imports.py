@@ -167,6 +167,67 @@ if "veadk.agent" in sys.modules:
     )
 
 
+def test_generated_agent_mcp_defers_protocol_runtime_until_first_call() -> None:
+    root = Path(__file__).resolve().parents[2]
+    script = """
+import sys
+
+import veadk.cli.generated_agent_mcp
+
+unexpected = sorted(
+    name
+    for name in sys.modules
+    if name == "mcp"
+    or name.startswith("mcp.")
+    or name == "google.adk.tools.mcp_tool"
+    or name.startswith("google.adk.tools.mcp_tool.")
+)
+if unexpected:
+    raise SystemExit("generated Agent MCP protocol runtime loaded at startup")
+"""
+
+    subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_skill_workbench_defers_agentkit_runtime_until_first_call() -> None:
+    root = Path(__file__).resolve().parents[2]
+    script = """
+import sys
+
+import frontend.server.skills.devenv
+
+unexpected = sorted(
+    name
+    for name in sys.modules
+    if name in {
+        "agentkit.sdk.skills.client",
+        "agentkit.sdk.skills.types",
+        "agentkit.sdk.tools.client",
+        "agentkit.sdk.tools.types",
+        "agentkit.toolkit.cli.sandbox.env_config",
+        "agentkit.toolkit.cli.sandbox.sandbox_client",
+        "veadk.skills.skill",
+    }
+)
+if unexpected:
+    raise SystemExit("Skill workbench AgentKit runtime loaded at startup")
+"""
+
+    subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
 def test_knowledge_routes_defer_document_extraction_stack() -> None:
     root = Path(__file__).resolve().parents[2]
     script = """

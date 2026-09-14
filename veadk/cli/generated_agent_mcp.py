@@ -17,15 +17,27 @@
 from __future__ import annotations
 
 from contextlib import suppress
-from typing import Iterator
+from typing import Any, Iterator
 
 import httpx
-from google.adk.tools.mcp_tool.mcp_session_manager import (
-    StreamableHTTPConnectionParams,
-)
-from google.adk.tools.mcp_tool.mcp_toolset import MCPToolset
 
 from veadk.cli.generated_agent_codegen import AgentDraft, McpTool, prepare_mcp_auth
+
+
+def StreamableHTTPConnectionParams(*args: Any, **kwargs: Any) -> Any:
+    """Construct ADK MCP connection params only for an actual debug probe."""
+    from google.adk.tools.mcp_tool.mcp_session_manager import (
+        StreamableHTTPConnectionParams as _StreamableHTTPConnectionParams,
+    )
+
+    return _StreamableHTTPConnectionParams(*args, **kwargs)
+
+
+def MCPToolset(*args: Any, **kwargs: Any) -> Any:
+    """Construct an ADK MCP toolset without charging Studio cold start."""
+    from google.adk.tools.mcp_tool.mcp_toolset import MCPToolset as _MCPToolset
+
+    return _MCPToolset(*args, **kwargs)
 
 
 class McpDebugConnectionError(ValueError):
