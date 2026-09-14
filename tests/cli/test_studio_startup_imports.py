@@ -228,6 +228,37 @@ if unexpected:
     )
 
 
+def test_migration_gateway_defers_agentkit_runtime_until_first_call() -> None:
+    root = Path(__file__).resolve().parents[2]
+    script = """
+import sys
+
+import frontend.server.migration.gateway
+
+unexpected = sorted(
+    name
+    for name in sys.modules
+    if name in {
+        "agentkit.sdk.tools.types",
+        "agentkit.toolkit.cli.sandbox.env_config",
+        "agentkit.toolkit.cli.sandbox.sandbox_client",
+        "veadk.cli.agentkit_session_metadata",
+        "veadk.cli.frontend_skill_creator",
+    }
+)
+if unexpected:
+    raise SystemExit("Migration Gateway AgentKit runtime loaded at startup")
+"""
+
+    subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
 def test_knowledge_routes_defer_document_extraction_stack() -> None:
     root = Path(__file__).resolve().parents[2]
     script = """
