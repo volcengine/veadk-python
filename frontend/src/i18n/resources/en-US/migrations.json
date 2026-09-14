@@ -362,6 +362,7 @@
       "aggregatingDetail": "Aggregate scores and evidence into an HTML report",
       "waiting": "Waiting",
       "running": "Running",
+      "failed": "Failed",
       "complete": "Completed"
     },
     "result": {
@@ -370,6 +371,14 @@
       "pending": "Waiting for migration to complete",
       "retry": "Run evaluation again",
       "retrying": "Retrying…",
+      "failureStage": "Failed at",
+      "errorCode": "Error code",
+      "taskId": "Task ID",
+      "diagnosticAttempt": "Evaluation attempt",
+      "runtime": "Runtime",
+      "errorDetails": "Error details",
+      "diagnosticField": "{{label}}: {{value}}",
+      "diagnosticHeading": "{{label}}:",
       "loadingReport": "Loading the evaluation report…",
       "reportTitle": "HTML evaluation report",
       "reportHtmlDescription": "View or download the HTML report.",

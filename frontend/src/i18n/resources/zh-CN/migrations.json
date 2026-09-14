@@ -362,6 +362,7 @@
       "aggregatingDetail": "汇总评分与证据，生成 HTML 报告",
       "waiting": "等待中",
       "running": "执行中",
+      "failed": "失败",
       "complete": "已完成"
     },
     "result": {
@@ -370,6 +371,14 @@
       "pending": "等待迁移完成",
       "retry": "重新评测",
       "retrying": "正在重试…",
+      "failureStage": "失败阶段",
+      "errorCode": "错误码",
+      "taskId": "任务 ID",
+      "diagnosticAttempt": "评测轮次",
+      "runtime": "Runtime",
+      "errorDetails": "错误详情",
+      "diagnosticField": "{{label}}：{{value}}",
+      "diagnosticHeading": "{{label}}：",
       "loadingReport": "正在读取评测报告…",
       "reportTitle": "HTML 评测报告",
       "reportHtmlDescription": "查看或下载 HTML 报告。",

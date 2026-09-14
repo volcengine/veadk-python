@@ -879,6 +879,53 @@ def test_command_diagnostics_keep_the_failure_tail() -> None:
     assert len(detail.encode("utf-8")) <= 2048
 
 
+def test_runner_failure_status_keeps_sanitized_stage_and_detail(
+    tmp_path: Path,
+) -> None:
+    namespace = _runner_namespace()
+    status = tmp_path / "status.json"
+    diagnostics = tmp_path / "diagnostics.log"
+    work = tmp_path / "work"
+    config = {
+        "schema_version": 1,
+        "task_id": TASK_ID,
+        "attempt": 2,
+        "locale": "zh-CN",
+        "runtime_name": "migration-eval-111111111111-a2",
+        "project_path": str(tmp_path / "project"),
+        "work_path": str(work),
+        "status_path": str(status),
+        "diagnostic_path": str(diagnostics),
+        "secret_path": "unused",
+        "cloud_credential_path": "unused",
+        "agentkit_config_protocol": "legacy",
+        "agentkit_config": {},
+    }
+
+    namespace["load_secrets"] = lambda _path: {"MODEL_API_KEY": "model-secret"}
+
+    def fail_cloud_credentials(_path: str) -> dict[str, str]:
+        raise RuntimeError("credential rejected: model-secret")
+
+    namespace["load_cloud_credentials"] = fail_cloud_credentials
+    namespace["cleanup_runtime"] = lambda *_args, **_kwargs: True
+
+    config_path = tmp_path / "runner.json"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    namespace["main"](str(config_path))
+
+    failure = json.loads(status.read_text(encoding="utf-8"))
+    assert failure["state"] == "failed"
+    assert failure["error"] == {
+        "code": "MIGRATION_EVALUATION_EXECUTION_FAILED",
+        "message": "临时部署或评测执行失败，请重试。",
+        "retryable": True,
+        "stage": "preparing",
+        "detail": "credential rejected: <redacted>",
+    }
+    assert "model-secret" not in status.read_text(encoding="utf-8")
+
+
 @pytest.mark.parametrize(
     ("protocol", "agentkit_config", "deploy_prefix", "invoke_prefix"),
     [

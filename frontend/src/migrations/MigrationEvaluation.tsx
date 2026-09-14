@@ -13,6 +13,7 @@ import type {
   MigrationEvaluationDimensionId,
   MigrationEvaluationStatus,
 } from "../adk/migrations";
+import { DeploymentErrorMessage } from "../ui/DeploymentErrorMessage";
 import { TextShimmer } from "../ui/text-shimmer/TextShimmer";
 import { initialEvaluationEnvironmentValues } from "./evaluationEnvironment";
 import { CloseIcon } from "./MigrationIcons";
@@ -961,6 +962,7 @@ export function MigrationEvaluationSetup({
 }
 
 interface ResultProps {
+  taskId: string;
   evaluation: MigrationEvaluationStatus;
   report: string | null;
   reportLoading: boolean;
@@ -969,9 +971,55 @@ interface ResultProps {
   busy: boolean;
   reportDownloading: boolean;
   onResume: (environment: Record<string, string>) => void;
-  onRetry: () => void;
+  onRetry: () => Promise<void>;
   onLoadReport: () => void;
   onDownloadReport: () => void;
+}
+
+function evaluationFailureMessage(
+  taskId: string,
+  evaluation: MigrationEvaluationStatus,
+  translate: EvaluationTranslate,
+): string {
+  const error = evaluation.error;
+  const lines = [error?.message || evaluation.message];
+  const field = (label: string, value: string | number) =>
+    translate("evaluation.result.diagnosticField", { label, value });
+  if (error?.stage) {
+    lines.push(
+      field(
+        translate("evaluation.result.failureStage"),
+        translate(`evaluation.execution.${error.stage}`),
+      ),
+    );
+  }
+  if (error?.code) {
+    lines.push(field(translate("evaluation.result.errorCode"), error.code));
+  }
+  lines.push(field(translate("evaluation.result.taskId"), taskId));
+  if (evaluation.attempt) {
+    lines.push(
+      field(
+        translate("evaluation.result.diagnosticAttempt"),
+        evaluation.attempt,
+      ),
+    );
+  }
+  if (evaluation.runtimeName) {
+    lines.push(
+      field(translate("evaluation.result.runtime"), evaluation.runtimeName),
+    );
+  }
+  if (error?.detail) {
+    lines.push(
+      "",
+      translate("evaluation.result.diagnosticHeading", {
+        label: translate("evaluation.result.errorDetails"),
+      }),
+      error.detail,
+    );
+  }
+  return lines.join("\n");
 }
 
 const EVALUATION_EXECUTION_STATES = [
@@ -991,7 +1039,12 @@ function EvaluationExecutionProgress({
   const currentIndex = EVALUATION_EXECUTION_STATES.indexOf(
     evaluation.state as (typeof EVALUATION_EXECUTION_STATES)[number],
   );
+  const failureIndex = EVALUATION_EXECUTION_STATES.indexOf(
+    evaluation.error?.stage as (typeof EVALUATION_EXECUTION_STATES)[number],
+  );
   const completed = evaluation.state === "completed";
+  const failed =
+    ["failed", "blocked"].includes(evaluation.state) && failureIndex >= 0;
   const waiting = ["pending", "waiting_dataset", "waiting_environment"].includes(
     evaluation.state,
   );
@@ -1019,21 +1072,25 @@ function EvaluationExecutionProgress({
       <ol>
         {EVALUATION_EXECUTION_STATES.map((state, index) => {
           const tone =
-            completed || index < currentIndex
+            completed || index < currentIndex || (failed && index < failureIndex)
               ? "complete"
               : index === currentIndex
                 ? "active"
+                : failed && index === failureIndex
+                  ? "failed"
                 : waiting && index === 0
                   ? "waiting"
-                : "pending";
+                  : "pending";
           const status =
             tone === "complete"
               ? t("evaluation.execution.complete")
               : tone === "active"
                 ? t("evaluation.execution.running")
+                : tone === "failed"
+                  ? t("evaluation.execution.failed")
                 : t("evaluation.execution.waiting");
           const currentDetail =
-            tone === "active" || tone === "waiting"
+            tone === "active" || tone === "waiting" || tone === "failed"
               ? evaluation.message || details[state]
               : "";
           return (
@@ -1055,6 +1112,7 @@ function EvaluationExecutionProgress({
 }
 
 export function MigrationEvaluationResult({
+  taskId,
   evaluation,
   report,
   reportLoading,
@@ -1154,15 +1212,14 @@ export function MigrationEvaluationResult({
         </div>
       ) : null}
       {["failed", "blocked"].includes(evaluation.state) ? (
-        <div className="migration-evaluation-failure" role="alert">
-          <strong>{evaluation.error?.message || evaluation.message}</strong>
-          {evaluation.canRetry ? (
-            <button type="button" onClick={onRetry} disabled={busy}>
-              {busy
-                ? t("evaluation.result.retrying")
-                : t("evaluation.result.retry")}
-            </button>
-          ) : null}
+        <div className="migration-evaluation-failure">
+          <DeploymentErrorMessage
+            message={evaluationFailureMessage(taskId, evaluation, t)}
+            className="migration-evaluation-failure__details"
+            defaultExpanded={false}
+            onRetry={evaluation.canRetry ? onRetry : undefined}
+            retryLabel={t("evaluation.result.retry")}
+          />
         </div>
       ) : null}
       {actionError ? (

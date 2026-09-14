@@ -2631,6 +2631,7 @@ export function MigrationWorkspace({
                 </div>
               ) : null}
               <MigrationEvaluationResult
+                taskId={task.id}
                 evaluation={task.evaluation}
                 report={evaluationReport}
                 reportLoading={evaluationReportLoading}
@@ -2639,7 +2640,7 @@ export function MigrationWorkspace({
                 busy={Boolean(evaluationAction)}
                 reportDownloading={evaluationAction === "download"}
                 onResume={(environment) => void resumeEvaluation(environment)}
-                onRetry={() => void retryEvaluation()}
+                onRetry={retryEvaluation}
                 onLoadReport={() => void loadEvaluationReport()}
                 onDownloadReport={() => void downloadEvaluationReport()}
               />

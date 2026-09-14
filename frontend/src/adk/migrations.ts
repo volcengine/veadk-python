@@ -59,6 +59,13 @@ export type MigrationEvaluationState =
   | "blocked"
   | "cancelled";
 
+export type MigrationEvaluationFailureStage =
+  | "preparing"
+  | "deploying"
+  | "executing"
+  | "judging"
+  | "aggregating";
+
 export interface MigrationEvaluationAsset {
   schemaVersion: 1;
   kind: "dataset" | "report";
@@ -98,6 +105,8 @@ export interface MigrationEvaluationStatus {
     code: string;
     message: string;
     retryable: boolean;
+    stage?: MigrationEvaluationFailureStage;
+    detail?: string;
   };
 }
 
@@ -383,6 +392,13 @@ const EVALUATION_STATES = new Set<MigrationEvaluationState>([
   "blocked",
   "cancelled",
 ]);
+const EVALUATION_FAILURE_STAGES = new Set<MigrationEvaluationFailureStage>([
+  "preparing",
+  "deploying",
+  "executing",
+  "judging",
+  "aggregating",
+]);
 
 const EVALUATION_DIMENSIONS = new Set<MigrationEvaluationDimensionId>([
   "semantic_fidelity",
@@ -586,6 +602,31 @@ function normalizeEvaluation(value: unknown): MigrationEvaluationStatus {
     normalized.canRetry = evaluation.canRetry;
   if (evaluation.error !== undefined) {
     const error = record(evaluation.error, adkT("migrations.labels.error"));
+    if (
+      error.stage !== undefined &&
+      (typeof error.stage !== "string" ||
+        !EVALUATION_FAILURE_STAGES.has(
+          error.stage as MigrationEvaluationFailureStage,
+        ))
+    ) {
+      throw new Error(
+        adkT("migrations.invalidFormat", {
+          label: adkT("migrations.labels.error"),
+        }),
+      );
+    }
+    if (
+      error.detail !== undefined &&
+      (typeof error.detail !== "string" ||
+        !error.detail.trim() ||
+        new TextEncoder().encode(error.detail).byteLength > 2 * 1024)
+    ) {
+      throw new Error(
+        adkT("migrations.invalidFormat", {
+          label: adkT("migrations.labels.error"),
+        }),
+      );
+    }
     normalized.error = {
       code:
         typeof error.code === "string"
@@ -594,6 +635,10 @@ function normalizeEvaluation(value: unknown): MigrationEvaluationStatus {
       message:
         typeof error.message === "string" ? error.message : evaluation.message,
       retryable: error.retryable === true,
+      ...(error.stage !== undefined
+        ? { stage: error.stage as MigrationEvaluationFailureStage }
+        : {}),
+      ...(typeof error.detail === "string" ? { detail: error.detail } : {}),
     };
   }
   return normalized;
