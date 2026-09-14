@@ -193,6 +193,11 @@ export function fromStudioTurns(turns: readonly Turn[], options: StudioConversat
     const custom = options.renderBlock?.(block, turn);
     if (custom !== undefined) return { id, type: "custom", content: custom };
     switch (block.kind) {
+      case "activity-source": return {
+        id,
+        type: "custom",
+        content: <div className="tool-activity-source">{block.label}</div>,
+      };
       case "text": return { id, type: "markdown", text: block.text };
       case "thinking": return { id, type: "reasoning", title: "思考过程", status: block.done ? "complete" : "running", content: block.text };
       case "progress": return { id, type: "reasoning", title: block.text, status: turn.meta?.streaming ? "running" : "complete", content: block.text };

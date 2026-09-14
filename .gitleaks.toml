@@ -72,6 +72,11 @@ id = "empty-env-key-pattern"
 description = "Empty environment variables with KEY pattern"
 regex = '''os\.environ\[".*?KEY"\]\s*=\s*".+"'''
 
+[[rules]]
+id = "hardcoded-api-key-token-secret"
+description = "Hardcoded API key, token, secret, password, or credential assignment"
+regex = '''(?i)\b(api[_-]?key|apikey|access[_-]?key|secret[_-]?key|client[_-]?secret|auth[_-]?token|access[_-]?token|refresh[_-]?token|session[_-]?token|bearer[_-]?token|password|credential)\b["'\s:=]{0,16}["'][A-Za-z0-9_./+=:@%-]{16,}["']'''
+
 [allowlist]
 # veadk/webui is the built (minified) web UI bundle — generated output reviewed
 # via its source under frontend/, not hand-written. Minified vendor libs
