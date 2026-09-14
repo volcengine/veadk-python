@@ -243,6 +243,7 @@ def runner_source() -> str:
         import threading
         import time
         from datetime import datetime, timezone
+        from decimal import Decimal, ROUND_HALF_UP
         from pathlib import Path
 
         OUTPUT_LIMIT = 64 * 1024
@@ -1449,14 +1450,16 @@ def runner_source() -> str:
             raise last_error
 
 
-        def raw_average(values):
+        def rounded_average(values):
             if not values:
                 return None
-            return round(sum(values) / len(values), 4)
+            return (2 * sum(values) + len(values)) // (2 * len(values))
 
 
         def display_score(value):
-            return None if value is None else int(float(value) * 100 + 0.5)
+            if value is None:
+                return None
+            return int((Decimal(str(value)) * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
 
         def build_report(config, cases, observations, judged, metadata, contract):
@@ -1471,13 +1474,15 @@ def runner_source() -> str:
                 dimensions = []
                 current_scores = []
                 for dimension in item["dimensions"]:
-                    if dimension["score"] is not None:
-                        dimension_scores[dimension["id"]].append(dimension["score"])
-                        current_scores.append(dimension["score"])
                     converted = {
                         **dimension,
                         "score": display_score(dimension["score"]),
                     }
+                    # Aggregate the same integer scores the report validator
+                    # can recompute, including at each subsequent summary level.
+                    if converted["score"] is not None:
+                        dimension_scores[dimension["id"]].append(converted["score"])
+                        current_scores.append(converted["score"])
                     dimensions.append(converted)
                     if dimension["severity"] == "critical":
                         critical_mismatches.append(
@@ -1489,7 +1494,7 @@ def runner_source() -> str:
                                 "evidence_sources": dimension["evidence_sources"],
                             }
                         )
-                case_score = display_score(raw_average(current_scores))
+                case_score = rounded_average(current_scores)
                 if case_score is not None:
                     case_scores.append(
                         {"case_id": case["case_id"], "score": case_score}
@@ -1509,13 +1514,13 @@ def runner_source() -> str:
             summaries = []
             available = []
             for dimension in config["dimensions"]:
-                score = raw_average(dimension_scores[dimension])
+                score = rounded_average(dimension_scores[dimension])
                 if score is not None:
                     available.append(score)
                 summaries.append(
                     {
                         "id": dimension,
-                        "score": display_score(score),
+                        "score": score,
                         "reason": (
                             localized(
                                 config,
@@ -1619,7 +1624,7 @@ def runner_source() -> str:
                 },
                 "cases": results,
                 "summary": {
-                    "score": display_score(raw_average(available)),
+                    "score": rounded_average(available),
                     "dimensions": summaries,
                 },
                 "execution": {
