@@ -1065,3 +1065,7 @@ not rendered as empty results. No task mutations are performed.
 Run `npm run test:mpa-cron-coverage` and
 `python -m pytest tests/frontend/server/test_mpa_cron.py --cov=frontend.server.mpa_cron --cov-branch --cov-fail-under=96`
 for isolated client/server checks.
+
+### Runtime task management (2026-09-15)
+
+Runtime tasks now follow mono's list/calendar workflow: status filtering, creation, editing, copying, deletion, enable/disable, run now, and execution history. Select a cloud Runtime first. The server forwards the authenticated Studio user as `x-user-id`; with MPA JWT disabled, that user's task data remains isolated. No JWT input or TOP credential exchange is used. Enter the Runtime's Agent ID when creating a task. Complex Cron expressions display only the server's next execution in the calendar. Mutations and history use the existing MPA REST interfaces; Runtime upgrades and ADK session authentication are separate concerns.

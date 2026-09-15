@@ -10787,6 +10787,7 @@ def _run_frontend_server(
 
     mount_mpa_cron_routes(
         app,
+        user_for=_sandbox_owner,
         authorize=_authorized_runtime_for_connection,
         connection=_resolve_runtime_conn,
         region_for=_coerce_cloud_region,

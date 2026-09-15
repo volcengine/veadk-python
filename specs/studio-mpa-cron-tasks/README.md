@@ -1,14 +1,32 @@
-# MPA Runtime task viewer
+# MPA Runtime task management
 
 [中文版](README.zh.md)
 
-2026-09-15. The Studio panel owns read-only presentation and pagination of the selected Runtime's /api/v1/esa-cron-tasks response. MPA owns storage, user authorization and scheduling. The existing Studio proxy owns Runtime access and gateway authentication. Selection includes Runtime ID and region; no selection performs no requests. Requests use limit=20, offset and includeDisabled=true. The optional X-Jwt-Token lives only in component memory and is cleared when the target changes or panel unmounts. Lists display only tasks accessible to that token. Errors never become empty successes, and stale responses must not cross targets. No mutation or scheduler APIs are added. See [change and verification](../../prd-spec/features/studio-mpa-cron-tasks/README.md).
+Revised 2026-09-15. Component ID: studio-mpa-cron-tasks.
 
-## Automatic credentials revision — 2026-09-15
-The current user authorizes replacing manual JWT entry with server-side TOP GetMpaInstanceToken (2026-03-01). Resolve MPA_AGENT_ID, MPA_SPACE_ID/CLAW_SPACE_ID, MPA_IS_DEBUG_RUNTIME and ARKCLAW_TOP_SERVICE from the authorized selected Runtime. Use trusted enterprise user_pool_user_uid; local administrators configure VEADK_STUDIO_MPA_USER_UID on the server. Never use a browser-supplied identity to acquire credentials. TOP signs the JWT. Match its HTTPS endpoint against the selected Runtime before forwarding Authorization and X-Jwt-Token. Acquire fresh credentials per list request; do not cache, persist or return credentials to the browser. Keep the read-only scope and add task prompt details plus executionCount/successRate summaries following mono SharedAgent/Cron. Missing configuration and TOP errors remain actionable errors. Tests must cover identity, endpoint mismatch, upstream failures, credential containment and cancellation, with incremental coverage above 95%. This revision supersedes the previous manual-JWT contract and its completed verification applies only to the previous revision.
+Studio presents the selected Runtime's user-scoped scheduled tasks. MPA owns persistence, authorization, scheduling and execution. The Studio server owns Runtime access checks, trusted principal resolution and gateway credentials. No TOP/JWT acquisition or all-user fallback is performed. This contract supersedes the prior all-user viewer after MPA revert `91fd6a3`.
 
-## Direct Runtime revision (2026-09-15)
-The user has disabled Runtime JWT verification and authorizes removal of TOP credential acquisition. Replace the previous credential contract: keep selected-Runtime authorization and gateway authentication, send the current Studio principal owner_id as x-user-id, derive x-space-id and x-mpa-id from Runtime configuration with the existing MPA local defaults, and never acquire or forward X-Jwt-Token. Remove enterprise UID configuration and credential-specific UI messages. Task visibility remains user-scoped. No Runtime setting or business logic is modified. Verify request headers, no TOP calls, pagination, upstream errors and cancellation; incremental coverage must exceed 95%.
+## HTTP and identity
 
-## Final all-user contract — 2026-09-15
-The user explicitly authorizes all-user reads when Runtime JWT authentication is disabled. MPA commit 833c6bc implements that behavior. Studio therefore sends only gateway authorization, without JWT, x-user-id, x-space-id or x-mpa-id, and no longer requires a business identity. This supersedes the preceding user-scoped direct-access revision. Runtime authorization, read-only scope, pagination and existing error handling remain unchanged.
+All routes require `region` and existing selected-Runtime authorization. Resolve `x-user-id` from the authenticated Studio principal, never from a browser identity header. Resolve the upstream endpoint/key through existing Runtime connection code. Forward only gateway Authorization and x-user-id. JWT-enabled Runtimes must return their normal authentication failure.
+
+| Studio route | Method | MPA route |
+| --- | --- | --- |
+| `/web/mpa-cron/{runtime_id}` | GET / POST | `/api/v1/esa-cron-tasks` |
+| `/web/mpa-cron/{runtime_id}/{task_id}` | POST / DELETE | `/api/v1/esa-cron-tasks/{task_id}` |
+| `/web/mpa-cron/{runtime_id}/{task_id}/run` | POST | `/api/v1/esa-cron-tasks/{task_id}/run` |
+| `/web/mpa-cron/{runtime_id}/{task_id}/runs` | GET | `/api/v1/esa-cron-tasks/{task_id}/runs` |
+
+Task IDs allow letters, digits, underscore and hyphen. Mutations allow only existing MPA schema field names, with a 32 KiB body limit. Upstream validates field values. Requests time out after 30 seconds and do not follow redirects. HTTP failures preserve their status without echoing upstream bodies; malformed/network/redirect responses fail safely. Listing uses includeDisabled=true and server pages of 20. History remains paginated. Mutations preserve expectedVersion and stable clientToken for retries of the same create/run operation.
+
+## UI and state
+
+The mono reference supplies list/calendar, status filter, overview, task detail/history, create/edit/copy, delete confirmation, enabled switch and run-now interactions. Studio uses existing local controls/styles rather than adding mono's workspace dependency graph. Creation requires an Agent ID and prompt; Web and Feishu delivery are supported, and edits preserve unchanged delivery metadata. Copy opens a form without writing until save.
+
+Read all task pages before presenting a complete calendar or filtered list, deduplicate IDs, paginate the list locally by 10. Aggregate metrics use the upstream response's actual all-history scope, not an invented seven-day window. Task lastRunAt and nextRunAt remain distinct. Calendar expands Once/Interval/Daily/Weekly/Monthly and fixed-time Cron, honoring schedule zones and DST; complex Cron shows only server nextRunAt. Day cells group multiple executions of one task. Calendar times display in the device zone; schedules show their configured zone.
+
+No target means no request. Target changes abort reads and ignore stale results, including history and mutation completion. Writes use a single-flight guard; aborting an HTTP write does not mean undoing its server effects. Failed writes retain form inputs, and version conflicts require refreshing. Loading, empty and errors are distinct. Existing Studio/TOS scheduling and ADK sessions are unaffected.
+
+## Verification
+
+See the [implementation and acceptance record](../../prd-spec/features/studio-mpa-cron-tasks/2026-09-15-mono-task-management.md). Cover proxy boundaries, API schemas, mutation concurrency/idempotency, paging, timezone/DST, stale responses, IME, loading/error/retry and keyboard behavior. Incremental coverage must exceed 95%. Browser fixture verification is distinct from live Runtime reads; do not claim live write E2E from mocked tests.
