@@ -103,6 +103,11 @@
     "downloadFormat": "下载 {{format}}"
   },
   "blocks": {
+    "a2a": {
+      "connecting": "正在等待 Runtime 响应…",
+      "submitted": "任务排队中…",
+      "working": "任务执行中…"
+    },
     "unsupportedComponent": "不支持的组件：{{component}}",
     "sandboxIdentity": "Codex Sandbox 执行标识",
     "useSkill": "使用 {{name}} 技能",

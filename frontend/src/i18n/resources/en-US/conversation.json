@@ -103,6 +103,11 @@
     "downloadFormat": "Download {{format}}"
   },
   "blocks": {
+    "a2a": {
+      "connecting": "Waiting for Runtime response…",
+      "submitted": "Task queued…",
+      "working": "Task running…"
+    },
     "unsupportedComponent": "Unsupported component: {{component}}",
     "sandboxIdentity": "Codex Sandbox execution identifiers",
     "useSkill": "Use the {{name}} skill",

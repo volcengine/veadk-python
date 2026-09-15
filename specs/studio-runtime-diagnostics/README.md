@@ -36,3 +36,5 @@ Non-A2A agents and A2A agents without model capabilities retain the existing Com
 | `CON-3` | BFF metadata tests, mpa-agent validation tests, and browser default/override/invalid cases |
 | `CON-4` | Endpoint tests for 404/425/403/502/200 and real TraceDrawer check |
 | `CON-5` | Secret scan and assertions that keys/raw logs are absent from browser payloads/downloads |
+
+- `CON-6`: The A2A bridge emits a nonterminal connecting status before upstream waits. The transcript displays connecting/submitted/working as waiting/queued/running in the existing progress placeholder. Status is not an answer or proof of acceptance; content supersedes it. Valid streams wait until completion, error or cancellation, with no automatic retry.

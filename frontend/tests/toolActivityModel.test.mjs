@@ -566,7 +566,7 @@ test("ignores duplicate event ids across completed assistant turns", () => {
   assert.equal(duplicate.turn.blocks.length, 0);
 });
 
-test("ignores A2A transport heartbeats without creating a transcript turn", () => {
+test("keeps A2A transport status in pending metadata without answer blocks", () => {
   const projector = createAssistantEventProjector("heartbeat");
   const projection = projector.project({
     id: "a2a-task-1-working",
@@ -576,9 +576,10 @@ test("ignores A2A transport heartbeats without creating a transcript turn", () =
     customMetadata: { a2aStatus: "working" },
   });
 
-  assert.equal(projection.ignored, true);
+  assert.equal(projection.ignored, undefined);
   assert.equal(projection.turn.blocks.length, 0);
-  assert.deepEqual(projector.finish(), []);
+  assert.equal(projection.turn.meta.a2aStatus, "working");
+  assert.equal(projector.finish()[0].meta.streaming, false);
 });
 
 test("bounds duplicate event tracking for long-running projector instances", () => {
