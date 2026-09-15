@@ -1973,7 +1973,12 @@ def _run_frontend_server(
             sandbox_chat_hermes_snapshot_tool_id
         )
 
-    from google.adk.cli.fast_api import get_fast_api_app
+    if os.environ.get("_VEADK_STUDIO_LAZY_ADK_PACKAGES") == "1":
+        from veadk.cli.studio_start import studio_fast_api_factory
+
+        get_fast_api_app = studio_fast_api_factory()
+    else:
+        from google.adk.cli.fast_api import get_fast_api_app
 
     agents_dir = os.path.abspath(agents_dir)
     allow_origins = _frontend_allow_origins(vite)
