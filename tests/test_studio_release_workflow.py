@@ -108,6 +108,15 @@ def test_smoke_gate_executes_bundle_as_low_privilege_user() -> None:
     assert '"$permission_probe/run.sh"' in script
 
 
+def test_smoke_gate_sets_state_mode_before_transferring_ownership() -> None:
+    script = _smoke_script()
+
+    chmod_state = script.index('chmod 700 "$permission_probe_state"')
+    chown_state = script.index('sudo chown nobody "$permission_probe_state"')
+
+    assert chmod_state < chown_state
+
+
 def test_smoke_gate_survives_platform_entrypoint_mode_normalization() -> None:
     script = _smoke_script()
 
