@@ -85,8 +85,12 @@ def test_sidecar_release_gate_runs_backend_and_frontend_in_parallel() -> None:
         "test_initialized_runtime_deferred_identity_failure_remains_fail_closed"
         in backend_run
     )
+    assert "test_directory_normalizes_credential_resolver_failure" in backend_run
     assert (
-        "test_uninitialized_runtime_identity_failure_still_blocks_startup"
+        "test_uninitialized_runtime_identity_failure_remains_fail_closed" in backend_run
+    )
+    assert (
+        "test_uninitialized_runtime_retries_original_initialization_after_recovery"
         in backend_run
     )
     assert "test_tos_dependency_store_accepts_manifest_pinned_agentkit_cli_version" in (
