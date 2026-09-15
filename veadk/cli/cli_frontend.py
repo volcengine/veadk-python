@@ -13486,6 +13486,21 @@ def _run_frontend_server(
         return (f"api-knowledgebase.mlp.{region}.volces.com", "https")
 
     def _collection_attr(collection: Any, name: str, fallback: Any = "") -> Any:
+        if isinstance(collection, dict):
+            value = collection.get(name)
+            if value is not None:
+                return value
+            snake = re.sub(r"(?<!^)(?=[A-Z])", "_", name).lower()
+            value = collection.get(snake)
+            if value is not None:
+                return value
+            camel = "".join(
+                part[:1].upper() + part[1:] for part in name.split("_") if part
+            )
+            value = collection.get(camel)
+            if value is not None:
+                return value
+            return fallback
         value = getattr(collection, name, None)
         if value is not None:
             return value
@@ -14020,39 +14035,40 @@ def _run_frontend_server(
                 },
             )
 
-        try:
-            agentkit_items = await asyncio.to_thread(
-                _list_agentkit_viking_knowledge_bases,
-                access_key=ak,
-                secret_key=sk,
-                session_token=token,
-                region=region,
-                project=project_name,
-            )
-            for item in agentkit_items:
-                _append_unique_viking_collection_item(items, seen, item)
-        except Exception as e:
-            logger.warning(
-                f"List AgentKit Viking knowledgebases error for {region}: {e}",
-                exc_info=True,
-            )
+        if ak and sk:
+            try:
+                agentkit_items = await asyncio.to_thread(
+                    _list_agentkit_viking_knowledge_bases,
+                    access_key=ak,
+                    secret_key=sk,
+                    session_token=token,
+                    region=region,
+                    project=project_name,
+                )
+                for item in agentkit_items:
+                    _append_unique_viking_collection_item(items, seen, item)
+            except Exception as e:
+                logger.warning(
+                    f"List AgentKit Viking knowledgebases error for {region}: {e}",
+                    exc_info=True,
+                )
 
-        try:
-            vector_items = await asyncio.to_thread(
-                _list_vikingdb_vector_collections,
-                access_key=ak,
-                secret_key=sk,
-                session_token=token,
-                region=region,
-                project=project_name,
-            )
-            for item in vector_items:
-                _append_unique_viking_collection_item(items, seen, item)
-        except Exception as e:
-            logger.warning(
-                f"List VikingDB vector collections error for {region}: {e}",
-                exc_info=True,
-            )
+            try:
+                vector_items = await asyncio.to_thread(
+                    _list_vikingdb_vector_collections,
+                    access_key=ak,
+                    secret_key=sk,
+                    session_token=token,
+                    region=region,
+                    project=project_name,
+                )
+                for item in vector_items:
+                    _append_unique_viking_collection_item(items, seen, item)
+            except Exception as e:
+                logger.warning(
+                    f"List VikingDB vector collections error for {region}: {e}",
+                    exc_info=True,
+                )
 
         if not items:
             raise HTTPException(

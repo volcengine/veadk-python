@@ -154,7 +154,7 @@ VIKING_MEMORY_ENV = (
     EnvVar(
         "DATABASE_VIKING_REGION",
         False,
-        None,
+        "",
         "VikingDB 记忆库地域",
         hidden=True,
     ),
@@ -332,7 +332,7 @@ LTM_BACKENDS = (
         ),
         pip_extra="extensions",
     ),
-    BackendOption("viking", env=VIKING_KB_ENV),
+    BackendOption("viking", env=VIKING_MEMORY_ENV),
     BackendOption(
         "openviking",
         env=(
@@ -386,7 +386,7 @@ KB_BACKENDS = (
         ),
         pip_extra="extensions",
     ),
-    BackendOption("viking", env=VIKING_MEMORY_ENV),
+    BackendOption("viking", env=VIKING_KB_ENV),
     BackendOption(
         "context_search",
         env=(

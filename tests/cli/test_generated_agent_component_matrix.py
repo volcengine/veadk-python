@@ -448,6 +448,23 @@ def test_viking_long_term_memory_uses_selected_index() -> None:
     _assert_python_files_compile(project)
 
 
+def test_viking_long_term_memory_generates_memory_env() -> None:
+    project = generate_project_from_draft(
+        AgentDraft(
+            name="ltm-viking",
+            memory=MemoryConfig(longTerm=True),
+            longTermBackend="viking",
+        )
+    )
+    env_keys = _env_keys(_files(project)[".env.example"])
+
+    assert "DATABASE_VIKINGMEM_API_KEY" not in env_keys
+    assert "DATABASE_VIKINGMEM_PROJECT" in env_keys
+    assert "DATABASE_VIKINGMEM_MEMORY_TYPE" in env_keys
+    assert "DATABASE_VIKING_API_KEY" not in env_keys
+    assert "DATABASE_VIKING_RESOURCE_ID" not in env_keys
+
+
 @pytest.mark.parametrize("backend", KB_BACKENDS, ids=lambda item: item.id)
 def test_every_knowledgebase_backend_generates_code_env_and_dependency(
     backend: BackendOption,
@@ -507,6 +524,23 @@ def test_viking_knowledgebase_uses_selected_index() -> None:
 
     assert 'KnowledgeBase(backend="viking", index="existing_kb"' in agent_py
     _assert_python_files_compile(project)
+
+
+def test_viking_knowledgebase_generates_knowledge_env() -> None:
+    project = generate_project_from_draft(
+        AgentDraft(
+            name="kb-viking",
+            knowledgebase=True,
+            knowledgebaseBackend="viking",
+        )
+    )
+    env_keys = _env_keys(_files(project)[".env.example"])
+
+    assert "DATABASE_VIKING_API_KEY" not in env_keys
+    assert "DATABASE_VIKING_PROJECT" in env_keys
+    assert "DATABASE_VIKING_RESOURCE_ID" in env_keys
+    assert "DATABASE_VIKINGMEM_API_KEY" not in env_keys
+    assert "DATABASE_VIKINGMEM_PROJECT" not in env_keys
 
 
 def test_openviking_knowledgebase_generates_required_runtime_env() -> None:
