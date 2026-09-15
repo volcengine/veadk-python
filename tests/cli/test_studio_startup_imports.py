@@ -442,6 +442,34 @@ if unexpected:
     )
 
 
+def test_intelligent_development_routes_defer_sandbox_helpers_until_first_use() -> None:
+    root = Path(__file__).resolve().parents[2]
+    script = """
+import sys
+
+import frontend.server.intelligent_development_routes
+
+unexpected = sorted(
+    name
+    for name in sys.modules
+    if name == "frontend.server.sandbox_remote"
+    or name == "veadk.cli.frontend_skill_creator"
+    or name == "agentkit.toolkit.cli.sandbox.env_config"
+    or name == "agentkit.toolkit.cli.sandbox.sandbox_client"
+)
+if unexpected:
+    raise SystemExit("intelligent development Sandbox helpers loaded at startup")
+"""
+
+    subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
 def test_knowledge_routes_defer_document_extraction_stack() -> None:
     root = Path(__file__).resolve().parents[2]
     script = """
