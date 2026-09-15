@@ -662,6 +662,15 @@ with tempfile.TemporaryDirectory() as agents_dir:
     if real_module_loaded is None or real_module_loaded():
         raise SystemExit("Google GenAI models loaded while constructing Studio app")
 
+    genai_models = sys.modules["google.genai.models"]
+    real_models_module_loaded = getattr(
+        genai_models,
+        "_veadk_real_module_loaded",
+        None,
+    )
+    if real_models_module_loaded is None or real_models_module_loaded():
+        raise SystemExit("Google GenAI client loaded while constructing Studio app")
+
     from google.adk.cli.api_server import RunAgentRequest
 
     request = RunAgentRequest.model_validate(
@@ -692,6 +701,18 @@ with tempfile.TemporaryDirectory() as agents_dir:
         "title": "Value",
         "type": "string",
     }
+
+    from google.adk.telemetry import _experimental_semconv
+    from google.adk.telemetry import tracing
+
+    assert isinstance(
+        tracing._instrumented_with_opentelemetry_instrumentation_google_genai(),
+        bool,
+    )
+    transformed = _experimental_semconv.transformers.t_contents("hello")
+    assert transformed[0].parts[0].text == "hello"
+    if not real_models_module_loaded():
+        raise SystemExit("Google GenAI client not loaded for real telemetry use")
 """
 
     subprocess.run(

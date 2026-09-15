@@ -250,6 +250,79 @@ def _install_lazy_genai_types() -> ModuleType:
     return proxy
 
 
+def _install_lazy_genai_models() -> ModuleType:
+    """Defer the generated GenAI client until telemetry actually uses it."""
+
+    name = "google.genai.models"
+    existing = sys.modules.get(name)
+    if existing is not None:
+        return existing
+    parent_name, _, child_name = name.rpartition(".")
+    parent = sys.modules.get(parent_name)
+    parent_path = getattr(parent, "__path__", None)
+    if parent is None or parent_path is None:
+        raise ImportError(f"Unable to locate parent package {parent_name!r}")
+    spec = importlib.machinery.PathFinder.find_spec(name, parent_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Unable to locate module {name!r}")
+    loader = spec.loader
+    proxy = ModuleType(name)
+    proxy.__file__ = spec.origin
+    proxy.__loader__ = loader
+    proxy.__package__ = parent_name
+    proxy.__spec__ = spec
+    loaded: list[ModuleType] = []
+    load_lock = RLock()
+
+    def _load_real_module() -> ModuleType:
+        with load_lock:
+            if loaded:
+                return loaded[0]
+            real = importlib.util.module_from_spec(spec)
+            sys.modules[name] = real
+            setattr(parent, child_name, real)
+            try:
+                loader.exec_module(real)
+            except BaseException:
+                sys.modules[name] = proxy
+                setattr(parent, child_name, proxy)
+                raise
+            loaded.append(real)
+            return real
+
+    _DeferredModels = _DeferredGenaiTypeMeta(
+        "Models",
+        (),
+        {
+            "__module__": name,
+            "_target_name": "Models",
+            "_load_real_module": staticmethod(_load_real_module),
+        },
+    )
+
+    class _DeferredTransformers:
+        def __getattr__(self, attribute: str) -> Any:
+            if attribute.startswith("_"):
+                raise AttributeError(
+                    f"object {type(self).__name__!r} has no attribute {attribute!r}"
+                )
+            return getattr(_load_real_module().t, attribute)
+
+    def _load_attribute(attribute: str) -> Any:
+        if attribute.startswith("__"):
+            raise AttributeError(f"module {name!r} has no attribute {attribute!r}")
+        return getattr(_load_real_module(), attribute)
+
+    setattr(proxy, "Models", _DeferredModels)
+    setattr(proxy, "t", _DeferredTransformers())
+    proxy.__getattr__ = _load_attribute  # type: ignore[attr-defined]
+    proxy.__dict__["_load_real_module"] = _load_real_module
+    proxy.__dict__["_veadk_real_module_loaded"] = lambda: bool(loaded)
+    sys.modules[name] = proxy
+    setattr(parent, child_name, proxy)
+    return proxy
+
+
 def _install_studio_genai_imports() -> None:
     """Keep generated GenAI models out of the Studio readiness path."""
 
@@ -265,6 +338,8 @@ def _install_studio_genai_imports() -> None:
     )
     types_module = _install_lazy_genai_types()
     setattr(package, "types", types_module)
+    models_module = _install_lazy_genai_models()
+    setattr(package, "models", models_module)
 
 
 def _literal_assignment(module_name: str, assignment: str) -> Any:
