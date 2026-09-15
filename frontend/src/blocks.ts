@@ -92,7 +92,13 @@ export interface CodexSandboxActivity {
   items: Array<{ id: string; block: Block }>;
 }
 
-export type Block =
+export type Block = {
+  id?: string;
+  itemType?: string;
+  phase?: string;
+  durationMs?: number;
+} & (
+  | { kind: "diff"; text: string; done: boolean }
   | { kind: "progress"; text: string }
   | { kind: "thinking"; text: string; done: boolean }
   | { kind: "text"; text: string }
@@ -106,6 +112,7 @@ export type Block =
       status?: "running" | "completed" | "failed";
       defaultOpen?: boolean;
       codexActivity?: CodexSandboxActivity;
+      progressText?: string;
     }
   | {
       kind: "plan";
@@ -137,7 +144,7 @@ export type Block =
       authUri?: string;
       authConfig: unknown;
       done: boolean;
-    };
+    });
 
 /** Accumulator for one assistant turn. `liveStart` marks where the current
  *  streaming-preview blocks begin (everything before it is finalized). */

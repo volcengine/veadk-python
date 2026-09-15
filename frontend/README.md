@@ -264,26 +264,28 @@ See [deployment and operation](service/studio_release_notifier/README.md).
   AgentKit. Connected Harness agents expose supported image, video, and
   presentation task types; Studio mounts only missing task tools for the
   current session and preserves tools already supplied by the Agent.
-- **Intelligent Agent development**: describe the intended VeADK Agent once and
-  receive immediate, cancellable preparation feedback before the development
-  conversation opens. Studio then automatically runs intent gating,
-  implementation, local checks, a temporary cloud deployment, acceptance calls,
-  log inspection, and cleanup.
-  Public Codex reasoning updates and Assistant replies use the normal
-  conversation renderer; credentials, raw Sandbox paths, and internal commands
-  stay hidden. Each build appears in the shared conversation history for the
-  lifetime of its remote development environment (up to eight hours); reopening
-  it restores the latest conversation and current source-delivery card.
-  Navigating away from an active build requires confirmation and stops that
-  build before leaving, while the conversation remains available until expiry.
-  Stopping preserves received output and blocks the next submission until
-  cleanup finishes. An interrupted Codex turn is reported explicitly, including
-  when Studio discovers it after reconnecting; it does not publish a new version
-  or wait for the inactivity timeout. Users can inspect generated text files and
-  download the complete ZIP (including binary assets) as soon as the source is ready.
-  Active turns resume on the same thread after a connection drops. New task
-  progress resets the recovery allowance; reconnecting and reading unchanged
-  state do not extend the inactivity deadline or restart the task.
+- **Intelligent Agent development**: describe a VeADK Agent and receive
+  immediate, cancellable preparation feedback. Studio owns each build as a
+  background task, including implementation, local checks, temporary cloud
+  validation, source delivery, version persistence when configured, and cleanup.
+  Codex App Server **0.154.0** provides native thread/turn recovery, history,
+  `turn/interrupt`, and `turn/steer`. The running composer keeps separate Stop
+  and Add instructions controls. Additions show whether they are pending,
+  sending, delivered, or withdrawn; additions during recovery or delivery wait
+  until they can safely be applied.
+  Navigating away or disconnecting SSE leaves the task running. Studio's task
+  notification returns to it, and replay restores existing output without
+  duplicating messages. Only an explicit Stop requests remote interruption.
+  Stop is accepted immediately, remains “stopping” until confirmed by Codex and
+  any delivery command, and preserves all received output and workspace changes.
+  Temporary transport failures reconnect automatically; interrupted native turns
+  may continue in the same thread after checking their status. Ambiguous
+  submissions are reconciled by their native message identifiers instead of
+  being sent again. Unresolved failures retain output and expose a Continue
+  action; unusable environments or invalid source integrity require a new build.
+  Public reasoning and Assistant replies reuse the existing conversation
+  renderer. Credentials are redacted before events reach local storage.
+  Source downloads remain available once the delivery artifact is ready.
   Each completed build or optimization is also saved as an immutable project
   version in the private Studio TOS bucket. Users can reopen any saved version,
   view, download, deploy, delete, or restore it into a new Sandbox for another
@@ -295,6 +297,30 @@ See [deployment and operation](service/studio_release_notifier/README.md).
   Deployable source can be sent to Runtime manually; an incomplete verification
   report requires an explicit confirmation. No separate “start verification”
   action is required.
+  Task execution metadata and replay events use local SQLite, with no TOS task
+  writes. `VEADK_STUDIO_TASK_DB` defaults to
+  `~/.veadk/studio/development-runs.sqlite3`; retain this directory on a local
+  persistent volume when restarting a container. `VEADK_STUDIO_TASK_RETENTION_SECONDS`
+  defaults to 21600 (six hours after a terminal state).
+  Active tasks are not removed by retention. `VEADK_STUDIO_TASK_MAX_ACTIVE_SECONDS`
+  defaults to 28800 (eight hours), after which Studio requests a durable stop.
+  Admission allows three unfinished tasks per user, 100 globally, and 16 local
+  workers. Task output is limited to 64 MiB per run; reaching the limit keeps
+  existing content. All task reads, event replay, controls, and deletion use the
+  authenticated owner and an owner-qualified database key.
+  This SQLite deployment supports one Studio instance with multiple users.
+  Replicas with separate local disks do not share task state; moving to multiple
+  instances requires a shared transactional task store. Losing the local volume
+  loses its short-term task history. Existing immutable project/version storage
+  continues to use the configured TOS repository independently.
+  The task API accepts idempotent submissions under
+  `/web/intelligent-development/sessions/{sessionId}/runs`, exposes ordered replay
+  at `/runs/{runId}/events?after={seq}`, and accepts `/stop`, `/resume`, and `/inputs`.
+  `/runs` lists only the current user's unfinished tasks. The legacy `/messages`
+  stream is an adapter over the same task service and includes `run.status`
+  events; stream detachment does not stop work.
+  See the [verification report](recoverable-build-verification.md) for executed
+  recovery, isolation, Stop/Steer, and retained-output checks and their limits.
 - **Existing Agent migration**: upload a local project ZIP for read-only
   analysis, confirm the detected framework and entry point, then migrate and
   validate it in a temporary Sandbox. Successful migration source is saved as

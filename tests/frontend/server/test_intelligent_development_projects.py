@@ -36,6 +36,7 @@ from frontend.server.intelligent_development_projects import (
     IntelligentDevelopmentSessionBinding,
     IntelligentDevelopmentVersion,
     IntelligentDevelopmentVersionIntegrityError,
+    IntelligentDevelopmentVersionNotFound,
     TosIntelligentDevelopmentProjectRepository,
 )
 from frontend.server.intelligent_development_projects import service as service_module
@@ -929,3 +930,90 @@ async def test_service_maps_restore_transport_failure_to_a_retryable_session_err
         )
 
     remote.exec_text.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_task_delivery_retry_reuses_version_and_repairs_binding() -> None:
+    from typing import cast
+    from frontend.server.intelligent_development import DeliveryReference
+    from frontend.server.intelligent_development_task import IntentDecision
+    from frontend.server.sandbox_remote import SandboxRemoteTransport
+
+    tos = FakeTos()
+    repository = _repository(tos)
+    service = IntelligentDevelopmentProjectService(repository)
+    now = datetime(2026, 9, 15, 8, tzinfo=timezone.utc)
+    artifact = b"task source archive"
+    report = b'{"status":"passed","acceptanceCriteria":["working agent"]}'
+    delivery = DeliveryReference(
+        artifact_sha256=hashlib.sha256(artifact).hexdigest(),
+        validation_report_sha256=hashlib.sha256(report).hexdigest(),
+        artifact_size=len(artifact),
+        session_id="session-1",
+        agent_name="agent",
+        entry_point="agent.py",
+        file_count=1,
+        validated_at=now.isoformat(),
+        gate_summary=("local-checks",),
+        deployable=True,
+        verified=True,
+        validation_summary="verified",
+    )
+    decision = IntentDecision("accept", "", "build agent", ("working agent",), True)
+    await repository.put_binding(
+        IntelligentDevelopmentSessionBinding(
+            ownerId="owner",
+            sessionId="session-1",
+            projectId="a" * 32,
+            projectName="Agent",
+            baseVersionId=None,
+            createdAt=now,
+            updatedAt=now,
+        )
+    )
+    remote = SimpleNamespace(download=AsyncMock(side_effect=[artifact, report]))
+
+    async def persist(value: DeliveryReference = delivery):
+        return await service.persist_delivery(
+            owner_id="owner",
+            session_id="session-1",
+            transport=cast(SandboxRemoteTransport, remote),
+            delivery=value,
+            decision=decision,
+            version_id="b" * 32,
+            created_at=now,
+        )
+
+    tos.fail_put_suffix = "/binding.json"
+    project, version = await persist()
+    assert (await repository.get_binding("owner", "session-1")).base_version_id is None
+    tos.fail_put_suffix = ""
+    repeated_project, repeated = await persist()
+    assert repeated == version
+    assert repeated_project == project
+    assert remote.download.await_count == 2
+    assert len(await repository.list_versions("owner", "a" * 32)) == 1
+    assert (
+        await repository.get_binding("owner", "session-1")
+    ).base_version_id == version.version_id
+    with pytest.raises(IntelligentDevelopmentVersionNotFound):
+        await repository.get_version("another-owner", "a" * 32, version.version_id)
+
+    from dataclasses import replace
+
+    with pytest.raises(ValueError, match="different artifacts"):
+        await persist(replace(delivery, artifact_sha256="c" * 64))
+
+    # A late retry of an older task must not move the session behind a newer version.
+    newer = _version(
+        version_id="d" * 32,
+        artifact=artifact,
+        report=report,
+        created_at=datetime(2026, 9, 15, 9, tzinfo=timezone.utc),
+        parent=version.version_id,
+    )
+    await repository.commit_version("owner", "Agent", newer, artifact, report)
+    await persist()
+    assert (
+        await repository.get_binding("owner", "session-1")
+    ).base_version_id == newer.version_id

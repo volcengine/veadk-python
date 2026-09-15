@@ -19,6 +19,7 @@ import requests
 
 from frontend.server.sandbox_remote import (
     SandboxRemoteError,
+    SandboxRemoteFileNotFound,
     SandboxRemoteResponseError,
     SandboxRemoteSizeError,
     SandboxRemoteTransport,
@@ -275,7 +276,9 @@ async def test_read_retry_reports_transient_exhaustion_and_nontransient_http(
     assert transient.value.retryable is True
 
     monkeypatch.setattr(requests, "get", lambda *args, **kwargs: Response(404))
-    with pytest.raises(SandboxRemoteError, match="Failed to download") as permanent:
+    with pytest.raises(
+        SandboxRemoteFileNotFound, match="file does not exist"
+    ) as permanent:
         await SandboxRemoteTransport("https://sandbox").download("/file")
     assert permanent.value.retryable is False
 
@@ -302,3 +305,39 @@ async def test_retry_loop_defensive_failure_if_attempt_invariant_is_corrupted() 
     transport._read_attempts = 0
     with pytest.raises(RuntimeError, match="exited unexpectedly"):
         await transport._read_retry(lambda: b"unused", "read", retry_conflict=False)
+
+
+@pytest.mark.asyncio
+async def test_native_shell_exec_and_wait_preserve_identity_and_do_not_retry_submission(
+    monkeypatch,
+):
+    calls = []
+
+    def post(url, **kwargs):
+        calls.append((url, kwargs))
+        return Response(
+            payload={"data": {"session_id": "command-1", "status": "running"}}
+        )
+
+    monkeypatch.setattr(requests, "post", post)
+    remote = SandboxRemoteTransport(
+        "https://sandbox.example?Authorization=invalid-test-token"
+    )
+    assert (await remote.start_command("effect", hard_timeout=180))[
+        "session_id"
+    ] == "command-1"
+    await remote.wait_command("command-1")
+    assert "/v1/shell/exec" in calls[0][0] and "/v1/shell/wait" in calls[1][0]
+    assert calls[0][1]["json"]["hard_timeout"] == 180
+    assert calls[0][1]["json"]["timeout"] == 1
+    assert calls[1][1]["json"]["id"] == "command-1"
+    assert calls[0][1]["timeout"] == (5, 15)
+
+    def lost(*args, **kwargs):
+        calls.append(None)
+        raise requests.Timeout("lost reply")
+
+    monkeypatch.setattr(requests, "post", lost)
+    with pytest.raises(SandboxRemoteError, match="unknown"):
+        await remote.start_command("effect", hard_timeout=180)
+    assert len(calls) == 3

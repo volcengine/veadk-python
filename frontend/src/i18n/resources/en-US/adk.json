@@ -553,5 +553,32 @@
     "invalidProjectUrl": "The project URL is invalid",
     "listFallback": "Could not load projects",
     "connectionState": "Could not connect to the workspace. Try again"
+  },
+  "developmentRuns": {
+    "requestFailed": "Task request failed. Please retry.",
+    "invalidResponse": "Invalid task state response.",
+    "eventGap": "Restoring missing task output.",
+    "reconnecting": "Reconnecting. Existing output is preserved.",
+    "input": {
+      "pending": "Queued",
+      "sending": "Confirming delivery",
+      "delivered": "Delivered",
+      "withdrawn": "Not sent"
+    },
+    "plan": "Execution plan",
+    "diff": "File changes",
+    "preparing": "Preparing task",
+    "processing": "Processing request",
+    "thinking": "Thinking",
+    "read": "Read file · {{target}}",
+    "listFiles": "List directory · {{target}}",
+    "search": "Search · {{target}}",
+    "command": "Run command · {{target}}",
+    "editFiles": "Edit files · {{target}}",
+    "webSearch": "Search web · {{target}}",
+    "processSummary": "Processed {{count}} items",
+    "duration": "{{seconds}}s",
+    "failedTools": "{{count}} tools failed",
+    "toolFailed": "Failed"
   }
 }

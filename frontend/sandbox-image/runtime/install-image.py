@@ -201,17 +201,26 @@ def main() -> None:
     binary.unlink()
     binary.symlink_to(wrapper)
 
-    with tarfile.open(STUDIO / "assets/codex-0.139.0-linux-arm64.tgz") as archive:
-        member = archive.getmember(
-            "package/vendor/aarch64-unknown-linux-musl/bin/codex"
-        )
-        source = archive.extractfile(member)
-        if source is None:
-            raise ValueError("Local ARM64 archive is missing the executable")
-        with source:
-            native = Path("/usr/local/libexec/codex-arm64-local")
-            native.write_bytes(source.read())
-            native.chmod(0o755)
+    for archive_name, triple, destination in (
+        (
+            "codex-0.154.0-linux-x64.tgz",
+            "x86_64-unknown-linux-musl",
+            "/usr/local/libexec/studio-codex",
+        ),
+        (
+            "codex-0.154.0-linux-arm64.tgz",
+            "aarch64-unknown-linux-musl",
+            "/usr/local/libexec/codex-arm64-local",
+        ),
+    ):
+        with tarfile.open(STUDIO / f"assets/{archive_name}") as archive:
+            source = archive.extractfile(f"package/vendor/{triple}/bin/codex")
+            if source is None:
+                raise ValueError("Codex archive is missing the executable")
+            with source:
+                native = Path(destination)
+                native.write_bytes(source.read())
+                native.chmod(0o755)
 
     (home / "Projects").mkdir(exist_ok=True)
     (home / ".local/share/studio-code-server").mkdir(exist_ok=True)

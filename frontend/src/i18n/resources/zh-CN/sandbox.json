@@ -97,7 +97,11 @@
     "continuePlaceholder": "继续说明你想实现或调整的内容",
     "messagePlaceholder": "向 AgentKit 沙箱发送消息，输入 / 查看命令，输入 $ 调用 Skill…",
     "stop": "停止生成",
-    "send": "发送"
+    "send": "发送",
+    "stopping": "正在确认停止…",
+    "resume": "恢复任务",
+    "steer": "追加要求",
+    "steerPlaceholder": "可继续追加要求，或随时停止任务…"
   },
   "launch": {
     "defaultName": "我的智能体",
@@ -265,5 +269,19 @@
       "status": "Codex 当前状态",
       "help": "Sandbox 支持的 Codex 快捷命令"
     }
+  },
+  "taskNotice": {
+    "label": "智能构建任务",
+    "queued": "构建任务已排队",
+    "running": "构建任务正在后台运行",
+    "recovering": "正在恢复构建任务",
+    "waiting_user": "构建任务需要继续处理",
+    "stopping": "正在停止构建任务",
+    "succeeded": "构建任务已完成",
+    "cancelled": "构建任务已停止",
+    "failed": "构建任务未完成",
+    "open": "返回任务",
+    "hide": "隐藏任务通知",
+    "reconnecting": "正在重新连接任务服务，已有任务继续保留。"
   }
 }

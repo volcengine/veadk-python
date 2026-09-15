@@ -1,3 +1,7 @@
+import { Button } from "./components/primitives/Button";
+import { TextShimmer } from "./ui/text-shimmer/TextShimmer";
+import { useDevelopmentRun } from "./create/useDevelopmentRun";
+import { DevelopmentTaskNotice } from "./create/DevelopmentTaskNotice";
 import { UserManagement } from "./users/UserManagement";
 import {
   useCallback,
@@ -192,7 +196,6 @@ import {
   intelligentDevelopmentErrorMessage,
   intelligentDevelopmentClient,
   sandboxClient,
-  SandboxServiceError,
   type SandboxApproval,
   type SandboxApprovalDecision,
   type SandboxAgentResource,
@@ -1173,12 +1176,6 @@ export default function App() {
   const sandboxLaunchCapabilityAbortRef = useRef<AbortController | null>(null);
   const intelligentCreateAbortRef = useRef<AbortController | null>(null);
   const sandboxMessageAbortRef = useRef<AbortController | null>(null);
-  const pendingIntelligentNavigationRef = useRef<(() => void) | null>(null);
-  const [intelligentLeaveOpen, setIntelligentLeaveOpen] = useState(false);
-  const sandboxStopWaitRef = useRef<{
-    controller: AbortController;
-    promise: Promise<boolean>;
-  } | null>(null);
   const sandboxSessionIdRef = useRef(sandboxSession?.id ?? "");
   const sandboxActiveAssistantTurnIdRef = useRef("");
   const sandboxUploadRunRef = useRef(0);
@@ -1314,6 +1311,7 @@ export default function App() {
     useState(true);
   const [intelligentCapabilitiesError, setIntelligentCapabilitiesError] =
     useState("");
+  const [intelligentPreparationMessage, setIntelligentPreparationMessage] = useState("");
   const [intelligentPreparationStage, setIntelligentPreparationStage] =
     useState<IntelligentPreparationStage | null>(null);
   const [migrationProjectReturn, setMigrationProjectReturn] = useState<{
@@ -1898,7 +1896,7 @@ export default function App() {
   });
   useEffect(() => {
     const activeSession = sandboxSession;
-    if (!activeSession || !sandboxBusy || sandboxMessageAbortRef.current) return;
+    if (!activeSession || activeSession.intelligentDevelopment || !sandboxBusy || sandboxMessageAbortRef.current) return;
     let stopped = false;
     let timer: number | undefined;
     const controller = new AbortController();
@@ -1970,6 +1968,15 @@ export default function App() {
       if (timer !== undefined) window.clearTimeout(timer);
     };
   }, [sandboxBusy, sandboxSession?.id]);
+  const development = useDevelopmentRun({
+    sessionId: sandboxSession?.intelligentDevelopment ? sandboxSession.id : "",
+    ownerId: userId,
+    onTurns: setSandboxTurns,
+    onBusy: (busy) => {
+      setSandboxBusy(busy);
+      setSandboxSession((current) => current?.intelligentDevelopment ? { ...current, busy } : current);
+    },
+  });
   const activeAgent = activeAgentBySession[sessionId] ?? "";
   const seenAgents = seenAgentsBySession[sessionId] ?? EMPTY_STRING_SET;
   const execPath = execPathBySession[sessionId] ?? EMPTY_STRING_ARR;
@@ -4085,7 +4092,7 @@ export default function App() {
     sandboxUploadRunRef.current += 1;
     const closingSession = sandboxSession;
     setSandboxSession(null);
-    if (closingSession && closeRemote) {
+    if (closingSession && closeRemote && !closingSession.intelligentDevelopment) {
       const closingClient = closingSession.intelligentDevelopment
         ? intelligentDevelopmentClient
         : sandboxClient;
@@ -4376,32 +4383,11 @@ export default function App() {
   function stopSandboxGeneration() {
     const controller = sandboxMessageAbortRef.current;
     const activeSession = sandboxSession;
-    if (!controller) return;
     if (activeSession?.intelligentDevelopment) {
-      if (sandboxStopWaitRef.current?.controller === controller) return;
-      const promise = intelligentDevelopmentClient
-        .interruptSession(activeSession.id)
-        .then(() => {
-          if (sandboxStopWaitRef.current?.controller === controller) {
-            controller.abort();
-          }
-          return true;
-        })
-        .catch((cause) => {
-          if (sandboxStopWaitRef.current?.controller === controller) {
-            sandboxStopWaitRef.current = null;
-          }
-          if (
-            sandboxSessionIdRef.current === activeSession.id &&
-            sandboxMessageAbortRef.current === controller
-          ) {
-            setError(cause instanceof Error ? cause.message : String(cause));
-          }
-          return false;
-        });
-      sandboxStopWaitRef.current = { controller, promise };
+      void development.stop();
       return;
     }
+    if (!controller) return;
     controller.abort();
     if (activeSession) {
       void sandboxClient.interruptSession(activeSession.id).catch((cause) => {
@@ -4413,35 +4399,7 @@ export default function App() {
   }
 
   function requestIntelligentNavigation(action: () => void) {
-    if (sandboxSession?.intelligentDevelopment && sandboxBusy) {
-      pendingIntelligentNavigationRef.current = action;
-      setIntelligentLeaveOpen(true);
-      return;
-    }
     action();
-  }
-
-  function confirmIntelligentNavigation() {
-    const activeSession = sandboxSession;
-    const action = pendingIntelligentNavigationRef.current;
-    if (!activeSession?.intelligentDevelopment || !action) {
-      setIntelligentLeaveOpen(false);
-      pendingIntelligentNavigationRef.current = null;
-      return;
-    }
-    setError("");
-    const interrupt = intelligentDevelopmentClient.interruptSession(activeSession.id);
-    sandboxMessageAbortRef.current?.abort();
-    pendingIntelligentNavigationRef.current = null;
-    setIntelligentLeaveOpen(false);
-    action();
-    void interrupt.catch(() => {
-      if (!sandboxSessionIdRef.current) {
-        setError(
-          appText("errors.buildStopUnconfirmed"),
-        );
-      }
-    });
   }
 
   async function sendSandboxMessage(
@@ -4451,6 +4409,11 @@ export default function App() {
     activeSessionOverride?: SandboxSessionInfo,
   ) {
     const activeSession = activeSessionOverride ?? sandboxSession;
+    if (activeSession?.intelligentDevelopment) {
+      const accepted = await development.submit(text.trim(), activeSession.id);
+      if (accepted) setInput((current) => current === text ? "" : current);
+      return;
+    }
     const readyAttachments = messageAttachments.filter(
       (attachment) => attachment.status === "ready" && attachment.uri,
     );
@@ -4533,10 +4496,7 @@ export default function App() {
         ? { ...current, busy: true, workspaceLocked: true }
         : current,
     );
-    const activeClient = activeSession.intelligentDevelopment
-      ? intelligentDevelopmentClient
-      : sandboxClient;
-    let remainingBusy = false;
+    const activeClient = sandboxClient;
     try {
       const reply = await activeClient.sendMessage(
         {
@@ -4638,9 +4598,7 @@ export default function App() {
         }
         return next;
       });
-      if (!activeSession.intelligentDevelopment) {
-        void sandboxCommands.refreshThreads();
-      }
+      void sandboxCommands.refreshThreads();
     } catch (messageError) {
       operation.fail({
         sessionId: String(activeSession.id),
@@ -4653,24 +4611,11 @@ export default function App() {
       if (sandboxMessageAbortRef.current !== controller) {
         return;
       }
-      setSandboxTurns((current) =>
-        current.filter(
-          (turn) =>
-            turn.meta?.localId !== userTurnId &&
-            turn.meta?.localId !== assistantTurnId,
-        ),
-      );
       setInput(text);
       setAttachments(messageAttachments);
       sandboxCommands.setSelectedSkills(selectedSkills);
-      const taskStillRunning =
-        activeSession.intelligentDevelopment &&
-        messageError instanceof SandboxServiceError &&
-        messageError.code === "INTELLIGENT_DEVELOPMENT_TASK_IN_PROGRESS";
-      remainingBusy = activeSession.intelligentDevelopment;
       try {
         const status = await activeClient.getStatus(activeSession.id);
-        remainingBusy = status.busy;
         setSandboxSession((current) =>
           current?.id === activeSession.id
             ? { ...current, ...status }
@@ -4679,58 +4624,33 @@ export default function App() {
       } catch {
         // Keep the optimistic lock when the connection itself is unavailable.
       }
-      if (!taskStillRunning) {
-        setError(
-          activeSession.intelligentDevelopment
-            ? intelligentDevelopmentErrorMessage(messageError)
-            : appText("errors.builtinAgentSendFailed", {
-                message: messageError instanceof Error
-                  ? messageError.message
-                  : String(messageError),
-              }),
-        );
-      }
+      setError(appText("errors.builtinAgentSendFailed", {
+        message: messageError instanceof Error
+          ? messageError.message
+          : String(messageError),
+      }));
     } finally {
       if (sandboxMessageAbortRef.current === controller) {
-        const stopWait = sandboxStopWaitRef.current;
-        if (stopWait?.controller === controller) {
-          const cleanupConfirmed = await stopWait.promise;
-          if (sandboxStopWaitRef.current === stopWait) {
-            sandboxStopWaitRef.current = null;
-          }
-          if (cleanupConfirmed) {
-            setSandboxTurns((current) => current.filter(
-              (turn) =>
-                turn.meta?.localId !== assistantTurnId || turn.blocks.length > 0,
-            ));
-            appendSandboxActivity(activeSession.id, appText("sandbox.stoppedReady"));
-          }
-        }
         sandboxMessageAbortRef.current = null;
         if (sandboxActiveAssistantTurnIdRef.current === assistantTurnId) {
           sandboxActiveAssistantTurnIdRef.current = "";
         }
         setSandboxApproval(null);
-        if (activeSession.intelligentDevelopment) {
-          setSandboxBusy(remainingBusy);
-          setSandboxSession((current) =>
-            current?.id === activeSession.id
-              ? { ...current, busy: remainingBusy }
-              : current,
-          );
-        } else {
-          setSandboxBusy(false);
-          setSandboxSession((current) =>
-            current?.id === activeSession.id
-              ? { ...current, busy: false }
-              : current,
-          );
-        }
+        setSandboxBusy(false);
+        setSandboxSession((current) =>
+          current?.id === activeSession.id
+            ? { ...current, busy: false }
+            : current,
+        );
       }
     }
   }
 
   async function submitSandboxInput(value: string) {
+    if (sandboxSession?.intelligentDevelopment) {
+      await sendSandboxMessage(value);
+      return;
+    }
     if (
       !sandboxSession?.intelligentDevelopment &&
       await sandboxCommands.executeSlash(value)
@@ -4829,6 +4749,7 @@ export default function App() {
     intelligentCreateAbortRef.current?.abort();
     const controller = new AbortController();
     intelligentCreateAbortRef.current = controller;
+    setIntelligentPreparationMessage(goal);
     setIntelligentPreparationStage("preparing");
     setIntelligentCapabilitiesError("");
     try {
@@ -4857,7 +4778,7 @@ export default function App() {
         intelligentCreateAbortRef.current !== controller
       ) return;
       if (returnTarget) setMigrationProjectReturn(returnTarget);
-      activateIntelligentDevelopmentSession(connected, []);
+      activateIntelligentDevelopmentSession(connected, development.prepare(goal, connected.id));
       intelligentCreateAbortRef.current = null;
       setIntelligentPreparationStage(null);
       await sendSandboxMessage(goal, [], [], connected);
@@ -6532,6 +6453,12 @@ export default function App() {
 
   return (
     <div className="layout">
+      <DevelopmentTaskNotice key={userId} ownerId={userId} sessionId={sandboxSession?.id ?? ""}
+        onOpen={async (id, signal) => {
+          const connected = await intelligentDevelopmentClient.connectSession(id, { signal });
+          if (signal.aborted) return;
+          activateIntelligentDevelopmentSession(connected, []);
+        }} />
       <Sidebar
         branding={siteBranding}
         cloudProvider={cloudProvider}
@@ -6754,8 +6681,13 @@ export default function App() {
                 value={input}
                 onChange={setInput}
                 onSubmit={(value) => void submitSandboxInput(value)}
-                onStop={sandboxBusy ? stopSandboxGeneration : undefined}
+                onStop={sandboxBusy || development.submitting ? stopSandboxGeneration : undefined}
                 disabled={false}
+                allowSteer={sandboxSession.intelligentDevelopment}
+                sending={sandboxSession.intelligentDevelopment && development.submitting}
+                stopping={sandboxSession.intelligentDevelopment && (development.stopPending || development.run?.state === "stopping")}
+                errorText={sandboxSession.intelligentDevelopment ? development.error : undefined}
+                onResume={sandboxSession.intelligentDevelopment && development.run?.state === "waiting_user" ? () => void development.resume() : undefined}
                 busy={sandboxBusy || sandboxCommands.commandBusy}
                 attachments={attachments}
                 onAddFiles={addSandboxFiles}
@@ -7580,6 +7512,14 @@ export default function App() {
                   {" "}{t("credentials.suffix")}
                 </div>
               </div>
+            ) : intelligentPreparationStage ? (
+              <div className="development-preparation">
+                <div className="transcript">
+                  <div className="turn turn--user"><div className="bubble"><Markdown text={intelligentPreparationMessage} /></div></div>
+                  <div className="turn turn--assistant"><div className="development-process__status" role="status"><TextShimmer>{t("adk:developmentRuns.preparing")}</TextShimmer></div></div>
+                </div>
+                <div className="development-preparation__footer"><Button variant="secondary" onClick={cancelIntelligentPreparation}>{t("sandbox:composer.stop")}</Button></div>
+              </div>
             ) : intelligentDeployment ? (
               <IntelligentDeployment
                 delivery={intelligentDeployment}
@@ -7787,9 +7727,9 @@ export default function App() {
               const turnInvocation = turn.blocks.find((b) => b.kind === "invocation");
               return (
                 <motion.div
-                  key={i}
+                  key={turn.meta?.localId ?? i}
                   className="turn turn--user"
-                  initial={{ opacity: 0, y: 8 }}
+                  initial={sandboxSession?.intelligentDevelopment ? false : { opacity: 0, y: 8 }}
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ duration: 0.2, ease: "easeOut" }}
                 >
@@ -7809,6 +7749,7 @@ export default function App() {
                     data-share-image-exclude="true"
                   >
                     {turn.meta?.ts && <span className="meta-text">{fmtTime(turn.meta.ts)}</span>}
+                    {turn.activity && <span className="meta-text" role="status">{turn.activity.title}</span>}
                     <CopyButton text={text} />
                   </div>
                 </motion.div>
@@ -7874,7 +7815,7 @@ export default function App() {
                 aria-label={canAnnotate
                   ? t("conversation.annotationHint")
                   : undefined}
-                initial={{ opacity: 0, y: 8 }}
+                initial={sandboxSession?.intelligentDevelopment ? false : { opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.2, ease: "easeOut" }}
               >
@@ -7893,12 +7834,17 @@ export default function App() {
                   </>
                 )}
                 {pending ? (
-                  turnIsStreaming ? <ThinkingPlaceholder /> : null
+                  turnIsStreaming ? (sandboxSession?.intelligentDevelopment
+                    ? <Blocks blocks={[]} groupProcess streaming liveStatus={development.connection || development.run?.statusMessage} onAction={onAction} />
+                    : <ThinkingPlaceholder />) : null
                 ) : (
                   <>
                     <Blocks
                       appName={appName}
                       blocks={turn.blocks}
+                      groupProcess={Boolean(sandboxSession?.intelligentDevelopment)}
+                      liveStatus={sandboxSession?.intelligentDevelopment && isLast
+                        ? (development.connection || (development.run?.phase !== "coding" ? development.run?.statusMessage : "")) : undefined}
                       streaming={turnIsStreaming}
                       onStreamFrame={turnIsStreaming ? followConversationStreamFrame : undefined}
                       onStreamComplete={
@@ -8159,20 +8105,6 @@ export default function App() {
         onRefreshAgents={() => setSandboxAgentRefreshKey((current) => current + 1)}
         onOpenSession={openCodexHandoffSession}
       />
-
-      {intelligentLeaveOpen ? (
-        <StudioConfirmDialog
-          title={t("dialogs.buildRunning.title")}
-          description={t("dialogs.buildRunning.description")}
-          confirmLabel={t("dialogs.buildRunning.confirm")}
-          variant="warning"
-          onCancel={() => {
-            pendingIntelligentNavigationRef.current = null;
-            setIntelligentLeaveOpen(false);
-          }}
-          onConfirm={confirmIntelligentNavigation}
-        />
-      ) : null}
 
       {sandboxThreadDeleteTarget ? (
         <StudioConfirmDialog

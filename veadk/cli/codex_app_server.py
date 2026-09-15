@@ -34,7 +34,7 @@ import secrets
 import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import Any, Literal, cast
 from urllib.parse import urlsplit, urlunsplit
 
@@ -82,6 +82,15 @@ class CodexAppServerError(RuntimeError):
 
 class CodexAppServerTransportError(CodexAppServerError):
     """The Codex app-server transport could not continue an operation."""
+
+
+class CodexAppServerRequestError(CodexAppServerError):
+    """An explicit JSON-RPC rejection, distinct from an unknown transport result."""
+
+    def __init__(self, error: object) -> None:
+        self.code = error.get("code") if isinstance(error, dict) else None
+        self.detail = error
+        super().__init__(_app_server_error_detail(error))
 
 
 class CodexAppServerTurnInterruptedError(CodexAppServerError):
@@ -407,6 +416,9 @@ class CodexAppServerEvent:
     usage: CodexTokenUsage | None = None
     thread_total: CodexTokenUsage | None = None
     model_context_window: int | None = None
+    item_type: str = ""
+    phase: str = ""
+    duration_ms: int | None = None
 
 
 class CodexAppServerSession:
@@ -439,7 +451,8 @@ class CodexAppServerSession:
         self._received_unidentified_agent_delta = False
         self._completed_agent_messages: dict[str, dict[str, object]] = {}
         self._turn_final_item_id = ""
-        self._reasoning_delta_text: dict[str, str] = {}
+        self._reasoning_delta_text: dict[str, dict[int, str]] = {}
+        self._item_phases: dict[str, str] = {}
         self._skills_by_id: dict[str, _CodexPrivateSkill] = {}
         self._skills_cwd = ""
         self._skills_loaded = False
@@ -458,6 +471,24 @@ class CodexAppServerSession:
     def active(self) -> bool:
         """Whether a turn is currently running."""
         return self._turn_completion is not None
+
+    @property
+    def active_turn_id(self) -> str:
+        return self._active_turn_id
+
+    def refresh_endpoint(self, endpoint: str) -> None:
+        """Use the control plane's latest endpoint on the next reconnect."""
+        self._endpoint = endpoint
+
+    async def attach_thread(
+        self, thread_id: str, *, allow_empty_restart: bool = False
+    ) -> None:
+        """Attach an exact persisted thread without silently creating a replacement."""
+        if self.active:
+            raise CodexAppServerError("当前 Codex 任务仍在运行。")
+        self.thread_id = _required_identifier(thread_id, "threadId")
+        self._workspace_locked = not allow_empty_restart
+        await self.connect()
 
     @property
     def workspace_locked(self) -> bool:
@@ -717,6 +748,9 @@ class CodexAppServerSession:
         permissions: CodexPermissionSettings | None = None,
         timeout_seconds: float | None = None,
         output_schema: dict[str, object] | None = None,
+        client_user_message_id: str = "",
+        resume_turn_id: str = "",
+        interrupt_on_cancel: bool = True,
     ) -> AsyncIterator[CodexAppServerEvent]:
         """Start one Codex turn and stream its public events."""
         if self.active:
@@ -726,18 +760,23 @@ class CodexAppServerSession:
         )
         if turn_timeout <= 0 or not math.isfinite(turn_timeout):
             raise CodexAppServerError("Codex Turn 超时时间无效。")
+        task_observer = bool(client_user_message_id or resume_turn_id)
         if not self.thread_id:
             await self.connect()
         else:
             await self.ensure_connected(
-                minimum_lifetime_seconds=turn_timeout,
+                minimum_lifetime_seconds=_REQUEST_TIMEOUT_SECONDS
+                if task_observer
+                else turn_timeout,
             )
         if not self.thread_id:
             raise CodexAppServerError("Codex Thread 尚未初始化。")
         prompt = prompt.strip()
-        if not prompt:
+        if not prompt and not resume_turn_id:
             raise CodexAppServerError("消息内容不能为空。")
-        skills = await self._resolve_skills(prompt, skill_ids)
+        skills = (
+            await self._resolve_skills(prompt, skill_ids) if not resume_turn_id else ()
+        )
         turn_permissions = permissions or self.permissions
 
         queue: asyncio.Queue[CodexAppServerEvent] = asyncio.Queue()
@@ -752,32 +791,49 @@ class CodexAppServerSession:
         self._completed_agent_messages.clear()
         self._turn_final_item_id = ""
         self._reasoning_delta_text.clear()
+        self._item_phases.clear()
         loop = asyncio.get_running_loop()
         started_at = last_progress_at = loop.time()
         transport_recoveries = 0
         try:
-            result = await self.request(
-                "turn/start",
-                {
-                    "threadId": self.thread_id,
-                    "input": [
-                        {"type": "text", "text": prompt},
-                        *(
-                            {
-                                "type": "skill",
-                                "name": skill.name,
-                                "path": skill.path,
-                            }
-                            for skill in skills
+            if task_observer:
+                # Let the durable executor persist the exact association before
+                # dispatch. No further handshake may replace an empty thread here.
+                yield CodexAppServerEvent(
+                    kind="thread_ready", response={"threadId": self.thread_id}
+                )
+            send_turn = self._request if task_observer else self.request
+            result = (
+                {"turn": {"id": resume_turn_id}}
+                if resume_turn_id
+                else await send_turn(
+                    "turn/start",
+                    {
+                        "threadId": self.thread_id,
+                        **(
+                            {"clientUserMessageId": client_user_message_id}
+                            if client_user_message_id
+                            else {}
                         ),
-                    ],
-                    **_runtime_permission_params(turn_permissions, self.cwd),
-                    **(
-                        {"outputSchema": output_schema}
-                        if output_schema is not None
-                        else {}
-                    ),
-                },
+                        "input": [
+                            {"type": "text", "text": prompt},
+                            *(
+                                {
+                                    "type": "skill",
+                                    "name": skill.name,
+                                    "path": skill.path,
+                                }
+                                for skill in skills
+                            ),
+                        ],
+                        **_runtime_permission_params(turn_permissions, self.cwd),
+                        **(
+                            {"outputSchema": output_schema}
+                            if output_schema is not None
+                            else {}
+                        ),
+                    },
+                )
             )
             turn = result.get("turn")
             if not isinstance(turn, dict) or not isinstance(turn.get("id"), str):
@@ -785,28 +841,75 @@ class CodexAppServerSession:
             self._active_turn_id = turn["id"]
             self._workspace_locked = True
 
+            hydrated_text_ids: set[str] = set()
+            next_snapshot_at = loop.time() + 5
+
+            def hydrate(stored: dict[str, object]) -> list[CodexAppServerEvent]:
+                events = self.turn_snapshot_events(stored)
+                hydrated_text_ids.update(
+                    event.item_id for event in events if event.kind == "text_snapshot"
+                )
+                return events
+
+            if task_observer:
+                yield CodexAppServerEvent(kind="turn_started", turn_id=turn["id"])
+            if resume_turn_id:
+                stored = await self.read_turn(resume_turn_id)
+                if stored is None:
+                    raise CodexAppServerError("原执行轮次暂时无法确认，请稍后恢复。")
+                for event in hydrate(stored):
+                    yield event
+                if _turn_is_terminal(stored) and not completion.done():
+                    completion.set_result(stored)
+
             try:
                 deadline = loop.time() + turn_timeout
                 while True:
                     while not (completion.done() and queue.empty()):
+                        if hydrated_text_ids and loop.time() >= next_snapshot_at:
+                            stored = await self.read_turn(turn["id"])
+                            next_snapshot_at = loop.time() + 5
+                            if stored is not None:
+                                for event in hydrate(stored):
+                                    yield event
+                                if _turn_is_terminal(stored) and not completion.done():
+                                    completion.set_result(stored)
                         remaining = deadline - loop.time()
                         event_task = asyncio.create_task(queue.get())
                         done, _ = await asyncio.wait(
                             {event_task, completion},
-                            timeout=max(0.0, remaining),
+                            timeout=max(
+                                0.0, min(remaining, 5.0) if task_observer else remaining
+                            ),
                             return_when=asyncio.FIRST_COMPLETED,
                         )
                         if not done:
                             event_task.cancel()
                             with contextlib.suppress(asyncio.CancelledError):
                                 await event_task
+                            if task_observer and remaining > 0:
+                                stored = await self.read_turn(turn["id"])
+                                if stored is not None and _turn_is_terminal(stored):
+                                    for event in hydrate(stored):
+                                        yield event
+                                    if not completion.done():
+                                        completion.set_result(stored)
+                                continue
                             raise TimeoutError
                         if event_task in done:
                             # Progress ends the current failure streak. A healthy
                             # long Turn may outlive many transport connections.
                             transport_recoveries = 0
                             last_progress_at = loop.time()
-                            yield event_task.result()
+                            event = event_task.result()
+                            # History snapshots and queued deltas can overlap.
+                            # Hydrated items use full snapshots until completion;
+                            # newly started items continue streaming normally.
+                            if (
+                                event.kind != "text"
+                                or event.item_id not in hydrated_text_ids
+                            ):
+                                yield event
                             # Treat the turn timeout as an inactivity bound, not an
                             # absolute wall-clock limit. Long coding tasks can run
                             # well beyond ten minutes while continuing to emit
@@ -840,7 +943,9 @@ class CodexAppServerSession:
                             timeout=max(0.0, deadline - loop.time()),
                         )
                         stored_turn = await asyncio.wait_for(
-                            self._read_stored_turn(turn["id"]),
+                            self.read_turn(turn["id"])
+                            if task_observer
+                            else self._read_stored_turn(turn["id"]),
                             timeout=max(0.0, deadline - loop.time()),
                         )
                         if (
@@ -849,6 +954,9 @@ class CodexAppServerSession:
                             and not completion.done()
                         ):
                             completion.set_result(stored_turn)
+                        if task_observer and stored_turn is not None:
+                            for event in hydrate(stored_turn):
+                                yield event
                         logger.info(
                             "Codex turn reason=transport_recovered thread_id=%s turn_id=%s attempt=%s",
                             self.thread_id,
@@ -866,7 +974,8 @@ class CodexAppServerSession:
                     loop.time() - last_progress_at,
                     turn_timeout,
                 )
-                await self.interrupt()
+                if interrupt_on_cancel:
+                    await self.interrupt()
                 raise CodexAppServerTurnTimeoutError(
                     "Codex 智能体长时间没有新进度，已停止本次任务，请重试。"
                 ) from error
@@ -886,10 +995,21 @@ class CodexAppServerSession:
                 )
                 raise CodexAppServerError(detail)
             if not self._turn_final_item_id:
-                fallback = await self._read_turn_final_message(turn["id"])
+                result_items = turn_result.get("items", [])
+                fallback = (
+                    _final_agent_message(
+                        result_items if isinstance(result_items, list) else []
+                    )
+                    if task_observer
+                    else await self._read_turn_final_message(turn["id"])
+                )
                 if fallback is not None:
                     for event in self._authoritative_agent_events(fallback):
                         yield event
+            if task_observer:
+                yield CodexAppServerEvent(
+                    kind="turn_completed", turn_id=turn["id"], status=status
+                )
         except CodexAppServerTransportError as error:
             logger.warning(
                 "Codex turn reason=transport_failed thread_id=%s turn_id=%s elapsed_seconds=%.3f recoveries=%s error_type=%s",
@@ -907,7 +1027,8 @@ class CodexAppServerSession:
                 self._active_turn_id,
                 loop.time() - started_at,
             )
-            await self.interrupt()
+            if interrupt_on_cancel:
+                await self.interrupt()
             raise
         finally:
             self._turn_events = None
@@ -927,6 +1048,134 @@ class CodexAppServerSession:
                 },
                 timeout=10,
             )
+
+    async def interrupt_turn(self, turn_id: str) -> None:
+        """Request interruption without treating an RPC error as acknowledgement."""
+        await self.request(
+            "turn/interrupt",
+            {"threadId": self.thread_id, "turnId": turn_id},
+            timeout=10,
+        )
+
+    async def steer_turn(
+        self, message: str, expected_turn_id: str, client_id: str
+    ) -> str:
+        if not message.strip() or not expected_turn_id or not client_id:
+            raise ValueError(
+                "Steering requires input, an expected turn and a client message ID"
+            )
+        result = await self.request(
+            "turn/steer",
+            {
+                "threadId": self.thread_id,
+                "expectedTurnId": expected_turn_id,
+                "clientUserMessageId": client_id,
+                "input": [{"type": "text", "text": message}],
+            },
+        )
+        if result.get("turnId") != expected_turn_id:
+            raise CodexAppServerError("追加要求的接收轮次无法确认。")
+        return expected_turn_id
+
+    async def list_turns(self) -> list[dict[str, object]]:
+        """Read paginated 0.154 turn summaries, newest first."""
+        return await self._history_pages(
+            "thread/turns/list", {"itemsView": "summary", "sortDirection": "desc"}
+        )
+
+    async def _history_pages(
+        self, method: str, params: dict[str, object]
+    ) -> list[dict[str, object]]:
+        items: list[dict[str, object]] = []
+        cursor = ""
+        seen: set[str] = set()
+        while True:
+            result = await self.request(
+                method,
+                {
+                    "threadId": self.thread_id,
+                    "limit": 100,
+                    **params,
+                    **({"cursor": cursor} if cursor else {}),
+                },
+            )
+            page = result.get("data")
+            if not isinstance(page, list) or any(
+                not isinstance(item, dict) for item in page
+            ):
+                raise CodexAppServerError("Codex 历史分页返回格式无效。")
+            items.extend(page)
+            next_cursor = result.get("nextCursor")
+            if next_cursor is None:
+                return items
+            if (
+                not isinstance(next_cursor, str)
+                or not next_cursor
+                or next_cursor in seen
+            ):
+                raise CodexAppServerError("Codex 历史分页游标无效。")
+            seen.add(next_cursor)
+            cursor = next_cursor
+
+    async def read_turn(self, turn_id: str) -> dict[str, object] | None:
+        turns = await self.list_turns()
+        turn = next((item for item in turns if item.get("id") == turn_id), None)
+        if turn is None:
+            return None
+        entries = await self._history_pages(
+            "thread/items/list", {"turnId": turn_id, "sortDirection": "asc"}
+        )
+        items = [
+            entry["item"]
+            for entry in entries
+            if entry.get("turnId") == turn_id and isinstance(entry.get("item"), dict)
+        ]
+        return {**turn, "items": items, "itemsView": "full"}
+
+    async def find_input_turn(self, client_id: str) -> dict[str, object] | None:
+        entries = await self._history_pages(
+            "thread/items/list", {"sortDirection": "desc"}
+        )
+        for entry in entries:
+            item = entry.get("item")
+            if (
+                isinstance(item, dict)
+                and item.get("type") == "userMessage"
+                and item.get("clientId") == client_id
+            ):
+                turn_id = entry.get("turnId")
+                if isinstance(turn_id, str):
+                    return await self.read_turn(turn_id)
+        return None
+
+    @staticmethod
+    def turn_snapshot_events(turn: dict[str, object]) -> list[CodexAppServerEvent]:
+        events: list[CodexAppServerEvent] = []
+        items = turn.get("items")
+        if not isinstance(items, list):
+            return events
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") == "agentMessage":
+                events.append(
+                    CodexAppServerEvent(
+                        kind="text_snapshot",
+                        item_type="agentMessage",
+                        phase=str(item.get("phase") or ""),
+                        item_id=str(item.get("id") or ""),
+                        text=str(item.get("text") or ""),
+                        turn_id=str(turn.get("id") or ""),
+                        status="done" if _turn_is_terminal(turn) else "running",
+                    )
+                )
+            else:
+                event = _event_from_item(
+                    item, completed=item.get("status") != "inProgress"
+                )
+                if event is not None:
+                    events.append(replace(event, turn_id=str(turn.get("id") or "")))
+        return events
 
     async def list_models(self) -> tuple[CodexModel, ...]:
         """Return every visible Codex model, following bounded pagination."""
@@ -1646,7 +1895,7 @@ class CodexAppServerSession:
             return
         error = message.get("error")
         if error is not None:
-            future.set_exception(CodexAppServerError(_app_server_error_detail(error)))
+            future.set_exception(CodexAppServerRequestError(error))
             return
         result = message.get("result")
         if not isinstance(result, dict):
@@ -1657,6 +1906,13 @@ class CodexAppServerSession:
         future.set_result(result)
 
     def _handle_notification(self, method: str, params: dict[str, object]) -> None:
+        if params.get("threadId") not in (None, self.thread_id):
+            return
+        if self._active_turn_id and params.get("turnId") not in (
+            None,
+            self._active_turn_id,
+        ):
+            return
         if method == "thread/tokenUsage/updated":
             self._handle_token_usage(params)
             return
@@ -1668,34 +1924,86 @@ class CodexAppServerSession:
                     self._agent_message_delta_ids.add(item_id)
                 else:
                     self._received_unidentified_agent_delta = True
-                self._emit(CodexAppServerEvent(kind="text", text=delta))
-            return
-        if method in {
-            "item/reasoning/summaryTextDelta",
-            "item/reasoning/textDelta",
-        }:
-            delta = params.get("delta")
-            item_id = params.get("itemId")
-            if (
-                isinstance(delta, str)
-                and delta
-                and isinstance(item_id, str)
-                and item_id
-            ):
-                text = self._reasoning_delta_text.get(item_id, "") + delta
-                self._reasoning_delta_text[item_id] = text
                 self._emit(
                     CodexAppServerEvent(
-                        kind="thinking",
-                        item_id=item_id,
-                        status="running",
-                        text=text,
+                        kind="text",
+                        item_type="agentMessage",
+                        phase=self._item_phases.get(str(item_id), ""),
+                        item_id=item_id if isinstance(item_id, str) else "",
+                        text=delta,
                     )
                 )
+            return
+        if method in {"item/commandExecution/outputDelta", "item/mcpToolCall/progress"}:
+            is_output = method == "item/commandExecution/outputDelta"
+            self._emit(
+                CodexAppServerEvent(
+                    kind="tool_output" if is_output else "tool_progress",
+                    item_id=_string(params.get("itemId"), 200),
+                    turn_id=_string(params.get("turnId"), 200),
+                    item_type="commandExecution" if is_output else "mcpToolCall",
+                    status="running",
+                    text=_string(
+                        params.get("delta" if is_output else "message"), 100_000
+                    ),
+                )
+            )
+            return
+        if method in {"turn/plan/updated", "turn/diff/updated"}:
+            is_plan = method == "turn/plan/updated"
+            self._emit(
+                CodexAppServerEvent(
+                    kind="plan" if is_plan else "diff",
+                    turn_id=_string(params.get("turnId"), 200),
+                    status="running",
+                    text=_string(
+                        params.get("explanation" if is_plan else "diff"), 100_000
+                    ),
+                    response=_bounded_value(params.get("plan")) if is_plan else None,
+                )
+            )
+            return
+        if method in {"item/reasoning/summaryTextDelta", "item/reasoning/textDelta"}:
+            item_id = _string(params.get("itemId"), 200)
+            if not item_id:
+                return
+            parts = self._reasoning_delta_text.setdefault(item_id, {})
+            # Raw reasoning and its public summary are distinct protocol streams.
+            # Only expose the summary; raw activity still starts the indicator.
+            if method == "item/reasoning/summaryTextDelta":
+                index = params.get("summaryIndex", 0)
+                if isinstance(index, int) and 0 <= index < 500:
+                    parts[index] = parts.get(index, "") + _string(
+                        params.get("delta"), 100_000
+                    )
+            self._emit(
+                CodexAppServerEvent(
+                    kind="thinking",
+                    item_id=item_id,
+                    item_type="reasoning",
+                    status="running",
+                    text="\n\n".join(parts[index] for index in sorted(parts)),
+                )
+            )
             return
         if method in {"item/started", "item/completed"}:
             item = params.get("item")
             if isinstance(item, dict):
+                if item.get("type") == "agentMessage":
+                    self._item_phases[str(item.get("id") or "")] = str(
+                        item.get("phase") or ""
+                    )
+                if item.get("type") == "userMessage" and isinstance(
+                    item.get("clientId"), str
+                ):
+                    self._emit(
+                        CodexAppServerEvent(
+                            kind="user_input",
+                            item_id=str(item.get("id") or ""),
+                            turn_id=str(params.get("turnId") or self._active_turn_id),
+                            response={"clientId": item["clientId"]},
+                        )
+                    )
                 if method == "item/completed" and item.get("type") == "agentMessage":
                     item_id = item.get("id")
                     text = item.get("text")
@@ -1756,6 +2064,17 @@ class CodexAppServerSession:
             self._apply_runtime_settings(params)
             return
         if method == "error":
+            if isinstance(params.get("error"), dict):
+                self._emit(
+                    CodexAppServerEvent(
+                        kind="recovery",
+                        status="retrying" if params.get("willRetry") else "waiting",
+                        text="Codex 正在重试。"
+                        if params.get("willRetry")
+                        else "正在确认 Codex 执行状态。",
+                    )
+                )
+                return
             message = params.get("message")
             if (
                 isinstance(message, str)
@@ -1763,6 +2082,9 @@ class CodexAppServerSession:
                 and not self._turn_completion.done()
             ):
                 self._turn_completion.set_exception(CodexAppServerError(message))
+        if method == "thread/status/changed":
+            status = params.get("status")
+            self._emit(CodexAppServerEvent(kind="thread_status", response=status))
 
     def _handle_token_usage(self, params: dict[str, object]) -> None:
         update = _token_usage_update(params)
@@ -1913,7 +2235,9 @@ class CodexAppServerSession:
 
     def _emit(self, event: CodexAppServerEvent) -> None:
         if self._turn_events is not None:
-            self._turn_events.put_nowait(event)
+            self._turn_events.put_nowait(
+                replace(event, turn_id=event.turn_id or self._active_turn_id)
+            )
 
     def _authoritative_agent_events(
         self, item: dict[str, object]
@@ -1954,7 +2278,10 @@ class CodexAppServerSession:
                 text=text,
             )
         )
-        return tuple(events)
+        return tuple(
+            replace(event, item_type="agentMessage", phase=str(item.get("phase") or ""))
+            for event in events
+        )
 
     async def _read_turn_final_message(self, turn_id: str) -> dict[str, object] | None:
         for attempt in range(_TURN_FINAL_READ_ATTEMPTS):
@@ -2328,6 +2655,8 @@ def _event_from_item(
 ) -> CodexAppServerEvent | None:
     item_id = _string(item.get("id"), 200) or str(uuid.uuid4())
     item_type = item.get("type")
+    duration = item.get("durationMs")
+    duration_ms = duration if isinstance(duration, int) and duration >= 0 else None
     status = _completion_status(item.get("status")) if completed else "running"
     if item_type == "reasoning":
         summary = item.get("summary")
@@ -2341,6 +2670,9 @@ def _event_from_item(
         return CodexAppServerEvent(
             kind="thinking",
             item_id=item_id,
+            item_type=str(item_type),
+            phase=_string(item.get("phase"), 100),
+            duration_ms=duration_ms,
             status=status,
             text=text,
         )
@@ -2351,6 +2683,9 @@ def _event_from_item(
             return CodexAppServerEvent(
                 kind="commentary",
                 item_id=item_id,
+                item_type=str(item_type),
+                phase=_string(item.get("phase"), 100),
+                duration_ms=duration_ms,
                 status=status,
                 text=text,
             )
@@ -2368,11 +2703,15 @@ def _event_from_item(
         return CodexAppServerEvent(
             kind="tool",
             item_id=item_id,
+            item_type=str(item_type),
+            phase=_string(item.get("phase"), 100),
+            duration_ms=duration_ms,
             status=status,
             name="运行命令",
             arguments={
                 "command": _string(item.get("command"), 20_000),
                 "cwd": _string(item.get("cwd"), 4_096),
+                "commandActions": _bounded_value(item.get("commandActions")),
             },
             response=response,
         )
@@ -2380,6 +2719,9 @@ def _event_from_item(
         return CodexAppServerEvent(
             kind="tool",
             item_id=item_id,
+            item_type=str(item_type),
+            phase=_string(item.get("phase"), 100),
+            duration_ms=duration_ms,
             status=status,
             name="修改文件",
             arguments={"changes": _bounded_value(item.get("changes"))},
@@ -2395,6 +2737,9 @@ def _event_from_item(
         return CodexAppServerEvent(
             kind="tool",
             item_id=item_id,
+            item_type=str(item_type),
+            phase=_string(item.get("phase"), 100),
+            duration_ms=duration_ms,
             status=status,
             name=f"MCP · {'/'.join(filter(None, (server, tool)))}",
             arguments=_bounded_value(item.get("arguments")),
@@ -2408,6 +2753,9 @@ def _event_from_item(
         return CodexAppServerEvent(
             kind="tool",
             item_id=item_id,
+            item_type=str(item_type),
+            phase=_string(item.get("phase"), 100),
+            duration_ms=duration_ms,
             status=status,
             name="网络搜索",
             arguments={"query": _string(item.get("query"), 4_000)},
@@ -2424,13 +2772,13 @@ def _turn_is_terminal(turn: dict[str, object]) -> bool:
     status = turn.get("status")
     if isinstance(status, dict):
         status = status.get("type")
-    if isinstance(status, str) and status.lower() in {
-        "completed",
-        "failed",
-        "cancelled",
-        "interrupted",
-    }:
-        return True
+    if isinstance(status, str):
+        return status.lower() in {
+            "completed",
+            "failed",
+            "cancelled",
+            "interrupted",
+        }
     items = turn.get("items")
     return _final_agent_message(items if isinstance(items, list) else []) is not None
 

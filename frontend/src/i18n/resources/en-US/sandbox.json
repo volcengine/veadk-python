@@ -97,7 +97,11 @@
     "continuePlaceholder": "Describe what you want to implement or adjust next",
     "messagePlaceholder": "Message the AgentKit Sandbox. Type / for commands or $ to invoke a Skill…",
     "stop": "Stop generating",
-    "send": "Send"
+    "send": "Send",
+    "stopping": "Confirming stop…",
+    "resume": "Resume task",
+    "steer": "Add instructions",
+    "steerPlaceholder": "Add instructions, or stop the task at any time…"
   },
   "launch": {
     "defaultName": "My Agent",
@@ -265,5 +269,19 @@
       "status": "Current Codex status",
       "help": "Codex shortcuts supported by Sandbox"
     }
+  },
+  "taskNotice": {
+    "label": "Build tasks",
+    "queued": "Build queued",
+    "running": "Build running in the background",
+    "recovering": "Recovering build",
+    "waiting_user": "Build needs attention",
+    "stopping": "Stopping build",
+    "succeeded": "Build completed",
+    "cancelled": "Build stopped",
+    "failed": "Build could not complete",
+    "open": "Return to task",
+    "hide": "Hide task notification",
+    "reconnecting": "Reconnecting to the task service. Existing tasks are retained."
   }
 }
