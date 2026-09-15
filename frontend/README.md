@@ -1047,3 +1047,15 @@ Sandbox。修改这些模板只需要更新 Studio，不需要重建镜像，也
 模板中的新依赖不会自动安装，运行环境依赖仍由镜像管理。
 
 其他地域需要显式设置 `STUDIO_WORKSPACE_IMAGE`，避免错误使用跨地域镜像。
+
+### MPA Runtime scheduled tasks
+
+Scheduled tasks now has separate Studio and Runtime source tabs. Select a connected
+cloud Runtime, then open Runtime scheduled tasks to view its MPA tasks. The list
+uses `/api/v1/esa-cron-tasks` through the existing Runtime proxy, includes disabled
+tasks and pages in groups of 20. Visibility follows the MPA user JWT, not all users
+in that Runtime. If authentication is required, enter a valid user JWT in the masked
+field; it is kept only in this panel and cleared on target change or unmount.
+No task mutation or scheduling is performed by this panel.
+
+Run `npm run test:mpa-cron-coverage` for the isolated HTTP and component checks.

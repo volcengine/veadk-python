@@ -7189,7 +7189,7 @@ export default function App() {
                 setCreateView("workspace");
               } : undefined} />
             ) : cronJobsView ? (
-              <CronJobs cloudProvider={cloudProvider} />
+              <CronJobs cloudProvider={cloudProvider} selectedRuntime={currentRuntime ?? selectedDraftStudioRuntime} />
             ) : applicationsView === "coding-agents" ? (
               <CodingAgentsIntegration
                 onBack={() => setApplicationsView("catalog")}
