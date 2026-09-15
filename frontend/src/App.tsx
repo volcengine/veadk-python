@@ -1489,6 +1489,10 @@ export default function App() {
   const [studioToolCapabilities, setStudioToolCapabilities] =
     useState<RuntimeStudioToolCapabilities | null>(null);
   const [studioToolsLoading, setStudioToolsLoading] = useState(false);
+  const [selectedCronRuntime, setSelectedCronRuntime] = useState<{
+    runtimeId: string; name: string; region: string;
+  } | undefined>();
+  useEffect(() => setSelectedCronRuntime(undefined), [appName]);
   const [draftStudioRuntime, setDraftStudioRuntime] = useState<{
     appName: string;
     runtimeId: string;
@@ -6328,6 +6332,10 @@ export default function App() {
     } = {},
   ) => {
     if (!agent.runtime) return;
+    // Task reads do not depend on the Runtime's chat/session protocol.
+    setSelectedCronRuntime({
+      runtimeId: agent.runtime.runtimeId, name: agent.name, region: agent.runtime.region,
+    });
     try {
       const agentId = await connectRuntimeForUser(
         agent,
@@ -7189,7 +7197,7 @@ export default function App() {
                 setCreateView("workspace");
               } : undefined} />
             ) : cronJobsView ? (
-              <CronJobs cloudProvider={cloudProvider} selectedRuntime={currentRuntime ?? selectedDraftStudioRuntime} />
+              <CronJobs cloudProvider={cloudProvider} selectedRuntime={selectedCronRuntime ?? currentRuntime ?? selectedDraftStudioRuntime} />
             ) : applicationsView === "coding-agents" ? (
               <CodingAgentsIntegration
                 onBack={() => setApplicationsView("catalog")}

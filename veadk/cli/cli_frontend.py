@@ -10784,17 +10784,15 @@ def _run_frontend_server(
         )
 
     from frontend.server.mpa_cron import mount_routes as mount_mpa_cron_routes
-    from frontend.server.mpa_cron import user_uid as mpa_cron_user_uid
 
     mount_mpa_cron_routes(
         app,
         authorize=_authorized_runtime_for_connection,
         connection=_resolve_runtime_conn,
-        credentials=_resolve_ve_credentials,
         region_for=_coerce_cloud_region,
-        identity=lambda request: mpa_cron_user_uid(
-            request, app, auth_mode == "gateway", _claims_from_forwarded_jwt
-        ),
+        authorization=lambda request, apikey, auth_type: _runtime_request_headers(
+            request, apikey=apikey, auth_type=auth_type
+        ).get("Authorization", ""),
     )
 
     @app.get("/web/runtime-tool-channel/{runtime_id}/capabilities")

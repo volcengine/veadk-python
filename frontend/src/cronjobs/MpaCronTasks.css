@@ -2,10 +2,10 @@
 .mpa-cron p { color: hsl(var(--muted-foreground)); line-height: 1.6; }
 .mpa-cron-target { display: flex; gap: 8px 16px; flex-wrap: wrap; overflow-wrap: anywhere; }
 .mpa-cron-target span { color: hsl(var(--muted-foreground)); }
-.mpa-cron-auth { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; margin-top: 20px; }
-.mpa-cron-auth label { display: flex; flex-direction: column; gap: 8px; flex: 1 1 240px; max-width: 480px; }
-.mpa-cron-auth input { height: 36px; border: 1px solid hsl(var(--border)); border-radius: 6px; padding: 0 12px; background: hsl(var(--panel)); color: inherit; }
-.mpa-cron-auth input:focus-visible { outline: 2px solid hsl(var(--primary)); outline-offset: 2px; }
+.mpa-cron-search { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; margin-top: 20px; }
+.mpa-cron-search label { display: flex; flex-direction: column; gap: 8px; flex: 1 1 240px; max-width: 480px; }
+.mpa-cron-search input { height: 36px; border: 1px solid hsl(var(--border)); border-radius: 6px; padding: 0 12px; background: hsl(var(--panel)); color: inherit; }
+.mpa-cron-search input:focus-visible { outline: 2px solid hsl(var(--primary)); outline-offset: 2px; }
 .mpa-cron .mpa-cron-error { color: hsl(var(--destructive)); }
 .mpa-cron-table { overflow-x: auto; margin-top: 20px; }
 .mpa-cron table { width: 100%; border-collapse: collapse; text-align: left; }

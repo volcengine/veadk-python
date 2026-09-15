@@ -91,10 +91,6 @@ it("accepts null optional task fields", async () => {
  expect(await fetchMpaCronTasks(vi.fn().mockResolvedValue(new Response(JSON.stringify(data))),runtime,0,"")).toEqual(data);
 });
 
-it.each(["mpa_identity_required", "mpa_runtime_config_required", "mpa_runtime_mismatch", "mpa_top_failed"])("handles safe server code %s", async code => {
- await expect(fetchMpaCronTasks(vi.fn().mockResolvedValue(new Response(JSON.stringify({detail:code}),{status:409})),runtime,0,"")).rejects.toThrow(code);
- list.mockRejectedValue(new Error(code)); await mount(); expect(host.textContent).toContain(`mpa.errors.${code}`);
-});
 it("does not echo unknown server error bodies", async () => {
  await expect(fetchMpaCronTasks(vi.fn().mockResolvedValue(new Response(JSON.stringify({detail:"secret"}),{status:502})),runtime,0,"")).rejects.toThrow("MPA_HTTP_502");
 });

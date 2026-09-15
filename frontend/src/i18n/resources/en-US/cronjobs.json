@@ -3,12 +3,12 @@
     "source": "Task source",
     "studio": "Studio scheduled tasks",
     "title": "Runtime scheduled tasks",
-    "selectRuntime": "Select a connected cloud Runtime in the Agent list first.",
-    "scope": "MPA scheduled tasks visible to your user identity in the selected Runtime.",
+    "selectRuntime": "Select a cloud Runtime from the Agent list first.",
+    "scope": "Lists all users’ scheduled tasks in the selected Runtime with JWT verification disabled.",
     "refresh": "Refresh",
     "loading": "Loading Runtime tasks",
-    "empty": "No scheduled tasks are visible to this user in this Runtime.",
-    "authRequired": "MPA rejected the automatically obtained credentials. Check the user identity and Runtime JWT configuration.",
+    "empty": "No matching scheduled tasks in this Runtime.",
+    "authRequired": "Runtime rejected the request. Check gateway access and the Runtime authentication setting.",
     "forbidden": "Access denied. Check the selected Runtime and user JWT.",
     "unsupported": "This Runtime does not provide the MPA scheduled tasks API.",
     "invalidResponse": "The tasks API returned unrecognized data. Check the Runtime version.",
@@ -33,16 +33,9 @@
       "cron": "Cron"
     },
     "search": "Search tasks",
-    "automaticAuth": "Studio obtains MPA credentials on the server. Only tasks accessible to the enterprise user are shown.",
     "executionCount": "Executions",
     "successRate": "Success rate",
-    "prompt": "Task content",
-    "errors": {
-      "mpa_identity_required": "Enterprise user identity is missing. For local testing, set VEADK_STUDIO_MPA_USER_UID on the Studio server and restart it.",
-      "mpa_runtime_config_required": "The selected Runtime is missing its MPA instance or space configuration.",
-      "mpa_runtime_mismatch": "The TOP endpoint does not match the selected Runtime. Check the formal / debug Runtime binding.",
-      "mpa_top_failed": "TOP could not issue MPA credentials. Check AK/SK permissions and the instance space."
-    }
+    "prompt": "Task content"
   },
   "actions": {
     "backToList": "Back to scheduled tasks",
