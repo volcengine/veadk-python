@@ -243,6 +243,7 @@ it("opens detail, editor, copy and delete; submits scoped versioned actions", as
   await submit();
   expect(write.mock.calls.at(-1)![3]).toMatchObject({
     name: "Edited",
+    agentId: "agent1",
     expectedVersion: 3,
   });
   await click("mpa.manage.copy");
@@ -251,6 +252,7 @@ it("opens detail, editor, copy and delete; submits scoped versioned actions", as
   expect(write.mock.calls.at(-1)![2]).toBe("");
   expect(write.mock.calls.at(-1)![3]).toMatchObject({
     clientToken: expect.any(String),
+    agentId: "agent1",
   });
   await click("mpa.manage.enabled Report");
   expect(write.mock.calls.at(-1)![3]).toEqual({
@@ -288,11 +290,12 @@ it("supports create, retains form on failure, and rejects malformed mutation res
   await render();
   await click("mpa.manage.create");
   await field("mpa.manage.name", "New");
-  await field("mpa.manage.agent", "agent");
+  expect(host.querySelector("[role=dialog]")?.textContent).not.toContain("mpa.manage.agent");
   await field("mpa.manage.prompt", "prompt");
   write.mockResolvedValueOnce({});
   await submit();
   expect(host.textContent).toContain("mpa.invalidResponse");
+  expect(write.mock.calls[0][3].agentId).toBe(runtime.runtimeId);
   const token = write.mock.calls[0][3].clientToken;
   await submit();
   expect(write.mock.calls[1][3].clientToken).toBe(token);
@@ -574,6 +577,7 @@ it("submits every schedule type and preserves delivery metadata on edit", async 
   const save = vi.fn();
   await render(
     <MpaTaskEditor
+      defaultAgentId="runtime-test"
       task={{
         ...task,
         delivery: { channel: "Feishu", targetId: "group", threadId: "thread" },
@@ -607,6 +611,7 @@ it("validates editor required values, dates, zones, weekdays, intervals and cron
   const save = vi.fn();
   await render(
     <MpaTaskEditor
+      defaultAgentId="runtime-test"
       task={task}
       copy={false}
       busy={false}
@@ -651,6 +656,7 @@ it("honors editor IME and busy guard", async () => {
   const save = vi.fn();
   await render(
     <MpaTaskEditor
+      defaultAgentId="runtime-test"
       task={task}
       copy={false}
       busy={false}
@@ -681,6 +687,7 @@ it("honors editor IME and busy guard", async () => {
   expect(save).toHaveBeenCalledTimes(1);
   await render(
     <MpaTaskEditor
+      defaultAgentId="runtime-test"
       task={task}
       copy={false}
       busy
@@ -696,6 +703,7 @@ it("edits time, recipient and checkbox and preserves interval anchors", async ()
   const save = vi.fn();
   await render(
     <MpaTaskEditor
+      defaultAgentId="runtime-test"
       task={{
         ...task,
         schedule: {
@@ -732,6 +740,7 @@ it("initializes a one-shot edit and cancels it", async () => {
   const close = vi.fn();
   await render(
     <MpaTaskEditor
+      defaultAgentId="runtime-test"
       task={{
         ...task,
         schedule: { type: "Once", runAt: "2030-01-01T10:00:00Z" },

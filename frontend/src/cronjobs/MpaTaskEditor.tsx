@@ -8,6 +8,7 @@ import { MpaIcon } from "./MpaTaskIcons";
 
 export function MpaTaskEditor({
   task,
+  defaultAgentId,
   copy,
   busy,
   error,
@@ -15,6 +16,7 @@ export function MpaTaskEditor({
   onSave,
 }: {
   task?: MpaCronTask;
+  defaultAgentId: string;
   copy: boolean;
   busy: boolean;
   error: string;
@@ -27,7 +29,6 @@ export function MpaTaskEditor({
   const [name, setName] = useState(
     task ? task.name + (copy ? ` (${label("copy")})` : "") : "",
   );
-  const [agent, setAgent] = useState(task?.agentId || "");
   const [prompt, setPrompt] = useState(task?.prompt || "");
   const [type, setType] = useState(initial?.type || "Daily");
   const [zone, setZone] = useState(
@@ -108,7 +109,6 @@ export function MpaTaskEditor({
     }
     if (
       !name.trim() ||
-      !agent.trim() ||
       !prompt.trim() ||
       (channel === "Feishu" && !target.trim())
     ) {
@@ -128,7 +128,7 @@ export function MpaTaskEditor({
     setValidation("");
     onSave({
       name: name.trim(),
-      agentId: agent.trim(),
+      agentId: task?.agentId || defaultAgentId,
       prompt: prompt.trim(),
       enabled,
       schedule,
@@ -179,16 +179,6 @@ export function MpaTaskEditor({
                 maxLength={128}
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-              />
-            </label>
-            <label>
-              {label("agent")}
-              <input
-                className="cw-input"
-                required
-                maxLength={256}
-                value={agent}
-                onChange={(e) => setAgent(e.target.value)}
               />
             </label>
             <label>
