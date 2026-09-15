@@ -150,6 +150,7 @@ jobs:
               tests/test_studio_release_server.py::test_release_server_agentkit_cli_pin_matches_veadk \
               tests/test_studio_release_server.py::test_publisher_repairs_missing_agentkit_cli_before_manifest \
               tests/test_studio_release_server.py::test_release_server_zip_normalizes_runtime_file_permissions \
+              tests/test_studio_release_server.py::test_stage_deployment_uses_frontend_service_package \
               tests/cli/test_studio_release.py::test_release_zip_normalizes_runtime_file_permissions \
               tests/test_studio_release_workflow.py::test_smoke_gate_is_fresh_amd64_and_runs_before_import_validation \
               tests/test_studio_release_workflow.py::test_smoke_gate_executes_bundle_as_low_privilege_user \
