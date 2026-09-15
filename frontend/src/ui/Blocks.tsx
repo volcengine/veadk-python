@@ -631,7 +631,11 @@ function DeliveryCard({
 
 /** Shown immediately after sending — identical head to ThinkingBlock so there
  *  is no layout jump when real content streams in. */
-export function ThinkingPlaceholder() {
+export function ThinkingPlaceholder({ a2aStatus }: { a2aStatus?: string }) {
+  const { t } = useTranslation("conversation");
+  if (a2aStatus === "connecting" || a2aStatus === "submitted" || a2aStatus === "working") {
+    return <BuildProgressBlock text={t(`blocks.a2a.${a2aStatus}`)} />;
+  }
   return <ThinkingBlock text="" done={false} />;
 }
 

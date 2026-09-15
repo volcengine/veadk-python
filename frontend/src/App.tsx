@@ -7952,7 +7952,7 @@ export default function App() {
                   </>
                 )}
                 {pending ? (
-                  turnIsStreaming ? <ThinkingPlaceholder /> : null
+                  turnIsStreaming ? <ThinkingPlaceholder a2aStatus={turn.meta?.a2aStatus} /> : null
                 ) : (
                   <>
                     <Blocks

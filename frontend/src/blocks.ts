@@ -155,6 +155,7 @@ export interface Acc {
 }
 
 export interface TurnMeta {
+  a2aStatus?: string;
   author?: string;
   localId?: string;
   streaming?: boolean;
@@ -821,7 +822,13 @@ function completesAssistantResponse(ev: AdkEvent, blocks: Block[]): boolean {
   );
 }
 
+function a2aStatusOf(ev: AdkEvent): string | undefined {
+  const status = (ev.customMetadata ?? ev.custom_metadata)?.a2aStatus;
+  return typeof status === "string" ? status : undefined;
+}
+
 function eventAffectsAssistantTurn(ev: AdkEvent): boolean {
+  if (a2aStatusOf(ev)) return true;
   const artifactDelta = ev.actions?.artifactDelta ?? ev.actions?.artifact_delta;
   if (artifactDelta && Object.keys(artifactDelta).length > 0) return true;
   return (ev.content?.parts ?? []).some((part) =>
@@ -928,6 +935,7 @@ export function createAssistantEventProjector(
         author: author || state.meta.author,
         localId: state.localId,
         streaming: !completed,
+        a2aStatus: a2aStatusOf(ev),
         tokens: usage?.totalTokenCount || state.meta.tokens,
         ts: ev.timestamp || state.meta.ts,
         invocationId: invocationId || state.meta.invocationId,

@@ -244,3 +244,35 @@ test("closes unfinished reasoning when the transport stream ends", () => {
     thoughtKind: "reasoning",
   }]);
 });
+
+
+test("A2A progress is scoped to the pending turn and never completes an answer", () => {
+  const projector = createAssistantEventProjector("a2a");
+  let localId;
+  for (const status of ["connecting", "submitted", "working"]) {
+    const ev = { id: status, author: "agent", partial: true,
+      customMetadata: { a2aStatus: status }, content: { role: "model", parts: [] } };
+    const projection = projector.project(ev);
+    assert.equal(projection.ignored, undefined);
+    assert.equal(projection.completed, false);
+    assert.equal(projection.turn.meta.a2aStatus, status);
+    assert.deepEqual(projection.turn.blocks, []);
+    localId ??= projection.turn.meta.localId;
+    assert.equal(projection.turn.meta.localId, localId);
+    assert.equal(projector.project(ev).ignored, true);
+  }
+  const final = projector.project({author: "agent", partial: false,
+    content: {role: "model", parts: [{text: "done"}]}});
+  assert.equal(final.completed, true);
+  assert.equal(final.turn.meta.localId, localId);
+  assert.equal(final.turn.meta.a2aStatus, undefined);
+});
+
+test("A2A malformed metadata is ignored; snake case metadata is supported", () => {
+  const projector = createAssistantEventProjector("a2a");
+  assert.equal(projector.project({customMetadata: {a2aStatus: 123}}).ignored, true);
+  const projection = projector.project({author: "agent", partial: true,
+    custom_metadata: {a2aStatus: "working"}});
+  assert.equal(projection.turn.meta.a2aStatus, "working");
+  assert.equal(projector.finish()[0].meta.streaming, false);
+});

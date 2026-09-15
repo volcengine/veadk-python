@@ -1069,3 +1069,7 @@ for isolated client/server checks.
 ### Runtime task management (2026-09-15)
 
 Runtime tasks now follow mono's list/calendar workflow: status filtering, creation, editing, copying, deletion, enable/disable, run now, and execution history. Select a cloud Runtime first. The server forwards the authenticated Studio user as `x-user-id`; with MPA JWT disabled, that user's task data remains isolated. No JWT input or TOP credential exchange is used. Enter the Runtime's Agent ID when creating a task. Complex Cron expressions display only the server's next execution in the calendar. Mutations and history use the existing MPA REST interfaces; Runtime upgrades and ADK session authentication are separate concerns.
+
+### A2A 长耗时请求
+
+连接 A2A Runtime 后，对话会显示等待响应、排队或执行中的状态。收到有效状态后会继续等待最终回复，不因任务耗时超过 30 秒而自动中断。等待响应不代表 Runtime 已接受任务；错误或连接中断也不代表后台任务已取消，请先确认任务状态再重试创建等操作。

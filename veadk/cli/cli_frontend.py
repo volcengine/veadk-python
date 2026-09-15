@@ -10495,6 +10495,21 @@ def _run_frontend_server(
                 **({"metadata": request_metadata} if request_metadata else {}),
             },
         }
+        # A blocking A2A server may not send headers until the task completes.
+        # Acknowledge the Studio wait without claiming Runtime acceptance.
+        yield (
+            "data: "
+            + json.dumps(
+                {
+                    "id": str(uuid4()),
+                    "author": str(card.get("name") or _RUNTIME_A2A_VIRTUAL_APP),
+                    "partial": True,
+                    "content": {"role": "model", "parts": []},
+                    "customMetadata": {"a2aStatus": "connecting"},
+                }
+            )
+            + "\n\n"
+        ).encode("utf-8")
         client = httpx.AsyncClient(timeout=None)
         upstream = None
         try:

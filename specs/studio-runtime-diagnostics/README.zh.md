@@ -36,3 +36,5 @@
 | `CON-3` | BFF metadata 测试、mpa-agent 校验测试及浏览器默认/覆盖/非法场景 |
 | `CON-4` | 404/425/403/502/200 Endpoint 测试及真实 TraceDrawer 检查 |
 | `CON-5` | Secret scan 及浏览器 Payload/下载不含 Key 或原始日志的断言 |
+
+- `CON-6`：A2A 桥接在等待上游前输出非终止 connecting 状态。对话通过现有进度占位将 connecting/submitted/working 展示为等待/排队/执行中。状态不算答案或接受请求的证明，实际内容替换占位。有效流等待完成、错误或取消，不自动重试。
