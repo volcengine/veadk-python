@@ -574,6 +574,101 @@ if unexpected:
     )
 
 
+def test_studio_entrypoint_defers_unused_google_adk_package_exports() -> None:
+    root = Path(__file__).resolve().parents[2]
+    script = """
+import sys
+
+import veadk.cli.studio_start
+from google.adk.cli.fast_api import get_fast_api_app
+
+assert callable(get_fast_api_app)
+unexpected = sorted(
+    name
+    for name in sys.modules
+    if name == "google.adk.cli.cli_tools_click"
+    or name == "google.adk.workflow._workflow"
+    or name == "google.adk.workflow._graph"
+    or name == "google.adk.workflow._function_node"
+    or name == "google.adk.evaluation"
+    or name.startswith("google.adk.evaluation.")
+)
+if unexpected:
+    raise SystemExit("unused Google ADK package exports loaded by Studio entrypoint")
+"""
+
+    subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_studio_fast_api_defers_evaluation_storage_until_first_use() -> None:
+    root = Path(__file__).resolve().parents[2]
+    script = """
+import sys
+import tempfile
+from pathlib import Path
+
+from veadk.cli.studio_start import studio_fast_api_factory
+
+with tempfile.TemporaryDirectory() as agents_dir:
+    app_dir = Path(agents_dir, "agent-test")
+    app_dir.mkdir()
+    app = studio_fast_api_factory()(agents_dir=agents_dir, web=False)
+    assert any(route.path == "/list-apps" for route in app.routes)
+    if "google.adk.evaluation" in sys.modules:
+        raise SystemExit("evaluation storage loaded while constructing Studio app")
+
+    fast_api = sys.modules["google.adk.cli.fast_api"]
+    manager = fast_api.LocalEvalSetsManager(agents_dir=agents_dir)
+    assert manager.list_eval_sets("agent-test") == []
+    if "google.adk.evaluation.local_eval_sets_manager" not in sys.modules:
+        raise SystemExit("evaluation storage not loaded for a real request")
+"""
+
+    subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_session_metadata_defers_agentkit_models_until_first_request() -> None:
+    root = Path(__file__).resolve().parents[2]
+    script = """
+import sys
+
+from veadk.cli import agentkit_session_metadata as metadata
+
+assert metadata.session_display_name_metadata_value("Studio") == "Studio"
+if "agentkit.sdk.tools.types" in sys.modules:
+    raise SystemExit("AgentKit Session models loaded during Studio route setup")
+
+request = metadata.build_list_sessions_request(
+    tool_id="tool-test",
+    max_results=10,
+    username="owner-test",
+)
+assert request is not None
+if "agentkit.sdk.tools.types" not in sys.modules:
+    raise SystemExit("AgentKit Session models not loaded for a real request")
+"""
+
+    subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
 def test_knowledge_routes_defer_document_extraction_stack() -> None:
     root = Path(__file__).resolve().parents[2]
     script = """
