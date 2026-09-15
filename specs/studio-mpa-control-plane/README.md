@@ -26,7 +26,7 @@ Own the Studio-to-mpa-agent contract for Ark model discovery, immutable Turn sna
 - `CON-12`: Tool activity exposes a tool-specific safe action and subject. Unknown tools expose their concrete name rather than a generic completed label.
 - `CON-13`: Sanitized tool inputs/results remain completely retrievable by an explicit copy/download action. Preview rendering is bounded, truncation is disclosed, and all detail paths share the same redaction rules.
 - `CON-14`: Turn model selection is searchable and keyboard accessible, and remains disabled while a non-terminal Turn owns an immutable model snapshot.
-- `CON-15`: Runtime listing exposes `agentCategory` and accepts `agentCategory=general|mpa` for server-side category filtering before visible pagination. The authoritative and only MPA source is Runtime tag `veadk:agent-type=mpa`; image names and artifact URLs are not category inputs.
+- `CON-15`: Runtime listing exposes `agentCategory` and accepts `agentCategory=general|mpa` for server-side category filtering before visible pagination. The authoritative and only MPA source is Runtime tag `veadk:agent-type=mpa`; image names and artifact URLs are not category inputs. `agentCategory=mpa` must first query the Volcano Tag service with a positive tag filter to obtain candidate Runtime IDs, then hydrate those records by Runtime ID, so sparse MPA results do not require scanning unrelated Runtime pages.
 
 ## State and data
 

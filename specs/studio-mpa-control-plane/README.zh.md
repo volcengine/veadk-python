@@ -26,7 +26,7 @@
 - `CON-12`：工具活动展示工具特定的安全动作和对象；未知工具展示具体名称，不使用通用完成标签。
 - `CON-13`：已脱敏工具输入/结果可通过显式复制/下载完整获取；预览渲染有界、截断有提示，所有详情路径共享同一脱敏规则。
 - `CON-14`：Turn 模型选择支持搜索和键盘访问，并在非终态 Turn 拥有不可变模型快照期间保持禁用。
-- `CON-15`：Runtime 列表暴露 `agentCategory`，并接受 `agentCategory=general|mpa` 在可见分页前执行服务端分类过滤。MPA 的权威且唯一来源是 Runtime 标签 `veadk:agent-type=mpa`；镜像名和 artifact URL 不参与分类。
+- `CON-15`：Runtime 列表暴露 `agentCategory`，并接受 `agentCategory=general|mpa` 在可见分页前执行服务端分类过滤。MPA 的权威且唯一来源是 Runtime 标签 `veadk:agent-type=mpa`；镜像名和 artifact URL 不参与分类。`agentCategory=mpa` 必须先通过 Volcano Tag 服务正向标签过滤获得候选 Runtime ID，再按 Runtime ID 补齐详情，避免 MPA 结果稀疏时扫描无关 Runtime 页。
 
 ## 状态与数据
 

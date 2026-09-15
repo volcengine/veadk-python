@@ -960,11 +960,30 @@ test("keeps the Turn model controls separate from the new-chat Agent picker", ()
   );
   assert.match(
     stylesSource,
-    /\.composer-model-select \.new-chat-compact-select__menu\s*\{[\s\S]*?top:\s*auto;[\s\S]*?right:\s*0;[\s\S]*?bottom:\s*calc\(100% \+ 6px\);[\s\S]*?left:\s*auto;/,
+    /\.composer-model-select \.new-chat-compact-select__menu\s*\{[\s\S]*?right:\s*0;[\s\S]*?left:\s*auto;[\s\S]*?width:\s*min\(360px, calc\(100vw - 32px\)\);/,
+  );
+  const composerModelMenuRule =
+    stylesSource.match(
+      /\.composer-model-select \.new-chat-compact-select__menu\s*\{([\s\S]*?)\}/,
+    )?.[1] ?? "";
+  assert.doesNotMatch(composerModelMenuRule, /top:\s*auto|bottom:\s*calc/);
+  assert.match(compactSelectSource, /data-side=\{menuSide\}/);
+  assert.match(compactSelectSource, /getBoundingClientRect\(\)/);
+  assert.match(compactSelectSource, /spaceBelow[\s\S]*?spaceAbove[\s\S]*?setMenuSide/);
+  assert.match(compactSelectSource, /minimumUsableMenuHeight/);
+  assert.doesNotMatch(compactSelectSource, /preferredMenuHeight/);
+  assert.match(compactSelectSource, /--new-chat-compact-select-list-max-height/);
+  assert.match(
+    workspaceStylesSource,
+    /\.new-chat-compact-select__menu\[data-side="top"\]\s*\{[\s\S]*?top:\s*auto;[\s\S]*?bottom:\s*calc\(100% \+ 7px\);/,
   );
   assert.match(
-    stylesSource,
-    /\.composer-model-select \.new-chat-compact-select__list\s*\{[\s\S]*?max-height:\s*min\(260px, calc\(100dvh - 220px\)\);/,
+    workspaceStylesSource,
+    /\.new-chat-compact-select__menu\[data-side="bottom"\]\s*\{[\s\S]*?top:\s*calc\(100% \+ 7px\);[\s\S]*?bottom:\s*auto;/,
+  );
+  assert.match(
+    workspaceStylesSource,
+    /\.new-chat-compact-select__list\s*\{[\s\S]*?var\(--new-chat-compact-select-list-max-height, 240px\)/,
   );
 });
 

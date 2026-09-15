@@ -27,6 +27,7 @@ Studio 已新增 `CloudRuntime.agentCategory`，新对话选择器也可以展�
 
 - `FR-1`: MPA Runtime 创建和按名称收敛更新必须包含 `veadk:agent-type=mpa`。
 - `FR-2`: `/web/runtimes` 必须接受可选 `agentCategory=general|mpa`，并在暴露分页结果前完成服务端过滤。
+- `FR-5`: `agentCategory=mpa` 必须先通过 Volcano Tag 服务的正向 `veadk:agent-type=mpa` 查询获得 Runtime ID，再补齐 Runtime 详情，避免 MPA 结果稀疏时扫描大量无关 Runtime 页。
 - `FR-3`: 已有未打标签的 MPA Runtime 不得通过镜像名启发式归类为 MPA。只有显式补写 `veadk:agent-type=mpa` 后才进入 MPA 筛选。
 - `FR-4`: 新对话和“我的智能体”类型筛选都必须展示 MPA，并且通用智能体中不得混入 MPA Runtime。
 
@@ -34,7 +35,7 @@ Studio 已新增 `CloudRuntime.agentCategory`，新对话选择器也可以展�
 
 `veadk.integrations.mpa.mpa_runtime.provision_runtime()` 新增 `tags` 映射参数。MPA CLI 传入 `{"veadk:agent-type": "mpa"}`。该函数在 `CreateRuntimeRequest` 和 `UpdateRuntimeRequest` 中都写入标签，确保重试复用同名 Runtime 时也会收敛到同一分类。
 
-`GET /web/runtimes` 保持响应结构不变，新增可选查询参数 `agentCategory`。无效值返回 `400`。Runtime 分类只来自显式 Runtime 标签。当传入分类时，每个地域扫描器会持续读取控制面分页，直到得到足够的匹配项用于当前合并页，或远端游标结束。返回项仍包含 `agentCategory` 字段。
+`GET /web/runtimes` 保持响应结构不变，新增可选查询参数 `agentCategory`。无效值返回 `400`。Runtime 分类只来自显式 Runtime 标签。当传入 `agentCategory=mpa` 时，服务端先使用 Volcano Tag 服务按正向 `veadk:agent-type=mpa` 过滤获得候选 Runtime ID，再按 ID 补齐 Runtime 详情。普通 Runtime 列表仍保留逐页 Tag 服务补查，因为 Runtime SDK 响应可能缺失自定义标签。`agentCategory=general` 继续使用本地排除过滤，因为控制面不提供“非某标签”的负向过滤。
 
 前端为 `getRuntimes()` 增加 `agentCategory` 参数。NewChatAgentPicker 不再对单页结果做本地二次过滤，而是向服务端请求 `mpa` 或 `general`。MyAgents 将 `mpa` 加入类型枚举，并对 `general` 与 `mpa` 共用 Runtime 列表路径；个人沙箱智能体类型保持不变。
 
@@ -51,6 +52,7 @@ Studio 已新增 `CloudRuntime.agentCategory`，新对话选择器也可以展�
 | --- | --- | --- | --- | --- |
 | `FR-1` | `T-1` | MPA create/update Runtime 请求包含 `veadk:agent-type=mpa`。 | `uv run --extra dev pytest tests/integrations/test_mpa_runtime.py tests/cli/test_cli_mpa.py` | pass |
 | `FR-2` | `T-2` | `/web/runtimes?agentCategory=mpa` 只返回 MPA Runtime 分页，并拒绝非法分类。 | `uv run --extra dev pytest tests/cli/test_frontend_runtime_proxy.py::test_runtime_list_filters_agent_category_before_pagination -q` | pass |
+| `FR-5` | `T-2` | MPA Runtime 列表通过 Tag 服务正向过滤获得候选 Runtime ID，不再扫描后续无关 Runtime 列表页。 | `uv run --extra dev pytest tests/cli/test_frontend_runtime_proxy.py::test_runtime_list_filters_agent_category_before_pagination -q` | pass |
 | `FR-4` | `T-3` | 新对话和“我的智能体”都展示 MPA，并请求服务端分类过滤后的 Runtime 页。 | `node --test frontend/tests/newChatAgentPicker.test.mjs frontend/tests/myAgents.test.mjs`; `npm --prefix frontend test` | pass |
 | All | `T-4` | Studio 构建产物与源码变化一致。 | `npm --prefix frontend run build -- --mode development`; `npm --prefix frontend run test:webui-assets`; `git diff --check` | pass |
 

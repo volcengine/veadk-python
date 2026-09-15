@@ -37,7 +37,7 @@ import threading
 import unicodedata
 import zipfile
 from collections import OrderedDict
-from collections.abc import AsyncIterator, Callable, Iterable, Mapping
+from collections.abc import AsyncIterator, Callable, Iterable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
@@ -9419,6 +9419,70 @@ def _run_frontend_server(
             }
         return result
 
+    def _runtime_id_from_resource_tag_mapping(item: Any) -> str:
+        runtime_id = str(getattr(item, "resource_id", "") or "")
+        if runtime_id:
+            return runtime_id
+        resource_trn = str(getattr(item, "resource_trn", "") or "")
+        match = re.search(r"/runtime/([^/:]+)$", resource_trn)
+        return match.group(1) if match else ""
+
+    def _runtime_resources_by_tags(
+        region: str,
+        *,
+        tag_filters: Sequence[tuple[str, str]],
+        max_results: int,
+        next_token: str = "",
+    ) -> tuple[dict[str, dict[str, str]], str]:
+        if not tag_filters:
+            return {}, ""
+        try:
+            import volcenginesdkcore
+            import volcenginesdktag
+
+            ak, sk, token = _resolve_ve_credentials()
+            configuration = volcenginesdkcore.Configuration()
+            configuration.ak = ak
+            configuration.sk = sk
+            configuration.session_token = token or ""
+            configuration.region = region
+            configuration.client_side_validation = True
+            client = volcenginesdktag.TAGApi(volcenginesdkcore.ApiClient(configuration))
+            request = volcenginesdktag.GetResourcesRequest(
+                max_results=max(1, min(max_results, 100)),
+                resource_type_filters=["agentkit:runtime"],
+                tag_filters=[
+                    volcenginesdktag.TagFilterForGetResourcesInput(
+                        key=key,
+                        values=[value],
+                    )
+                    for key, value in tag_filters
+                ],
+            )
+            if next_token:
+                request.next_token = next_token
+            response = client.get_resources(request)
+        except Exception as error:
+            logger.warning(
+                "runtime tag service filtered lookup failed region=%s tags=%s error=%s",
+                region,
+                ",".join(key for key, _ in tag_filters),
+                _safe_exception_detail(error, secrets=_resolve_ve_credentials()),
+            )
+            raise RuntimeError("Runtime tag filtered lookup failed") from error
+
+        result: dict[str, dict[str, str]] = {}
+        for item in getattr(response, "resource_tag_mapping_list", None) or []:
+            runtime_id = _runtime_id_from_resource_tag_mapping(item)
+            if not runtime_id:
+                continue
+            result[runtime_id] = {
+                str(getattr(tag, "key", "") or ""): str(getattr(tag, "value", "") or "")
+                for tag in (getattr(item, "tags", None) or [])
+                if getattr(tag, "key", None)
+            }
+        return result, str(getattr(response, "next_token", "") or "")
+
     def _runtime_agent_category(runtime: Any, tags: Mapping[str, str]) -> str:
         """Classify Runtime products from explicit, persisted Runtime tags."""
         tagged = str(tags.get("veadk:agent-type") or "").strip().lower()
@@ -10020,11 +10084,13 @@ def _run_frontend_server(
         list_lock = _runtime_list_locks.setdefault(cache_key, asyncio.Lock())
 
         # next_token format for cross-region mode: "all:<offset>".
+        mpa_tag_filter = ("veadk:agent-type", "mpa")
+
         async def _list_region(
             reg: str,
             tok: str,
             max_results: int = page_size,
-            tag_filter: tuple[str, str] | None = None,
+            tag_filters: Sequence[tuple[str, str]] | None = None,
         ) -> tuple[list[dict], str]:
             from agentkit.sdk.runtime.client import AgentkitRuntimeClient
             from agentkit.sdk.runtime import types as _rt
@@ -10041,11 +10107,12 @@ def _run_frontend_server(
             target_size = max(1, min(max_results, 100))
             for _ in range(20):
                 kw: dict = {"max_results": max(1, target_size - len(out))}
-                if tag_filter is not None:
+                if tag_filters:
                     kw["tag_filters"] = [
                         _rt.TagFiltersItemForListRuntimes.model_validate(
-                            {"Key": tag_filter[0], "Values": [tag_filter[1]]}
+                            {"Key": key, "Values": [value]}
                         )
+                        for key, value in tag_filters
                     ]
                 if current_token:
                     kw["next_token"] = current_token
@@ -10122,6 +10189,105 @@ def _run_frontend_server(
                 current_token = next_page_token
             return out[:target_size], next_page_token
 
+        def _runtime_to_visible_item(
+            runtime: Any,
+            tags: Mapping[str, str],
+            reg: str,
+        ) -> dict[str, Any] | None:
+            is_mine = runtime_belongs_to(tags, principal)
+            if scope == "mine" and not is_mine:
+                return None
+            if (
+                not role.is_admin
+                and not is_mine
+                and not (principal is not None and enterprise_visible(tags))
+            ):
+                return None
+            agent_category = _runtime_agent_category(runtime, tags)
+            if (
+                normalized_agent_category
+                and agent_category != normalized_agent_category
+            ):
+                return None
+            can_delete = (
+                role != StudioRole.USER
+                and tags.get("veadk:managed") == "true"
+                and (role.is_admin or is_mine)
+            )
+            return {
+                "name": runtime.name,
+                "runtimeId": runtime.runtime_id,
+                "status": runtime.status,
+                "createdAt": runtime.created_at,
+                "description": getattr(runtime, "description", "") or "",
+                "cpuMilli": getattr(runtime, "cpu_milli", None),
+                "memoryMb": getattr(runtime, "memory_mb", None),
+                "currentVersion": getattr(runtime, "current_version_number", None),
+                "agentCategory": agent_category,
+                "region": reg,
+                "author": tags.get("veadk:author", ""),
+                "isMine": is_mine,
+                "canDelete": can_delete
+                and tags.get(STATUS_TAG) != "pending"
+                and not enterprise_visible(tags),
+                "canManage": role != StudioRole.USER and (role.is_admin or is_mine),
+                "canPublish": role.is_admin,
+                "visibility": "enterprise" if enterprise_visible(tags) else "private",
+                "reviewStatus": tags.get(STATUS_TAG, ""),
+            }
+
+        async def _list_mpa_region(
+            reg: str,
+            tok: str,
+            max_results: int = page_size,
+            extra_tag_filters: Sequence[tuple[str, str]] = (),
+        ) -> tuple[list[dict], str]:
+            tag_filters = [mpa_tag_filter, *extra_tag_filters]
+
+            async def _tagged_runtime_item(
+                runtime_id: str,
+                tags: Mapping[str, str],
+            ) -> dict[str, Any] | None:
+                try:
+                    runtime = await asyncio.to_thread(_get_runtime, runtime_id, reg)
+                except Exception as error:
+                    logger.warning(
+                        "tagged MPA runtime detail lookup failed runtime_id=%s "
+                        "region=%s error=%s",
+                        runtime_id,
+                        reg,
+                        _safe_exception_detail(error, secrets=(ak, sk, svc_token)),
+                    )
+                    return None
+                merged_tags = {**_runtime_tags(runtime), **tags}
+                merged_tags.setdefault(mpa_tag_filter[0], mpa_tag_filter[1])
+                return _runtime_to_visible_item(runtime, merged_tags, reg)
+
+            out: list[dict] = []
+            current_token = tok
+            following_token = ""
+            target_size = max(1, min(max_results, 100))
+            for _ in range(20):
+                tag_map, following_token = await asyncio.to_thread(
+                    _runtime_resources_by_tags,
+                    reg,
+                    tag_filters=tag_filters,
+                    max_results=max(1, target_size - len(out)),
+                    next_token=current_token,
+                )
+                results = await asyncio.gather(
+                    *(
+                        _tagged_runtime_item(runtime_id, tags)
+                        for runtime_id, tags in tag_map.items()
+                    )
+                )
+                out.extend(item for item in results if item is not None)
+                if len(out) >= target_size or not following_token:
+                    break
+                current_token = following_token
+            out.sort(key=lambda item: item.get("createdAt") or "", reverse=True)
+            return out[:target_size], following_token
+
         await list_lock.acquire()
         cached = _runtime_list_cache.get(cache_key)
         if cached and monotonic() - cached[0] < _runtime_list_cache_ttl_seconds:
@@ -10149,11 +10315,22 @@ def _run_frontend_server(
                 owned_has_more = False
                 owned_results = await asyncio.gather(
                     *(
-                        _list_region(
-                            reg,
-                            "",
-                            window_end,
-                            ("veadk:owner", principal.owner_id),
+                        (
+                            _list_mpa_region(
+                                reg,
+                                "",
+                                window_end,
+                                [("veadk:owner", principal.owner_id)]
+                                if scope == "mine"
+                                else [],
+                            )
+                            if normalized_agent_category == "mpa"
+                            else _list_region(
+                                reg,
+                                "",
+                                window_end,
+                                [("veadk:owner", principal.owner_id)],
+                            )
                         )
                         for reg in regions
                     )
@@ -10174,7 +10351,10 @@ def _run_frontend_server(
                 return _cache_result({"runtimes": page, "nextToken": following_token})
 
             if len(regions) == 1:
-                out, nxt = await _list_region(regions[0], next_token)
+                if normalized_agent_category == "mpa":
+                    out, nxt = await _list_mpa_region(regions[0], next_token)
+                else:
+                    out, nxt = await _list_region(regions[0], next_token)
                 return _cache_result({"runtimes": out, "nextToken": nxt})
 
             if next_token:
@@ -10213,6 +10393,47 @@ def _run_frontend_server(
                     seen_tokens.add(following_token)
                     regional_token = following_token
                 return items, bool(following_token)
+
+            if normalized_agent_category == "mpa":
+                regional_results = await asyncio.gather(
+                    *(_list_mpa_region(reg, "", window_end) for reg in regions),
+                    return_exceptions=True,
+                )
+                regional_errors: list[str] = []
+                tagged_runtimes: list[dict] = []
+                regional_has_more = False
+                for reg, result in zip(regions, regional_results):
+                    if isinstance(result, BaseException):
+                        if isinstance(result, asyncio.CancelledError):
+                            raise result
+                        error_detail = _safe_exception_detail(
+                            result,
+                            secrets=(ak, sk, svc_token),
+                        )
+                        logger.warning(
+                            "list tagged MPA runtimes [%s] failed: %s",
+                            reg,
+                            error_detail,
+                        )
+                        regional_errors.append(f"{reg}: {error_detail}")
+                        continue
+                    items, has_more = result
+                    tagged_runtimes.extend(items)
+                    regional_has_more = regional_has_more or has_more
+                if len(regional_errors) == len(regions):
+                    raise RuntimeError(
+                        "all regional tagged MPA runtime requests failed: "
+                        + "; ".join(regional_errors)
+                    )
+                tagged_runtimes.sort(
+                    key=lambda x: x.get("createdAt") or "",
+                    reverse=True,
+                )
+                page_end = min(offset + page_size, len(tagged_runtimes))
+                page = tagged_runtimes[offset:page_end]
+                has_more = page_end < len(tagged_runtimes) or regional_has_more
+                following_token = f"all:{page_end}" if has_more else ""
+                return _cache_result({"runtimes": page, "nextToken": following_token})
 
             all_runtimes: list[dict] = []
             regional_has_more = False

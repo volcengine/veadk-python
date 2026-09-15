@@ -3467,15 +3467,9 @@ body {
 }
 
 .composer-model-select .new-chat-compact-select__menu {
-  top: auto;
   right: 0;
-  bottom: calc(100% + 6px);
   left: auto;
   width: min(360px, calc(100vw - 32px));
-}
-
-.composer-model-select .new-chat-compact-select__list {
-  max-height: min(260px, calc(100dvh - 220px));
 }
 .composer--new-chat .composer-submit-actions {
   position: absolute;

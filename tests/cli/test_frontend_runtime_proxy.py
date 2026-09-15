@@ -2205,7 +2205,9 @@ def test_runtime_list_filters_agent_category_before_pagination(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     app = _create_frontend_app(monkeypatch, tmp_path)
-    calls: list[tuple[str, str, int]] = []
+    list_calls: list[tuple[str, str, int]] = []
+    get_calls: list[tuple[str, str]] = []
+    tag_calls: list[dict[str, Any]] = []
     runtimes = [
         ("general-new", "2026-07-21T05:00:00Z", []),
         ("mpa-tagged", "2026-07-21T04:00:00Z", []),
@@ -2220,7 +2222,7 @@ def test_runtime_list_filters_agent_category_before_pagination(
         def list_runtimes(self, request: Any) -> SimpleNamespace:
             offset = int(getattr(request, "next_token", "") or 0)
             page_size = request.max_results
-            calls.append((self.region, str(offset), page_size))
+            list_calls.append((self.region, str(offset), page_size))
             page = runtimes[offset : offset + page_size]
             page_end = offset + len(page)
             return SimpleNamespace(
@@ -2241,6 +2243,25 @@ def test_runtime_list_filters_agent_category_before_pagination(
                 next_token=str(page_end) if page_end < len(runtimes) else "",
             )
 
+        def get_runtime(self, request: Any) -> SimpleNamespace:
+            runtime_id = request.runtime_id
+            get_calls.append((self.region, runtime_id))
+            match = next(
+                item for item in runtimes if f"runtime-{item[0]}" == runtime_id
+            )
+            name, created_at, tags = match
+            return SimpleNamespace(
+                name=name,
+                runtime_id=runtime_id,
+                status="Ready",
+                created_at=created_at,
+                artifact_url=(
+                    "agentkit-platform-2112682748-cn-beijing.cr.volces.com"
+                    f"/agentkit/{name}:test"
+                ),
+                tags=tags,
+            )
+
     monkeypatch.setattr(
         "agentkit.sdk.runtime.client.AgentkitRuntimeClient", _FakeRuntimeClient
     )
@@ -2250,10 +2271,46 @@ def test_runtime_list_filters_agent_category_before_pagination(
             pass
 
         def get_resources(self, request: Any) -> SimpleNamespace:
+            tag_filters = [
+                (
+                    getattr(item, "key", None) or getattr(item, "Key", ""),
+                    tuple(getattr(item, "values", None) or getattr(item, "Values", [])),
+                )
+                for item in (getattr(request, "tag_filters", None) or [])
+            ]
+            tag_calls.append(
+                {
+                    "trns": tuple(getattr(request, "resource_trn_list", []) or []),
+                    "resource_type_filters": tuple(
+                        getattr(request, "resource_type_filters", []) or []
+                    ),
+                    "tag_filters": tag_filters,
+                }
+            )
+            if tag_filters == [("veadk:agent-type", ("mpa",))]:
+                return SimpleNamespace(
+                    resource_tag_mapping_list=[
+                        SimpleNamespace(
+                            resource_id="runtime-mpa-tagged",
+                            resource_trn=(
+                                "trn:agentkit:cn-beijing:2112682748:"
+                                "runtime/runtime-mpa-tagged"
+                            ),
+                            resource_type="runtime",
+                            tags=[
+                                SimpleNamespace(
+                                    key="veadk:agent-type",
+                                    value="mpa",
+                                )
+                            ],
+                        )
+                    ],
+                    next_token="",
+                )
             trns = set(getattr(request, "resource_trn_list", []) or [])
             tagged_trn = "trn:agentkit:cn-beijing:2112682748:runtime/runtime-mpa-tagged"
             if tagged_trn not in trns:
-                return SimpleNamespace(resource_tag_mapping_list=[])
+                return SimpleNamespace(resource_tag_mapping_list=[], next_token="")
             return SimpleNamespace(
                 resource_tag_mapping_list=[
                     SimpleNamespace(
@@ -2265,7 +2322,8 @@ def test_runtime_list_filters_agent_category_before_pagination(
                             )
                         ],
                     )
-                ]
+                ],
+                next_token="",
             )
 
     monkeypatch.setattr("volcenginesdktag.TAGApi", _FakeTagApi)
@@ -2275,6 +2333,7 @@ def test_runtime_list_filters_agent_category_before_pagination(
             "/web/runtimes",
             params={"region": "cn-beijing", "page_size": 2, "agentCategory": "mpa"},
         )
+        list_calls_after_mpa = list(list_calls)
         general = client.get(
             "/web/runtimes",
             params={
@@ -2297,8 +2356,101 @@ def test_runtime_list_filters_agent_category_before_pagination(
     ]
     assert {item["agentCategory"] for item in general.json()["runtimes"]} == {"general"}
     assert invalid.status_code == 400
-    assert ("cn-beijing", "0", 2) in calls
-    assert ("cn-beijing", "2", 1) in calls
+    assert get_calls == [("cn-beijing", "runtime-mpa-tagged")]
+    assert {
+        "trns": (),
+        "resource_type_filters": ("agentkit:runtime",),
+        "tag_filters": [("veadk:agent-type", ("mpa",))],
+    } in tag_calls
+    assert list_calls_after_mpa == []
+    assert ("cn-beijing", "0", 2) in list_calls
+    assert ("cn-beijing", "2", 1) in list_calls
+
+
+def test_runtime_list_filters_mpa_owner_with_tag_service(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    app = _create_frontend_app(
+        monkeypatch,
+        tmp_path,
+        admins="admin",
+        developers="developer",
+    )
+    get_calls: list[str] = []
+    tag_calls: list[list[tuple[str, tuple[str, ...]]]] = []
+
+    class _FakeRuntimeClient:
+        def __init__(self, **kwargs: Any) -> None:
+            del kwargs
+
+        def list_runtimes(self, _request: Any) -> SimpleNamespace:
+            raise AssertionError("MPA category must not scan Runtime list pages")
+
+        def get_runtime(self, request: Any) -> SimpleNamespace:
+            runtime_id = request.runtime_id
+            get_calls.append(runtime_id)
+            return SimpleNamespace(
+                name=runtime_id,
+                runtime_id=runtime_id,
+                status="Ready",
+                created_at="2026-07-21T04:00:00Z",
+                tags=[],
+            )
+
+    monkeypatch.setattr(
+        "agentkit.sdk.runtime.client.AgentkitRuntimeClient", _FakeRuntimeClient
+    )
+
+    class _FakeTagApi:
+        def __init__(self, _api_client: object) -> None:
+            pass
+
+        def get_resources(self, request: Any) -> SimpleNamespace:
+            filters = [
+                (
+                    getattr(item, "key", None) or getattr(item, "Key", ""),
+                    tuple(getattr(item, "values", None) or getattr(item, "Values", [])),
+                )
+                for item in (getattr(request, "tag_filters", None) or [])
+            ]
+            tag_calls.append(filters)
+            assert filters == [
+                ("veadk:agent-type", ("mpa",)),
+                ("veadk:owner", ("developer",)),
+            ]
+            return SimpleNamespace(
+                resource_tag_mapping_list=[
+                    SimpleNamespace(
+                        resource_id="runtime-owned-mpa",
+                        tags=[
+                            SimpleNamespace(key="veadk:agent-type", value="mpa"),
+                            SimpleNamespace(key="veadk:owner", value="developer"),
+                            SimpleNamespace(key="veadk:author", value="developer"),
+                        ],
+                    )
+                ],
+                next_token="",
+            )
+
+    monkeypatch.setattr("volcenginesdktag.TAGApi", _FakeTagApi)
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/web/runtimes?scope=mine&page_size=2&region=cn-beijing&agentCategory=mpa",
+            headers={"X-VeADK-Local-User": "developer"},
+        )
+
+    assert response.status_code == 200
+    assert [item["runtimeId"] for item in response.json()["runtimes"]] == [
+        "runtime-owned-mpa"
+    ]
+    assert get_calls == ["runtime-owned-mpa"]
+    assert tag_calls == [
+        [
+            ("veadk:agent-type", ("mpa",)),
+            ("veadk:owner", ("developer",)),
+        ]
+    ]
 
 
 @pytest.mark.parametrize("scope", ["all", "mine"])
