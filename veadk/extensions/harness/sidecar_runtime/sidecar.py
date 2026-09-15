@@ -519,6 +519,14 @@ def _configure_structured_mcp_upstreams(
     if not raw or not config.mcp_gateway.enabled:
         return config, []
     servers = _parse_structured_mcp_servers(raw)
+    if not servers:
+        # An explicit empty list is the canonical legacy representation of a
+        # managed Runtime with no user MCP.  Do not manufacture credentials or
+        # fall back to stale legacy upstreams when starting that Runtime.
+        runtime_env.pop(_MCP_SERVERS_JSON_ENV, None)
+        runtime_env.pop("MCP_URLS", None)
+        runtime_env.pop("MCP_API_KEY", None)
+        return config, []
     internal_api_key = token_urlsafe(32)
     relays: list[ManagedMcpUpstreamRelay] = []
     try:
@@ -559,7 +567,7 @@ def _parse_structured_mcp_servers(raw: str) -> list[_ManagedMcpServer]:
         raise HarnessSidecarError(
             "Managed MCP server configuration is invalid"
         ) from error
-    if not isinstance(payload, list) or not 1 <= len(payload) <= 32:
+    if not isinstance(payload, list) or len(payload) > 32:
         raise HarnessSidecarError("Managed MCP server configuration is invalid")
     servers: list[_ManagedMcpServer] = []
     seen_names: set[str] = set()

@@ -479,6 +479,7 @@ def test_http_permissions_refresh_and_cross_origin_mutations_are_blocked(
 def test_directory_uses_provider_host_and_fetches_all_pages(
     monkeypatch, provider, region, host
 ):
+    import importlib
     from types import SimpleNamespace
     from frontend.server.user_management import directory as module
 
@@ -507,8 +508,10 @@ def test_directory_uses_provider_host_and_fetches_all_pages(
             )
             return SimpleNamespace(data=[value], total_count=2)
 
-    monkeypatch.setattr(module.volcenginesdkcore, "ApiClient", api_client)
-    monkeypatch.setattr(module.sdk, "IDApi", Api)
+    monkeypatch.setattr(
+        importlib.import_module("volcenginesdkcore"), "ApiClient", api_client
+    )
+    monkeypatch.setattr(module._identity_sdk(), "IDApi", Api)
     monkeypatch.delenv("IDENTITY_OPENAPI_HOST", raising=False)
     directory = module.IdentityDirectory(
         "pool", provider, region, lambda: ("test-ak", "test-sk", None)
@@ -518,6 +521,24 @@ def test_directory_uses_provider_host_and_fetches_all_pages(
     assert all(
         config.host == host and config.region == region for config in configurations
     )
+
+
+def test_directory_normalizes_credential_resolver_failure():
+    from frontend.server.user_management.directory import IdentityDirectory
+
+    def unavailable_credentials():
+        raise RuntimeError("credential source unavailable")
+
+    directory = IdentityDirectory(
+        "pool",
+        "volcengine",
+        "cn-shanghai",
+        unavailable_credentials,
+    )
+    with pytest.raises(UserManagementError) as error:
+        directory._resolve_credentials()
+    assert error.value.status == 503
+    assert error.value.code == "identity_unavailable"
 
 
 @pytest.mark.parametrize(
@@ -642,3 +663,130 @@ def test_failed_runtime_migration_never_clears_old_environment(monkeypatch):
             admins="missing@example.com",
         )
     assert not directory.group_records
+
+
+def test_initialized_runtime_defers_transient_identity_directory_failure(monkeypatch):
+    from frontend.server.user_management import deployment
+
+    directory = Directory()
+    seeded = UserManagementService(directory, "pool", "client", "volcengine")
+    seeded.initialize("owner", allow_initialize=True)
+    original_groups = directory.groups
+    attempts = 0
+
+    def transient_groups():
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise UserManagementError(503, "identity_unavailable")
+        return original_groups()
+
+    directory.groups = transient_groups
+    monkeypatch.setattr(deployment, "IdentityDirectory", lambda *args: directory)
+
+    service = deployment.initialize_runtime_roles(
+        pool_uid="pool",
+        client_uid="client",
+        provider="volcengine",
+        identity_region="cn-shanghai",
+        credentials=lambda: ("ak", "sk", "token"),
+        environment={"VEADK_STUDIO_IDENTITY_ROLES": "1"},
+    )
+
+    principal = service.principal_for(
+        StudioPrincipal.from_claims({"sub": "oidc|owner"})
+    )
+    assert attempts == 2
+    assert principal.role == StudioRole.SUPER_ADMIN
+
+
+def test_initialized_runtime_deferred_identity_failure_remains_fail_closed(
+    monkeypatch,
+):
+    from frontend.server.user_management import deployment
+
+    directory = Directory()
+    seeded = UserManagementService(directory, "pool", "client", "volcengine")
+    seeded.initialize("owner", allow_initialize=True)
+
+    def unavailable_groups():
+        raise UserManagementError(503, "identity_unavailable")
+
+    directory.groups = unavailable_groups
+    monkeypatch.setattr(deployment, "IdentityDirectory", lambda *args: directory)
+
+    service = deployment.initialize_runtime_roles(
+        pool_uid="pool",
+        client_uid="client",
+        provider="volcengine",
+        identity_region="cn-shanghai",
+        credentials=lambda: ("ak", "sk", "token"),
+        environment={"VEADK_STUDIO_IDENTITY_ROLES": "1"},
+    )
+
+    with pytest.raises(UserManagementError, match="identity_unavailable"):
+        service.principal_for(StudioPrincipal.from_claims({"sub": "oidc|owner"}))
+
+
+def test_uninitialized_runtime_identity_failure_remains_fail_closed(monkeypatch):
+    from frontend.server.user_management import deployment
+
+    directory = Directory()
+
+    def unavailable_groups():
+        raise UserManagementError(503, "identity_unavailable")
+
+    directory.groups = unavailable_groups
+    monkeypatch.setattr(deployment, "IdentityDirectory", lambda *args: directory)
+
+    service = deployment.initialize_runtime_roles(
+        pool_uid="pool",
+        client_uid="client",
+        provider="volcengine",
+        identity_region="cn-shanghai",
+        credentials=lambda: ("ak", "sk", "token"),
+        environment={},
+    )
+
+    assert not directory.group_records
+    with pytest.raises(UserManagementError, match="identity_unavailable"):
+        service.principal_for(StudioPrincipal.from_claims({"sub": "oidc|owner"}))
+    assert not directory.group_records
+
+
+def test_uninitialized_runtime_retries_original_initialization_after_recovery(
+    monkeypatch,
+):
+    from frontend.server.user_management import deployment
+
+    directory = Directory()
+    original_groups = directory.groups
+    attempts = 0
+
+    def transient_groups():
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise UserManagementError(503, "identity_unavailable")
+        return original_groups()
+
+    directory.groups = transient_groups
+    monkeypatch.setattr(deployment, "IdentityDirectory", lambda *args: directory)
+
+    service = deployment.initialize_runtime_roles(
+        pool_uid="pool",
+        client_uid="client",
+        provider="volcengine",
+        identity_region="cn-shanghai",
+        credentials=lambda: ("ak", "sk", "token"),
+        environment={},
+    )
+
+    assert attempts == 1
+    assert not directory.group_records
+    principal = service.principal_for(
+        StudioPrincipal.from_claims({"sub": "oidc|owner"})
+    )
+    assert attempts == 2
+    assert principal.role == StudioRole.ADMIN
+    assert len(directory.group_records) == len(StudioRole)

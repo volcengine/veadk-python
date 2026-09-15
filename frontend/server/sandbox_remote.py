@@ -28,25 +28,17 @@ from agentkit.toolkit.cli.sandbox.sandbox_client import (
     build_file_url,
 )
 
+from frontend.server.sandbox_remote_errors import (
+    SandboxRemoteError,
+    SandboxRemoteResponseError,
+    SandboxRemoteSizeError,
+)
+
 _MAX_PATH_BYTES = 512
 _MAX_TRANSFER_BYTES = 20 * 1024 * 1024
 _MAX_COMMAND_OUTPUT_BYTES = 16 * 1024 * 1024
 _RETRYABLE_HTTP_STATUSES = {408, 429, 500, 502, 503, 504}
 _T = TypeVar("_T")
-
-
-class SandboxRemoteError(RuntimeError):
-    def __init__(self, message: str, *, retryable: bool = False) -> None:
-        super().__init__(message)
-        self.retryable = retryable
-
-
-class SandboxRemoteResponseError(SandboxRemoteError):
-    pass
-
-
-class SandboxRemoteSizeError(SandboxRemoteResponseError):
-    pass
 
 
 def _exact_file_path(value: str) -> str:

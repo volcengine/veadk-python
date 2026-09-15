@@ -63,6 +63,67 @@ def _verification_script() -> str:
     return step["run"].split("<<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
 
 
+def _smoke_script() -> str:
+    workflow_path = (
+        Path(__file__).parents[1]
+        / ".github"
+        / "workflows"
+        / "publish-studio-release.yaml"
+    )
+    workflow = yaml.safe_load(workflow_path.read_text(encoding="utf-8"))
+    step = next(
+        step
+        for step in workflow["jobs"]["verify"]["steps"]
+        if step.get("name") == "Simulate customer update and smoke-test Studio"
+    )
+    return step["run"]
+
+
+def test_smoke_gate_is_fresh_amd64_and_runs_before_import_validation() -> None:
+    script = _smoke_script()
+
+    assert 'test "$(uname -s)" = "Linux"' in script
+    assert 'test "$(uname -m)" = "x86_64"' in script
+    assert "COLD_START_DEADLINE_SECONDS=60" in script
+    assert "COLD_START_DEADLINE_SECONDS=90" not in script
+    assert "STUDIO_MAX_BUNDLE_BYTES=$((256 * 1024 * 1024))" in script
+    assert script.index("smoke_studio byteplus") < script.index("import frontend")
+    assert script.index("smoke_studio volcengine") < script.index("import frontend")
+    assert 'runtime_venv="$RUNNER_TEMP/studio-release-runtime-${provider}"' in script
+
+
+def test_smoke_gate_executes_bundle_as_low_privilege_user() -> None:
+    script = _smoke_script()
+
+    assert 'permission_probe_root="$(mktemp -d)"' in script
+    assert 'permission_probe="$permission_probe_root/package"' in script
+    assert 'sudo chown nobody "$permission_probe_state"' in script
+    assert 'unzip -q "${bundle[0]}" -d "$permission_probe"' in script
+    assert 'test "$(stat -c %a "$permission_probe/run.sh")" = "755"' in script
+    assert (
+        'test "$(stat -c %a "$permission_probe/agentkit-linux-x64.tar.gz")" = "644"'
+        in script
+    )
+    assert "sudo -u nobody -H env" in script
+    assert '"$permission_probe/run.sh"' in script
+
+
+def test_smoke_gate_sets_state_mode_before_transferring_ownership() -> None:
+    script = _smoke_script()
+
+    chmod_state = script.index('chmod 700 "$permission_probe_state"')
+    chown_state = script.index('sudo chown nobody "$permission_probe_state"')
+
+    assert chmod_state < chown_state
+
+
+def test_smoke_gate_survives_platform_entrypoint_mode_normalization() -> None:
+    script = _smoke_script()
+
+    assert 'chmod 644 "$permission_probe/run.sh"' in script
+    assert 'bash "$permission_probe/run.sh"' in script
+
+
 def test_verification_reuses_checked_inputs_and_rebuilds_current_source(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

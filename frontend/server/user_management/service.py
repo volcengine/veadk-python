@@ -45,6 +45,41 @@ class UserManagementService:
         # Only the immutable subject-to-UID mapping is cached, never permissions
         self._subject_uids: dict[str, str] = {}
         self._write_lock = RLock()
+        self._deferred_initialization: tuple[str, str, str, bool] | None = None
+
+    def defer_initialization(
+        self,
+        bootstrap: str = "",
+        admins: str = "",
+        developers: str = "",
+        *,
+        allow_initialize: bool = False,
+    ) -> None:
+        """Retry an already-authorized startup initialization on protected access."""
+        with self._write_lock:
+            self._deferred_initialization = (
+                bootstrap,
+                admins,
+                developers,
+                allow_initialize,
+            )
+
+    def _ensure_deferred_initialization(self) -> None:
+        pending = self._deferred_initialization
+        if pending is None:
+            return
+        with self._write_lock:
+            pending = self._deferred_initialization
+            if pending is None:
+                return
+            bootstrap, admins, developers, allow_initialize = pending
+            self.initialize(
+                bootstrap,
+                admins,
+                developers,
+                allow_initialize=allow_initialize,
+            )
+            self._deferred_initialization = None
 
     def initialize(
         self,
@@ -179,6 +214,7 @@ class UserManagementService:
         return roles[0] if len(roles) == 1 else StudioRole.USER
 
     def _resolve_user(self, principal: StudioPrincipal | None) -> PoolUser:
+        self._ensure_deferred_initialization()
         if principal is None:
             raise UserManagementError(401, "sign_in_required")
         subject = principal.owner_id
@@ -301,6 +337,7 @@ class UserManagementService:
         expected_role: StudioRole,
     ) -> dict:
         with self._write_lock:
+            self._ensure_deferred_initialization()
             self.initialize()
             actor_user = self._require_super_admin(actor)
             user = self.directory.user(user_uid)

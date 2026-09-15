@@ -501,10 +501,6 @@ test("workspace publish flow restores PR 748 deployment lifecycle hooks", () => 
     projectPreviewSource,
     /await onDeploymentComplete\?\.\(result\)[\s\S]*?catch \(error\)[\s\S]*?error instanceof RuntimeProbeError[\s\S]*?status: "success"[\s\S]*?label: t\("projectPreview\.task\.deployedNotConnected"\)[\s\S]*?message: error\.message/,
   );
-  assert.match(
-    appSource,
-    /const startDeployment = useCallback[\s\S]*?flushPendingWorkspaceDraft\(\)[\s\S]*?draftId: editingDraftId[\s\S]*?updateDeploymentTask\(linkedTask\)[\s\S]*?openDeploymentDetail\(linkedTask\)/,
-  );
   assert.doesNotMatch(workspaceSource, /aw-deployment-focus/);
   assert.match(
     workspaceSource,
@@ -586,6 +582,20 @@ test("workspace publish flow restores PR 748 deployment lifecycle hooks", () => 
     appSource,
     /const finishDeployment = useCallback[\s\S]*?removeWorkspaceDraft\(completedDraftId\)[\s\S]*?setEditingDraftId\(""\)[\s\S]*?await connectRuntime\([\s\S]*?waitForReady: true/,
   );
+});
+
+test("starting a deployment persists the task without leaving the active editor", () => {
+  const startDeploymentSource = appSource.slice(
+    appSource.indexOf("const startDeployment = useCallback"),
+    appSource.indexOf("const finishDeployment = useCallback"),
+  );
+
+  assert.match(
+    startDeploymentSource,
+    /flushPendingWorkspaceDraft\(\)[\s\S]*?draftId: editingDraftId[\s\S]*?updateDeploymentTask\(linkedTask\)/,
+  );
+  assert.doesNotMatch(startDeploymentSource, /openDeploymentDetail\(/);
+  assert.match(appSource, /onViewDeploymentTask=\{openDeploymentDetail\}/);
 });
 
 test("runtime update deployments stay on the existing agent row", () => {
@@ -700,6 +710,8 @@ test("runtime updates use the Agent selected in management instead of the active
   assert.match(clientSource, /network: NetworkConfig/);
   assert.match(clientSource, /agent\?:\s*\{[\s\S]*?\}\s*\| null/);
   assert.match(clientSource, /export function getRuntimeUpdateCapability/);
+  assert.match(clientSource, /export async function getRuntimeMcpCredentials/);
+  assert.match(clientSource, /\/web\/runtime-mcp-credentials/);
   assert.match(clientSource, /\/web\/runtime-update-capability\?\$\{params\.toString\(\)\}/);
   assert.match(clientSource, /new URLSearchParams\(\{ runtimeId, region \}\)/);
   assert.match(clientSource, /if \(appName\) params\.set\("appName", appName\)/);
@@ -733,14 +745,7 @@ test("runtime updates use the Agent selected in management instead of the active
     customCreateSource,
     /removeRuntimeEnvKeys:\s*deploymentTarget[\s\S]*?removedConfiguredMcpEnvKeys\([\s\S]*?deploymentTarget\.configuredMcpEnvKeys[\s\S]*?draft/,
   );
-  assert.match(
-    customCreateSource,
-    /onClick=\{\(\) =>[\s\S]*?onChange\([\s\S]*?tools\.map\([\s\S]*?clearMcpConfiguredAuth\(tool\)/,
-  );
-  assert.doesNotMatch(
-    customCreateSource,
-    /update\(i,\s*clearMcpConfiguredAuth\(/,
-  );
+  assert.doesNotMatch(customCreateSource, /clearMcpConfiguredAuth/);
 
   const handlerStart = appSource.indexOf("onUpdateAgent={async (capability) =>");
   const handlerEnd = appSource.indexOf("onEditDraft=", handlerStart);
@@ -765,9 +770,16 @@ test("runtime updates use the Agent selected in management instead of the active
   );
   assert.doesNotMatch(handler, /draftEnvValues|selectedAgentUpdateDraft\?\.draft/);
   assert.match(handler, /hydrateRuntimeModelSelection\(/);
+  assert.match(handler, /await getRuntimeMcpCredentials\(/);
+  assert.match(handler, /hydrateMcpCredentialValues\(/);
+  assert.ok(
+    handler.indexOf("hydrateMcpCredentialValues(") <
+      handler.indexOf("setImportedDraft("),
+    "MCP credentials must be restored before the editor opens",
+  );
   assert.match(
     handler,
-    /setCustomCreationSurface\([\s\S]*?classifiedDraft\.dynamicAgentDelegation === true[\s\S]*?\? "vulcan"[\s\S]*?: "traditional"/,
+    /setCustomCreationSurface\([\s\S]*?editorDraft\.dynamicAgentDelegation === true[\s\S]*?\? "vulcan"[\s\S]*?: "traditional"/,
   );
   assert.match(handler, /network:\s*capability\.runtime\.network/);
   assert.match(handler, /etag:\s*capability\.etag/);

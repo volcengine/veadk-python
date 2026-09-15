@@ -563,6 +563,7 @@ def test_studio_update_preserves_branding_and_updates_existing_ids(
     assert update["application_id"] == "app-id"
     assert update["function_id"] == "function-app-id"
     assert update["disable_gateway_cors"] is True
+    assert update["normalize_studio_entrypoint"] is True
     assert update["environment_overrides"] == {
         "STUDIO_WORKSPACE_TOOL_ID": "studio-workspace-tool",
         "AGENTKIT_SANDBOX_REGION": "cn-beijing",
@@ -1662,10 +1663,11 @@ def test_update_application_code_bundle_merges_only_explicit_environment(
     service.session_token = ""
     cast(Any, service).client = SimpleNamespace(
         get_function=lambda _: SimpleNamespace(
+            command="./run.sh",
             envs=[
                 SimpleNamespace(key="EXISTING", value="kept"),
                 SimpleNamespace(key="VEADK_SITE_TITLE", value="old"),
-            ]
+            ],
         ),
         update_function=updated_requests.append,
         update_function_resource=resource_requests.append,
@@ -1681,6 +1683,7 @@ def test_update_application_code_bundle_merges_only_explicit_environment(
         path=str(tmp_path),
         environment_overrides={"VEADK_SITE_TITLE": "新标题"},
         disable_gateway_cors=True,
+        normalize_studio_entrypoint=True,
     )
 
     assert url == "https://same"
@@ -1690,6 +1693,7 @@ def test_update_application_code_bundle_merges_only_explicit_environment(
         "EXISTING": "kept",
         "VEADK_SITE_TITLE": "新标题",
     }
+    assert request.command == "bash ./run.sh"
     resource_request = resource_requests[0]
     assert resource_request.function_id == "function-id"
     assert resource_request.min_instance == 1
@@ -2227,6 +2231,56 @@ def test_update_application_code_bundle_does_not_read_or_replace_environment(
     assert request.id == "function-id"
     assert request.envs is None
     assert request.request_timeout is None
+
+
+def test_studio_update_preserves_custom_function_command(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    updated_requests: list[Any] = []
+    service = object.__new__(VeFaaS)
+    service.session_token = ""
+    cast(Any, service).client = SimpleNamespace(
+        get_function=lambda _: SimpleNamespace(
+            command="python3 custom_server.py",
+            envs=[],
+        ),
+        update_function=updated_requests.append,
+        update_function_resource=lambda _: None,
+    )
+    monkeypatch.setattr(service, "_upload_and_mount_code", lambda *_: None)
+    monkeypatch.setattr(service, "_release_application", lambda _: "https://same")
+
+    service.update_application_code_bundle(
+        application_id="app-id",
+        function_id="function-id",
+        path=str(tmp_path),
+        environment_overrides={"VEADK_STUDIO_RELEASE_VERSION": "next"},
+        normalize_studio_entrypoint=True,
+    )
+
+    request = updated_requests[0]
+    assert request.command is None
+
+
+def test_native_python_function_uses_mode_independent_bundle_entrypoint(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    requests: list[Any] = []
+    service = object.__new__(VeFaaS)
+    service.project_name = "default"
+    cast(Any, service).client = SimpleNamespace(
+        create_function=lambda request: (
+            requests.append(request)
+            or SimpleNamespace(id="function-id", project_name="default")
+        )
+    )
+    monkeypatch.setattr(service, "_upload_and_mount_code", lambda *_: None)
+
+    service._create_function("studio-fn", str(tmp_path))
+
+    assert requests[0].command == "bash ./run.sh"
 
 
 @pytest.fixture(autouse=True)

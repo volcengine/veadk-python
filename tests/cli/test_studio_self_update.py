@@ -669,6 +669,7 @@ def test_submit_latest_uses_fixed_deployment_ids_and_sts(
     update = captured["update"]
     assert update["application_id"] == "application-id"
     assert update["function_id"] == "function-id"
+    assert update["normalize_studio_entrypoint"] is True
     assert update["environment_overrides"] == {
         "VEADK_STUDIO_RELEASE_VERSION": manifest.version,
         "CLOUD_PROVIDER": "byteplus",

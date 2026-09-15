@@ -24,8 +24,6 @@ from uuid import uuid4
 
 from pydantic import BaseModel
 
-from veadk import Agent, Runner
-
 from .models import (
     AutoEvaluationCase,
     AutoEvaluationOutput,
@@ -115,6 +113,8 @@ customModule 必须为 null。同一模块同一优先级合并为一个 group�
         schema: type[OutputT],
         payload: Any,
     ) -> OutputT:
+        from veadk import Agent, Runner
+
         agent = Agent(
             name=name,
             description="AgentKit Studio evaluation automation.",

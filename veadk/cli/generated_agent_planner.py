@@ -22,7 +22,6 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from veadk import Agent, Runner
 from veadk.cli.generated_agent_codegen import AgentDraft, CustomTool, MemoryConfig
 from veadk.consts import DEFAULT_MODEL_AGENT_NAME
 from veadk.utils.cloud_provider import cloud_provider_from_env
@@ -185,6 +184,8 @@ def _to_agent_draft(plan: GeneratedAgentPlan) -> AgentDraft:
 
 async def generate_agent_draft(requirement: str) -> dict:
     """Call Ark with a strict output schema and return a Studio AgentDraft."""
+
+    from veadk import Agent, Runner
 
     planner = Agent(
         name="studio_agent_draft_planner",
