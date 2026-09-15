@@ -251,6 +251,123 @@ for module in ("filetype", "httpx"):
     )
 
 
+def test_video_routes_defer_provider_runtime_until_first_request() -> None:
+    root = Path(__file__).resolve().parents[2]
+    script = """
+import sys
+
+from frontend.server.video.routes import build_video_service
+
+service = build_video_service(
+    provider="volcengine",
+    resolve_credentials=lambda: ("unused", "unused", None),
+)
+unexpected = sorted(
+    name
+    for name in sys.modules
+    if name in {
+        "frontend.server.video.client",
+        "frontend.server.video.service",
+        "frontend.server.video.storage",
+        "veadk.auth.veauth.ark_veauth",
+    }
+)
+if unexpected:
+    raise SystemExit("video request runtime loaded during Studio startup")
+
+assert service.capabilities().provider == "volcengine"
+if "frontend.server.video.service" not in sys.modules:
+    raise SystemExit("video request runtime did not load on first use")
+"""
+
+    subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_feishu_setup_defers_qr_provider_until_first_request() -> None:
+    root = Path(__file__).resolve().parents[2]
+    script = """
+import sys
+
+from frontend.server.feishu_bot_setup import create_feishu_bot_setup_service
+
+service = create_feishu_bot_setup_service()
+unexpected = sorted(
+    name
+    for name in sys.modules
+    if name == "qrcode"
+    or name.startswith("qrcode.")
+    or name == "frontend.server.feishu_bot_setup.feishu_app_registration"
+)
+if unexpected:
+    raise SystemExit("Feishu QR provider loaded during Studio startup")
+
+provider = service._provider._resolve()
+if type(provider).__name__ != "FeishuAppRegistrationProvider":
+    raise SystemExit("Feishu QR provider did not load on first use")
+"""
+
+    subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_studio_update_routes_defer_updater_runtime_until_first_request() -> None:
+    root = Path(__file__).resolve().parents[2]
+    script = """
+import asyncio
+import sys
+
+from fastapi import FastAPI
+import httpx
+
+from veadk.cli.studio_self_update_bootstrap import (
+    LazyStudioSelfUpdater,
+    mount_lazy_studio_update_routes,
+)
+
+app = FastAPI()
+updater = LazyStudioSelfUpdater(
+    provider="volcengine",
+    credential_resolver=lambda: ("unused", "unused", None),
+    branding_logo=None,
+)
+mount_lazy_studio_update_routes(app, updater, lambda _request: None)
+if "veadk.cli.studio_self_update" in sys.modules:
+    raise SystemExit("Studio updater runtime loaded during route setup")
+
+async def verify_first_request():
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        response = await client.get("/web/studio-update")
+    assert response.status_code == 200
+    assert response.json()["enabled"] is False
+
+asyncio.run(verify_first_request())
+if "veadk.cli.studio_self_update" not in sys.modules:
+    raise SystemExit("Studio updater runtime did not load on first request")
+"""
+
+    subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
 def test_logger_import_does_not_load_general_network_helpers() -> None:
     root = Path(__file__).resolve().parents[2]
     script = """

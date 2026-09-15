@@ -34,8 +34,7 @@ BUILTIN_TOOL_DECLARATIONS: dict[str, tuple[str, dict[str, Any]]] = {
         },
     ),
     "get_city_weather": (
-        "Retrieves the weather information of a given city. the args "
-        "must in English",
+        "Retrieves the weather information of a given city. the args must in English",
         {
             "additionalProperties": False,
             "properties": {"city": {"title": "City", "type": "string"}},
@@ -45,8 +44,7 @@ BUILTIN_TOOL_DECLARATIONS: dict[str, tuple[str, dict[str, Any]]] = {
         },
     ),
     "get_location_weather": (
-        "Retrieves the weather information of a given city. the args "
-        "must in English",
+        "Retrieves the weather information of a given city. the args must in English",
         {
             "additionalProperties": False,
             "properties": {"city": {"title": "City", "type": "string"}},

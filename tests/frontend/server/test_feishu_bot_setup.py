@@ -66,10 +66,11 @@ def test_session_is_scoped_to_the_current_studio_user() -> None:
         service.get(owner="bob", session_id=str(created["id"]))
 
 
-def test_default_service_uses_the_real_registration_provider() -> None:
+def test_default_service_resolves_the_real_registration_provider() -> None:
     service = create_feishu_bot_setup_service()
 
-    assert isinstance(service._provider, FeishuAppRegistrationProvider)
+    resolve_provider = getattr(service._provider, "_resolve")
+    assert isinstance(resolve_provider(), FeishuAppRegistrationProvider)
 
 
 def _begin_response() -> dict[str, object]:
