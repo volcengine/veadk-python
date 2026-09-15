@@ -289,6 +289,95 @@ if "frontend.server.video.service" not in sys.modules:
     )
 
 
+def test_complete_studio_app_defers_model_catalog_network_runtime() -> None:
+    root = Path(__file__).resolve().parents[2]
+    script = """
+import os
+import sys
+import tempfile
+from unittest.mock import patch
+
+os.environ["VOLCENGINE_ACCESS_KEY"] = "unused"
+os.environ["VOLCENGINE_SECRET_KEY"] = "unused"
+os.environ["_VEADK_STUDIO_LAZY_ADK_PACKAGES"] = "1"
+
+from veadk.cli.cli_frontend import _run_frontend_server
+
+captured = {}
+with tempfile.TemporaryDirectory() as agents_dir:
+    with patch("dotenv.find_dotenv", return_value=""), patch(
+        "uvicorn.run",
+        side_effect=lambda app, **kwargs: captured.setdefault("app", app),
+    ):
+        _run_frontend_server(
+            agents_dir=agents_dir,
+            frontend_dir=None,
+            site_logo=None,
+            site_title=None,
+            host="127.0.0.1",
+            port=8765,
+            dev=True,
+            vite=True,
+            oauth2_user_pool=None,
+            oauth2_user_pool_client=None,
+            oauth2_user_pool_uid=None,
+            oauth2_user_pool_client_uid=None,
+            oauth2_redirect_uri=None,
+            oauth2_provider=None,
+            oauth2_provider_label=None,
+            auth_mode="frontend",
+            generated_agent_test_run_ttl=60,
+            open_browser=False,
+            provider="volcengine",
+            studio=True,
+        )
+
+assert captured["app"] is not None
+unexpected = sorted(
+    name
+    for name in sys.modules
+    if name in {
+        "frontend.server.video.client",
+        "veadk.auth.veauth.ark_veauth",
+        "veadk.utils.misc",
+        "veadk.utils.volcengine_sign",
+        "requests",
+    }
+)
+if unexpected:
+    raise SystemExit("model catalog network runtime loaded during Studio startup")
+
+import asyncio
+
+from frontend.server.model_catalog.routes import build_model_catalog_service
+
+service = build_model_catalog_service(
+    provider="volcengine",
+    resolve_credentials=lambda: ("unused", "unused", None),
+    signed_request=lambda **_kwargs: {
+        "Result": {"TotalCount": 0, "Items": []},
+    },
+)
+response = asyncio.run(service.list_api_keys())
+assert response.keys == []
+for expected in (
+    "frontend.server.video.client",
+    "veadk.utils.volcengine_sign",
+    "requests",
+):
+    if expected not in sys.modules:
+        raise SystemExit("model catalog network runtime did not load on first use")
+"""
+
+    subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
 def test_feishu_setup_defers_qr_provider_until_first_request() -> None:
     root = Path(__file__).resolve().parents[2]
     script = """
@@ -357,6 +446,50 @@ async def verify_first_request():
 asyncio.run(verify_first_request())
 if "veadk.cli.studio_self_update" not in sys.modules:
     raise SystemExit("Studio updater runtime did not load on first request")
+"""
+
+    subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_disabled_studio_route_channel_defers_request_runtime() -> None:
+    root = Path(__file__).resolve().parents[2]
+    script = """
+import os
+import sys
+
+os.environ.pop("VEADK_STUDIO_ROUTE_CHANNEL", None)
+
+from frontend.server.studio_routes.registry import build_studio_route_registry
+
+registry = build_studio_route_registry(provider="volcengine")
+assert registry.enabled is False
+unexpected = sorted(
+    name
+    for name in sys.modules
+    if name in {
+        "frontend.server.studio_routes.connector",
+        "frontend.server.studio_routes.skill_catalog",
+        "frontend.server.skills.repository",
+        "frontend.server.skills.storage",
+        "frontend.server.skills.system_spaces",
+        "veadk.integrations.agentkit.studio_routes.host",
+    }
+)
+if unexpected:
+    raise SystemExit("disabled Studio route channel loaded request runtime")
+
+os.environ["VEADK_STUDIO_ROUTE_CHANNEL"] = "skill-catalog"
+enabled = build_studio_route_registry(provider="volcengine")
+assert enabled.enabled is True
+assert len(enabled.manifests()) == 3
+if "frontend.server.studio_routes.skill_catalog" not in sys.modules:
+    raise SystemExit("Studio route request runtime did not load when enabled")
 """
 
     subprocess.run(
@@ -463,7 +596,7 @@ def test_skill_workbench_defers_agentkit_runtime_until_first_call() -> None:
     script = """
 import sys
 
-import frontend.server.skills.devenv
+import frontend.server.skills.devenv as devenv
 
 unexpected = sorted(
     name
@@ -475,11 +608,17 @@ unexpected = sorted(
         "agentkit.sdk.tools.types",
         "agentkit.toolkit.cli.sandbox.env_config",
         "agentkit.toolkit.cli.sandbox.sandbox_client",
+        "agentkit.auth.errors",
+        "requests",
         "veadk.skills.skill",
     }
 )
 if unexpected:
     raise SystemExit("Skill workbench AgentKit runtime loaded at startup")
+
+assert devenv._is_transient_dependency_error(RuntimeError("test")) is False
+if "requests" not in sys.modules or "agentkit.auth.errors" not in sys.modules:
+    raise SystemExit("Skill workbench network runtime did not load on first use")
 """
 
     subprocess.run(
@@ -496,7 +635,7 @@ def test_migration_gateway_defers_agentkit_runtime_until_first_call() -> None:
     script = """
 import sys
 
-import frontend.server.migration.gateway
+import frontend.server.migration.gateway as gateway
 
 unexpected = sorted(
     name
@@ -507,10 +646,15 @@ unexpected = sorted(
         "agentkit.toolkit.cli.sandbox.sandbox_client",
         "veadk.cli.agentkit_session_metadata",
         "veadk.cli.frontend_skill_creator",
+        "requests",
     }
 )
 if unexpected:
     raise SystemExit("Migration Gateway AgentKit runtime loaded at startup")
+
+assert gateway._requests().__name__ == "requests"
+if "requests" not in sys.modules:
+    raise SystemExit("Migration Gateway network runtime did not load on first use")
 """
 
     subprocess.run(
@@ -584,16 +728,22 @@ def test_environment_service_defers_generated_project_runtime_until_build() -> N
     script = """
 import sys
 
-import frontend.server.environments
+import frontend.server.environments as environments
 
 unexpected = sorted(
     name
     for name in sys.modules
     if name == "veadk.cli.generated_agent_codegen"
     or name == "veadk.cli.generated_agent_skills"
+    or name == "veadk.auth.veauth.ark_veauth"
+    or name == "requests"
 )
 if unexpected:
     raise SystemExit("generated project runtime loaded by environment composition")
+
+assert environments._get_ark_token().__name__ == "get_ark_token"
+if "veadk.auth.veauth.ark_veauth" not in sys.modules:
+    raise SystemExit("environment model auth runtime did not load on first use")
 """
 
     subprocess.run(

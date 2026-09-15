@@ -23,8 +23,6 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-import requests
-
 from veadk.cli.agentkit_sandbox_region import (
     is_agentkit_resource_not_found,
     sandbox_region_candidates,
@@ -64,6 +62,22 @@ _RELEASED_SESSION_STATUSES = {
 }
 
 logger = logging.getLogger(__name__)
+
+
+def _requests() -> Any:
+    import requests
+
+    return requests
+
+
+class _LazyRequests:
+    """Preserve the patchable module surface without importing it at startup."""
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(_requests(), name)
+
+
+requests = _LazyRequests()
 
 
 def _tools_types() -> Any:
@@ -780,7 +794,7 @@ class MigrationSandboxGateway:
         deadline = time.monotonic() + timeout_seconds + 30
         start_marker = _BACKGROUND_START_MARKERS.get(operation, "")
 
-        def response_data(response: requests.Response) -> dict[str, object]:
+        def response_data(response: Any) -> dict[str, object]:
             if response.status_code >= 400:
                 raise MigrationGatewayError(
                     "MIGRATION_REMOTE_EXEC_FAILED",

@@ -2001,10 +2001,7 @@ def _run_frontend_server(
         runtime_request_context,
         studio_runtime_context_headers,
     )
-    from frontend.server.studio_routes import (
-        StudioRouteChannelManager,
-        build_studio_route_registry,
-    )
+    from frontend.server.studio_routes.registry import build_studio_route_registry
     from frontend.server.studio_tools import build_studio_tool_registry
     from veadk.multimodal.service import MediaService
     from veadk.multimodal.storage import create_media_storage
@@ -2020,7 +2017,23 @@ def _run_frontend_server(
         )
 
     studio_route_registry = build_studio_route_registry(provider=provider_id)
-    studio_route_channels = StudioRouteChannelManager(studio_route_registry)
+    if studio_route_registry.enabled:
+        from frontend.server.studio_routes import StudioRouteChannelManager
+
+        studio_route_channels = StudioRouteChannelManager(studio_route_registry)
+    else:
+
+        class _DisabledStudioRouteChannelManager:
+            async def close(self) -> None:
+                return None
+
+            async def ensure_connected(self, *_args: Any, **_kwargs: Any) -> bool:
+                return False
+
+            def connected(self, *_args: Any, **_kwargs: Any) -> bool:
+                return False
+
+        studio_route_channels = _DisabledStudioRouteChannelManager()
     app.state.studio_route_registry = studio_route_registry
     app.state.studio_route_channels = studio_route_channels
     if studio_route_registry.enabled:
