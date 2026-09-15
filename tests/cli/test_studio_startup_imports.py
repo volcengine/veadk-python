@@ -18,6 +18,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 
 def test_studio_startup_modules_do_not_eagerly_load_generated_cloud_models() -> None:
     root = Path(__file__).resolve().parents[2]
@@ -81,6 +83,73 @@ if "veadk.agent" in sys.modules:
         capture_output=True,
         text=True,
     )
+
+
+def test_studio_tools_defer_sandbox_runtime_until_first_sandbox_call() -> None:
+    root = Path(__file__).resolve().parents[2]
+    script = """
+import sys
+
+from frontend.server.studio_tools.registry import build_studio_tool_registry
+
+registry = build_studio_tool_registry()
+assert any(item["name"] == "branch_compare" for item in registry.manifests())
+
+unexpected = sorted(
+    name
+    for name in (
+        "veadk.cli.agentkit_session_metadata",
+        "veadk.cli.codex_app_server",
+    )
+    if name in sys.modules
+)
+if unexpected:
+    raise SystemExit("Sandbox session runtime loaded during Studio cold start")
+"""
+
+    subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_codex_sandbox_default_connection_factory_is_lazy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import frontend.server.studio_tools.codex_sandbox as codex_sandbox
+    from frontend.server.environments.session_mounts import SessionEnvironmentMount
+    from frontend.server.studio_tools.registry import StudioToolExecutionContext
+    from frontend.server.studio_tools.sandbox_shell import SandboxExecutionTarget
+
+    created_endpoints: list[str] = []
+    connection = object()
+
+    class Targets:
+        async def resolve(
+            self,
+            mount: SessionEnvironmentMount,
+            context: StudioToolExecutionContext,
+        ) -> SandboxExecutionTarget:
+            del mount, context
+            raise AssertionError("target resolution is not a startup operation")
+
+    def connection_factory(endpoint: str) -> object:
+        created_endpoints.append(endpoint)
+        return connection
+
+    monkeypatch.setattr(
+        codex_sandbox,
+        "CodexAppServerSession",
+        connection_factory,
+    )
+    delegate = codex_sandbox.CodexSandboxDelegate(Targets())
+
+    assert created_endpoints == []
+    assert delegate._connection_factory("https://sandbox.example") is connection
+    assert created_endpoints == ["https://sandbox.example"]
 
 
 def test_frontend_branding_defers_optional_logo_network_stack() -> None:
