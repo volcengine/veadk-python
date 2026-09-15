@@ -166,3 +166,14 @@ def test_mask_secret_hides_middle() -> None:
     # Very short secrets are fully masked.
     assert set(mask_secret("ab")) == {"*"}
     assert "CODEX_MCP_RUNTIME_API_KEY" in SECRET_ENV_KEYS
+
+
+def test_runtime_jwt_default_and_explicit_override() -> None:
+    env = build_runtime_env(_params(), public_endpoint="https://runtime.example.com")
+    assert env["DISABLE_JWT_AUTH"] == "true"
+    overrides = {"DISABLE_JWT_AUTH": "false"}
+    env = build_runtime_env(
+        _params(extra_env=overrides), public_endpoint="https://runtime.example.com"
+    )
+    assert env["DISABLE_JWT_AUTH"] == "false"
+    assert overrides == {"DISABLE_JWT_AUTH": "false"}
