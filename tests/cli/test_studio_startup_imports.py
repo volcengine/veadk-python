@@ -359,6 +359,63 @@ if unexpected:
     )
 
 
+def test_migration_routes_defer_source_project_runtime_until_persistence() -> None:
+    root = Path(__file__).resolve().parents[2]
+    script = """
+import sys
+
+import frontend.server.migration.routes
+
+unexpected = sorted(
+    name
+    for name in sys.modules
+    if name == "frontend.server.source_projects"
+    or name.startswith("frontend.server.intelligent_development_projects")
+    or name == "frontend.server.intelligent_development_task"
+    or name == "frontend.server.sandbox_remote"
+    or name == "agentkit.toolkit.cli.sandbox.sandbox_client"
+)
+if unexpected:
+    raise SystemExit("migration source-project runtime loaded at startup")
+"""
+
+    subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_source_project_service_defers_sandbox_runtime_until_first_use() -> None:
+    root = Path(__file__).resolve().parents[2]
+    script = """
+import sys
+
+import frontend.server.intelligent_development_projects.service
+
+unexpected = sorted(
+    name
+    for name in sys.modules
+    if name == "frontend.server.intelligent_development_task"
+    or name == "frontend.server.sandbox_remote"
+    or name == "veadk.cli.frontend_sandbox"
+    or name == "agentkit.toolkit.cli.sandbox.sandbox_client"
+)
+if unexpected:
+    raise SystemExit("source-project Sandbox runtime loaded at startup")
+"""
+
+    subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
 def test_knowledge_routes_defer_document_extraction_stack() -> None:
     root = Path(__file__).resolve().parents[2]
     script = """
