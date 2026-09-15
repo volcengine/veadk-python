@@ -196,12 +196,12 @@ def initialize_runtime_roles(
             super_admin, admins, developers, allow_initialize=not initialized
         )
     except UserManagementError as error:
-        if initialized and error.code == "identity_unavailable":
+        if error.code == "identity_unavailable":
             service.defer_initialization(
                 super_admin,
                 admins,
                 developers,
-                allow_initialize=False,
+                allow_initialize=not initialized,
             )
             deferred = True
         else:

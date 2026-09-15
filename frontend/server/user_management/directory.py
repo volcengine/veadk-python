@@ -85,13 +85,21 @@ class IdentityDirectory:
         self.region = region
         self.credentials = credentials
 
+    def _resolve_credentials(self) -> tuple[str, str, str | None]:
+        try:
+            return self.credentials()
+        except UserManagementError:
+            raise
+        except Exception as error:
+            raise UserManagementError(503, "identity_unavailable") from error
+
     def _call(self, action: str, body: Any) -> Any:
         import volcenginesdkcore
         from volcenginesdkcore.rest import ApiException
 
         sdk = _identity_sdk()
         # Resolve credentials for each call so rotating cloud credentials remain valid
-        ak, sk, token = self.credentials()
+        ak, sk, token = self._resolve_credentials()
         # The generated SDK types host as None although it accepts URL strings
         config: Any = volcenginesdkcore.Configuration()
         config.ak, config.sk, config.session_token = ak, sk, token or ""

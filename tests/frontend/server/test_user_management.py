@@ -523,6 +523,24 @@ def test_directory_uses_provider_host_and_fetches_all_pages(
     )
 
 
+def test_directory_normalizes_credential_resolver_failure():
+    from frontend.server.user_management.directory import IdentityDirectory
+
+    def unavailable_credentials():
+        raise RuntimeError("credential source unavailable")
+
+    directory = IdentityDirectory(
+        "pool",
+        "volcengine",
+        "cn-shanghai",
+        unavailable_credentials,
+    )
+    with pytest.raises(UserManagementError) as error:
+        directory._resolve_credentials()
+    assert error.value.status == 503
+    assert error.value.code == "identity_unavailable"
+
+
 @pytest.mark.parametrize(
     "provider,region",
     [
@@ -710,8 +728,7 @@ def test_initialized_runtime_deferred_identity_failure_remains_fail_closed(
         service.principal_for(StudioPrincipal.from_claims({"sub": "oidc|owner"}))
 
 
-def test_uninitialized_runtime_identity_failure_still_blocks_startup(monkeypatch):
-    import click
+def test_uninitialized_runtime_identity_failure_remains_fail_closed(monkeypatch):
     from frontend.server.user_management import deployment
 
     directory = Directory()
@@ -722,12 +739,54 @@ def test_uninitialized_runtime_identity_failure_still_blocks_startup(monkeypatch
     directory.groups = unavailable_groups
     monkeypatch.setattr(deployment, "IdentityDirectory", lambda *args: directory)
 
-    with pytest.raises(click.ClickException, match="identity_unavailable"):
-        deployment.initialize_runtime_roles(
-            pool_uid="pool",
-            client_uid="client",
-            provider="volcengine",
-            identity_region="cn-shanghai",
-            credentials=lambda: ("ak", "sk", "token"),
-            environment={},
-        )
+    service = deployment.initialize_runtime_roles(
+        pool_uid="pool",
+        client_uid="client",
+        provider="volcengine",
+        identity_region="cn-shanghai",
+        credentials=lambda: ("ak", "sk", "token"),
+        environment={},
+    )
+
+    assert not directory.group_records
+    with pytest.raises(UserManagementError, match="identity_unavailable"):
+        service.principal_for(StudioPrincipal.from_claims({"sub": "oidc|owner"}))
+    assert not directory.group_records
+
+
+def test_uninitialized_runtime_retries_original_initialization_after_recovery(
+    monkeypatch,
+):
+    from frontend.server.user_management import deployment
+
+    directory = Directory()
+    original_groups = directory.groups
+    attempts = 0
+
+    def transient_groups():
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise UserManagementError(503, "identity_unavailable")
+        return original_groups()
+
+    directory.groups = transient_groups
+    monkeypatch.setattr(deployment, "IdentityDirectory", lambda *args: directory)
+
+    service = deployment.initialize_runtime_roles(
+        pool_uid="pool",
+        client_uid="client",
+        provider="volcengine",
+        identity_region="cn-shanghai",
+        credentials=lambda: ("ak", "sk", "token"),
+        environment={},
+    )
+
+    assert attempts == 1
+    assert not directory.group_records
+    principal = service.principal_for(
+        StudioPrincipal.from_claims({"sub": "oidc|owner"})
+    )
+    assert attempts == 2
+    assert principal.role == StudioRole.ADMIN
+    assert len(directory.group_records) == len(StudioRole)
