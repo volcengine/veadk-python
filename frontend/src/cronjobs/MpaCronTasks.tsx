@@ -560,7 +560,6 @@ function RuntimeTasks({ runtime }: { runtime: MpaRuntime }) {
       )}
       {editor && (
         <MpaTaskEditor
-          defaultAgentId={runtime.runtimeId}
           task={editor.task}
           copy={editor.copy}
           busy={busy}

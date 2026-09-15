@@ -1,3 +1,5 @@
 Remove the executor Agent input at the user’s explicit request. New tasks use the selected Runtime ID as agentId; edits and copies retain the original agentId. The Runtime endpoint still determines execution. No backend or authentication changes. Review: minimal scope, required API field retained, bilingual consistency checked. Acceptance: no Agent input; create/edit/copy payloads remain valid; coverage exceeds 95%. User approval: explicit screenshot request to remove the field.
 
 Verification: 71 targeted tests passed; editor line coverage 100%, overall lines 99.71%. 1096 frontend tests passed; build, asset check and pre-commit passed. Browser refresh was not performed because the user has an unsaved task form open.
+
+New task creation omits agentId. The Runtime resolves the configured Agent display name, falling back to its runtime agent name. Explicit IDs and edit/copy values remain unchanged. This supersedes the previous Runtime ID default. Approved by the user on 2026-09-15; review found no authentication or execution routing changes.

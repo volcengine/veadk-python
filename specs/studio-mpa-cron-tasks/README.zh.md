@@ -32,3 +32,5 @@ Studio 展示所选 Runtime 内按用户隔离的定时任务。MPA 负责持久
 见[实施和验收记录](../../prd-spec/features/studio-mpa-cron-tasks/2026-09-15-mono-task-management.zh.md)。覆盖代理边界、API schema、写入并发/幂等、分页、时区/夏令时、过期响应、IME、加载/错误/重试和键盘行为。增量覆盖率超过 95%。浏览器模拟数据验收与真实 Runtime 读取分开记录，不把模拟测试宣称为真实写入 E2E。
 
 任务编辑器不展示执行 Agent 输入框。新任务自动使用所选 Runtime ID 作为 agentId；编辑和复制保留原值。
+
+创建新任务不传 agentId，由 Runtime 使用配置中的 Agent 展示名称，缺失时回退运行时 Agent 名称。显式值及编辑/复制原值不变。此规则替代此前默认填写 Runtime ID 的处理。用户于 2026-09-15 明确批准；复核确认不改变鉴权和执行路由。

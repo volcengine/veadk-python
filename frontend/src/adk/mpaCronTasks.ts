@@ -125,7 +125,7 @@ export interface MpaRunPage {
   nextOffset: number | null;
 }
 export type TaskFields = Pick<MpaCronTask, "name" | "schedule" | "enabled"> & {
-  agentId: string;
+  agentId?: string;
   prompt: string;
   delivery?: Record<string, unknown>;
   jitterSeconds?: number;
