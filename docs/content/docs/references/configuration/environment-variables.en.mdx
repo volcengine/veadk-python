@@ -108,8 +108,12 @@ Prefix `DATABASE_`, grouped by storage type. Memory and the knowledge base read 
 | | `DATABASE_MILVUS_OVERWRITE` | Overwrite the collection, default `false` |
 | | `DATABASE_MILVUS_TIMEOUT` | Connection/request timeout (optional) |
 | | `DATABASE_MILVUS_OUTPUT_FIELDS` | Comma-separated retrieval output fields (optional) |
+| VikingDB knowledgebase | `DATABASE_VIKING_API_KEY` | API key for searching existing knowledgebases; management still requires AK/SK/IAM |
 | VikingDB | `DATABASE_VIKING_PROJECT` | Project name |
 | | `DATABASE_VIKING_REGION` | Region |
+| VikingDB memory | `DATABASE_VIKINGMEM_API_KEY` | API key for existing memory collections; management still requires AK/SK/IAM |
+| | `DATABASE_VIKINGMEM_PROJECT` | Project name, default `default` |
+| | `DATABASE_VIKINGMEM_MEMORY_TYPE` | Comma-separated memory types |
 | TOS | `DATABASE_TOS_ENDPOINT` | Endpoint |
 | | `DATABASE_TOS_REGION` | Region |
 | | `DATABASE_TOS_BUCKET` | Bucket name |

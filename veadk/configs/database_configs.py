@@ -162,6 +162,9 @@ class OpenVikingConfig(BaseSettings):
 class VikingKnowledgebaseConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="DATABASE_VIKING_")
 
+    api_key: str = ""
+    """VikingDB knowledgebase API key for searching existing collections."""
+
     project: str = "default"
     """User project in Volcengine console web."""
 
