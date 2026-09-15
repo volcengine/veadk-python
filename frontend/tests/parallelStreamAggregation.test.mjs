@@ -132,6 +132,53 @@ test("replays interleaved history without token cards and binds feedback to fina
   assert.equal(turns[1].meta.feedback, undefined);
 });
 
+test("replays multiple user turns without reusing assistant history ids", () => {
+  const turns = eventsToTurns([
+    {
+      author: "user",
+      invocationId: "user-1",
+      id: "user-1",
+      partial: false,
+      timestamp: 1,
+      content: { role: "user", parts: [{ text: "问题一" }] },
+    },
+    event("agent", "回答一", {
+      invocationId: "answer-1",
+      partial: false,
+      id: "final-1",
+      timestamp: 2,
+    }),
+    {
+      author: "user",
+      invocationId: "user-2",
+      id: "user-2",
+      partial: false,
+      timestamp: 3,
+      content: { role: "user", parts: [{ text: "问题二" }] },
+    },
+    event("agent", "回答二", {
+      invocationId: "answer-2",
+      partial: false,
+      id: "final-2",
+      timestamp: 4,
+    }),
+  ]);
+
+  assert.deepEqual(turns.map((turn) => turn.role), [
+    "user",
+    "assistant",
+    "user",
+    "assistant",
+  ]);
+  assert.deepEqual(turns.map((turn) => blockText(turn, "text")), [
+    "问题一",
+    "回答一",
+    "问题二",
+    "回答二",
+  ]);
+  assert.notEqual(turns[1].meta.localId, turns[3].meta.localId);
+});
+
 test("keeps an OAuth-resumed response on its seeded turn when invocation changes", () => {
   const initialTurn = {
     role: "assistant",

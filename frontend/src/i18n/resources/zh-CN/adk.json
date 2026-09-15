@@ -70,7 +70,16 @@
     "validateFailed": "校验 Skill 失败",
     "deleteFailed": "删除 Skill 失败",
     "listFilesFailed": "读取 Skill 文件失败",
-    "downloadFailed": "下载 Skill 失败"
+    "downloadFailed": "下载 Skill 失败",
+    "sharedSpaceFailed": "共享空间加载失败",
+    "reservedSpaceName": "此名称由系统空间保留，请使用其他名称",
+    "reviewSpaceFailed": "待审核空间暂不可用",
+    "submitReviewFailed": "申请公开失败",
+    "listReviewsFailed": "加载审核申请失败",
+    "reviewFilesFailed": "加载提交文件失败",
+    "decideReviewFailed": "审批失败，请重试",
+    "listVersionsFailed": "无法加载技能版本",
+    "uploadVersionFailed": "上传技能新版本失败"
   },
   "sse": {
     "truncatedData": "{{data}}…（已截断，共 {{count}} 个字符）",
@@ -135,6 +144,10 @@
     "requestFailed": "知识库请求失败 ({{status}})"
   },
   "intelligentDevelopment": {
+    "invalidName": "名称须为 1～128 个字符，不能包含控制字符、不可见格式字符或 < >。",
+    "renameProjectFailed": "修改项目名称失败",
+    "renameVersionFailed": "修改版本名称失败",
+    "invalidNameUpdateResponse": "名称更新响应与请求不一致，请刷新后重试。",
     "invalidSourceSnapshot": "源码快照的响应格式无效。",
     "invalidProjectList": "项目列表的响应格式无效。",
     "invalidProjectVersion": "项目版本的响应格式无效。",
@@ -187,6 +200,15 @@
     "loadArtifactFailed": "读取迁移产物失败",
     "loadArtifactFileFailed": "读取迁移产物文件失败",
     "downloadArtifactFailed": "下载迁移产物失败",
+    "evaluation": {
+      "datasetSaveFailed": "保存评测用例失败",
+      "datasetLoadFailed": "读取评测用例失败",
+      "statusLoadFailed": "读取评测状态失败",
+      "resumeFailed": "继续评测失败",
+      "retryFailed": "重新评测失败",
+      "reportLoadFailed": "读取评测报告失败",
+      "reportDownloadFailed": "下载评测报告失败"
+    },
     "labels": {
       "analysisResult": "迁移分析结果",
       "recommendation": "迁移建议",
@@ -231,7 +253,22 @@
       "capabilities": "迁移能力",
       "framework": "迁移框架",
       "modelCapabilities": "迁移模型能力",
-      "taskList": "迁移会话列表"
+      "taskList": "迁移会话列表",
+      "evaluationAsset": "评测资产",
+      "evaluation": "评测状态",
+      "evaluationCapabilities": "评测能力",
+      "evaluationDimension": "评测维度",
+      "evaluationCase": "评测用例",
+      "evaluationCriteria": "评测标准",
+      "evaluationMessage": "评测对话",
+      "evaluationDataset": "评测数据集",
+      "evaluationDimensionResult": "评测维度结果",
+      "evaluationEvidence": "评测证据",
+      "evaluationReport": "评测报告",
+      "evaluationSummary": "评测汇总",
+      "evaluationCaseResult": "评测用例结果",
+      "evaluationOutput": "评测输出",
+      "evaluationLimitations": "评测限制"
     }
   },
   "sandbox": {
@@ -494,5 +531,27 @@
   },
   "jsonResponse": {
     "nonJson": "{{fallback}}：服务端返回非 JSON 响应（HTTP {{status}}，{{contentType}}）{{detail}}"
+  },
+  "workspaceProjects": {
+    "busy": "工作区正在处理较多请求，请稍后重试",
+    "notFound": "工作区不存在",
+    "duplicates": "检测到多个个人工作区会话，请联系管理员处理",
+    "timeout": "工作区恢复超时，项目仍保留，请重试",
+    "unavailable": "工作区暂时无法恢复，原项目仍保留，请重试",
+    "persistence": "当前 Sandbox 未启用持久化快照，请检查工作区配置",
+    "startup": "个人工作区启动失败，请检查 Sandbox 状态",
+    "exists": "项目名称已存在，请从项目列表打开",
+    "directory": "项目目录不存在",
+    "configuration": "请先配置工作区 Sandbox 镜像",
+    "state": "暂时无法确认工作区状态，请重试",
+    "list": "恢复工作区或读取项目列表失败，请重试",
+    "create": "项目初始化失败，请确认镜像可用后重试",
+    "open": "恢复工作区或打开项目失败，请重试",
+    "connection": "工作区暂时无法连接，请重试",
+    "invalidWorkspaceUrl": "工作区返回了无效的访问地址",
+    "operation": "项目操作失败，请重试",
+    "invalidProjectUrl": "项目访问地址无效",
+    "listFallback": "读取项目列表失败",
+    "connectionState": "暂时无法连接工作区，请重试"
   }
 }

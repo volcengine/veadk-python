@@ -1,6 +1,11 @@
 import type { AgentDraft } from "./types";
 import { createT } from "./i18n";
 import { prepareMcpAuth, referencedMcpEnvKeys } from "./mcpAuth";
+import { defaultModelApiBase } from "../adk/cloudProvider";
+import {
+  customModelCredentialRequirements,
+  referencedModelFallbackApiKeyEnvKeys,
+} from "./customModelCredentials";
 
 const WORKSPACE_DRAFT_STORAGE_VERSION = 1;
 const SERVER_MANAGED_MODEL_API_KEY = "MODEL_AGENT_API_KEY";
@@ -74,6 +79,7 @@ function stripBrowserStorageSecrets(
   draft: AgentDraft,
   protectedMcpKeys: ReadonlySet<string>,
   transientMcpKeys: ReadonlySet<string>,
+  protectedModelKeys: ReadonlySet<string>,
 ): AgentDraft {
   const deployment = draft.deployment;
   const envValues = deployment?.envValues;
@@ -86,7 +92,8 @@ function stripBrowserStorageSecrets(
                 Object.entries(envValues).filter(
                   ([key]) =>
                     key !== SERVER_MANAGED_MODEL_API_KEY &&
-                    !protectedMcpKeys.has(key),
+                    !protectedMcpKeys.has(key) &&
+                    !protectedModelKeys.has(key),
                 ),
               ),
             }
@@ -112,7 +119,12 @@ function stripBrowserStorageSecrets(
       : {}),
     ...(safeDeployment ? { deployment: safeDeployment } : {}),
     subAgents: draft.subAgents.map((child) =>
-      stripBrowserStorageSecrets(child, protectedMcpKeys, transientMcpKeys),
+      stripBrowserStorageSecrets(
+        child,
+        protectedMcpKeys,
+        transientMcpKeys,
+        protectedModelKeys,
+      ),
     ),
     ...(draft.workflow
       ? {
@@ -124,6 +136,7 @@ function stripBrowserStorageSecrets(
                 node.agent,
                 protectedMcpKeys,
                 transientMcpKeys,
+                protectedModelKeys,
               ),
             })),
           },
@@ -172,10 +185,21 @@ function preserveConfiguredMcpState(
 export function sanitizeAgentDraftForStorage(draft: AgentDraft): AgentDraft {
   const prepared = prepareMcpAuth(draft);
   const storageDraft = preserveConfiguredMcpState(prepared.draft, draft);
+  const protectedModelKeys = new Set(
+    [
+      ...customModelCredentialRequirements(
+        prepared.draft,
+        defaultModelApiBase(prepared.draft.cloudProvider ?? "volcengine"),
+      ).map((item) => item.key),
+      ...referencedModelFallbackApiKeyEnvKeys(prepared.draft),
+      ...referencedModelFallbackApiKeyEnvKeys(draft),
+    ],
+  );
   return stripBrowserStorageSecrets(
     storageDraft,
     new Set(referencedMcpEnvKeys(prepared.draft)),
     new Set(Object.keys(prepared.envValues)),
+    protectedModelKeys,
   );
 }
 

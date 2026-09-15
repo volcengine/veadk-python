@@ -774,7 +774,6 @@ async def test_cloud():
                     mock_vefaas_service.deploy.call_args.kwargs["disable_gateway_cors"]
                     is False
                 )
-
                 # Verify deployment result contains expected values
                 assert cloud_app.vefaas_application_name == app_name
                 assert cloud_app.vefaas_endpoint == test_endpoint

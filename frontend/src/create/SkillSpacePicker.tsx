@@ -14,6 +14,7 @@ import {
   skillLookupIdentity,
   toHit,
   getSkillSpaceConsoleUrl,
+  getSkillSpaceDisplayName,
   type SkillSpaceRef,
   type SkillSpaceSkill,
 } from "./skills/skillspace";
@@ -155,7 +156,7 @@ export function SkillSpacePicker({
             >
               {spaces.map((s) => (
                 <option key={s.id} value={s.id}>
-                  {s.name || s.id}
+                  {getSkillSpaceDisplayName(s) || s.id}
                   {s.description ? ` — ${displayDescription(s.description)}` : ""}
                 </option>
               ))}
@@ -229,7 +230,7 @@ export function SkillSpacePicker({
                         </span>
                       )}
                       <span className="cw-skill-result-repo">
-                        <Cloud className="cw-i cw-i-sm" /> {selectedSpace?.name || spaceId}
+                        <Cloud className="cw-i cw-i-sm" /> {getSkillSpaceDisplayName(selectedSpace) || spaceId}
                       </span>
                     </span>
                   </button>

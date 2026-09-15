@@ -15,6 +15,37 @@
 from __future__ import annotations
 
 import pytest
+from unittest.mock import AsyncMock, MagicMock
+
+
+@pytest.fixture(autouse=True)
+def _stub_skill_score_background_worker(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep CLI route tests independent of live Skill recovery scans"""
+    monkeypatch.setattr(
+        "frontend.server.skills.auto_scoring.SkillAutoScoring.start", AsyncMock()
+    )
+
+
+@pytest.fixture(autouse=True)
+def _stub_studio_deploy_role_confirmation(
+    monkeypatch: pytest.MonkeyPatch,
+    request: pytest.FixtureRequest,
+) -> None:
+    """Provisioning tests continue past the separately tested interactive warning"""
+    if request.path.name == "test_studio_deploy_role_confirmation.py":
+        return
+    monkeypatch.setattr(
+        "frontend.server.user_management.deployment.confirm_super_admin_for_deploy",
+        lambda super_admin: None,
+    )
+
+
+@pytest.fixture(autouse=True)
+def _stub_studio_runtime_role(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+    """Keep deployment tests isolated from live Runtime IAM operations"""
+    resolver = MagicMock(return_value="shared-runtime-role")
+    monkeypatch.setattr("frontend.server.runtime_iam.ensure_runtime_role", resolver)
+    return resolver
 
 
 @pytest.fixture(autouse=True)

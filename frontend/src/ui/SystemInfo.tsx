@@ -93,7 +93,7 @@ export function SystemInfo({
   onBack,
 }: SystemInfoProps) {
   const { t } = useTranslation("ui");
-  const isAdmin = role === "admin";
+  const isAdmin = role === "admin" || role === "super_admin";
   const [tosAddress, setTosAddress] = useState("");
   const [sandboxTools, setSandboxTools] = useState<SandboxToolInfo[]>([]);
   const [userPools, setUserPools] = useState<IdentityUserPool[]>([]);

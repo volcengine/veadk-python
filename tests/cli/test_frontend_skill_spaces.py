@@ -242,8 +242,9 @@ def test_a2a_space_routes_keep_missing_credentials_status(
     assert response.status_code == 409
 
 
+@pytest.mark.parametrize("display_name", [None, "中文显示名称"])
 def test_list_skill_spaces_maps_metadata_and_pagination(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, display_name: str | None
 ) -> None:
     app = _create_frontend_app(monkeypatch, tmp_path)
     calls: list[tuple[str, Any]] = []
@@ -261,6 +262,9 @@ def test_list_skill_spaces_maps_metadata_and_pagination(
                     SimpleNamespace(
                         id="space-1",
                         name="客户支持技能",
+                        tags=[SimpleNamespace(key="display_name", value=display_name)]
+                        if display_name
+                        else None,
                         description="客服工作流",
                         status="Ready",
                         project_name="support-project",
@@ -291,6 +295,7 @@ def test_list_skill_spaces_maps_metadata_and_pagination(
             {
                 "id": "space-1",
                 "name": "客户支持技能",
+                "displayName": display_name or "客户支持技能",
                 "description": "客服工作流",
                 "status": "Ready",
                 "region": "cn-shanghai",
@@ -454,6 +459,10 @@ def test_list_skills_maps_existing_dto_and_pagination(
         def __init__(self, **kwargs: Any) -> None:
             self.region = kwargs["region"]
 
+        def get_skill_space(self, request: Any) -> SimpleNamespace:
+            _assert_sdk_call_is_off_event_loop()
+            return SimpleNamespace(id=request.id, name="personal", description="")
+
         def list_skills_by_skill_space(self, request: Any) -> SimpleNamespace:
             _assert_sdk_call_is_off_event_loop()
             calls.append((self.region, request))
@@ -596,18 +605,7 @@ def test_skill_space_errors_preserve_sdk_details(
         response = client.get("/web/skill-spaces", params={"region": "cn-beijing"})
 
     assert response.status_code == 502
-    assert response.json() == {
-        "detail": {
-            "code": "SKILL_SERVICE_UNAVAILABLE",
-            "message": "暂时无法访问 AgentKit Skills。",
-            "retryable": True,
-            "originalError": {
-                "type": "builtins.RuntimeError",
-                "message": "upstream failure: signed-token-value",
-                "repr": "RuntimeError('upstream failure: signed-token-value')",
-            },
-        }
-    }
+    assert response.json() == {"detail": "upstream failure: signed-token-value"}
     assert "signed-token-value" in response.text
 
 
@@ -978,9 +976,7 @@ def test_get_skill_detail_preserves_package_download_error(
         )
 
     assert response.status_code == 502
-    assert response.json()["detail"]["originalError"]["message"] == (
-        "TOS GetObject failed with request-id-3"
-    )
+    assert response.json()["detail"] == ("TOS GetObject failed with request-id-3")
 
 
 def test_skill_space_routes_keep_missing_credentials_status(

@@ -1,5 +1,9 @@
 import type { AgentDraft } from "./types";
 import { createT } from "./i18n";
+import {
+  defaultModelFallbackApiKeyEnv,
+  isModelFallbackEndpoint,
+} from "./modelFallbacks";
 
 export interface CustomModelCredentialRequirement {
   key: string;
@@ -13,6 +17,12 @@ export interface CustomModelEnvironmentBinding {
   provider: string;
   apiBase: string;
   label: string;
+  path: number[];
+}
+
+export interface MissingCustomModelCredentialRequirement
+  extends CustomModelCredentialRequirement {
+  path: number[];
 }
 
 function envSegment(value: string, fallback: string): string {
@@ -61,15 +71,16 @@ export function customModelEnvironmentBindings(
   const bindings: CustomModelEnvironmentBinding[] = [];
   const used = new Set<string>();
 
-  const visit = (node: AgentDraft) => {
+  const visit = (node: AgentDraft, path: number[] = []) => {
+    const segment = envSegment(node.name, "AGENT");
+    const isLlmNode = node.agentType === undefined || node.agentType === "llm";
     if (
-      node.agentType === "llm" &&
+      isLlmNode &&
       node.modelSource !== "ark" &&
       (node.modelSource === "custom" ||
         (!!node.modelApiBase?.trim() &&
           !isProviderModelApiBase(node.modelApiBase, officialBaseUrl)))
     ) {
-      const segment = envSegment(node.name, "AGENT");
       const provider = node.modelProvider?.trim() ?? "";
       const apiBase = node.modelApiBase?.trim() ?? "";
       const providerKey = provider
@@ -91,9 +102,34 @@ export function customModelEnvironmentBindings(
         label: createT("helpers.customModel.apiKeyLabel", {
           name: node.name.trim() || createT("helpers.customModel.fallbackName"),
         }),
+        path,
       });
     }
-    node.subAgents.forEach(visit);
+    if (!isLlmNode) {
+      node.subAgents.forEach((child, index) => visit(child, [...path, index]));
+      return;
+    }
+    node.modelFallbacks?.forEach((fallback, index) => {
+      if (!isModelFallbackEndpoint(fallback)) return;
+      const modelName = fallback.modelName.trim();
+      if (!modelName) return;
+      const explicitKey = fallback.modelApiKeyEnv?.trim() ?? "";
+      const apiKeyKey =
+        explicitKey ||
+        nextEnvName(defaultModelFallbackApiKeyEnv(node.name, index), used);
+      used.add(apiKeyKey);
+      bindings.push({
+        apiKeyKey,
+        provider: fallback.modelProvider?.trim() ?? "",
+        apiBase: fallback.modelApiBase?.trim() ?? "",
+        label: createT("helpers.customModel.fallbackApiKeyLabel", {
+          name: node.name.trim() || createT("helpers.customModel.fallbackName"),
+          model: modelName,
+        }),
+        path,
+      });
+    });
+    node.subAgents.forEach((child, index) => visit(child, [...path, index]));
   };
 
   visit(root);
@@ -108,4 +144,35 @@ export function customModelCredentialRequirements(
   return customModelEnvironmentBindings(root, officialBaseUrl).map(
     ({ apiKeyKey, label }) => ({ key: apiKeyKey, label }),
   );
+}
+
+export function missingCustomModelCredentialRequirement(
+  root: AgentDraft,
+  officialBaseUrl: string,
+  secretValues: Record<string, string>,
+  configuredRuntimeEnvKeys: readonly string[] = [],
+): MissingCustomModelCredentialRequirement | null {
+  const configuredKeys = new Set(configuredRuntimeEnvKeys);
+  return (
+    customModelEnvironmentBindings(root, officialBaseUrl)
+      .map(({ apiKeyKey, label, path }) => ({ key: apiKeyKey, label, path }))
+      .find(
+        ({ key }) => !secretValues[key]?.trim() && !configuredKeys.has(key),
+      ) ?? null
+  );
+}
+
+export function referencedModelFallbackApiKeyEnvKeys(root: AgentDraft): string[] {
+  const keys = new Set<string>();
+  const visit = (node: AgentDraft) => {
+    for (const fallback of node.modelFallbacks ?? []) {
+      if (!isModelFallbackEndpoint(fallback)) continue;
+      const key = fallback.modelApiKeyEnv?.trim() ?? "";
+      if (key) keys.add(key);
+    }
+    node.subAgents.forEach(visit);
+    node.workflow?.nodes.forEach((workflowNode) => visit(workflowNode.agent));
+  };
+  visit(root);
+  return [...keys];
 }

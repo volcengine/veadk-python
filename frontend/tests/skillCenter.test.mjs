@@ -86,7 +86,7 @@ test("skill center uses the Studio page shell and opens spaces as a detail page"
   for (const component of ["ResourceDetailLayout", "ResourceDetailSummary", "ResourceDetailSectionHeader"]) {
     assert.match(skillCenterSource, new RegExp(`<${component}`));
   }
-  assert.match(skillCenterSource, /<ResourceDetailLayout[\s\S]*?title=\{selectedSpace\.name\}[\s\S]*?onBack=\{closeSpace\}/);
+  assert.match(skillCenterSource, /<ResourceDetailLayout[\s\S]*?title=\{selectedSpaceName \|\| selectedSpace\.name\}[\s\S]*?onBack=\{closeSpace\}/);
   assert.doesNotMatch(skillCenterSource, /skillcenter-page-heading--back/);
   assert.doesNotMatch(skillCenterSource, /skillcenter-browser|点击 Skill 空间以查看详情/);
   assert.doesNotMatch(skillCenterSource, /items\[0\]/);
@@ -437,7 +437,7 @@ test("Skill file browser and refinement composer reuse clean Studio patterns", (
 
 test("Skill table keeps version beside the name and uses clear actions", () => {
   assert.match(skillCenterSource, /<strong title=\{skill\.skillName\}>\{skill\.skillName\}<\/strong>/);
-  assert.match(skillCenterSource, /<span className="skillcenter-table__version-badge">\{skill\.version\}<\/span>/);
+  assert.match(skillCenterSource, /<span className="skillcenter-table__version-badge">\{skill\.sourceVersion \|\| skill\.version\}<\/span>/);
   assert.doesNotMatch(skillCenterSource, /className="skillcenter-table__version"/);
   assert.match(skillStylesSource, /\.skillcenter-table__version-badge\s*\{[^}]*border-radius:\s*999px/);
   assert.match(skillStylesSource, /\.skillcenter-table__actions button,[\s\S]*?color:\s*hsl\(var\(--foreground\)\)/);

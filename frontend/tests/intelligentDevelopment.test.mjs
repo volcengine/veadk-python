@@ -226,6 +226,27 @@ test("text-only intelligent client uses its fixed endpoint and omits skills", as
   ]);
 });
 
+test("optimization session titles fit the session limit without changing project identity", async (t) => {
+  const previousFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = previousFetch; });
+  const requests = [];
+  globalThis.fetch = async (_url, init) => {
+    requests.push(JSON.parse(init.body));
+    return Response.json({ sessionId: "dev-1", status: "Creating" });
+  };
+  const projectName = "迁移项目🚀".repeat(24);
+  await intelligentDevelopmentClient.startSession({
+    displayName: `  ${projectName}  `,
+    projectId: "project-1",
+    baseVersionId: "version-1",
+  });
+  assert.deepEqual(requests, [{
+    displayName: Array.from(projectName).slice(0, 40).join(""),
+    projectId: "project-1",
+    baseVersionId: "version-1",
+  }]);
+});
+
 test("intelligent reconnect parses the restored conversation snapshot", async (t) => {
   const previousFetch = globalThis.fetch;
   t.after(() => {
@@ -279,6 +300,43 @@ test("intelligent reconnect parses the restored conversation snapshot", async (t
     connected.restoredConversation.messages.map((message) => message.content),
     ["创建销售 Agent", "已完成"],
   );
+});
+
+test("intelligent client preserves its session kind when server metadata is absent or generic", async (t) => {
+  const previousFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = previousFetch; });
+  for (const toolName of [undefined, "codex", "intelligent-development"]) {
+    globalThis.fetch = async (url, init) => {
+      const session = { sessionId: "dev-1", status: "Ready", toolName };
+      return Response.json(url.endsWith("/sessions") && init.method === "GET"
+        ? { sessions: [session] }
+        : session);
+    };
+    const created = await intelligentDevelopmentClient.startSession({ displayName: "Agent" });
+    const connected = await intelligentDevelopmentClient.connectSession("dev-1");
+    assert.equal(created.intelligentDevelopment, true);
+    assert.equal(connected.intelligentDevelopment, true);
+    const listed = await intelligentDevelopmentClient.listSessions();
+    assert.equal(listed[0].intelligentDevelopment, true);
+    const ordinary = await sandboxClient.connectSession("dev-1");
+    assert.equal(ordinary.intelligentDevelopment, toolName === "intelligent-development");
+  }
+});
+
+test("SSE heartbeat comments do not create or change visible reply blocks", async (t) => {
+  const previousFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = previousFetch; });
+  globalThis.fetch = async () => sseResponse([
+    ": heartbeat",
+    'event: delta\ndata: {"text":"first"}',
+    ": heartbeat",
+    ": heartbeat",
+    'event: delta\ndata: {"text":" second"}',
+    'event: done\ndata: {}',
+  ]);
+  const reply = await intelligentDevelopmentClient.sendMessage({ sessionId: "dev-1", text: "build" });
+  assert.equal(reply.text, "first second");
+  assert.deepEqual(reply.blocks, [{ kind: "text", text: "first second" }]);
 });
 
 test("current intelligent release can be absent or restored", async (t) => {
@@ -527,6 +585,36 @@ test("model text that resembles a delivery cannot create a delivery block", asyn
 
   assert.deepEqual(reply.blocks.map((block) => block.kind), ["text"]);
   assert.equal(reply.text.includes("development.succeeded"), true);
+});
+
+test("interrupted turns preserve partial output and the server reason without retrying", async (t) => {
+  const previousFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = previousFetch; });
+  const updates = [];
+  let requests = 0;
+  const message = "本轮任务已中断，未发布新版本。请在当前会话继续。";
+  globalThis.fetch = async () => {
+    requests += 1;
+    return sseResponse([
+      'event: delta\ndata: {"text":"partial-output"}',
+      `event: error\ndata: ${JSON.stringify({ code: "SANDBOX_TURN_INTERRUPTED", message, retryable: true })}`,
+      'event: done\ndata: {"reason":"failed"}',
+    ]);
+  };
+  await assert.rejects(
+    intelligentDevelopmentClient.sendMessage(
+      { sessionId: "dev-1", text: "continue" },
+      { onBlocks: (blocks) => updates.push(structuredClone(blocks)) },
+    ),
+    (error) => {
+      assert.equal(error.code, "SANDBOX_TURN_INTERRUPTED");
+      assert.equal(error.retryable, true);
+      assert.equal(intelligentDevelopmentErrorMessage(error), message);
+      return true;
+    },
+  );
+  assert.equal(requests, 1);
+  assert.deepEqual(updates.at(-1), [{ kind: "text", text: "partial-output" }]);
 });
 
 test("intelligent streams preserve thinking and assistant message order", async (t) => {
@@ -1102,6 +1190,10 @@ test("trusted deployment previews verified files but never deploys browser file 
 test("intelligent goal input shares IME handling and semantic responsive styles", () => {
   assert.match(createSource, /isImeCompositionEvent\(event\.nativeEvent\)/);
   assert.match(createSource, /listModelOptions\(\{/);
+  assert.match(
+    createSource,
+    /listModelOptions\(\{[\s\S]*?scope: "development"/,
+  );
   assert.match(
     createSource,
     /function IntelligentModelSelect\([\s\S]*?<NewChatCompactSelect[\s\S]*?label=\{t\("intelligent\.model\.label"\)\}[\s\S]*?hideLabel[\s\S]*?searchable/,

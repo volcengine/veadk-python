@@ -58,6 +58,49 @@ from veadk.cli.studio_rbac import (
 )
 
 
+@pytest.mark.parametrize("provider", ["volcengine", "byteplus"])
+def test_runtime_role_lookup_failure_finishes_deployment_and_allows_retry(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    _stub_studio_runtime_role,
+    provider: str,
+) -> None:
+    monkeypatch.setenv("BYTEPLUS_ACCESS_KEY", "test-ak")
+    monkeypatch.setenv("BYTEPLUS_SECRET_KEY", "test-sk")
+    _stub_studio_runtime_role.side_effect = RuntimeError("IAM role lookup denied")
+    monkeypatch.setattr(
+        "agentkit.toolkit.sdk.launch",
+        lambda **_kwargs: pytest.fail("IAM failure must stop deployment before launch"),
+    )
+    app = _create_studio_app(
+        monkeypatch, tmp_path, developers="developer", provider=provider
+    )
+    with TestClient(app) as client:
+        for _ in range(2):
+            response = client.post(
+                "/web/deploy-agentkit",
+                headers={"X-VeADK-Local-User": "developer"},
+                json={
+                    "name": "role-lookup-test",
+                    "taskId": "role-lookup-task",
+                    "createEvaluationSets": False,
+                    "envs": [{"key": "MODEL_AGENT_API_KEY", "value": "test-only-key"}],
+                    "files": [{"path": "app.py", "content": "app = object()\n"}],
+                    "config": {"region": "cn-beijing"},
+                },
+            )
+            assert response.status_code == 200
+            frames = [
+                json.loads(line.removeprefix("data: "))
+                for line in response.iter_lines()
+                if line.startswith("data: ")
+            ]
+            assert frames[-1]["done"] is True
+            assert frames[-1]["success"] is False
+            assert "IAM role lookup denied" in frames[-1]["error"]
+    assert _stub_studio_runtime_role.call_count == 2
+
+
 @pytest.mark.parametrize(
     ("code", "expected"),
     [
@@ -171,6 +214,20 @@ def _create_studio_app(
     provider: str = "volcengine",
 ) -> FastAPI:
     captured: dict[str, Any] = {}
+    monkeypatch.setenv("VEADK_STUDIO_IDENTITY_ROLES", "")
+    # These fixtures exercise resource/SSO routes; isolate the Identity control plane
+    from dataclasses import replace
+
+    policy = StudioAccessPolicy.from_csv(admins, developers)
+    monkeypatch.setattr(
+        "frontend.server.user_management.deployment.initialize_runtime_roles",
+        lambda **kwargs: SimpleNamespace(
+            directory=None,
+            principal_for=lambda principal: replace(
+                principal, role=policy.role_for(principal)
+            ),
+        ),
+    )
     monkeypatch.setattr("dotenv.find_dotenv", lambda *args, **kwargs: "")
     monkeypatch.setenv("VOLCENGINE_ACCESS_KEY", "test-ak")
     monkeypatch.setenv("VOLCENGINE_SECRET_KEY", "test-sk")
@@ -379,6 +436,8 @@ def test_auth_config_uses_cloud_specific_identity_label(
     provider_label: str | None,
     expected_label: str,
 ) -> None:
+    monkeypatch.setenv("BYTEPLUS_ACCESS_KEY", "test-byteplus-ak")
+    monkeypatch.setenv("BYTEPLUS_SECRET_KEY", "test-byteplus-sk")
     from veadk.auth.middleware.oauth2_auth import OAuth2Config
 
     monkeypatch.setattr(
@@ -643,6 +702,7 @@ def test_system_info_lists_configured_sandbox_tool_ids(
     monkeypatch.setenv("SANDBOX_CHAT_OPENCLAW_SNAPSHOT", "tool-openclaw-snapshot")
     monkeypatch.setenv("SANDBOX_CHAT_HERMES_SNAPSHOT", "tool-hermes-snapshot")
     monkeypatch.setenv("SANDBOX_DEV", "tool-dev")
+    monkeypatch.setenv("STUDIO_WORKSPACE_TOOL_ID", "tool-workspace")
     monkeypatch.setenv("VEADK_STUDIO_TOS_BUCKET", "teststudio")
     monkeypatch.setenv("VEADK_STUDIO_TOS_REGION", "cn-beijing")
     app = _create_studio_app(
@@ -741,6 +801,13 @@ def test_system_info_lists_configured_sandbox_tool_ids(
                 "label": "Dev Sandbox",
                 "toolId": "tool-dev",
                 "snapshot": False,
+                **default_model_env_state,
+            },
+            {
+                "kind": "studio_workspace",
+                "label": "Studio Sandbox",
+                "toolId": "tool-workspace",
+                "snapshot": True,
                 **default_model_env_state,
             },
         ],
@@ -1142,12 +1209,12 @@ def test_current_user_pool_deployment_forwards_studio_jwt_to_run_sse(
     assert response.headers["cache-control"] == "no-cache, no-transform"
     assert response.headers["x-accel-buffering"] == "no"
     assert frames[-1]["success"] is True
-    huawei = "https://repo.huaweicloud.com/repository/pypi/simple"
-    aliyun = "https://mirrors.aliyun.com/pypi/simple/"
+    tencent = "https://mirrors.cloud.tencent.com/pypi/simple"
+    ustc = "https://pypi.mirrors.ustc.edu.cn/simple"
     pypi = "https://pypi.org/simple"
     assert (
-        captured_dockerfile.index(huawei)
-        < captured_dockerfile.index(aliyun)
+        captured_dockerfile.index(tencent)
+        < captured_dockerfile.index(ustc)
         < captured_dockerfile.index(pypi)
     )
     cloud = captured_config["launch_types"]["cloud"]
@@ -1278,6 +1345,63 @@ def test_byteplus_deploy_agentkit_uses_iam_file_for_sdk_templates(
     assert os.environ.get("BYTEPLUS_ACCESS_KEY") is None
 
 
+def test_volcengine_deploy_omits_feedback_evaluation_sets_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    evaluation_set_calls = 0
+
+    def launch(*, config_file: str, **_kwargs: Any) -> SimpleNamespace:
+        assert Path(config_file).is_file()
+        return SimpleNamespace(
+            success=True,
+            error=None,
+            deploy_result=SimpleNamespace(
+                endpoint_url="https://runtime.example.com",
+                metadata={
+                    "runtime_id": "runtime-default-evaluation-off",
+                    "runtime_name": "default-evaluation-off",
+                    "runtime_endpoint": "https://runtime.example.com",
+                    "runtime_apikey": "secret",
+                },
+            ),
+        )
+
+    async def initialize_evaluation_sets(**_kwargs: Any) -> list[str]:
+        nonlocal evaluation_set_calls
+        evaluation_set_calls += 1
+        return ["unexpected"]
+
+    monkeypatch.setattr("agentkit.toolkit.sdk.launch", launch)
+    monkeypatch.setattr(
+        "frontend.server.evaluation_automation.datasets.ensure_feedback_sets",
+        initialize_evaluation_sets,
+    )
+    app = _create_studio_app(monkeypatch, tmp_path, developers="developer")
+
+    with TestClient(app) as client:
+        with client.stream(
+            "POST",
+            "/web/deploy-agentkit",
+            headers={"X-VeADK-Local-User": "developer"},
+            json={
+                "name": "default-evaluation-off",
+                "files": [{"path": "app.py", "content": "app = object()\n"}],
+                "config": {"region": "cn-beijing", "projectName": "default"},
+            },
+        ) as response:
+            frames = [
+                json.loads(line.removeprefix("data: "))
+                for line in response.iter_lines()
+                if line.startswith("data: ")
+            ]
+
+    assert response.status_code == 200
+    assert frames[-1]["success"] is True
+    assert not [frame for frame in frames if frame.get("phase") == "evaluation"]
+    assert evaluation_set_calls == 0
+
+
 def test_migration_routes_require_agent_management_role(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1403,10 +1527,13 @@ def test_code_package_manifest_entry_point_reaches_agentkit_sdk(
     tmp_path: Path,
 ) -> None:
     captured_config: dict[str, Any] = {}
+    captured_dockerfile = ""
 
     def launch(*, config_file: str, **_kwargs: Any) -> SimpleNamespace:
+        nonlocal captured_dockerfile
         config_path = Path(config_file)
         captured_config.update(yaml.safe_load(config_path.read_text()))
+        captured_dockerfile = (config_path.parent / "Dockerfile").read_text()
         assert (config_path.parent / "runtime" / "main.py").read_text() == (
             "app = object()\n"
         )
@@ -1463,6 +1590,7 @@ def test_code_package_manifest_entry_point_reaches_agentkit_sdk(
     assert response.status_code == 200
     assert frames[-1]["success"] is True
     assert captured_config["common"]["entry_point"] == "runtime/main.py"
+    assert 'CMD ["python", "-m", "app"]' in captured_dockerfile
 
 
 def test_migration_deployment_materializes_owned_session_source_server_side(
@@ -1473,6 +1601,7 @@ def test_migration_deployment_materializes_owned_session_source_server_side(
     from veadk.config import veadk_environments
 
     captured_config: dict[str, Any] = {}
+    captured_dockerfile = ""
     materialized: dict[str, str] = {}
 
     def materialize(
@@ -1482,15 +1611,42 @@ def test_migration_deployment_materializes_owned_session_source_server_side(
         target: Path,
     ) -> str:
         materialized.update(task_id=task_id, owner_id=owner_id)
-        entry = target / "runtime" / "migrated.py"
-        entry.parent.mkdir(parents=True)
-        entry.write_text("app = object()\n", encoding="utf-8")
+        configured_entry = target / "bailian-test-workflow-agent.py"
+        configured_entry.write_text("app = object()\n", encoding="utf-8")
+        startup_entry = target / "runtime" / "migrated.py"
+        startup_entry.parent.mkdir(parents=True)
+        startup_entry.write_text("app = object()\n", encoding="utf-8")
+        (target / "agentkit.yaml").write_text(
+            "common:\n"
+            "  agent_name: bailian-test-workflow-agent\n"
+            "  entry_point: bailian-test-workflow-agent.py\n"
+            "  description: AgentKit project bailian-test-workflow-agent - Agent Server App\n"
+            "  language: Python\n"
+            '  language_version: "3.12"\n'
+            "  agent_type: WebServer App\n"
+            "  dependencies_file: requirements.txt\n"
+            "  launch_type: cloud\n",
+            encoding="utf-8",
+        )
+        nested_dockerfile = target / ".agentkit" / "Dockerfile"
+        nested_dockerfile.parent.mkdir()
+        nested_dockerfile.write_text(
+            'FROM example.com/nested:latest\nCMD ["python", "wrong.py"]\n',
+            encoding="utf-8",
+        )
         return "runtime/migrated.py"
 
     def launch(*, config_file: str, **_kwargs: Any) -> SimpleNamespace:
+        nonlocal captured_dockerfile
         config_path = Path(config_file)
         captured_config.update(yaml.safe_load(config_path.read_text()))
+        captured_dockerfile = (config_path.parent / "Dockerfile").read_text()
+        assert (config_path.parent / "bailian-test-workflow-agent.py").is_file()
         assert (config_path.parent / "runtime" / "migrated.py").is_file()
+        assert (
+            'CMD ["python", "wrong.py"]'
+            in (config_path.parent / ".agentkit" / "Dockerfile").read_text()
+        )
         assert not (config_path.parent / "browser.py").exists()
         return SimpleNamespace(
             success=True,
@@ -1561,13 +1717,143 @@ def test_migration_deployment_materializes_owned_session_source_server_side(
         "task_id": "migration-v1-" + "1" * 32,
         "owner_id": "developer",
     }
-    assert captured_config["common"]["entry_point"] == "runtime/migrated.py"
+    assert captured_config["common"]["entry_point"] == "bailian-test-workflow-agent.py"
+    assert 'CMD ["python", "bailian-test-workflow-agent.py"]' in captured_dockerfile
     runtime_envs = captured_config["launch_types"]["cloud"]["runtime_envs"]
     assert runtime_envs["MODEL_AGENT_NAME"] == "doubao-seed-2-1-pro-260628"
     assert runtime_envs["MODEL_NAME"] == "doubao-seed-2-1-pro-260628"
     assert runtime_envs["MODEL_AGENT_API_BASE"] == (
         "https://ark.cn-beijing.volces.com/api/v3"
     )
+
+
+@pytest.mark.parametrize(
+    ("producer", "expected_command"),
+    [
+        (
+            "migration",
+            'CMD ["python", "bailian-test-workflow-agent.py"]',
+        ),
+        (
+            "intelligent-development",
+            'CMD ["python", "-m", "app"]',
+        ),
+    ],
+)
+def test_saved_project_deployment_scopes_manifest_entry_point_to_migrations(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    producer: str,
+    expected_command: str,
+) -> None:
+    from veadk.config import veadk_environments
+
+    captured_config: dict[str, Any] = {}
+    captured_dockerfile = ""
+    materialized: dict[str, str] = {}
+
+    async def materialize(
+        target: Path,
+        source: dict[str, str],
+        *,
+        owner_id: str,
+        **_kwargs: Any,
+    ) -> SimpleNamespace:
+        materialized.update(
+            kind=source["kind"],
+            project_id=source["projectId"],
+            version_id=source["versionId"],
+            owner_id=owner_id,
+        )
+        configured_entry = target / "bailian-test-workflow-agent.py"
+        configured_entry.write_text("app = object()\n", encoding="utf-8")
+        startup_entry = target / "runtime" / "migrated.py"
+        startup_entry.parent.mkdir()
+        startup_entry.write_text("app = object()\n", encoding="utf-8")
+        (target / "agentkit.yaml").write_text(
+            "common:\n"
+            "  agent_name: bailian-test-workflow-agent\n"
+            "  entry_point: bailian-test-workflow-agent.py\n",
+            encoding="utf-8",
+        )
+        return SimpleNamespace(
+            agent_name="bailian-test-workflow-agent",
+            entry_point="runtime/migrated.py",
+            producer=producer,
+        )
+
+    def launch(*, config_file: str, **_kwargs: Any) -> SimpleNamespace:
+        nonlocal captured_dockerfile
+        config_path = Path(config_file)
+        captured_config.update(yaml.safe_load(config_path.read_text()))
+        captured_dockerfile = (config_path.parent / "Dockerfile").read_text()
+        assert (config_path.parent / "bailian-test-workflow-agent.py").is_file()
+        return SimpleNamespace(
+            success=True,
+            error=None,
+            deploy_result=SimpleNamespace(
+                endpoint_url="https://runtime.example.com",
+                metadata={
+                    "runtime_id": "runtime-saved-migration",
+                    "runtime_name": "saved-migration-agent",
+                    "runtime_endpoint": "https://runtime.example.com",
+                    "runtime_apikey": "secret",
+                },
+            ),
+        )
+
+    monkeypatch.setattr(
+        "frontend.server.intelligent_development_source."
+        "materialize_intelligent_development_source",
+        materialize,
+    )
+    monkeypatch.setattr("agentkit.toolkit.sdk.launch", launch)
+    monkeypatch.setitem(veadk_environments, "MODEL_AGENT_API_KEY", "test-model-key")
+    app = _create_studio_app(monkeypatch, tmp_path, developers="developer")
+
+    with (
+        TestClient(app) as client,
+        client.stream(
+            "POST",
+            "/web/deploy-agentkit",
+            headers={"X-VeADK-Local-User": "developer"},
+            json={
+                "name": "saved-migration-agent",
+                "files": [],
+                "source": {
+                    "kind": "intelligentDevelopment",
+                    "sessionId": "session-saved-migration",
+                    "projectId": "project-saved-migration",
+                    "versionId": "version-saved-migration",
+                    "artifactSha256": "a" * 64,
+                    "validationReportSha256": "b" * 64,
+                },
+                "config": {"region": "cn-beijing", "projectName": "default"},
+                "createEvaluationSets": False,
+            },
+        ) as response,
+    ):
+        frames = [
+            json.loads(line.removeprefix("data: "))
+            for line in response.iter_lines()
+            if line.startswith("data: ")
+        ]
+
+    assert response.status_code == 200
+    assert frames[-1]["success"] is True
+    assert materialized == {
+        "kind": "intelligentDevelopment",
+        "project_id": "project-saved-migration",
+        "version_id": "version-saved-migration",
+        "owner_id": "developer",
+    }
+    expected_entry_point = (
+        "bailian-test-workflow-agent.py"
+        if producer == "migration"
+        else "runtime/migrated.py"
+    )
+    assert captured_config["common"]["entry_point"] == expected_entry_point
+    assert expected_command in captured_dockerfile
 
 
 def test_migration_deployment_rejection_removes_temporary_source(
@@ -2150,7 +2436,7 @@ def test_unlisted_identity_is_a_regular_user() -> None:
         "createAgents": False,
         "createPersonalAgents": True,
         "manageAgents": False,
-        "runtimeScope": "mine",
+        "runtimeScope": "all",
     }
 
 
@@ -2203,12 +2489,11 @@ def test_studio_deploy_exposes_role_options() -> None:
     result = CliRunner().invoke(studio, ["deploy", "--help"])
 
     assert result.exit_code == 0
-    assert "--admin" in result.output
-    assert "--developer" in result.output
+    assert "--super-admin" in result.output
+    assert "--admin " not in result.output
+    assert "--developer " not in result.output
     assert "--allow-dangerous-login" in result.output
-    assert "Omit both role options to grant every user admin access" in " ".join(
-        result.output.split()
-    )
+    assert "grant every user admin access" not in result.output
     assert "--skill-creator-tool-id" not in result.output
 
 
@@ -2254,7 +2539,7 @@ def test_access_endpoint_resolves_local_roles_and_blocks_user_management(
         "createAgents": False,
         "createPersonalAgents": True,
         "manageAgents": False,
-        "runtimeScope": "mine",
+        "runtimeScope": "all",
     }
     assert user.json()["telemetry"]["userId"] == "reader"
     assert user.json()["telemetry"]["accountId"] == "2100123456"
@@ -2269,6 +2554,8 @@ def test_media_routes_enforce_user_ownership_and_allow_explicit_admin(
     provider: str,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
+    # VeADK keeps its own handler; allow pytest to observe this audit record
+    monkeypatch.setattr(logging.getLogger("veadk"), "propagate", True)
     monkeypatch.setenv("VEADK_MEDIA_LOCAL_DIR", str(tmp_path / "media"))
     app = _create_studio_app(
         monkeypatch,
@@ -2704,12 +2991,12 @@ def test_non_admin_runtime_list_uses_one_owner_filtered_request(
 
     with TestClient(app) as client:
         developer = client.get(
-            "/web/runtimes?scope=all&page_size=1&region=cn-beijing",
+            "/web/runtimes?scope=mine&page_size=1&region=cn-beijing",
             headers={"X-VeADK-Local-User": "developer"},
         )
         developer_call_count = runtime_calls
         reader = client.get(
-            "/web/runtimes?scope=all&page_size=10&region=cn-beijing",
+            "/web/runtimes?scope=mine&page_size=10&region=cn-beijing",
             headers={"X-VeADK-Local-User": "reader"},
         )
         admin = client.get(
@@ -3249,6 +3536,15 @@ def test_runtime_update_capability_supports_owned_unmanaged_runtime(
                 '"headers":{"Authorization":"Bearer structured-secret"}}]'
             ),
         ),
+        SimpleNamespace(
+            key="CUSTOM_MODEL_SELECTED_AGENT_API_KEY",
+            value="custom-model-secret",
+        ),
+        SimpleNamespace(key="OPENAI_BACKUP_API_KEY", value="fallback-secret"),
+        SimpleNamespace(
+            key="FALLBACK_MODEL_SELECTED_AGENT_2_API_KEY",
+            value="implicit-fallback-secret",
+        ),
         SimpleNamespace(key="CUSTOM_TOKEN", value="custom-secret"),
     ]
     legacy_runtime = _runtime_with_public_endpoint(
@@ -3329,6 +3625,23 @@ def test_runtime_update_capability_supports_owned_unmanaged_runtime(
                         "name": "selected-agent",
                         "description": "Existing Agent",
                         "instruction": "Keep the published configuration.",
+                        "modelSource": "custom",
+                        "modelName": "primary-custom-model",
+                        "modelProvider": "openai",
+                        "modelApiBase": "https://api.openai.com/v1",
+                        "modelFallbacks": [
+                            {
+                                "modelName": "gpt-4o-mini",
+                                "modelProvider": "openai",
+                                "modelApiBase": "https://api.openai.com/v1",
+                                "modelApiKeyEnv": "OPENAI_BACKUP_API_KEY",
+                            },
+                            {
+                                "modelName": "claude-3-haiku",
+                                "modelProvider": "anthropic",
+                                "modelApiBase": "https://api.anthropic.com/v1",
+                            },
+                        ],
                         "mcpTools": [
                             {
                                 "name": "orders",
@@ -3479,7 +3792,13 @@ def test_runtime_update_capability_supports_owned_unmanaged_runtime(
             {"key": "AGENTKIT_TOOL_ID", "value": "t-code-sandbox"},
             {"key": "AGENTKIT_TOOL_REGION", "value": "cn-beijing"},
         ],
-        "configuredEnvKeys": ["MCP_API_KEY", "PUBLISHED_INVENTORY_TOKEN"],
+        "configuredEnvKeys": [
+            "MCP_API_KEY",
+            "PUBLISHED_INVENTORY_TOKEN",
+            "CUSTOM_MODEL_SELECTED_AGENT_API_KEY",
+            "OPENAI_BACKUP_API_KEY",
+            "FALLBACK_MODEL_SELECTED_AGENT_2_API_KEY",
+        ],
         "network": {
             "mode": "both",
             "vpcId": "vpc-existing",
@@ -3499,6 +3818,9 @@ def test_runtime_update_capability_supports_owned_unmanaged_runtime(
         "custom-secret",
         "mcp-secret",
         "structured-secret",
+        "custom-model-secret",
+        "fallback-secret",
+        "implicit-fallback-secret",
     ):
         assert protected not in response.text
     assert requested_paths[:2] == [
@@ -3773,7 +4095,8 @@ def test_slow_runtime_proxy_authorization_does_not_starve_capability_budget(
             ),
             headers=headers,
         )
-        assert proxy_started.wait(timeout=1.0)
+        # Allow worker startup on busy CI hosts before measuring request latency
+        assert proxy_started.wait(timeout=10.0)
 
         started_at = time.monotonic()
         pending = client.get(
@@ -4853,6 +5176,14 @@ def test_source_preserving_update_ignores_browser_source_and_keeps_secrets_out_o
                 "envs": [{"key": "UNRELATED_SECRET", "value": "must-not-pass"}],
             },
         )
+        fallback_model_change = client.post(
+            "/web/deploy-agentkit",
+            headers=headers,
+            json={
+                **update_payload,
+                "draft": {**draft, "modelFallbacks": ["backup-model"]},
+            },
+        )
         with client.stream(
             "POST",
             "/web/deploy-agentkit",
@@ -4867,6 +5198,8 @@ def test_source_preserving_update_ignores_browser_source_and_keeps_secrets_out_o
 
     assert generic_env.status_code == 400
     assert "不接受通用环境变量" in generic_env.json()["detail"]
+    assert fallback_model_change.status_code == 409
+    assert "模型 fallback" in fallback_model_change.json()["detail"]
     assert response.status_code == 200
     assert frames[-1]["success"] is True
     assert captured["dockerfile"].splitlines()[0].endswith("@sha256:" + "b" * 64)
@@ -5181,6 +5514,7 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
     has_resource_tags: bool,
     provider: str,
     region: str,
+    _stub_studio_runtime_role,
 ) -> None:
     from agentkit.sdk.runtime.client import AgentkitRuntimeClient
 
@@ -5443,6 +5777,7 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
                 "removeRuntimeEnvKeys": remove_runtime_env_keys,
                 "files": [{"path": "app.py", "content": "app = object()\n"}],
                 "config": {"region": region, "projectName": "default"},
+                "createEvaluationSets": True,
                 "authentication": {"type": "api_key"},
                 "im": {"feishu": {"enabled": not remove_feishu_credentials}},
                 "envs": requested_envs,
@@ -5511,20 +5846,21 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
     assert cloud["runtime_id"] == runtime.runtime_id
     assert cloud["runtime_name"] == runtime.name
     assert cloud["runtime_role_name"] == "runtime-role"
+    _stub_studio_runtime_role.assert_not_called()
     assert cloud["image_tag"] == "veadk-v4"
     if provider == "volcengine":
-        huawei = "https://repo.huaweicloud.com/repository/pypi/simple"
-        aliyun = "https://mirrors.aliyun.com/pypi/simple/"
+        tencent = "https://mirrors.cloud.tencent.com/pypi/simple"
+        ustc = "https://pypi.mirrors.ustc.edu.cn/simple"
         pypi = "https://pypi.org/simple"
         assert (
-            captured_dockerfile.index(huawei)
-            < captured_dockerfile.index(aliyun)
+            captured_dockerfile.index(tencent)
+            < captured_dockerfile.index(ustc)
             < captured_dockerfile.index(pypi)
         )
     else:
         assert "RUN uv pip install -r requirements.txt" in captured_dockerfile
-        assert "repo.huaweicloud.com" not in captured_dockerfile
-        assert "mirrors.aliyun.com" not in captured_dockerfile
+        assert "mirrors.cloud.tencent.com" not in captured_dockerfile
+        assert "pypi.mirrors.ustc.edu.cn" not in captured_dockerfile
     assert cloud["runtime_auth_type"] == "custom_jwt"
     assert cloud["runtime_jwt_discovery_url"] == (
         "https://studio.example.com/.well-known/openid-configuration"
@@ -5594,6 +5930,260 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
 
 
 @pytest.mark.parametrize(
+    ("lifecycle_case", "credential_storage", "explicit_reuse"),
+    [
+        ("change-url", "reference-env", True),
+        ("change-url", "reference-env", False),
+        ("change-url", "servers-json", True),
+        ("change-url", "servers-json", False),
+        ("add-first", "reference-env", False),
+        ("add-second", "reference-env", False),
+        ("add-second", "servers-json", False),
+    ],
+)
+def test_application_owned_mcp_update_routes_cover_reuse_and_additions(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    lifecycle_case: str,
+    credential_storage: str,
+    explicit_reuse: bool,
+) -> None:
+    from agentkit.sdk.runtime.client import AgentkitRuntimeClient
+
+    agent_name = "ordinary-mcp-agent"
+    credential_reference = "MCP_ORDINARY_MCP_AGENT_TOOL_1_AUTH_TOKEN"
+    credential_value = "server-retained-route-test-secret"
+    added_credential_reference = "MCP_ORDINARY_MCP_AGENT_INVENTORY_AUTH_TOKEN"
+    added_credential_value = "new-route-test-secret"
+    old_url = "https://old-mcp.example.test/vtrace"
+    new_url = "https://new-mcp.example.test/mcp"
+    runtime = _runtime_with_public_endpoint(
+        _runtime("ordinary-mcp-runtime", "developer", managed=False)
+    )
+    runtime.current_version_number = 3
+    runtime.status = "Ready"
+    runtime.role_name = "runtime-role"
+    runtime.artifact_url = ""
+    runtime.envs = (
+        []
+        if lifecycle_case == "add-first"
+        else [SimpleNamespace(key=credential_reference, value=credential_value)]
+    )
+    if credential_storage == "servers-json" and lifecycle_case != "add-first":
+        runtime.envs = [
+            SimpleNamespace(
+                key="MCP_SERVERS_JSON",
+                value=json.dumps(
+                    [
+                        {
+                            "name": (
+                                "vtrace" if lifecycle_case == "change-url" else "orders"
+                            ),
+                            "url": old_url,
+                            "headers": {"Authorization": f"Bearer {credential_value}"},
+                        }
+                    ]
+                ),
+            )
+        ]
+    published_mcp_tools = []
+    if lifecycle_case != "add-first":
+        published_mcp_tools = [
+            {
+                "name": "" if lifecycle_case == "change-url" else "orders",
+                "transport": "http",
+                "url": old_url,
+                "authTokenEnv": credential_reference,
+            }
+        ]
+    published_draft = {
+        "name": agent_name,
+        "description": "Ordinary MCP update",
+        "instruction": "Use the configured MCP.",
+        "mcpTools": published_mcp_tools,
+    }
+    captured_config: dict[str, Any] = {}
+    update_requests: list[Any] = []
+
+    def get_runtime(_self: Any, _request: Any) -> SimpleNamespace:
+        runtime.current_version_number = 4 if update_requests else 3
+        return runtime
+
+    def update_runtime(_self: Any, request: Any) -> SimpleNamespace:
+        update_requests.append(request)
+        return SimpleNamespace(runtime_id=runtime.runtime_id)
+
+    def launch(*, config_file: str, **_kwargs: Any) -> SimpleNamespace:
+        captured_config.update(yaml.safe_load(Path(config_file).read_text()))
+        update_runtime(
+            object(),
+            SimpleNamespace(tags=[], apmplus_enable=False),
+        )
+        return SimpleNamespace(
+            success=True,
+            error=None,
+            deploy_result=SimpleNamespace(
+                endpoint_url="https://runtime.example.test",
+                metadata={
+                    "runtime_id": runtime.runtime_id,
+                    "runtime_name": runtime.name,
+                    "runtime_endpoint": "https://runtime.example.test",
+                    "runtime_apikey": "test-only-api-key",
+                },
+            ),
+        )
+
+    class RuntimeAsyncClient:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> "RuntimeAsyncClient":
+            return self
+
+        async def __aexit__(self, *_args: Any) -> None:
+            return None
+
+        async def request(
+            self,
+            _method: str,
+            url: str,
+            **_kwargs: Any,
+        ) -> _RuntimeJsonResponse:
+            if url.endswith("/list-apps"):
+                return _RuntimeJsonResponse([agent_name])
+            assert url.endswith(f"/web/agent-info/{agent_name}")
+            return _RuntimeJsonResponse(
+                {
+                    "name": agent_name,
+                    "draft": published_draft,
+                }
+            )
+
+    monkeypatch.setattr(AgentkitRuntimeClient, "get_runtime", get_runtime)
+    monkeypatch.setattr(AgentkitRuntimeClient, "update_runtime", update_runtime)
+    monkeypatch.setattr("agentkit.toolkit.sdk.launch", launch)
+    monkeypatch.setattr("httpx.AsyncClient", RuntimeAsyncClient)
+    monkeypatch.setenv("VEADK_STUDIO_ACCOUNT_ID", "test-account")
+    monkeypatch.setattr(
+        "veadk.auth.veauth.ark_veauth.get_ark_token",
+        lambda **_kwargs: "test-only-model-key",
+    )
+    monkeypatch.setattr(
+        "veadk.cli.cli_frontend._sync_volcengine_runtime_tags",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "agentkit.utils.template_utils.render_template",
+        lambda template: template.replace("{{account_id}}", "test-account"),
+    )
+    app = _create_studio_app(monkeypatch, tmp_path, developers="developer")
+    headers = {"X-VeADK-Local-User": "developer"}
+    capability_params = {
+        "runtimeId": runtime.runtime_id,
+        "region": "cn-shanghai",
+        "appName": agent_name,
+        "currentVersion": runtime.current_version_number,
+    }
+
+    def get_completed_capability(client: TestClient) -> httpx.Response:
+        response = client.get(
+            "/web/runtime-update-capability",
+            params=capability_params,
+            headers=headers,
+        )
+        for _ in range(5):
+            if response.status_code != 202:
+                return response
+            time.sleep(0.05)
+            response = client.get(
+                "/web/runtime-update-capability",
+                params=capability_params,
+                headers=headers,
+            )
+        return response
+
+    with TestClient(app) as client:
+        capability = get_completed_capability(client)
+        assert capability.status_code == 200
+        edited_draft = capability.json()["agent"]["draft"]
+        if lifecycle_case == "change-url":
+            edited_draft["mcpTools"][0]["url"] = new_url
+        else:
+            edited_draft["mcpTools"].append(
+                {
+                    "name": "orders" if lifecycle_case == "add-first" else "inventory",
+                    "transport": "http",
+                    "url": new_url,
+                    "authTokenEnv": (
+                        credential_reference
+                        if lifecycle_case == "add-first"
+                        else added_credential_reference
+                    ),
+                }
+            )
+        payload = {
+            "name": agent_name,
+            "runtimeId": runtime.runtime_id,
+            "appName": agent_name,
+            "draft": edited_draft,
+            "updateEtag": capability.json()["etag"],
+            "baseRuntimeVersion": 3,
+            "createEvaluationSets": False,
+            "files": [{"path": "app.py", "content": "app = object()\n"}],
+            "config": {"region": "cn-shanghai", "projectName": "default"},
+        }
+        if lifecycle_case == "add-first":
+            payload["envs"] = [
+                {"key": credential_reference, "value": added_credential_value}
+            ]
+        elif lifecycle_case == "add-second":
+            payload["envs"] = [
+                {
+                    "key": added_credential_reference,
+                    "value": added_credential_value,
+                }
+            ]
+        elif explicit_reuse:
+            payload["mcpCredentialReuses"] = [
+                {
+                    "agentName": agent_name,
+                    "name": "",
+                    "url": new_url,
+                    "sourceAuthTokenEnv": credential_reference,
+                }
+            ]
+        response = client.post(
+            "/web/deploy-agentkit",
+            headers=headers,
+            json=payload,
+        )
+        frames = [
+            json.loads(line.removeprefix("data: "))
+            for line in response.iter_lines()
+            if line.startswith("data: ")
+        ]
+
+    if lifecycle_case == "change-url" and not explicit_reuse:
+        assert response.status_code == 409
+        assert "重新填写 Key 或确认沿用原凭证" in response.json()["detail"]
+        assert captured_config == {}
+        assert credential_value not in response.text
+        return
+
+    assert response.status_code == 200
+    assert frames[-1]["success"] is True
+    assert credential_value not in json.dumps(frames)
+    runtime_envs = captured_config["launch_types"]["cloud"]["runtime_envs"]
+    assert credential_reference in runtime_envs, sorted(runtime_envs)
+    assert runtime_envs[credential_reference] == (
+        added_credential_value if lifecycle_case == "add-first" else credential_value
+    )
+    if lifecycle_case == "add-second":
+        assert runtime_envs[added_credential_reference] == added_credential_value
+    assert "MCP_SERVERS_JSON" not in runtime_envs
+
+
+@pytest.mark.parametrize(
     (
         "session_storage",
         "min_instance",
@@ -5609,6 +6199,7 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
         ("persistent", 1, 5, False, True),
     ],
 )
+@pytest.mark.parametrize("provider", ["volcengine", "byteplus"])
 def test_new_deployment_only_updates_non_default_instance_range(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -5617,6 +6208,8 @@ def test_new_deployment_only_updates_non_default_instance_range(
     max_instance: int,
     expects_update: bool,
     quick_mode: bool,
+    provider: str,
+    _stub_studio_runtime_role,
 ) -> None:
     from agentkit.sdk.runtime.client import AgentkitRuntimeClient
 
@@ -5624,7 +6217,6 @@ def test_new_deployment_only_updates_non_default_instance_range(
     update_requests: list[Any] = []
     create_requests: list[Any] = []
     captured_config: dict[str, Any] = {}
-    full_access_calls: list[dict[str, Any]] = []
 
     def create_runtime(_self: Any, request: Any) -> SimpleNamespace:
         create_requests.append(request)
@@ -5662,14 +6254,11 @@ def test_new_deployment_only_updates_non_default_instance_range(
     monkeypatch.setattr(AgentkitRuntimeClient, "update_runtime", update_runtime)
     monkeypatch.setattr(AgentkitRuntimeClient, "get_runtime", get_runtime)
     monkeypatch.setattr("agentkit.toolkit.sdk.launch", launch)
-    monkeypatch.setattr(
-        "veadk.cli.agentkit_runtime_iam.ensure_quick_runtime_full_access",
-        lambda role_name, **kwargs: full_access_calls.append(
-            {"role_name": role_name, **kwargs}
-        )
-        or True,
+    monkeypatch.setenv("BYTEPLUS_ACCESS_KEY", "test-ak")
+    monkeypatch.setenv("BYTEPLUS_SECRET_KEY", "test-sk")
+    app = _create_studio_app(
+        monkeypatch, tmp_path, developers="developer", provider=provider
     )
-    app = _create_studio_app(monkeypatch, tmp_path, developers="developer")
 
     with TestClient(app) as client:
         with client.stream(
@@ -5749,21 +6338,15 @@ def test_new_deployment_only_updates_non_default_instance_range(
     assert bool(update_requests) is expects_update
     assert all(request.apmplus_enable is True for request in update_requests)
     assert any(frame.get("phase") == "update" for frame in frames) is expects_update
-    assert bool(full_access_calls) is quick_mode
-    if quick_mode:
-        assert full_access_calls == [
-            {
-                "role_name": "AgentKit_Runtime_Default_ServiceRole_test",
-                "access_key": "test-ak",
-                "secret_key": "test-sk",
-                "session_token": None,
-                "provider": "volcengine",
-            }
-        ]
-        assert any(
-            frame.get("message") == "快速模式 Runtime 已具备 AgentKit 资源访问权限"
-            for frame in frames
-        )
+    assert captured_config["launch_types"]["cloud"]["runtime_role_name"] == (
+        "shared-runtime-role"
+    )
+    _stub_studio_runtime_role.assert_called_once_with(
+        access_key="test-ak",
+        secret_key="test-sk",
+        session_token=None,
+        provider=provider,
+    )
     if expects_update:
         request = update_requests[0]
         assert request.runtime_id == runtime_id
@@ -5857,6 +6440,7 @@ def test_new_deployment_rejects_invalid_instance_range(
 def test_sidecar_deployment_uses_agentkit_cli_structured_release(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    _stub_studio_runtime_role,
 ) -> None:
     from agentkit.sdk.runtime.client import AgentkitRuntimeClient
     from veadk.cli.studio_sidecar_prerequisites import DEFAULT_SIDECAR_BASE_IMAGE
@@ -6090,6 +6674,7 @@ def test_sidecar_deployment_uses_agentkit_cli_structured_release(
     assert frames[-1]["agentName"] == agent_name
     assert frames[-1]["runtimeName"] == runtime_name
     assert captured["command"] == ["/fake/agentkit", "release", "--json"]
+    _stub_studio_runtime_role.assert_not_called()
     assert captured["managed_base_in_env"] is True
     assert captured["create_only"] is True
     assert captured["cli_env"]["AGENTKIT_RUNTIME_READY_TIMEOUT_MS"] == "900000"
@@ -6712,3 +7297,214 @@ def test_update_deployment_rejects_incompatible_runtime_before_launch(
         "该 Runtime 包含多个 Agent，暂不支持原地更新。"
     )
     assert launched is False
+
+
+@pytest.mark.parametrize(
+    "provider,region", [("volcengine", "cn-beijing"), ("byteplus", "ap-southeast-1")]
+)
+def test_agent_review_flow_enforces_shared_use_and_private_management(
+    monkeypatch, tmp_path, provider, region
+):
+    from copy import deepcopy
+    from agentkit.sdk.runtime.client import AgentkitRuntimeClient
+    from frontend.server.agent_reviews.tags import runtime_tags
+
+    runtime = _runtime_with_public_endpoint(_runtime("runtime-review", "developer"))
+    runtime.envs = [
+        SimpleNamespace(key="MODEL_AGENT_API_KEY", value="never-in-review-payload")
+    ]
+    runtime.current_version_number = 1
+    writes = []
+    monkeypatch.setenv("BYTEPLUS_ACCESS_KEY", "test-ak")
+    monkeypatch.setenv("BYTEPLUS_SECRET_KEY", "test-sk")
+    monkeypatch.setattr(
+        AgentkitRuntimeClient, "get_runtime", lambda *args: deepcopy(runtime)
+    )
+    monkeypatch.setattr(
+        AgentkitRuntimeClient,
+        "list_runtimes",
+        lambda *args: SimpleNamespace(
+            agent_kit_runtimes=[deepcopy(runtime)], next_token=""
+        ),
+    )
+
+    def tag(_self, *, api_action, request, response_type):
+        assert api_action == "TagResources"
+        body = request.model_dump(by_alias=True)
+        assert body["ResourceType"] == "runtime"
+        assert body["ResourceIds"] == [runtime.runtime_id]
+        assert len(body["Tags"]) <= 20
+        values = {
+            **runtime_tags(runtime),
+            **{item["Key"]: item["Value"] for item in body["Tags"]},
+        }
+        runtime.tags = [
+            SimpleNamespace(key=key, value=value) for key, value in values.items()
+        ]
+        writes.append(body)
+        return response_type()
+
+    monkeypatch.setattr(AgentkitRuntimeClient, "_invoke_api", tag)
+
+    class ReviewProxyStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield b'["demo"]'
+
+    class ReviewProxyClient(httpx.AsyncClient):
+        def __init__(self, **kwargs):
+            kwargs["transport"] = httpx.MockTransport(
+                lambda request: httpx.Response(
+                    200,
+                    stream=ReviewProxyStream(),
+                    headers={"content-type": "application/json"},
+                )
+            )
+            super().__init__(**kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", ReviewProxyClient)
+    app = _create_studio_app(
+        monkeypatch, tmp_path, admins="admin", developers="developer", provider=provider
+    )
+    owner = {"X-VeADK-Local-User": "developer"}
+    admin = {"X-VeADK-Local-User": "admin"}
+    user = {"X-VeADK-Local-User": "reader"}
+    base = "/web/agent-reviews/runtime-review"
+    query = {"region": region}
+    with TestClient(app) as client:
+
+        def catalog():
+            response = client.get(
+                "/web/runtimes", params={**query, "scope": "all"}, headers=user
+            )
+            assert response.status_code == 200, response.text
+            return response.json()["runtimes"]
+
+        assert not catalog()
+        assert (
+            client.post(base + "/submit", json=query, headers=user).status_code == 403
+        )
+        submitted = client.post(
+            base + "/submit", json={**query, "message": "请审核"}, headers=owner
+        )
+        assert submitted.status_code == 200, submitted.text
+        assert "never-in-review-payload" not in submitted.text
+        assert submitted.json()["agent"]["version"] == runtime.current_version_number
+        assert (
+            client.get("/web/agent-reviews", params=query, headers=user).status_code
+            == 403
+        )
+        assert (
+            len(
+                client.get("/web/agent-reviews", params=query, headers=admin).json()[
+                    "items"
+                ]
+            )
+            == 1
+        )
+        assert (
+            client.post(
+                "/web/delete-runtime",
+                json={**query, "runtimeId": runtime.runtime_id},
+                headers=owner,
+            ).status_code
+            == 409
+        )
+        assert (
+            client.get(
+                "/web/runtime-update-capability",
+                params={**query, "runtimeId": runtime.runtime_id},
+                headers=owner,
+            ).status_code
+            == 409
+        )
+        returned = client.post(
+            base + "/decision",
+            json={
+                **query,
+                "applicationId": submitted.json()["id"],
+                "decision": "returned",
+                "reason": "请补充使用说明\n和示例",
+                "comment": "谢谢",
+            },
+            headers=admin,
+        )
+        assert returned.status_code == 200, returned.text
+        assert returned.json()["reason"] == "请补充使用说明\n和示例"
+        assert (
+            client.get(base, params=query, headers=owner).json()["application"][
+                "reviewer"
+            ]["name"]
+            == "admin"
+        )
+        submitted = client.post(base + "/submit", json=query, headers=owner)
+        approved = client.post(
+            base + "/decision",
+            json={
+                **query,
+                "applicationId": submitted.json()["id"],
+                "decision": "approved",
+                "comment": "通过",
+            },
+            headers=admin,
+        )
+        assert approved.status_code == 200, approved.text
+        assert approved.json()["reviewedAt"]
+        public = catalog()
+        assert len(public) == 1
+        assert public[0]["canManage"] is False and public[0]["canDelete"] is False
+        assert public[0]["visibility"] == "enterprise"
+        for route in ["/web/runtime-detail", "/web/runtime-api-key/reveal"]:
+            method = client.post if "reveal" in route else client.get
+            assert (
+                method(
+                    route,
+                    params={**query, "runtimeId": runtime.runtime_id},
+                    headers=user,
+                ).status_code
+                == 404
+            )
+        proxy = f"/web/runtime-proxy/{runtime.runtime_id}"
+        assert (
+            client.get(proxy + "/list-apps", params=query, headers=user).status_code
+            == 200
+        )
+        assert (
+            client.get(
+                proxy + "/apps/demo/users/reader/sessions", params=query, headers=user
+            ).status_code
+            == 200
+        )
+        assert (
+            client.get(
+                proxy + "/apps/demo/users/developer/sessions",
+                params=query,
+                headers=user,
+            ).status_code
+            == 403
+        )
+        assert (
+            client.get(
+                proxy + "/web/runtime-detail", params=query, headers=user
+            ).status_code
+            == 403
+        )
+        assert (
+            client.post(
+                proxy + "/run_sse",
+                params=query,
+                json={"user_id": "developer"},
+                headers=user,
+            ).status_code
+            == 403
+        )
+        assert (
+            client.post(base + "/unpublish", json=query, headers=owner).status_code
+            == 200
+        )
+        assert not catalog()
+        # Cached Runtime connection credentials cannot retain revoked access
+        assert (
+            client.get(proxy + "/list-apps", params=query, headers=user).status_code
+            == 404
+        )
+    assert writes

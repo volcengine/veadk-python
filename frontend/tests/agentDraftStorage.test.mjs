@@ -586,6 +586,79 @@ test("never persists server-managed Ark API key values while retaining selection
   );
 });
 
+test("never persists cross-provider fallback API key values", () => {
+  const leakedValue = "fallback-secret-must-not-enter-local-storage";
+  const storage = memoryStorage();
+  const sourceDraft = draft({
+    modelName: "primary",
+    modelFallbacks: [
+      {
+        modelName: "gpt-4o-mini",
+        modelProvider: "openai",
+        modelApiBase: "https://api.openai.com/v1",
+        modelApiKeyEnv: "OPENAI_BACKUP_API_KEY",
+      },
+    ],
+    deployment: {
+      feishuEnabled: false,
+      envValues: {
+        OPENAI_BACKUP_API_KEY: leakedValue,
+        SAFE_SETTING: "kept",
+      },
+    },
+  });
+
+  writeWorkspaceDrafts(storage, "alice", [
+    {
+      id: "draft-with-fallback-secret",
+      updatedAt: 123,
+      draft: sourceDraft,
+    },
+  ]);
+
+  const serialized = storage.value(workspaceDraftsKey("alice"));
+  assert.equal(serialized.includes(leakedValue), false);
+  const persisted = JSON.parse(serialized).drafts[0].draft;
+  assert.deepEqual(persisted.deployment.envValues, { SAFE_SETTING: "kept" });
+  assert.deepEqual(persisted.modelFallbacks, sourceDraft.modelFallbacks);
+});
+
+test("does not persist fallback API key values while fallback row is incomplete", () => {
+  const leakedValue = "drafting-fallback-secret";
+  const storage = memoryStorage();
+  const sourceDraft = draft({
+    modelName: "primary",
+    modelFallbacks: [
+      {
+        modelName: "",
+        modelProvider: "openai",
+        modelApiBase: "https://api.openai.com/v1",
+        modelApiKeyEnv: "FALLBACK_MODEL_DRAFT_AGENT_1_API_KEY",
+      },
+    ],
+    deployment: {
+      feishuEnabled: false,
+      envValues: {
+        FALLBACK_MODEL_DRAFT_AGENT_1_API_KEY: leakedValue,
+        SAFE_SETTING: "kept",
+      },
+    },
+  });
+
+  writeWorkspaceDrafts(storage, "alice", [
+    {
+      id: "draft-with-incomplete-fallback-secret",
+      updatedAt: 123,
+      draft: sourceDraft,
+    },
+  ]);
+
+  const serialized = storage.value(workspaceDraftsKey("alice"));
+  assert.equal(serialized.includes(leakedValue), false);
+  const persisted = JSON.parse(serialized).drafts[0].draft;
+  assert.deepEqual(persisted.deployment.envValues, { SAFE_SETTING: "kept" });
+});
+
 test("loads both legacy arrays and the current versioned payload", () => {
   const key = workspaceDraftsKey("alice");
   const legacyDraft = { id: "legacy", updatedAt: 1, draft: draft() };

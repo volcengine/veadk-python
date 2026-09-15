@@ -1,3 +1,4 @@
+import { UsersIcon } from "../users/UsersIcon";
 import {
   type CSSProperties,
   type SVGProps,
@@ -49,6 +50,7 @@ import {
   SUPPORTED_LOCALES,
 } from "../i18n";
 import "./Sidebar.css";
+import { ReviewIcon } from "./icons/ReviewIcon";
 
 const SIDEBAR_AUTO_COLLAPSE_QUERY = "(max-width: 860px)";
 
@@ -95,11 +97,13 @@ export type SidebarPage =
   | "workspaces"
   | "environments"
   | "library"
+  | "review-center"
   | "applications"
   | "cronjobs"
   | "search"
   | "developer-resources"
   | "feedback"
+  | "users"
   | null;
 
 export interface SidebarSandboxHistory {
@@ -171,6 +175,7 @@ export interface SidebarProps {
   onSearch: () => void;
   onQuickCreate: () => void;
   onLibrary: () => void;
+  onReviewCenter: () => void;
   onAddAgent: () => void;
   onMyAgents: () => void;
   onWorkspace: () => void;
@@ -179,6 +184,7 @@ export interface SidebarProps {
   onAgentKitCli: () => void;
   onDeveloperResources: () => void;
   onSystemInfo: () => void;
+  onUserManagement?: () => void;
   onIssueFeedback: () => void;
   onPickSession: (id: string) => void;
   onDeleteSession: (id: string) => void;
@@ -204,6 +210,7 @@ function smokeAvatarStyle(seed: string): CSSProperties {
 }
 
 const STUDIO_ROLE_KEYS: Record<StudioAccess["role"], string> = {
+  super_admin: "account.roles.super_admin",
   admin: "account.roles.admin",
   developer: "account.roles.developer",
   user: "account.roles.user",
@@ -386,6 +393,7 @@ export function Sidebar({
   onSearch,
   onQuickCreate,
   onLibrary,
+  onReviewCenter,
   onAddAgent,
   onMyAgents,
   onWorkspace,
@@ -394,6 +402,7 @@ export function Sidebar({
   onAgentKitCli,
   onDeveloperResources,
   onSystemInfo,
+  onUserManagement,
   onIssueFeedback,
   onPickSession,
   onDeleteSession,
@@ -406,6 +415,8 @@ export function Sidebar({
   void onAddAgent;
   // Per-module feature gates; a missing flag defaults to shown.
   const show = (k: keyof NonNullable<typeof features>) => features?.[k] !== false;
+  const canReview = access.role === "admin" || access.role === "super_admin";
+  const canManageUsers = access.capabilities.manageUsers && Boolean(onUserManagement);
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const autoCollapsedRef = useRef(
     typeof window !== "undefined" &&
@@ -555,6 +566,34 @@ export function Sidebar({
             <span className="sidebar-nav-label">{t("navigation.automations")}</span>
           </button>
         </nav>
+        {canReview || canManageUsers ? (
+          <nav className="sidebar-nav sidebar-nav--administration" aria-label={t("navigation.administration")}>
+            <div className="sidebar-nav-group-title" aria-hidden="true">
+              {t("navigation.administration")}
+            </div>
+            {canReview ? (
+              <button
+                type="button"
+                className={`new-chat new-chat--review-center${activePage === "review-center" ? " is-active" : ""}`}
+                onClick={onReviewCenter}
+                aria-label={t("navigation.reviewCenter")}
+                aria-current={activePage === "review-center" ? "page" : undefined}
+                title={t("navigation.reviewCenter")}
+              >
+                <ReviewIcon className="icon" />
+                <span className="sidebar-nav-label">{t("navigation.reviewCenter")}</span>
+              </button>
+            ) : null}
+            {canManageUsers ? (
+              <button type="button" className={`new-chat${activePage === "users" ? " is-active" : ""}`}
+                onClick={onUserManagement} aria-label={t("navigation.users")}
+                aria-current={activePage === "users" ? "page" : undefined} title={t("navigation.users")}>
+                <UsersIcon className="icon" />
+                <span className="sidebar-nav-label">{t("navigation.users")}</span>
+              </button>
+            ) : null}
+          </nav>
+        ) : null}
       </div>
 
       {show("history") && (

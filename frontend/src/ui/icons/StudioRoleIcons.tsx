@@ -1,7 +1,7 @@
 import type { SVGProps } from "react";
 
 type StudioRoleIconProps = Omit<SVGProps<SVGSVGElement>, "role"> & {
-  role: "admin" | "developer" | "user";
+  role: "super_admin" | "admin" | "developer" | "user";
 };
 
 const sharedIconProps = {
@@ -16,6 +16,7 @@ const sharedIconProps = {
 
 export function StudioRoleIcon({ role, ...props }: StudioRoleIconProps) {
   switch (role) {
+    case "super_admin":
     case "admin":
       return (
         <svg {...props} {...sharedIconProps}>

@@ -31,6 +31,7 @@ from .models import (
     is_valid_model_id,
     is_valid_structured_entry,
 )
+from .evaluation.dimensions import EVALUATION_DIMENSION_IDS, STANDARD_DIMENSION_IDS
 
 _MAX_PATH_BYTES = 4 * 1024
 _MAX_PATH_DEPTH = 64
@@ -184,7 +185,7 @@ def validate_migration_request(
             "session_ttl_seconds",
             "created_at",
         },
-        optional={"model_id"},
+        optional={"model_id", "evaluation"},
     )
     if (
         value.get("schema_version") != 1
@@ -201,6 +202,29 @@ def validate_migration_request(
     _text(value.get("instruction"), maximum=_MAX_TEXT_LENGTH)
     if "model_id" in value and not is_valid_model_id(value.get("model_id")):
         raise MigrationContractError("invalid model id")
+    evaluation = value.get("evaluation")
+    if evaluation is not None:
+        if not isinstance(evaluation, dict):
+            raise MigrationContractError("invalid evaluation config")
+        _exact_keys(
+            evaluation,
+            required={"enabled", "preset", "dimensions", "locale"},
+        )
+        enabled = evaluation.get("enabled")
+        preset = evaluation.get("preset")
+        dimensions = evaluation.get("dimensions")
+        locale = evaluation.get("locale")
+        if (
+            enabled is not True
+            or preset not in {"standard", "custom"}
+            or locale not in {"zh-CN", "en-US"}
+            or not isinstance(dimensions, list)
+            or not dimensions
+            or len(set(str(item) for item in dimensions)) != len(dimensions)
+            or any(item not in EVALUATION_DIMENSION_IDS for item in dimensions)
+            or (preset == "standard" and tuple(dimensions) != STANDARD_DIMENSION_IDS)
+        ):
+            raise MigrationContractError("invalid evaluation config")
     created_at = value.get("created_at")
     if isinstance(created_at, str):
         _timestamp_text(created_at)

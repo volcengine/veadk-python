@@ -1520,6 +1520,34 @@ def mcp_reuse_supplied_credentials(
     return tuple(supplied)
 
 
+def mcp_supplied_secret_values_by_reference(
+    *,
+    edited_draft: Mapping[str, Any],
+    supplied_credentials: Iterable[Mapping[str, Any]],
+) -> dict[str, str]:
+    """Bind server-held supplied credentials to edited draft references.
+
+    ``mcp_reuse_supplied_credentials`` validates the published source slot and
+    returns endpoint-bound values without trusting a browser-selected target
+    reference. This final join uses only the server-validated edited draft so
+    application-owned MCP can receive the value under its generated Runtime
+    environment key without exposing that value to the browser.
+    """
+
+    supplied = _canonical_supplied_mcp_credentials(
+        draft=edited_draft,
+        supplied_credentials=supplied_credentials,
+    )
+    resolved: dict[str, str] = {}
+    for reference, identity in _mcp_tool_bindings(edited_draft).items():
+        value = supplied.get(identity, "")
+        if value:
+            resolved[reference] = _validated_secret(value)
+    if len(resolved) != len(supplied):
+        raise LegacyRecoveryError("legacy_mcp_credential_input_invalid")
+    return resolved
+
+
 def _toolset_endpoint(toolset: Mapping[str, Any]) -> str:
     configurations = toolset.get("network_configurations")
     if not isinstance(configurations, list):

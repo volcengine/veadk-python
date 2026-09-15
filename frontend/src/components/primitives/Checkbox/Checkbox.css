@@ -1,0 +1,62 @@
+/* Figma: 788:392445, unchecked state */
+.studio-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 16px;
+  color: var(--studio-text-primary, #dbdee7);
+  font-family: "Century Gothic", sans-serif;
+  font-size: 13px;
+  font-style: normal;
+  font-weight: 400;
+  font-synthesis: none;
+  line-height: normal;
+  letter-spacing: 0;
+  cursor: pointer;
+}
+.studio-checkbox__control {
+  position: relative;
+  display: block;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+}
+.studio-checkbox__input {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: inherit;
+}
+.studio-checkbox__box {
+  position: absolute;
+  inset: 0;
+  box-sizing: border-box;
+  border: 0.5px solid var(--studio-border-control, rgba(219, 222, 231, 0.2));
+  border-radius: 4px;
+  background: var(--studio-surface-checkbox, rgba(17, 17, 18, 0.7));
+  pointer-events: none;
+}
+.studio-checkbox__checkmark {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%) scale(.75);
+  display: block;
+  opacity: 0;
+  transition: opacity var(--studio-motion-duration-fast, 140ms) ease, transform var(--studio-motion-duration-normal, 160ms) var(--studio-motion-easing-standard, ease);
+  width: 16px;
+  height: 16px;
+}
+/* Checkmark path from Figma 780:376200; dark checked fill is not defined */
+.studio-checkbox__input:checked + .studio-checkbox__box .studio-checkbox__checkmark { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+.studio-checkbox__input:focus-visible + .studio-checkbox__box { outline: auto; }
+.studio-checkbox__label { white-space: nowrap; }
+.studio-checkbox:has(.studio-checkbox__input:disabled) { cursor: not-allowed; }
+
+@media (prefers-reduced-motion: reduce) {
+  .studio-checkbox__checkmark { transition: none; }
+}

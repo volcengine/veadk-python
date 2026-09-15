@@ -1,3 +1,4 @@
+import { isReservedSkillSpaceName } from "../create/skills/consts";
 import { withAuth } from "./auth";
 import { withLocalUser } from "./identity";
 import { DEFAULT_REQUEST_TIMEOUT_MS, requestSignal, TRANSFER_REQUEST_TIMEOUT_MS } from "./timeout";
@@ -101,6 +102,9 @@ export async function createSkillSpace(args: {
   region: string;
   projectName?: string;
 }): Promise<SkillSpaceRef> {
+  if (isReservedSkillSpaceName(args.name)) {
+    throw new SkillManagementApiError(adkT("skills.reservedSpaceName"), 409, "SKILL_SPACE_RESERVED_IDENTITY");
+  }
   return json(
     await request("/spaces", {
       method: "POST",
@@ -111,12 +115,89 @@ export async function createSkillSpace(args: {
   );
 }
 
+export async function ensureSharedSkillSpace(args: {
+  region: string;
+  signal?: AbortSignal;
+}): Promise<SkillSpaceRef> {
+  const params = new URLSearchParams({ region: args.region });
+  return json(
+    await request(`/shared-space/ensure?${params}`, { method: "POST", signal: args.signal }),
+    adkT("skills.sharedSpaceFailed"),
+  );
+}
+
+export async function ensureReviewSkillSpace(args: {
+  region: string;
+  signal?: AbortSignal;
+}): Promise<SkillSpaceRef> {
+  const params = new URLSearchParams({ region: args.region });
+  return json(
+    await request(`/review-space/ensure?${params}`, { method: "POST", signal: args.signal }),
+    adkT("skills.reviewSpaceFailed"),
+  );
+}
+
+export async function submitSkillReview(args: {
+  spaceId: string;
+  skillId: string;
+  version: string;
+  region: string;
+}): Promise<import("../reviews/reviewModel").ReviewApplication> {
+  return json(
+    await request(`/spaces/${encodeURIComponent(args.spaceId)}/skills/${encodeURIComponent(args.skillId)}/review`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ region: args.region, version: args.version }),
+    }, TRANSFER_REQUEST_TIMEOUT_MS),
+    adkT("skills.submitReviewFailed"),
+  );
+}
+
+export async function listSkillReviews(args: { region: string; signal?: AbortSignal }): Promise<{
+  items: import("../reviews/reviewModel").ReviewApplication[];
+  totalCount: number;
+}> {
+  const params = new URLSearchParams({ region: args.region });
+  return json(await request(`/reviews?${params}`, { signal: args.signal }), adkT("skills.listReviewsFailed"));
+}
+
+export async function getSkillReviewFiles(args: { id: string; region: string; signal?: AbortSignal }): Promise<{ files: ManagedSkillFile[] }> {
+  const params = new URLSearchParams({ region: args.region });
+  return json(await request(`/reviews/${encodeURIComponent(args.id)}/files?${params}`, { signal: args.signal }, TRANSFER_REQUEST_TIMEOUT_MS), adkT("skills.reviewFilesFailed"));
+}
+
+export async function decideSkillReview(args: {
+  id: string;
+  region: string;
+  decision: import("../reviews/reviewModel").ReviewDecision;
+  reason?: string;
+  comment?: string;
+}): Promise<import("../reviews/reviewModel").ReviewApplication> {
+  return json(await request(`/reviews/${encodeURIComponent(args.id)}/decision`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({region: args.region, decision: args.decision, reason: args.reason || "", comment: args.comment || ""}),
+  }, TRANSFER_REQUEST_TIMEOUT_MS), adkT("skills.decideReviewFailed"));
+}
+
+export async function listSourceSkillReviews(args: {
+  spaceId: string; region: string; signal?: AbortSignal;
+}): Promise<{ items: import("../reviews/reviewModel").ReviewApplication[] }> {
+  const params = new URLSearchParams({region: args.region});
+  return json(await request(`/spaces/${encodeURIComponent(args.spaceId)}/reviews?${params}`, {
+    signal: args.signal,
+  }), adkT("skills.listReviewsFailed"));
+}
+
 export async function updateSkillSpace(args: {
   spaceId: string;
   name: string;
   description?: string;
   region: string;
 }): Promise<SkillSpaceRef> {
+  if (isReservedSkillSpaceName(args.name)) {
+    throw new SkillManagementApiError(adkT("skills.reservedSpaceName"), 409, "SKILL_SPACE_RESERVED_IDENTITY");
+  }
   return json(
     await request(`/spaces/${encodeURIComponent(args.spaceId)}`, {
       method: "PUT",

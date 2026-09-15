@@ -16,6 +16,7 @@ authors = [
     {name = "Meng Wang", email = "mengwangwm@gmail.com"}
 ]
 dependencies = [
+    "async-timeout>=5,<6; python_version < '3.11'", # asyncio.timeout backport
     "pydantic-settings==2.10.1", # Config management
     "a2a-sdk>=0.3.7,<1.0.0", # For Google Agent2Agent protocol
     "deprecated==1.2.18",
@@ -158,6 +159,7 @@ include-package-data = true
 
 [tool.setuptools.package-data]
 "veadk" = ["**/*"]
+"frontend.server" = ["templates/**/*.tmpl", "templates/**/.*.tmpl", "skills/consts.json"]
 
 # Derive the package version from the latest git tag (e.g. tag "0.5.36"
 # publishes version 0.5.36). No version string is hardcoded anywhere; release

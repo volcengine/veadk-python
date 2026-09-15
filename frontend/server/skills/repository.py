@@ -26,9 +26,15 @@ import zipfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import TYPE_CHECKING, Any
+from uuid import uuid4
 
 from .archive import SkillArchive
+from .consts import SHARED_SOURCE_VERSION_TAG, SKILL_SPACE_DISPLAY_NAME_TAG
+from .space_names import skill_space_display_name
+
+if TYPE_CHECKING:
+    from .reviewer_profiles import ReviewerProfileResolver
 
 DEGRADED_SKILLSPACE_WARNING = "部分关联异常，已恢复可读取技能"
 
@@ -55,6 +61,7 @@ def list_skill_space_items(
     space_id: str,
     page: int = 1,
     page_size: int = 100,
+    include_display_metadata: bool = False,
 ) -> SkillSpaceListResult:
     """List authoritative relations, recovering readable names only on one 404."""
 
@@ -119,6 +126,23 @@ def list_skill_space_items(
         )
 
     raw_items = list(getattr(response, "items", None) or [])
+    metadata: dict[str, dict[str, str]] = {}
+    if include_display_metadata and raw_items:
+        from .system_spaces import is_shared_space
+
+        space = client.get_skill_space(skills_types.GetSkillSpaceRequest(Id=space_id))
+        if is_shared_space(space):
+            for item in raw_items:
+                skill_id = str(getattr(item, "skill_id", "") or "")
+                if skill_id and skill_id not in metadata:
+                    skill = client.get_skill(skills_types.GetSkillRequest(Id=skill_id))
+                    tags = {
+                        tag.key: tag.value for tag in getattr(skill, "tags", None) or []
+                    }
+                    metadata[skill_id] = {
+                        "author": tags.get("author", ""),
+                        "sourceVersion": tags.get(SHARED_SOURCE_VERSION_TAG, ""),
+                    }
     return SkillSpaceListResult(
         items=tuple(
             {
@@ -127,6 +151,7 @@ def list_skill_space_items(
                 "skillDescription": str(getattr(item, "skill_description", "") or ""),
                 "version": str(getattr(item, "version", "") or ""),
                 "skillStatus": str(getattr(item, "skill_status", "") or ""),
+                **metadata.get(str(getattr(item, "skill_id", "") or ""), {}),
             }
             for item in raw_items
         ),
@@ -234,8 +259,52 @@ def resolve_skill_response(
 class AgentKitSkillRepository:
     """Keep cloud SDK and TOS details outside route and UI code."""
 
-    def __init__(self, client_factory: Callable[[str], Any]) -> None:
+    def __init__(
+        self,
+        client_factory: Callable[[str], Any],
+        *,
+        reviewer_profiles: ReviewerProfileResolver | None = None,
+    ) -> None:
+        from .reviews import SkillReviewRepository
+        from .system_spaces import SystemSpaceManager
+        from .versions import SkillVersionRepository
+
         self._client_factory = client_factory
+        self._system_spaces = SystemSpaceManager(client_factory)
+        self.reviews = SkillReviewRepository(
+            self, client_factory, reviewer_profiles=reviewer_profiles
+        )
+        self.versions = SkillVersionRepository(self, client_factory)
+
+    def require_review_read(
+        self, *, region: str, space_id: str, skill_id: str, is_admin: bool
+    ) -> None:
+        from .system_spaces import require_review_read
+
+        require_review_read(
+            self._client_factory(region), space_id, skill_id=skill_id, is_admin=is_admin
+        )
+
+    def ensure_shared_space(self, *, region: str) -> dict[str, object]:
+        from .consts import SHARE_SPACE
+
+        return self._space_item(self._system_spaces.ensure(region, SHARE_SPACE), region)
+
+    def ensure_review_space(self, *, region: str) -> dict[str, object]:
+        from .consts import REVIEW_SPACE
+
+        return self._space_item(
+            self._system_spaces.ensure(region, REVIEW_SPACE), region
+        )
+
+    def require_space_write(
+        self, *, region: str, space_id: str, is_admin: bool = False
+    ) -> bool:
+        from .system_spaces import require_space_write
+
+        return require_space_write(
+            self._client_factory(region), space_id, is_admin=is_admin
+        )
 
     def list_spaces(
         self,
@@ -261,9 +330,16 @@ class AgentKitSkillRepository:
                 TagFilters=tag_filters,
             )
         )
+        from .system_spaces import is_review_space
+
         items = list(response.items or [])
         return {
-            "items": [self._space_item(item, region) for item in items],
+            "items": [
+                self._space_item(item, region)
+                for item in items
+                if not is_review_space(item)
+            ],
+            "scannedCount": len(items),
             "totalCount": response.total_count
             if response.total_count is not None
             else len(items),
@@ -282,13 +358,22 @@ class AgentKitSkillRepository:
     ) -> dict[str, object]:
         from agentkit.sdk.skills import types as skills_types
 
+        from .system_spaces import validate_personal_space
+
+        validate_personal_space(name, description)
         effective_project = project_name or os.getenv("VEADK_STUDIO_PROJECT") or None
+        space_name = f"studio_space_{uuid4().hex}"
         response = self._client_factory(region).create_skill_space(
             skills_types.CreateSkillSpaceRequest(
-                Name=name,
+                Name=space_name,
                 Description=description,
                 ProjectName=effective_project,
-                Tags=[skills_types.TagForSkill(Key="author", Value=author)],
+                Tags=[
+                    skills_types.TagForSkill(Key="author", Value=author),
+                    skills_types.TagForSkill(
+                        Key=SKILL_SPACE_DISPLAY_NAME_TAG, Value=name
+                    ),
+                ],
             )
         )
         space_id = str(response.id or "")
@@ -300,7 +385,8 @@ class AgentKitSkillRepository:
             )
         return {
             "id": space_id,
-            "name": name,
+            "name": space_name,
+            "displayName": name,
             "description": description or "",
             "status": "Creating",
             "region": region,
@@ -319,7 +405,11 @@ class AgentKitSkillRepository:
     ) -> dict[str, object]:
         from agentkit.sdk.skills import types as skills_types
 
+        from .system_spaces import validate_personal_space
+
+        validate_personal_space(name, description)
         client = self._client_factory(region)
+        self.require_space_write(region=region, space_id=space_id)
         client.update_skill_space(
             skills_types.UpdateSkillSpaceRequest(
                 Id=space_id,
@@ -333,13 +423,18 @@ class AgentKitSkillRepository:
     def delete_space(self, *, region: str, space_id: str) -> None:
         from agentkit.sdk.skills import types as skills_types
 
+        self.require_space_write(region=region, space_id=space_id)
         self._client_factory(region).delete_skill_space(
             skills_types.DeleteSkillSpaceRequest(Id=space_id)
         )
 
-    def delete_skill(self, *, region: str, skill_id: str) -> None:
+    def delete_skill(
+        self, *, region: str, skill_id: str, is_admin: bool = False
+    ) -> None:
         from agentkit.sdk.skills import types as skills_types
+        from .system_spaces import require_skill_write
 
+        require_skill_write(self._client_factory(region), skill_id, is_admin=is_admin)
         self._client_factory(region).delete_skill(
             skills_types.DeleteSkillRequest(Id=skill_id)
         )
@@ -542,6 +637,7 @@ class AgentKitSkillRepository:
         space_id: str,
         archive: SkillArchive,
         author: str,
+        is_admin: bool = False,
     ) -> dict[str, object]:
         from agentkit.sdk.skills import types as skills_types
         from agentkit.toolkit.cli.cli_skills_workflow import (
@@ -558,6 +654,9 @@ class AgentKitSkillRepository:
         )
 
         client = self._client_factory(region)
+        shared = self.require_space_write(
+            region=region, space_id=space_id, is_admin=is_admin
+        )
         if self._space_has_skill_named(
             client,
             skills_types,
@@ -593,7 +692,12 @@ class AgentKitSkillRepository:
                 SkillSpaces=[space_id],
                 BucketName=storage.bucket,
                 ProjectName=project_name,
-                Tags=[skills_types.TagForSkill(Key="author", Value=author)],
+                Tags=[skills_types.TagForSkill(Key="author", Value=author)]
+                + (
+                    [skills_types.TagForSkill(Key="veadk:visibility", Value="shared")]
+                    if shared
+                    else []
+                ),
             )
         )
         skill_id = str(created.id or "")
@@ -667,6 +771,8 @@ class AgentKitSkillRepository:
 
     @staticmethod
     def _space_item(value: Any, region: str) -> dict[str, object]:
+        from .system_spaces import is_shared_space
+
         tags = {
             str(getattr(tag, "key", "") or ""): str(getattr(tag, "value", "") or "")
             for tag in (getattr(value, "tags", None) or [])
@@ -674,6 +780,7 @@ class AgentKitSkillRepository:
         return {
             "id": str(getattr(value, "id", "") or ""),
             "name": str(getattr(value, "name", "") or ""),
+            "displayName": skill_space_display_name(value),
             "description": str(getattr(value, "description", "") or ""),
             "status": str(getattr(value, "status", "") or ""),
             "region": region,
@@ -681,6 +788,7 @@ class AgentKitSkillRepository:
             "updatedAt": str(getattr(value, "update_time_stamp", "") or ""),
             "skillCount": len(getattr(value, "relations", None) or []),
             "author": tags.get("author", ""),
+            "isShared": is_shared_space(value),
         }
 
 

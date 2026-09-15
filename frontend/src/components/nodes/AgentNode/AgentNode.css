@@ -1,0 +1,34 @@
+/* Figma: selected 740:291179 / default 740:291233 */
+.studio-agent-node { position: relative; box-sizing: border-box; width: 216px; height: 148px; overflow: hidden; border-radius: 16px; background: var(--studio-surface-node, rgba(38,38,46,.37)); box-shadow: inset 0 0 0 .5px var(--studio-border-default, rgba(255,255,255,.2)); backdrop-filter: blur(15px); color: var(--studio-text-primary, #dbdee7); font-family: "Century Gothic", sans-serif; font-weight: 400; font-synthesis: none; }
+.studio-agent-node[data-selected="true"] { height: 147px; overflow: visible; background: var(--studio-surface-node-selected, rgba(38,38,46,.45)); box-shadow: 0 4px 4px rgba(0,0,0,.32); backdrop-filter: blur(15px); }
+.studio-agent-node__selection-border { position: absolute; z-index: 1; left: -1px; top: -1px; width: 218px; height: 149px; overflow: visible; pointer-events: none; }
+.studio-agent-node__surface { position: absolute; left: .5px; top: .5px; width: 215px; height: 147px; overflow: hidden; border-radius: 16px; backdrop-filter: blur(6.45px); }
+.studio-agent-node[data-selected="true"] .studio-agent-node__surface { left: 0; top: 0; width: 216px; backdrop-filter: none; }
+.studio-agent-node__content { box-sizing: border-box; display: flex; flex-direction: column; align-items: flex-start; gap: 7px; width: 216px; padding: 6px 8px; }
+.studio-agent-node__heading { display: flex; align-items: center; gap: 7px; height: 24px; padding: 1px 2px; box-sizing: border-box; border-radius: 6px; }
+.studio-agent-node__heading > span, .studio-agent-node__heading img, .studio-agent-node__heading svg { display: block; width: 16px; height: 16px; }
+.studio-agent-node__heading h3 { margin: 0; color: var(--studio-text-primary, #dbdee7); font-family: "Century Gothic", sans-serif; font-size: 14px; font-weight: 400; line-height: 22px; white-space: nowrap; }
+.studio-agent-node__body { position: relative; display: flex; flex-direction: column; gap: 4px; box-sizing: border-box; width: 200px; height: 102px; padding: 12.5px 8.5px; border-radius: 8px; background: var(--studio-surface-node-body, rgba(37,37,42,.48)); box-shadow: inset 0 0 0 .5px var(--studio-border-default, rgba(255,255,255,.2)); backdrop-filter: blur(15px); }
+.studio-agent-node[data-selected="true"] .studio-agent-node__body { background: var(--studio-surface-node-body-selected, rgba(69,70,83,.29)); }
+.studio-agent-node__description { display: -webkit-box; flex: 0 0 55px; width: 183px; height: 55px; margin: 0; overflow: hidden; -webkit-line-clamp: 3; -webkit-box-orient: vertical; color: var(--studio-text-secondary, rgba(219,222,231,.6)); font-size: 12px; line-height: 18px; text-overflow: ellipsis; }
+.studio-agent-node__counts { display: flex; align-items: center; gap: 6px; height: 20px; }
+.studio-agent-node__counts > span { box-sizing: border-box; display: flex; align-items: center; gap: 4px; min-width: 36px; height: 20px; padding: 1px 5px; border-radius: 6px; background: var(--studio-surface-count, rgba(17,17,17,.54)); color: var(--studio-text-count, rgba(255,255,255,.6)); font-family: "JetBrains Mono", monospace; font-size: 12px; line-height: 18px; }
+.studio-agent-node__counts img { display: block; width: 14px; height: 14px; }
+.studio-agent-node__counts > span > span { min-width: 8px; }
+.studio-agent-node__glow { position: absolute; inset: 0; overflow: hidden; border-radius: 16px; pointer-events: none; }
+.studio-agent-node__glow > img { position: absolute; max-width: none; }
+.studio-agent-node__glow-blue { left: 113.8px; top: -9.7px; width: 127.118px; height: 96.7164px; }
+.studio-agent-node__glow-indigo { left: 103.7px; top: -11.8px; width: 127.6px; height: 90.6px; }
+.studio-agent-node__glow-small { left: 139.1px; top: 5.6px; width: 76.8px; height: 56.8px; }
+.studio-agent-node__glow-pink { left: 70.3px; top: .8px; width: 134.253px; height: 76.4px; }
+.studio-agent-node__glow-white { left: 118.6px; top: 17.6px; width: 100.8px; height: 41.8px; }
+.studio-agent-node__glow-default { left: 59.3px; top: -10.2px; width: 170.618px; height: 96.7164px; }
+
+.studio-agent-node { transition: background-color var(--studio-motion-duration-normal, 160ms) ease-out, box-shadow var(--studio-motion-duration-normal, 160ms) ease-out; }
+@media (hover: hover) {
+  .studio-agent-node:not([data-selected="true"]):not([aria-disabled="true"]):hover {
+    background-color: color-mix(in srgb, var(--studio-surface-node, rgba(38, 38, 46, .37)) 96%, var(--studio-text-primary, #dbdee7) 4%);
+    box-shadow: inset 0 0 0 .5px var(--studio-border-input, rgba(255, 255, 255, .2));
+  }
+}
+@media (prefers-reduced-motion: reduce) { .studio-agent-node { transition: none; } }

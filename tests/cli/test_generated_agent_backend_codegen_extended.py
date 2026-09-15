@@ -69,26 +69,26 @@ from veadk.cli.generated_agent_skills import (
 # These hashes lock the complete generated project contents, not just Python
 # syntax or selected snippets.
 _MINIMAL_FRONTEND_GOLDEN = {
-    "Dockerfile": "0b643795fc79f04b0aaff219ff513c9ca65a05e1af0f0b54d47e45ecf5305137",
+    "Dockerfile": "d260ed284c060834ef0ddb36cd5438a116259d9884e1997127ff36c7721ad95d",
     "app.py": "48a85b8eaa87d836e6dabc41bae6bdc0c587e1d55093bc8aaa7bcb62a362ad21",
     "agents/__init__.py": "a6449a6cac3bfda8b834ea39ea95ca2f8d0471ac480e1e876313d7398eea59ba",
     "agents/demo_agent/agent.py": "3c28f3e63f185d1ee8402d58b62c8654cf18fe4180a1f348abaa63547d91446c",
     "agents/demo_agent/__init__.py": "ba3abbb199bbae74dc75151a44ba53a557e5f47d509835950ca756346c5a9582",
     "agents/demo_agent/dynamic_a2a.py": "d136f27d6a77439708c415686a3d167f2ad2fb9a96a5f8a0751916b09d46e364",
     ".env.example": "ec3258da9bef4e74333376d8554c265ccb12a4a1e5d4e1e1b0acdf5c9ae93ab6",
-    "requirements.txt": "a66e74d4c0b91cc4cc036f6026599a787056ea72a034d857bedd92fddc6d779f",
+    "requirements.txt": "9f55ba1a16ae8199165fde7de39f5f93133963634ebb6d1bdb241cc3cefa10ee",
     "README.md": "a34208314cf9061c02662028d7a9dd97448e6b73c1d732cb4aeaa8f70dbbc684",
 }
 
 _FULL_FRONTEND_GOLDEN = {
-    "Dockerfile": "0b643795fc79f04b0aaff219ff513c9ca65a05e1af0f0b54d47e45ecf5305137",
+    "Dockerfile": "d260ed284c060834ef0ddb36cd5438a116259d9884e1997127ff36c7721ad95d",
     "app.py": "47c87fd54ac00e208030a7a370f0dbd52a872a9adf8ecd2e2e4f2e1b56188854",
     "agents/__init__.py": "a6449a6cac3bfda8b834ea39ea95ca2f8d0471ac480e1e876313d7398eea59ba",
     "agents/full_agent/agent.py": "35560cfa5ea93955244482d727c8f8369599fa5b9560ba1f3804df7273e245ce",
     "agents/full_agent/__init__.py": "ba3abbb199bbae74dc75151a44ba53a557e5f47d509835950ca756346c5a9582",
     "agents/full_agent/dynamic_a2a.py": "d136f27d6a77439708c415686a3d167f2ad2fb9a96a5f8a0751916b09d46e364",
     ".env.example": "2bfd3afda4e661fbb71588ec5f0d584ce6682363cacc81b0394f8da09f7977e8",
-    "requirements.txt": "63eb2d042226abfb78238725727c6a13724472a1f55d84d55f3fa79cd07be9eb",
+    "requirements.txt": "3372cfe49df006b3d0e5bdc4f7b4fcc152a16f663d9e10770f09c708e6daa32b",
     "README.md": "1bf4dc889c7d1076f50784d253b53412ba7c49bcb69a5d948f9092dbbecb18ac",
 }
 
@@ -250,6 +250,20 @@ def test_retired_a2ui_option_is_accepted_but_not_generated() -> None:
     assert "enableA2ui" not in draft.model_dump()
     assert "enable_a2ui" not in files["agents/legacy/agent.py"]
     assert "[a2ui]" not in files["requirements.txt"]
+
+
+@pytest.mark.parametrize("agent_type", ["llm", "sequential", "parallel", "loop"])
+def test_codegen_studio_tools_follow_root_type(agent_type: str) -> None:
+    draft = AgentDraft.model_validate(
+        {
+            "name": "workflow",
+            "agentType": agent_type,
+            "subAgents": [{"name": "worker", "agentType": "llm"}],
+        }
+    )
+    files = _file_map(generate_project_from_draft(draft))
+    expected = agent_type == "llm"
+    assert f'"enable_studio_tools": {expected!r}' in files["app.py"]
 
 
 def test_codegen_preserves_agent_display_names_for_topology() -> None:
@@ -1090,6 +1104,56 @@ def _generated_debug_app(
     return captured["app"]
 
 
+@pytest.mark.parametrize(
+    "system_root", [r"D:\Custom Windows", "", None], ids=["present", "empty", "absent"]
+)
+def test_generated_debug_runner_preserves_systemroot(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    system_root: str | None,
+) -> None:
+    """调试子进程保留 Windows 系统目录，同时继续过滤无关环境变量。"""
+    app = _generated_debug_app(monkeypatch, tmp_path)
+    if system_root is None:
+        monkeypatch.delenv("SYSTEMROOT", raising=False)
+    else:
+        monkeypatch.setenv("SYSTEMROOT", system_root)
+    monkeypatch.setenv("TEMP", str(tmp_path))
+    monkeypatch.setenv("UNRELATED_SERVICE_SECRET", "unrelated-test-value")
+    _FakeProcess.created.clear()
+    monkeypatch.setattr(_FakeAsyncClient, "listed_apps", ["demo_agent"])
+    monkeypatch.setattr("subprocess.Popen", _FakeProcess)
+    monkeypatch.setattr("httpx.AsyncClient", _FakeAsyncClient)
+    real_socket = socket.socket
+    monkeypatch.setattr(
+        "socket.socket",
+        lambda *args, **kwargs: (
+            real_socket(*args, **kwargs)
+            if len(args) >= 4 or "fileno" in kwargs
+            else _FakeSocket(*args, **kwargs)
+        ),
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/web/generated-agent-test-runs",
+            json={"draft": {"name": "demo-agent", "instruction": "Answer hello."}},
+        )
+        assert response.status_code == 200
+        process = _FakeProcess.created[-1]
+        run_id = response.json()["runId"]
+        assert (
+            client.delete(f"/web/generated-agent-test-runs/{run_id}").status_code == 200
+        )
+
+    if system_root:
+        assert process.env.get("SYSTEMROOT") == system_root
+    else:
+        assert "SYSTEMROOT" not in process.env
+    assert process.env["TEMP"] == str(tmp_path)
+    assert "UNRELATED_SERVICE_SECRET" not in process.env
+
+
 def test_local_generated_debug_allows_private_mcp(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1215,6 +1279,268 @@ def test_cloud_generated_debug_preserves_mcp_connection_error(
 
     assert response.status_code == 422
     assert response.json()["detail"] == original_detail
+
+
+@pytest.mark.parametrize(
+    (
+        "credential_storage",
+        "tool_name",
+        "published_url",
+        "edited_url",
+        "expected_status",
+        "expect_credential",
+        "explicit_reuse",
+        "has_published_draft",
+    ),
+    [
+        (
+            "reference-env",
+            "jvmdiag",
+            "https://8.8.8.8/mcp",
+            "https://8.8.8.8/mcp",
+            200,
+            True,
+            False,
+            True,
+        ),
+        (
+            "reference-env",
+            "",
+            "https://8.8.8.8/mcp",
+            "https://8.8.8.8/mcp",
+            200,
+            True,
+            False,
+            True,
+        ),
+        (
+            "servers-json",
+            "jvmdiag",
+            "https://8.8.8.8/mcp",
+            "https://8.8.8.8/mcp",
+            200,
+            True,
+            False,
+            True,
+        ),
+        (
+            "servers-json",
+            "",
+            "https://8.8.8.8/mcp",
+            "https://8.8.8.8/mcp",
+            200,
+            True,
+            False,
+            True,
+        ),
+        (
+            "servers-json",
+            "jvmdiag",
+            "https://8.8.8.8/mcp",
+            "https://8.8.8.8/changed-mcp",
+            409,
+            False,
+            False,
+            True,
+        ),
+        (
+            "missing",
+            "",
+            "https://8.8.8.8/mysqldiag",
+            "https://8.8.8.8/mysqldiag",
+            409,
+            False,
+            False,
+            True,
+        ),
+        (
+            "servers-json",
+            "",
+            "https://8.8.8.8/mcp",
+            "https://8.8.8.8/changed-mcp",
+            200,
+            True,
+            True,
+            True,
+        ),
+        (
+            "reference-env",
+            "",
+            "https://8.8.8.8/mcp",
+            "https://8.8.8.8/changed-mcp",
+            409,
+            False,
+            True,
+            False,
+        ),
+        (
+            "reference-env",
+            "",
+            "https://8.8.8.8/mcp?legacy=1",
+            "https://8.8.8.8/changed-mcp",
+            409,
+            False,
+            True,
+            True,
+        ),
+    ],
+)
+def test_generated_debug_applies_published_mcp_credential_contract_before_discovery(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    credential_storage: str,
+    tool_name: str,
+    published_url: str,
+    edited_url: str,
+    expected_status: int,
+    expect_credential: bool,
+    explicit_reuse: bool,
+    has_published_draft: bool,
+) -> None:
+    from agentkit.sdk.runtime.client import AgentkitRuntimeClient
+    from veadk.cli.generated_agent_mcp import McpDebugConnectionError
+
+    credential_reference = "MCP_LEGACY_AGENT_JVMDIAG_AUTH_TOKEN"
+    credential_value = "server-retained-debug-secret"
+    published_draft = {
+        "name": "legacy_agent",
+        "description": "Existing Agent",
+        "instruction": "Use the diagnostic MCP.",
+        "mcpTools": [
+            {
+                "name": tool_name,
+                "transport": "http",
+                "url": published_url,
+                "authTokenEnv": credential_reference,
+            }
+        ],
+    }
+    runtime_envs = [SimpleNamespace(key=credential_reference, value=credential_value)]
+    if credential_storage == "servers-json":
+        runtime_envs = [
+            SimpleNamespace(
+                key="MCP_SERVERS_JSON",
+                value=json.dumps(
+                    [
+                        {
+                            "name": tool_name or "mcp",
+                            "url": published_url,
+                            "headers": {"Authorization": f"Bearer {credential_value}"},
+                        }
+                    ]
+                ),
+            )
+        ]
+    elif credential_storage == "missing":
+        runtime_envs = []
+    runtime = SimpleNamespace(
+        runtime_id="runtime-debug-mcp",
+        runtime_name="legacy-agent-runtime",
+        current_version_number=3,
+        tags=[],
+        envs=runtime_envs,
+        network_configurations=[
+            SimpleNamespace(
+                endpoint="https://runtime.example.com",
+                network_type="public",
+            )
+        ],
+        authorizer_configuration=SimpleNamespace(
+            key_auth=SimpleNamespace(api_key="runtime-api-key"),
+            custom_jwt_authorizer=None,
+        ),
+    )
+
+    monkeypatch.setattr(
+        AgentkitRuntimeClient,
+        "get_runtime",
+        lambda _self, _request: runtime,
+    )
+
+    captured_discovery_env: dict[str, str] = {}
+    discovery_calls: list[bool] = []
+
+    async def capture_mcp_discovery(draft, env_values=None):
+        discovery_calls.append(True)
+        captured_discovery_env.update(env_values or {})
+        if not expect_credential:
+            raise McpDebugConnectionError("changed MCP endpoint rejected")
+        return draft
+
+    monkeypatch.setattr(
+        "veadk.cli.generated_agent_mcp.resolve_debug_mcp_endpoints",
+        capture_mcp_discovery,
+    )
+
+    class RuntimeDebugClient(_FakeAsyncClient):
+        async def request(self, _method: str, url: str, **_kwargs: Any):
+            if url.endswith("/list-apps"):
+                return _FakeResponse(json_data=["legacy_agent"])
+            if url.endswith("/web/agent-info/legacy_agent"):
+                agent_info: dict[str, Any] = {
+                    "name": "legacy_agent",
+                    "description": "Existing Agent",
+                }
+                if has_published_draft:
+                    agent_info["draft"] = published_draft
+                return _FakeResponse(json_data=agent_info)
+            if url.endswith("/web/agent-draft/legacy_agent"):
+                return _FakeResponse(status_code=404)
+            raise AssertionError(f"unexpected Runtime request path: {url}")
+
+    monkeypatch.setenv("_FAAS_FUNC_ID", "function-test")
+    app = _generated_debug_app(monkeypatch, tmp_path)
+    _FakeProcess.created.clear()
+    _FakeAsyncClient.listed_apps = ["legacy_agent"]
+    monkeypatch.setattr("subprocess.Popen", _FakeProcess)
+    monkeypatch.setattr("httpx.AsyncClient", RuntimeDebugClient)
+    real_socket = socket.socket
+    monkeypatch.setattr(
+        "socket.socket",
+        lambda *args, **kwargs: (
+            real_socket(*args, **kwargs)
+            if len(args) >= 4 or "fileno" in kwargs
+            else _FakeSocket(*args, **kwargs)
+        ),
+    )
+
+    with TestClient(app) as client:
+        edited_draft = json.loads(json.dumps(published_draft))
+        edited_draft["mcpTools"][0]["url"] = edited_url
+        payload = {
+            "draft": edited_draft,
+            "runtimeId": runtime.runtime_id,
+            "runtimeRegion": "cn-shanghai",
+        }
+        if explicit_reuse:
+            payload["mcpCredentialReuses"] = [
+                {
+                    "agentName": "legacy_agent",
+                    "name": tool_name,
+                    "url": edited_url,
+                    "sourceAuthTokenEnv": credential_reference,
+                }
+            ]
+        response = client.post(
+            "/web/generated-agent-test-runs",
+            json=payload,
+        )
+
+    assert response.status_code == expected_status, response.text
+    if expected_status != 200:
+        assert _FakeProcess.created == []
+    assert bool(discovery_calls) is (expected_status in {200, 422})
+    if "?" in published_url:
+        assert "MCP 地址无效" in response.json()["detail"]
+        assert "LegacyRecoveryError" not in response.text
+        assert "错误 ID" not in response.text
+    if expect_credential:
+        assert captured_discovery_env[credential_reference] == credential_value
+    else:
+        assert credential_reference not in captured_discovery_env
+    if credential_storage == "missing":
+        assert "缺少可用凭证" in response.json()["detail"]
+    assert credential_value not in response.text
 
 
 def test_debug_text_redacts_environment_and_inline_markers(

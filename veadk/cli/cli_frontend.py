@@ -1662,6 +1662,14 @@ def _serve_options(f):
             "Hermes agents (env: SANDBOX_CHAT_HERMES_SNAPSHOT).",
         ),
         click.option(
+            "--super-admin",
+            "studio_super_admin",
+            default=None,
+            envvar="VEADK_STUDIO_SUPER_ADMIN",
+            help="Initialize Identity-backed Studio roles with this user's email or UID. "
+            "Requires a user pool and client. Existing initialization is preserved.",
+        ),
+        click.option(
             "--admin",
             "studio_admins",
             default=None,
@@ -1724,6 +1732,7 @@ def frontend(
     sandbox_chat_hermes_snapshot_tool_id: str | None,
     studio_admins: str | None,
     studio_developers: str | None,
+    studio_super_admin: str | None,
     open_browser: bool,
 ) -> None:
     """Launch the A2UI web UI backed by the ADK agent API server."""
@@ -1756,6 +1765,7 @@ def frontend(
         sandbox_chat_hermes_snapshot_tool_id=sandbox_chat_hermes_snapshot_tool_id,
         studio_admins=studio_admins,
         studio_developers=studio_developers,
+        studio_super_admin=studio_super_admin,
         open_browser=open_browser,
         studio=False,
     )
@@ -1792,6 +1802,7 @@ def studio(
     sandbox_chat_hermes_snapshot_tool_id: str | None,
     studio_admins: str | None,
     studio_developers: str | None,
+    studio_super_admin: str | None,
     open_browser: bool,
 ) -> None:
     """Launch AgentKit Studio — the frontend trimmed to add & manage agents.
@@ -1829,6 +1840,7 @@ def studio(
         sandbox_chat_hermes_snapshot_tool_id=sandbox_chat_hermes_snapshot_tool_id,
         studio_admins=studio_admins,
         studio_developers=studio_developers,
+        studio_super_admin=studio_super_admin,
         open_browser=open_browser,
         studio=True,
     )
@@ -1861,6 +1873,7 @@ def _run_frontend_server(
     sandbox_chat_hermes_snapshot_tool_id: str | None = None,
     studio_admins: str | None = None,
     studio_developers: str | None = None,
+    studio_super_admin: str | None = None,
     open_browser: bool,
     provider: Literal["volcengine", "byteplus"] | None = None,
     studio: bool = False,
@@ -2059,6 +2072,9 @@ def _run_frontend_server(
         runtime_attribution,
         runtime_belongs_to,
     )
+    from frontend.server.agent_reviews.service import AgentReviewService, ReviewActor
+    from frontend.server.agent_reviews.tags import enterprise_visible, STATUS_TAG
+    from frontend.server.agent_reviews.access import authorize_shared_proxy
     from veadk.multimodal.api import mount_media_routes
     from veadk.multimodal.transport import resolve_runtime_media
 
@@ -2073,9 +2089,22 @@ def _run_frontend_server(
     }
 
     generated_agent_test_run_ttl = max(60, generated_agent_test_run_ttl)
+    identity_roles_initialized = os.getenv(
+        "VEADK_STUDIO_IDENTITY_ROLES", ""
+    ).strip().lower() in {"1", "true", "yes"}
+    identity_roles = (
+        identity_roles_initialized
+        or bool(studio_super_admin)
+        or bool(
+            studio
+            and (oauth2_user_pool_uid or oauth2_user_pool)
+            and (oauth2_user_pool_client_uid or oauth2_user_pool_client)
+        )
+    )
     access_policy = StudioAccessPolicy.from_csv(
         studio_admins,
         studio_developers,
+        identity_roles=identity_roles,
     )
     runtime_update_capability_tasks: dict[
         tuple[str, str, str, str, int | None, str, str],
@@ -2093,6 +2122,9 @@ def _run_frontend_server(
         production authentication boundary. It is ignored whenever OAuth or a
         trusted gateway is active.
         """
+        resolved = getattr(request.state, "studio_identity_principal", None)
+        if resolved is not None:
+            return resolved
         if auth_mode == "gateway":
             claims = _claims_from_forwarded_jwt(request.headers.get("authorization"))
             return StudioPrincipal.from_claims(claims) if claims else None
@@ -2136,10 +2168,7 @@ def _run_frontend_server(
             return
         if requested_user_id.casefold() in principal.identifiers:
             return
-        if (
-            access_policy.enabled
-            and access_policy.role_for(principal) == StudioRole.ADMIN
-        ):
+        if access_policy.enabled and access_policy.role_for(principal).is_admin:
             logger.info(
                 "studio media cross-user access actor=%r target_user_id=%r "
                 "method=%s path=%r",
@@ -2195,7 +2224,13 @@ def _run_frontend_server(
             # ``role_for`` intentionally grants legacy admin capabilities when
             # RBAC is unconfigured. Cross-user data access is more sensitive and
             # therefore requires an explicit administrator-list match.
-            if principal.identifiers & access_policy.admins:
+            if (
+                access_policy.identity_roles
+                and access_policy.role_for(principal).is_admin
+            ) or (
+                not access_policy.identity_roles
+                and principal.identifiers & access_policy.admins
+            ):
                 logger.info(
                     "Studio admin cross-user session access %s",
                     json.dumps(
@@ -2366,7 +2401,9 @@ def _run_frontend_server(
         )
         return SkillIdentity(
             author=author,
-            is_admin=access_policy.role_for(principal) == StudioRole.ADMIN,
+            is_admin=access_policy.role_for(principal).is_admin,
+            owner_id=principal.owner_id if principal else "",
+            identity_uid=principal.identity_uid if principal else "",
         )
 
     def _skill_workbench_tools_client(region: str):
@@ -2566,8 +2603,8 @@ def _run_frontend_server(
         return KnowledgeIdentity(
             owner_id=owner_id,
             owner_label=owner_label,
-            is_admin=role == StudioRole.ADMIN,
-            can_bind_provider=role in (StudioRole.ADMIN, StudioRole.DEVELOPER),
+            is_admin=role.is_admin,
+            can_bind_provider=(role.is_admin or role == StudioRole.DEVELOPER),
         )
 
     def _knowledge_signing_key() -> bytes:
@@ -2731,7 +2768,7 @@ def _run_frontend_server(
     )
 
     def _require_studio_admin(request: Request) -> None:
-        if _request_role(request) != StudioRole.ADMIN:
+        if not _request_role(request).is_admin:
             raise HTTPException(
                 status_code=403,
                 detail="Only Studio administrators can update Studio",
@@ -3338,9 +3375,18 @@ def _run_frontend_server(
         return principal.display_name
 
     def _sandbox_is_admin(request: Request) -> bool:
-        return _request_role(request) == StudioRole.ADMIN
+        return _request_role(request).is_admin
 
     from frontend.server.migration.gateway import MigrationSandboxGateway
+    from frontend.server.migration.evaluation.repository import (
+        TosMigrationEvaluationRepository,
+    )
+    from frontend.server.migration.evaluation.runner import (
+        SandboxMigrationEvaluationRunner,
+    )
+    from frontend.server.migration.evaluation.service import (
+        MigrationEvaluationService,
+    )
     from frontend.server.migration.routes import mount_migration_routes
     from frontend.server.migration.service import MigrationError, MigrationService
 
@@ -3364,24 +3410,48 @@ def _run_frontend_server(
     from frontend.server.storage.tos import create_tos_client_factory
 
     intelligent_project_service = None
+    migration_evaluation_repository = None
     intelligent_project_storage = StudioStorageConfig.from_env(provider)
     if intelligent_project_storage.configured:
+        studio_storage_client_factory = create_tos_client_factory(
+            intelligent_project_storage,
+            _resolve_ve_credentials,
+        )
         intelligent_project_service = IntelligentDevelopmentProjectService(
             TosIntelligentDevelopmentProjectRepository(
                 bucket=intelligent_project_storage.bucket,
-                client_factory=create_tos_client_factory(
-                    intelligent_project_storage,
-                    _resolve_ve_credentials,
-                ),
+                client_factory=studio_storage_client_factory,
             )
         )
-
-    migration_service = MigrationService(
-        MigrationSandboxGateway(
-            tools_client_factory=_sandbox_client,
-            region=os.getenv("AGENTKIT_SANDBOX_REGION"),
+        migration_evaluation_repository = TosMigrationEvaluationRepository(
+            bucket=intelligent_project_storage.bucket,
+            client_factory=studio_storage_client_factory,
         )
+
+    migration_gateway = MigrationSandboxGateway(
+        tools_client_factory=_sandbox_client,
+        region=os.getenv("AGENTKIT_SANDBOX_REGION"),
     )
+    migration_service = MigrationService(migration_gateway)
+    migration_evaluation_service = MigrationEvaluationService(
+        migration_service,
+        migration_gateway,
+        repository=migration_evaluation_repository,
+        runner=SandboxMigrationEvaluationRunner(
+            migration_gateway,
+            resolve_credentials=_resolve_ve_credentials,
+            provider=provider,
+        ),
+    )
+    if not is_vestack_deployment:
+        from frontend.server.workspace_tool import mount_workspace_upgrade_repair
+
+        mount_workspace_upgrade_repair(
+            app,
+            provider=provider,
+            resolve_credentials=_resolve_ve_credentials,
+        )
+
     # Register exact migration routes before the dynamic sandbox-agent routes.
     mount_migration_routes(
         app,
@@ -3389,6 +3459,7 @@ def _run_frontend_server(
         owner_resolver=_migration_owner,
         creator_resolver=_migration_creator,
         project_service=intelligent_project_service,
+        evaluation_service=migration_evaluation_service,
     )
 
     if is_vestack_deployment:
@@ -3880,6 +3951,7 @@ def _run_frontend_server(
             True,
         ),
         ("dev", "Dev Sandbox", "SANDBOX_DEV", False),
+        ("studio_workspace", "Studio Sandbox", "STUDIO_WORKSPACE_TOOL_ID", True),
     )
 
     from frontend.server.sandbox_updates import register_sandbox_update_routes
@@ -4487,6 +4559,7 @@ def _run_frontend_server(
         debug_runtime_env_from_draft,
         generate_project_from_draft,
         normalize_and_validate_draft,
+        prepare_mcp_auth,
     )
     from veadk.cli.generated_agent_security import (
         DebugPolicyError,
@@ -4528,6 +4601,7 @@ def _run_frontend_server(
         mcp_secret_values_for_draft_references,
         mcp_secret_values_from_runtime_environment,
         mcp_secret_values_from_toolset,
+        mcp_supplied_secret_values_by_reference,
         OciImageInspector,
         pin_source_image,
         preserve_runtime_skills,
@@ -4715,7 +4789,7 @@ def _run_frontend_server(
         if run is None:
             raise HTTPException(status_code=404, detail="test run not found")
         principal = _require_agent_management(request)
-        if _request_role(request) != StudioRole.ADMIN and (
+        if not _request_role(request).is_admin and (
             principal is None or run.owner_id != principal.owner_id
         ):
             raise HTTPException(status_code=404, detail="test run not found")
@@ -4773,6 +4847,7 @@ def _run_frontend_server(
                 env[key] = os.environ[key]
         for key in (
             "PATH",
+            "SYSTEMROOT",  # Windows 下 Python 初始化依赖系统目录。
             "HOME",
             "USER",
             "LOGNAME",
@@ -5113,10 +5188,15 @@ def _run_frontend_server(
         *,
         debug: bool,
         owner_id: str = "local",
+        validated_test_request: GeneratedAgentTestRunRequest | None = None,
+        debug_mcp_env_values: Mapping[str, str] | None = None,
     ) -> tuple[GeneratedProject, AgentDraft]:
         try:
             if debug:
-                req = GeneratedAgentTestRunRequest.model_validate(data)
+                req = (
+                    validated_test_request
+                    or GeneratedAgentTestRunRequest.model_validate(data)
+                )
             else:
                 req = GeneratedAgentProjectRequest.model_validate(data)
             draft = normalize_and_validate_draft(req.draft)
@@ -5135,7 +5215,18 @@ def _run_frontend_server(
                         else _cloud_studio_private_networks
                     ),
                 )
-                draft = await resolve_debug_mcp_endpoints(draft)
+                if debug_mcp_env_values:
+                    draft = prepare_mcp_auth(draft)
+                    mcp_env_values = dict(draft.deployment.envValues)
+                    for key, value in debug_mcp_env_values.items():
+                        if value and not mcp_env_values.get(key):
+                            mcp_env_values[key] = value
+                    draft = await resolve_debug_mcp_endpoints(
+                        draft,
+                        mcp_env_values,
+                    )
+                else:
+                    draft = await resolve_debug_mcp_endpoints(draft)
             else:
                 validate_project_policy(draft)
             project = generate_project_from_draft(draft)
@@ -5694,10 +5785,148 @@ def _run_frontend_server(
         temp_dir = ""
         proc = None
         try:
+            try:
+                test_request = GeneratedAgentTestRunRequest.model_validate(data)
+            except ValidationError as error:
+                raise HTTPException(status_code=422, detail=error.errors()) from error
+
+            runtime_envs: dict[str, str] = {}
+            debug_mcp_env_values: dict[str, str] = {}
+            runtime_id = test_request.runtimeId.strip()
+            runtime_region = _coerce_cloud_region(test_request.runtimeRegion)
+            reuse_requests = tuple(
+                item.model_dump(mode="json")
+                for item in test_request.mcpCredentialReuses
+            )
+            if reuse_requests and not runtime_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail="MCP credential reuse requires a Runtime update target",
+                )
+            if runtime_id:
+                edited_draft = test_request.draft.model_dump(
+                    mode="json",
+                    by_alias=True,
+                    exclude_none=True,
+                )
+                requested_references = mcp_auth_environment_keys(edited_draft)
+                requested_env_values = test_request.draft.deployment.envValues
+                stored_references = tuple(
+                    reference
+                    for reference in requested_references
+                    if not requested_env_values.get(reference)
+                )
+                if stored_references or reuse_requests:
+                    (
+                        update_capability,
+                        runtime,
+                    ) = await _runtime_update_capability_details(
+                        request,
+                        runtime_id=runtime_id,
+                        region=runtime_region,
+                    )
+                else:
+                    update_capability = {}
+                    runtime = await asyncio.to_thread(
+                        _authorized_runtime,
+                        request,
+                        runtime_id,
+                        runtime_region,
+                        coded_access_error=True,
+                    )
+                runtime_envs = {
+                    str(item.key): str(item.value or "")
+                    for item in (getattr(runtime, "envs", None) or [])
+                    if getattr(item, "key", None)
+                    and not _is_debug_protected_model_env(str(item.key))
+                }
+                published_agent = update_capability.get("agent")
+                published_draft = (
+                    published_agent.get("draft")
+                    if isinstance(published_agent, Mapping)
+                    else None
+                )
+                if (stored_references or reuse_requests) and not isinstance(
+                    published_draft, Mapping
+                ):
+                    raise HTTPException(
+                        status_code=409,
+                        detail=_mcp_deployment_error_detail(
+                            "legacy_mcp_reuse_source_missing"
+                        ),
+                    )
+                if (stored_references or reuse_requests) and isinstance(
+                    published_draft, Mapping
+                ):
+                    published_environment = _legacy_runtime_environment(runtime)
+                    published_references = mcp_auth_environment_keys(published_draft)
+                    published_reference_values = {
+                        reference: published_environment[reference]
+                        for reference in published_references
+                        if published_environment.get(reference)
+                    }
+                    if set(published_references).difference(published_reference_values):
+                        try:
+                            recovery, recovered_values = _legacy_mcp_state(
+                                runtime,
+                                runtime_region,
+                            )
+                            published_reference_values.update(
+                                mcp_secret_values_for_draft_references(
+                                    draft=published_draft,
+                                    recovery=recovery,
+                                    recovered_values=recovered_values,
+                                )
+                            )
+                        except LegacyRecoveryError as error:
+                            logger.info(
+                                "debug MCP credential recovery unavailable "
+                                "runtime_id=%s region=%s code=%s",
+                                runtime_id,
+                                runtime_region,
+                                error.code,
+                            )
+                    try:
+                        debug_mcp_env_values = retained_mcp_secret_values(
+                            published_draft=published_draft,
+                            edited_draft=edited_draft,
+                            published_reference_values=(published_reference_values),
+                        )
+                        if reuse_requests:
+                            supplied_credentials = mcp_reuse_supplied_credentials(
+                                published_draft=published_draft,
+                                edited_draft=edited_draft,
+                                published_reference_values=(published_reference_values),
+                                reuse_requests=reuse_requests,
+                            )
+                            debug_mcp_env_values.update(
+                                mcp_supplied_secret_values_by_reference(
+                                    edited_draft=edited_draft,
+                                    supplied_credentials=supplied_credentials,
+                                )
+                            )
+                    except LegacyRecoveryError as error:
+                        raise HTTPException(
+                            status_code=409,
+                            detail=_mcp_deployment_error_detail(error.code),
+                        ) from error
+                    unresolved_references = set(stored_references).difference(
+                        debug_mcp_env_values
+                    )
+                    if unresolved_references:
+                        raise HTTPException(
+                            status_code=409,
+                            detail=_mcp_deployment_error_detail(
+                                "legacy_mcp_credential_missing"
+                            ),
+                        )
+
             project, draft = await _generate_project_and_draft_from_request(
                 data,
                 debug=True,
                 owner_id=owner_id or "local",
+                validated_test_request=test_request,
+                debug_mcp_env_values=debug_mcp_env_values,
             )
             sidecar_env: dict[str, str] = {}
             sidecar_plan: dict[str, Any] | None = None
@@ -5734,25 +5963,6 @@ def _run_frontend_server(
                         status_code=409,
                         detail="Harness Sidecar 配置已更新，请重新解析后再启动调试。",
                     )
-            runtime_envs: dict[str, str] = {}
-            runtime_id = str(data.get("runtimeId") or "").strip()
-            if runtime_id:
-                runtime_region = (
-                    str(data.get("runtimeRegion") or "cn-beijing").strip()
-                    or "cn-beijing"
-                )
-                runtime = _authorized_runtime(
-                    request,
-                    runtime_id,
-                    runtime_region,
-                    coded_access_error=True,
-                )
-                runtime_envs = {
-                    str(item.key): str(item.value or "")
-                    for item in (getattr(runtime, "envs", None) or [])
-                    if getattr(item, "key", None)
-                    and not _is_debug_protected_model_env(str(item.key))
-                }
             temp_dir = tempfile.mkdtemp(prefix="veadk_generated_agent_test_")
             app_name = _write_generated_project(project, temp_dir)
             staged_environment_skills = ""
@@ -6230,7 +6440,7 @@ def _run_frontend_server(
             task = _deploy_tasks.get(task_id)
         if task is None:
             raise HTTPException(status_code=404, detail="Deployment task not found")
-        if _request_role(request) != StudioRole.ADMIN and (
+        if not _request_role(request).is_admin and (
             principal is None or task.get("owner_id") != principal.owner_id
         ):
             raise HTTPException(status_code=404, detail="Deployment task not found")
@@ -6350,6 +6560,28 @@ def _run_frontend_server(
                 status_code=409,
                 detail="更新页面缺少可验证的配置草稿，请重新打开智能体详情。",
             )
+
+        def _draft_has_model_fallbacks(value: Any) -> bool:
+            if not isinstance(value, Mapping):
+                return False
+            raw_fallbacks = value.get("modelFallbacks")
+            if isinstance(raw_fallbacks, list) and len(raw_fallbacks) > 0:
+                return True
+            raw_sub_agents = value.get("subAgents")
+            if isinstance(raw_sub_agents, list):
+                return any(
+                    _draft_has_model_fallbacks(child) for child in raw_sub_agents
+                )
+            return False
+
+        if source_preserving_requested and _draft_has_model_fallbacks(requested_draft):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "当前 Runtime 使用保留源码更新模式，不支持模型 fallback。"
+                    "请重新生成标准项目并使用 veadk-python >= 1.1.10 后部署。"
+                ),
+            )
         raw_remove_runtime_env_keys = data.get("removeRuntimeEnvKeys", [])
         if not isinstance(raw_remove_runtime_env_keys, list) or any(
             not isinstance(key, str)
@@ -6374,14 +6606,6 @@ def _run_frontend_server(
             )
         requested_runtime_name = (data.get("runtimeName") or agent_name).strip()
         files = data.get("files", [])
-        quick_mode_requested = (
-            isinstance(requested_draft, Mapping)
-            and requested_draft.get("dynamicAgentDelegation") is True
-        ) or any(
-            isinstance(item, Mapping)
-            and str(item.get("path") or "").endswith("/quick_mode_compat.py")
-            for item in files
-        )
         migration_task_id = str(data.get("migrationTaskId") or "").strip()
         source = data.get("source") or (
             {"kind": "migration", "migrationId": migration_task_id}
@@ -6480,7 +6704,7 @@ def _run_frontend_server(
         trusted_intelligent_source = source.get("kind") == "intelligentDevelopment"
         config = data.get("config", {})
         task_id = str(data.get("taskId") or f"deploy-{id(request)}").strip()
-        create_evaluation_sets = data.get("createEvaluationSets", True)
+        create_evaluation_sets = data.get("createEvaluationSets", False)
         author, owner_id = runtime_attribution(principal)
         environment_ref = (
             data.get("environment") if isinstance(data.get("environment"), dict) else {}
@@ -6637,27 +6861,27 @@ def _run_frontend_server(
                 set(sidecar_plan.get("effectiveComponents") or [])
                 & {"mcp_gateway", "mcp_resilience", "sql_readonly"}
             )
-            if sidecar_mcp_enabled and not source_preserving_requested:
-                if not isinstance(requested_draft, Mapping):
-                    raise HTTPException(
-                        status_code=400,
-                        detail=(
-                            "MCP 稳定性治理缺少可验证的 MCP 配置，请重新打开发布页面。"
-                        ),
-                    )
-                try:
-                    canonical_requested_draft = AgentDraft.model_validate(
-                        requested_draft
-                    ).model_dump(mode="json")
-                except ValidationError as error:
-                    raise HTTPException(
-                        status_code=400,
-                        detail="MCP 稳定性治理配置无效，请返回 MCP 工具步骤检查。",
-                    ) from error
             if not source_preserving_requested:
                 sidecar_base_image = managed_studio_sidecar_base_image(
                     os.getenv(SIDECAR_BASE_IMAGE_ENV, "")
                 )
+        if (
+            sidecar_mcp_enabled or requested_mcp_credential_reuses
+        ) and not source_preserving_requested:
+            if not isinstance(requested_draft, Mapping):
+                raise HTTPException(
+                    status_code=400,
+                    detail="MCP 凭证复用缺少可验证的 MCP 配置，请重新打开发布页面。",
+                )
+            try:
+                canonical_requested_draft = AgentDraft.model_validate(
+                    requested_draft
+                ).model_dump(mode="json")
+            except ValidationError as error:
+                raise HTTPException(
+                    status_code=400,
+                    detail="MCP 配置无效，请返回 MCP 工具步骤检查。",
+                ) from error
         if (
             requested_mcp_secret_values
             and not source_preserving_requested
@@ -6666,15 +6890,6 @@ def _run_frontend_server(
             raise HTTPException(
                 status_code=400,
                 detail="MCP credential identity submission requires managed Sidecar MCP",
-            )
-        if (
-            requested_mcp_credential_reuses
-            and not source_preserving_requested
-            and not sidecar_mcp_enabled
-        ):
-            raise HTTPException(
-                status_code=400,
-                detail="MCP credential reuse requires managed Sidecar MCP",
             )
         if not source_preserving_requested:
             _validate_harness_sidecar_project_files(files, enabled=sidecar_enabled)
@@ -6749,6 +6964,7 @@ def _run_frontend_server(
         published_draft: Mapping[str, Any] = {}
         published_mcp_reference_values: dict[str, str] = {}
         explicit_mcp_reuse_credentials: tuple[dict[str, str], ...] = ()
+        explicit_mcp_reuse_env_values: dict[str, str] = {}
         source_preserving_draft: dict[str, Any] | None = None
         source_preserving_source_image = ""
         source_preserving_mcp_secrets: dict[str, str] = {}
@@ -6853,6 +7069,24 @@ def _run_frontend_server(
                             region,
                             error.code,
                         )
+                if (
+                    not source_preserving_requested
+                    and canonical_requested_draft is None
+                    and isinstance(requested_draft, Mapping)
+                    and any(
+                        field in requested_draft
+                        for field in ("mcpTools", "subAgents", "workflow")
+                    )
+                ):
+                    try:
+                        canonical_requested_draft = AgentDraft.model_validate(
+                            requested_draft
+                        ).model_dump(mode="json")
+                    except ValidationError as error:
+                        raise HTTPException(
+                            status_code=400,
+                            detail="MCP 配置无效，请返回 MCP 工具步骤检查。",
+                        ) from error
                 allowed_remove_runtime_env_keys = set(
                     mcp_auth_environment_keys(published_draft)
                 )
@@ -7068,9 +7302,43 @@ def _run_frontend_server(
                             published_reference_values=(published_mcp_reference_values),
                             reuse_requests=requested_mcp_credential_reuses,
                         )
+                        reused_mcp_env_values = mcp_supplied_secret_values_by_reference(
+                            edited_draft=canonical_requested_draft,
+                            supplied_credentials=explicit_mcp_reuse_credentials,
+                        )
+                        if not sidecar_mcp_enabled:
+                            retained_mcp_env_values = retained_mcp_secret_values(
+                                published_draft=published_draft,
+                                edited_draft=canonical_requested_draft,
+                                published_reference_values=(
+                                    published_mcp_reference_values
+                                ),
+                            )
+                            retained_mcp_env_values = {
+                                reference: value
+                                for reference, value in retained_mcp_env_values.items()
+                                if reference not in requested_remove_runtime_env_keys
+                            }
+                            explicit_mcp_reuse_env_values = {
+                                **retained_mcp_env_values,
+                                **reused_mcp_env_values,
+                            }
+                            requested_references = set(
+                                mcp_auth_environment_keys(canonical_requested_draft)
+                            )
+                            available_references = {
+                                reference
+                                for reference, value in requested_runtime_envs.items()
+                                if value
+                            }
+                            available_references.update(explicit_mcp_reuse_env_values)
+                            if requested_references.difference(available_references):
+                                raise LegacyRecoveryError(
+                                    "legacy_mcp_credential_missing"
+                                )
                     except LegacyRecoveryError as error:
                         logger.info(
-                            "managed Sidecar MCP credential reuse rejected "
+                            "MCP credential update rejected "
                             "runtime_id=%s region=%s code=%s",
                             runtime_id,
                             region,
@@ -7285,6 +7553,7 @@ def _run_frontend_server(
         from frontend.server.deployment_source import (
             DeploymentSourceError,
             ensure_default_agentkit_dockerfile,
+            resolve_agentkit_entry_point,
             write_inline_source,
         )
         from frontend.server.intelligent_development_source import (
@@ -7298,13 +7567,18 @@ def _run_frontend_server(
 
         temp_dir = tempfile.mkdtemp(prefix=f"agentkit_deploy_{agent_name}_")
         base = PathlibPath(temp_dir).resolve()
+        migration_deployment_source = source.get("kind") == "migration"
         try:
-            if source.get("kind") == "migration":
-                entry_point = await asyncio.to_thread(
+            if migration_deployment_source:
+                migration_startup_entry_point = await asyncio.to_thread(
                     migration_service.materialize_deployment,
                     migration_task_id,
                     owner_id or "local",
                     base,
+                )
+                entry_point = resolve_agentkit_entry_point(
+                    base,
+                    fallback=migration_startup_entry_point,
                 )
                 trusted_agent_name = agent_name
             elif trusted_intelligent_source:
@@ -7319,7 +7593,15 @@ def _run_frontend_server(
                     service=intelligent_development_service,
                     project_service=intelligent_project_service,
                 )
-                entry_point = materialized.entry_point
+                migration_deployment_source = materialized.producer == "migration"
+                entry_point = (
+                    resolve_agentkit_entry_point(
+                        base,
+                        fallback=materialized.entry_point,
+                    )
+                    if migration_deployment_source
+                    else materialized.entry_point
+                )
                 trusted_agent_name = materialized.agent_name
             else:
                 entry_point = write_inline_source(base, files)
@@ -7360,7 +7642,11 @@ def _run_frontend_server(
             raise
 
         if not use_managed_sidecar_release:
-            ensure_default_agentkit_dockerfile(base, provider)
+            ensure_default_agentkit_dockerfile(
+                base,
+                provider,
+                entry_point=entry_point if migration_deployment_source else None,
+            )
 
         if use_managed_sidecar_release:
             try:
@@ -7474,6 +7760,13 @@ def _run_frontend_server(
             ):
                 runtime_envs.pop(key, None)
             runtime_envs["MCP_SERVERS_JSON"] = structured_mcp
+        elif canonical_requested_draft is not None and existing_runtime is not None:
+            for key in ("MCP_SERVERS_JSON", "MCP_URLS", "MCP_API_KEY"):
+                runtime_envs.pop(key, None)
+            for key in mcp_auth_environment_keys(published_draft):
+                if key not in extra_runtime_envs:
+                    runtime_envs.pop(key, None)
+            runtime_envs.update(explicit_mcp_reuse_env_values)
         explicit_model_key_requested = bool(
             extra_runtime_envs.get("MODEL_AGENT_API_KEY", "").strip()
         )
@@ -8575,6 +8868,21 @@ def _run_frontend_server(
                 try:
                     import copy
 
+                    if existing_runtime is None and not sidecar_enabled:
+                        from frontend.server.runtime_iam import ensure_runtime_role
+
+                        access_key, secret_key, session_token = (
+                            _resolve_ve_credentials()
+                        )
+                        sdk_agentkit_config["launch_types"]["cloud"][
+                            "runtime_role_name"
+                        ] = ensure_runtime_role(
+                            access_key=access_key,
+                            secret_key=secret_key,
+                            session_token=session_token,
+                            provider=provider,
+                        )
+
                     def _launch_config(config: dict[str, Any]):
                         config_path = base / "agentkit.yaml"
                         persisted_config = config
@@ -8739,41 +9047,6 @@ def _run_frontend_server(
                             100,
                         )
                     if result is not None and getattr(result, "success", False):
-                        if quick_mode_requested:
-                            created_runtime_id = str(
-                                task_state.get("runtime_id") or runtime_id
-                            )
-                            if not created_runtime_id:
-                                raise RuntimeError(
-                                    "快速模式 Runtime 创建成功，但未返回 Runtime ID"
-                                )
-                            runtime_detail = _get_runtime(created_runtime_id, region)
-                            runtime_role_name = str(
-                                getattr(runtime_detail, "role_name", "") or ""
-                            ).strip()
-                            from veadk.cli.agentkit_runtime_iam import (
-                                ensure_quick_runtime_full_access,
-                            )
-
-                            access_key, secret_key, session_token = (
-                                _resolve_ve_credentials()
-                            )
-                            if not ensure_quick_runtime_full_access(
-                                runtime_role_name,
-                                access_key=access_key,
-                                secret_key=secret_key,
-                                session_token=session_token,
-                                provider=provider,
-                            ):
-                                raise RuntimeError(
-                                    "快速模式 Runtime 使用了自定义运行角色；"
-                                    "请为该角色授予 AgentKitFullAccess。"
-                                )
-                            _emit(
-                                "success",
-                                "快速模式 Runtime 已具备 AgentKit 资源访问权限",
-                                100,
-                            )
                         _verify_sdk_sidecar_release(result)
                         if existing_runtime is not None and provider != "byteplus":
                             try:
@@ -9171,12 +9444,19 @@ def _run_frontend_server(
         *,
         managed_only: bool = False,
         coded_access_error: bool = False,
+        allow_shared: bool = False,
     ) -> Any:
         principal = _current_principal(request)
         role = _request_role(request)
         runtime = _get_runtime(runtime_id, region)
         tags = _runtime_tags(runtime)
-        if role != StudioRole.ADMIN and not runtime_belongs_to(tags, principal):
+        if (
+            not role.is_admin
+            and not runtime_belongs_to(tags, principal)
+            and not (
+                allow_shared and principal is not None and enterprise_visible(tags)
+            )
+        ):
             raise HTTPException(
                 status_code=404,
                 detail=(
@@ -9200,6 +9480,7 @@ def _run_frontend_server(
                 runtime_id,
                 region,
                 coded_access_error=True,
+                allow_shared=True,
             )
         except HTTPException:
             raise
@@ -9213,7 +9494,11 @@ def _run_frontend_server(
         principal = _current_principal(request)
         role = _request_role(request)
         tags = _runtime_tags(runtime)
-        if role != StudioRole.ADMIN and not runtime_belongs_to(tags, principal):
+        if (
+            not role.is_admin
+            and not runtime_belongs_to(tags, principal)
+            and not (principal is not None and enterprise_visible(tags))
+        ):
             raise HTTPException(
                 status_code=404,
                 detail="runtime_access_denied",
@@ -9240,7 +9525,7 @@ def _run_frontend_server(
     mount_runtime_log_routes(
         app,
         service=runtime_log_service,
-        authorize_runtime=_authorized_runtime_for_connection,
+        authorize_runtime=_authorized_runtime,
         normalize_region=_coerce_cloud_region,
         safe_error=lambda error: _safe_exception_detail(
             error,
@@ -9286,7 +9571,7 @@ def _run_frontend_server(
         role = _request_role(request)
         return CronjobIdentity(
             ownerId=principal.owner_id if principal is not None else "local",
-            isAdmin=role == StudioRole.ADMIN,
+            isAdmin=role.is_admin,
         )
 
     cronjob_local_dispatcher: Dispatcher | None = None
@@ -9373,9 +9658,7 @@ def _run_frontend_server(
                     tags = _runtime_tags(r)
                     if tags.get("veadk:managed") != "true":
                         continue
-                    if role != StudioRole.ADMIN and not runtime_belongs_to(
-                        tags, principal
-                    ):
+                    if not role.is_admin and not runtime_belongs_to(tags, principal):
                         continue
                     out.append(
                         {
@@ -9414,12 +9697,13 @@ def _run_frontend_server(
         if not runtime_id:
             raise HTTPException(status_code=400, detail="runtimeId is required")
         try:
-            _authorized_runtime(
+            runtime = _authorized_runtime(
                 request,
                 runtime_id,
                 region,
                 managed_only=True,
             )
+            AgentReviewService.require_editable(runtime)
             _delete_agentkit_runtime(runtime_id, region)
             return {"success": True}
         except HTTPException:
@@ -9604,15 +9888,15 @@ def _run_frontend_server(
     ):
         """One page of AgentKit runtimes for the agent selector. Lists ALL
         runtimes (server-side paginated); each item is flagged `isMine` when its
-        ownership tags match the trusted current identity. Non-admin users are
-        always restricted to their own runtimes.
+        ownership tags match the trusted current identity. Non-admin users see
+        their own runtimes and approved enterprise-visible runtimes.
         region=all merges runtimes across all supported regions."""
         principal = _current_principal(request)
         role = _request_role(request)
         ak, sk, svc_token = _resolve_ve_credentials()
         regions = _runtime_regions(provider, region)
         page_size = max(1, min(page_size, 100))
-        restrict_to_owner = scope == "mine" or role != StudioRole.ADMIN
+        restrict_to_owner = scope == "mine"
         principal_key = (
             getattr(principal, "owner_id", ""),
             getattr(principal, "display_name", ""),
@@ -9668,12 +9952,18 @@ def _run_frontend_server(
                 for runtime in resp.agent_kit_runtimes or []:
                     tags = _runtime_tags(runtime)
                     is_mine = runtime_belongs_to(tags, principal)
-                    if (scope == "mine" or role != StudioRole.ADMIN) and not is_mine:
+                    if scope == "mine" and not is_mine:
+                        continue
+                    if (
+                        not role.is_admin
+                        and not is_mine
+                        and not (principal is not None and enterprise_visible(tags))
+                    ):
                         continue
                     can_delete = (
                         role != StudioRole.USER
                         and tags.get("veadk:managed") == "true"
-                        and (role == StudioRole.ADMIN or is_mine)
+                        and (role.is_admin or is_mine)
                     )
                     out.append(
                         {
@@ -9690,7 +9980,16 @@ def _run_frontend_server(
                             "region": reg,
                             "author": tags.get("veadk:author", ""),
                             "isMine": is_mine,
-                            "canDelete": can_delete,
+                            "canDelete": can_delete
+                            and tags.get(STATUS_TAG) != "pending"
+                            and not enterprise_visible(tags),
+                            "canManage": role != StudioRole.USER
+                            and (role.is_admin or is_mine),
+                            "canPublish": role.is_admin,
+                            "visibility": "enterprise"
+                            if enterprise_visible(tags)
+                            else "private",
+                            "reviewStatus": tags.get(STATUS_TAG, ""),
                         }
                     )
                     if len(out) >= target_size:
@@ -10301,6 +10600,11 @@ def _run_frontend_server(
                 runtime_id,
                 region,
             )
+            principal = _current_principal(request)
+            if not _request_role(request).is_admin and not runtime_belongs_to(
+                _runtime_tags(runtime), principal
+            ):
+                await authorize_shared_proxy(request, path, upstream_method, principal)
             endpoint, apikey, auth_type, endpoint_network_type = _resolve_runtime_conn(
                 runtime_id,
                 region,
@@ -10765,11 +11069,12 @@ def _run_frontend_server(
                         environment_mount=session_environment_mount,
                         environment_mounts=session_environment_mounts_for_run,
                         prepare_environment_mounts=(
-                            lambda mounts,
-                            context: _prepare_execution_environment_mounts(
-                                studio_tool_owner_id,
-                                tuple(mounts),
-                                context,
+                            lambda mounts, context: (
+                                _prepare_execution_environment_mounts(
+                                    studio_tool_owner_id,
+                                    tuple(mounts),
+                                    context,
+                                )
                             )
                         ),
                     )
@@ -11023,6 +11328,80 @@ def _run_frontend_server(
             ),
         )
 
+    if identity_roles:
+        from frontend.server.user_management.deployment import initialize_runtime_roles
+        from frontend.server.user_management.routes import mount_user_management
+
+        pool_uid, client_uid = oauth2_user_pool_uid, oauth2_user_pool_client_uid
+        if not pool_uid or not client_uid:
+            pool_uid, client_uid = _current_studio_identity_ids(_identity_client())
+        if not pool_uid or not client_uid:
+            raise click.ClickException(
+                "Identity role management requires a user pool and client"
+            )
+        user_management = initialize_runtime_roles(
+            pool_uid=pool_uid,
+            client_uid=client_uid,
+            provider=provider,
+            identity_region=_identity_region(),
+            credentials=_resolve_ve_credentials,
+            environment=os.environ,
+            super_admin=studio_super_admin or "",
+            admins=studio_admins or "",
+            developers=studio_developers or "",
+        )
+        os.environ["VEADK_STUDIO_IDENTITY_ROLES"] = "1"
+        for legacy_key in (
+            "VEADK_STUDIO_SUPER_ADMIN",
+            "VEADK_STUDIO_ADMINS",
+            "VEADK_STUDIO_DEVELOPERS",
+        ):
+            os.environ.pop(legacy_key, None)
+        app.state.studio_user_management = user_management
+        mount_user_management(
+            app,
+            user_management,
+            _current_principal,
+            public_url=oauth2_redirect_uri,
+        )
+
+    from frontend.server.agent_reviews.repository import AgentReviewRepository
+    from frontend.server.agent_reviews.routes import mount_agent_review_routes
+    from frontend.server.agent_reviews.profiles import resolve_profile
+
+    def _agent_review_actor(request: Request) -> ReviewActor:
+        principal = _current_principal(request)
+        role = _request_role(request)
+        return ReviewActor(
+            owner_id=principal.owner_id if principal else "",
+            name=principal.display_name if principal else "",
+            role=role.value,
+            identity_uid=principal.identity_uid if principal else "",
+            identifiers=principal.identifiers if principal else frozenset(),
+        )
+
+    def _agent_review_profile(person: dict[str, str]) -> dict[str, str]:
+        management = getattr(app.state, "studio_user_management", None)
+        return resolve_profile(getattr(management, "directory", None), person)
+
+    def _invalidate_agent_review_access() -> None:
+        _runtime_list_cache.clear()
+        _rt_conn_cache.clear()
+        runtime_update_capability_results.clear()
+
+    agent_review_service = AgentReviewService(
+        AgentReviewRepository(provider, _resolve_ve_credentials),
+        profiles=_agent_review_profile,
+    )
+    app.state.agent_review_service = agent_review_service
+    mount_agent_review_routes(
+        app,
+        agent_review_service,
+        _agent_review_actor,
+        _coerce_cloud_region,
+        _invalidate_agent_review_access,
+    )
+
     # ---- Auth ----------------------------------------------------------------
     # 'gateway' mode: an upstream API gateway (the AgentKit runtime gateway) has
     # already authenticated the user and forwards the identity as an
@@ -11070,6 +11449,7 @@ def _run_frontend_server(
                 client_name=oauth2_user_pool_client,
                 client_uid=oauth2_user_pool_client_uid,
                 redirect_uri=redirect_uri,
+                identity_client=_identity_client(),
             )
             provider_id = provider_id or "veidentity"
         else:
@@ -11830,8 +12210,125 @@ def _run_frontend_server(
                 )
             except LegacyRecoveryError:
                 pass
-        editable_keys = [*references, "FEISHU_APP_SECRET"]
+        editable_keys = [
+            *references,
+            *_model_credential_environment_keys(draft, provider),
+            "FEISHU_APP_SECRET",
+        ]
         return [key for key in editable_keys if key in configured]
+
+    def _model_env_segment(value: Any, fallback: str) -> str:
+        segment = re.sub(r"[^A-Z0-9]+", "_", str(value or "").strip().upper())
+        return segment.strip("_") or fallback
+
+    def _next_model_env_name(base: str, used: set[str]) -> str:
+        if base not in used:
+            return base
+        suffix = 2
+        while f"{base}_{suffix}" in used:
+            suffix += 1
+        return f"{base}_{suffix}"
+
+    def _valid_model_env_name(value: str) -> bool:
+        return re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value) is not None
+
+    def _model_fallback_api_key_env(fallback: Mapping[str, Any]) -> str:
+        for key in (
+            "modelApiKeyEnv",
+            "model_api_key_env",
+            "apiKeyEnv",
+            "api_key_env",
+        ):
+            value = str(fallback.get(key) or "").strip()
+            if value and _valid_model_env_name(value):
+                return value
+        return ""
+
+    def _model_credential_environment_keys(
+        draft: Mapping[str, Any],
+        cloud_provider: CloudProvider,
+    ) -> list[str]:
+        keys: list[str] = []
+        used: set[str] = set()
+
+        def remember(key: str) -> None:
+            if key and key not in used:
+                keys.append(key)
+            if key:
+                used.add(key)
+
+        def reserve(key: str) -> None:
+            if key:
+                used.add(key)
+
+        def visit(node: Mapping[str, Any]) -> None:
+            agent_segment = _model_env_segment(node.get("name"), "AGENT")
+            agent_type = str(node.get("agentType") or "llm").strip() or "llm"
+            is_llm_node = agent_type == "llm"
+            model_source = str(node.get("modelSource") or "").strip()
+            model_api_base = str(node.get("modelApiBase") or "").strip()
+            is_custom_model = is_llm_node and (
+                model_source == "custom"
+                or (
+                    not model_source
+                    and bool(model_api_base)
+                    and not is_provider_modelark_base_url(
+                        cloud_provider,
+                        model_api_base,
+                    )
+                )
+            )
+            if is_custom_model:
+                if str(node.get("modelProvider") or "").strip():
+                    reserve(
+                        _next_model_env_name(
+                            f"CUSTOM_MODEL_{agent_segment}_PROVIDER",
+                            used,
+                        )
+                    )
+                if model_api_base:
+                    reserve(
+                        _next_model_env_name(
+                            f"CUSTOM_MODEL_{agent_segment}_API_BASE",
+                            used,
+                        )
+                    )
+                remember(
+                    _next_model_env_name(
+                        f"CUSTOM_MODEL_{agent_segment}_API_KEY",
+                        used,
+                    )
+                )
+            if is_llm_node:
+                raw_fallbacks = node.get("modelFallbacks")
+                fallbacks = raw_fallbacks if isinstance(raw_fallbacks, list) else []
+                for index, fallback in enumerate(fallbacks):
+                    if not isinstance(fallback, Mapping):
+                        continue
+                    model_name = str(
+                        fallback.get("modelName")
+                        or fallback.get("model_name")
+                        or fallback.get("model")
+                        or ""
+                    ).strip()
+                    if not model_name:
+                        continue
+                    explicit_key = _model_fallback_api_key_env(fallback)
+                    remember(
+                        explicit_key
+                        or _next_model_env_name(
+                            f"FALLBACK_MODEL_{agent_segment}_{index + 1}_API_KEY",
+                            used,
+                        )
+                    )
+            raw_children = node.get("subAgents")
+            children = raw_children if isinstance(raw_children, list) else []
+            for child in children:
+                if isinstance(child, Mapping):
+                    visit(child)
+
+        visit(draft)
+        return keys
 
     def _runtime_update_result(
         runtime: Any,
@@ -11972,6 +12469,7 @@ def _run_frontend_server(
                 detail="runtime_lookup_failed",
             ) from error
 
+        AgentReviewService.require_editable(runtime)
         runtime_payload = _runtime_update_payload(runtime, region)
 
         try:
@@ -12388,6 +12886,7 @@ def _run_frontend_server(
             feedback.runtime_id,
             feedback.region,
             coded_access_error=True,
+            allow_shared=True,
         )
         if provider == "byteplus":
             return {
@@ -13643,12 +14142,31 @@ def _run_frontend_server(
         resolve_skill_response,
     )
     from frontend.server.skills.routes import _convert_error, mount_skill_routes
+    from frontend.server.skills.auto_scoring import SkillAutoScoring
+    from frontend.server.skills.reviewer_profiles import ReviewerProfileResolver
     from frontend.server.skills.service import SkillService
+    from frontend.server.skills.space_names import skill_space_display_name
+    from frontend.server.skills.system_spaces import (
+        is_review_space,
+        require_review_read,
+    )
 
+    identity_management = getattr(app.state, "studio_user_management", None)
+    skill_repository = AgentKitSkillRepository(
+        _skills_client,
+        reviewer_profiles=ReviewerProfileResolver(
+            identity_management.directory if identity_management else None
+        ),
+    )
     mount_skill_routes(
         app,
-        SkillService(AgentKitSkillRepository(_skills_client)),
+        SkillService(skill_repository),
         _skill_identity,
+        scoring=SkillAutoScoring(
+            skill_repository,
+            provider=provider,
+            regions=_runtime_regions(provider, "all"),
+        ),
     )
 
     @app.get("/web/skill-spaces")
@@ -13690,10 +14208,13 @@ def _run_frontend_server(
                     ),
                 )
                 for s in resp.items or []:
+                    if is_review_space(s):
+                        continue
                     all_items.append(
                         {
                             "id": s.id or "",
                             "name": s.name or "",
+                            "displayName": skill_space_display_name(s),
                             "description": s.description or "",
                             "status": s.status or "",
                             "region": reg,
@@ -13724,6 +14245,7 @@ def _run_frontend_server(
     @app.get("/web/skill-spaces/{space_id}/skills")
     async def _web_list_skills_in_space(
         space_id: str,
+        request: Request,
         region: str = "",
         page: int = Query(default=1, ge=1),
         page_size: int = Query(default=100, ge=1, le=100),
@@ -13737,6 +14259,12 @@ def _run_frontend_server(
         region = _coerce_studio_resource_region(region)
         try:
             client = _skills_client(region)
+            await asyncio.to_thread(
+                require_review_read,
+                client,
+                space_id,
+                is_admin=_skill_identity(request).is_admin,
+            )
             result = await asyncio.to_thread(
                 list_skill_space_items,
                 client,
@@ -13744,6 +14272,7 @@ def _run_frontend_server(
                 space_id=space_id,
                 page=page,
                 page_size=page_size,
+                include_display_metadata=True,
             )
         except HTTPException:
             raise
@@ -13771,6 +14300,7 @@ def _run_frontend_server(
     async def _web_get_skill_detail(
         space_id: str,
         skill_id: str,
+        request: Request,
         version: str | None = None,
         region: str = "",
         skill_space_name: str | None = None,
@@ -13780,6 +14310,13 @@ def _run_frontend_server(
         region = _coerce_studio_resource_region(region)
         try:
             client = _skills_client(region)
+            await asyncio.to_thread(
+                require_review_read,
+                client,
+                space_id,
+                skill_id=skill_id,
+                is_admin=_skill_identity(request).is_admin,
+            )
             resp = await asyncio.to_thread(
                 resolve_skill_response,
                 client,
@@ -14374,19 +14911,20 @@ def _resolve_studio_cloud_credentials(
     help="Studio title, at most 16 characters.",
 )
 @click.option(
-    "--admin",
-    "studio_admins",
+    "--super-admin",
+    "studio_super_admin",
     default=None,
-    envvar="VEADK_STUDIO_ADMINS",
-    help="Comma-separated Studio admin usernames or OAuth emails. Omit both "
-    "role options to grant every user admin access.",
+    envvar="VEADK_STUDIO_SUPER_ADMIN",
+    help="Initial super administrator email or Identity UID. The user must already "
+    "exist in the pool. Omit on first deployment to make everyone an admin; "
+    "later deployments preserve Identity roles.",
 )
 @click.option(
-    "--developer",
-    "studio_developers",
+    "--studio-sandbox-tool-id",
     default=None,
-    envvar="VEADK_STUDIO_DEVELOPERS",
-    help="Comma-separated Studio developer usernames or OAuth emails.",
+    envvar="STUDIO_WORKSPACE_TOOL_ID",
+    help="Existing persistent Studio Sandbox Tool ID. Omit to create and "
+    "configure one alongside the other sandbox tools.",
 )
 @click.option(
     "--sandbox-dev-tool-id",
@@ -14506,8 +15044,8 @@ def frontend_deploy(
     precheck_only: bool,
     site_logo: str | None,
     site_title: str | None,
-    studio_admins: str | None,
-    studio_developers: str | None,
+    studio_super_admin: str | None,
+    studio_sandbox_tool_id: str | None,
     sandbox_dev_tool_id: str | None,
     sandbox_chat_codex_tool_id: str | None,
     sandbox_chat_openclaw_tool_id: str | None,
@@ -14533,6 +15071,13 @@ def frontend_deploy(
         studio_knowledge_signing_namespace,
     )
     from veadk.config import veadk_environments
+
+    from frontend.server.user_management.deployment import (
+        confirm_super_admin_for_deploy,
+    )
+
+    if not precheck_only:
+        confirm_super_admin_for_deploy(studio_super_admin)
 
     _restore_process_env_on_click_close(_STUDIO_DEPLOY_PROCESS_ENV_KEYS)
     explicit_volcengine_credentials = any(
@@ -14662,6 +15207,19 @@ def frontend_deploy(
             )
         )
 
+        from frontend.server.user_management.deployment import prepare_identity_roles
+
+        identity_role_environment = prepare_identity_roles(
+            pool_uid=str(user_pool_id),
+            client_uid=str(allowed_client_id),
+            provider=provider_id,
+            region=identity_region,
+            access_key=ak,
+            secret_key=sk,
+            session_token=session_token or "",
+            super_admin=studio_super_admin,
+        )
+
         if iam_role:
             role_trn = iam_role
             click.echo(f"Using provided IAM role: {role_trn}")
@@ -14747,10 +15305,7 @@ def frontend_deploy(
             vestack_environment["OAUTH2_CLIENT_SECRET"] = client_secret
         if site_title is not None:
             vestack_environment["VEADK_SITE_TITLE"] = branding_title
-        if studio_admins:
-            vestack_environment["VEADK_STUDIO_ADMINS"] = studio_admins
-        if studio_developers:
-            vestack_environment["VEADK_STUDIO_DEVELOPERS"] = studio_developers
+        vestack_environment.update(identity_role_environment)
         configured_sandbox_tools = {
             "SANDBOX_DEV": sandbox_dev_tool_id,
             "SANDBOX_CHAT_CODEX": sandbox_chat_codex_tool_id,
@@ -14822,15 +15377,15 @@ def frontend_deploy(
     auto_storage = not str(
         veadk_environments.get("VEADK_STUDIO_TOS_BUCKET") or ""
     ).strip()
-    auto_sandbox_tools = any(
-        not tool_id
-        for tool_id in (
+    auto_sandbox_tools = not all(
+        (
+            studio_sandbox_tool_id,
             sandbox_dev_tool_id,
             sandbox_chat_codex_tool_id,
-            sandbox_chat_openclaw_tool_id,
-            sandbox_chat_hermes_tool_id,
             sandbox_chat_codex_snapshot_tool_id,
+            sandbox_chat_openclaw_tool_id,
             sandbox_chat_openclaw_snapshot_tool_id,
+            sandbox_chat_hermes_tool_id,
             sandbox_chat_hermes_snapshot_tool_id,
         )
     )
@@ -14928,6 +15483,19 @@ def frontend_deploy(
             f"Identity region {identity_region}.",
             fg="yellow",
         )
+
+    from frontend.server.user_management.deployment import prepare_identity_roles
+
+    identity_role_environment = prepare_identity_roles(
+        pool_uid=str(user_pool_id),
+        client_uid=str(allowed_client_id),
+        provider=provider_id,
+        region=identity_region,
+        access_key=ak,
+        secret_key=sk,
+        session_token=session_token or "",
+        super_admin=studio_super_admin,
+    )
 
     # 1) Ensure VeFaaS has its service role before provisioning cloud resources.
     if provider_id in {"volcengine", "byteplus"}:
@@ -15074,8 +15642,27 @@ def frontend_deploy(
         click.echo(f"Creating AgentKit {label} Tool '{tool_names[0]}'…")
         missing_sandbox_tools[kind] = tool_names
 
-    if missing_sandbox_tools:
-        with ThreadPoolExecutor(max_workers=len(missing_sandbox_tools)) as executor:
+    from frontend.server.workspace_tool import provision_workspace_tool
+
+    workspace_tool_id = (studio_sandbox_tool_id or "").strip()
+    if workspace_tool_id:
+        click.echo(f"Using configured Studio Sandbox Tool '{workspace_tool_id}'.")
+
+    if missing_sandbox_tools or not workspace_tool_id:
+        with ThreadPoolExecutor(max_workers=len(missing_sandbox_tools) + 1) as executor:
+            workspace_future = None
+            if not workspace_tool_id:
+                click.echo(
+                    "Preparing persistent Studio Sandbox Tool and model credentials…"
+                )
+                workspace_future = executor.submit(
+                    provision_workspace_tool,
+                    provider=provider_id,
+                    region=region,
+                    access_key=ak,
+                    secret_key=sk,
+                    session_token=session_token or "",
+                )
             tool_futures = {}
             for kind, tool_names in missing_sandbox_tools.items():
                 if tool_futures:
@@ -15134,6 +15721,24 @@ def frontend_deploy(
                         f"Underlying error:\n{detail}"
                     ) from error
                 click.echo(f"AgentKit {label} Tool is ready.")
+
+            if workspace_future is not None:
+                try:
+                    workspace_tool_id = workspace_future.result()
+                    if not workspace_tool_id:
+                        raise RuntimeError(
+                            "Studio Sandbox provisioning returned no Tool ID"
+                        )
+                except Exception as error:
+                    detail = _safe_exception_detail(
+                        error, secrets=(ak, sk, session_token)
+                    )
+                    raise click.ClickException(
+                        f"Failed to provision Studio Sandbox Tool and model credentials: {detail}"
+                    ) from error
+                click.echo(
+                    f"Studio Sandbox Tool and model credentials are ready: {workspace_tool_id}"
+                )
 
     from veadk.cli.frontend_skill_creator import (
         ensure_skill_creator_model_credential,
@@ -15266,10 +15871,7 @@ def frontend_deploy(
     veadk_environments["VEIDENTITY_REGION"] = identity_region
     if site_title is not None:
         veadk_environments["VEADK_SITE_TITLE"] = branding_title
-    if studio_admins:
-        veadk_environments["VEADK_STUDIO_ADMINS"] = studio_admins
-    if studio_developers:
-        veadk_environments["VEADK_STUDIO_DEVELOPERS"] = studio_developers
+    veadk_environments.update(identity_role_environment)
     veadk_environments["SANDBOX_CHAT_CODEX"] = chat_codex_tool_id
     veadk_environments["SANDBOX_CHAT_CODEX_SNAPSHOT"] = chat_codex_snapshot_tool_id
     veadk_environments["SANDBOX_CHAT_OPENCLAW"] = openclaw_tool_id
@@ -15277,6 +15879,7 @@ def frontend_deploy(
     veadk_environments["SANDBOX_CHAT_HERMES"] = hermes_tool_id
     veadk_environments["SANDBOX_CHAT_HERMES_SNAPSHOT"] = hermes_snapshot_tool_id
     veadk_environments["SANDBOX_DEV"] = dev_tool_id
+    veadk_environments["STUDIO_WORKSPACE_TOOL_ID"] = workspace_tool_id
     veadk_environments["AGENTKIT_SANDBOX_REGION"] = region
     veadk_environments["VEADK_STUDIO_UPDATE_BUCKET"] = studio_update_bucket
     veadk_environments["VEADK_STUDIO_UPDATE_PREFIX"] = studio_update_prefix
@@ -15353,10 +15956,17 @@ def frontend_deploy(
             from veadk.cli.studio_package import stage_studio_provider_requirements
 
             try:
-                requirements = (
-                    stage_studio_provider_requirements(Path(tmp), provider_id)
-                    + requirements
+                provider_requirements = stage_studio_provider_requirements(
+                    Path(tmp), provider_id
                 )
+                if provider_id == "byteplus":
+                    requirements = (
+                        "--extra-index-url https://pypi.org/simple\n"
+                        + provider_requirements
+                        + requirements
+                    )
+                else:
+                    requirements = provider_requirements + requirements
             except ValueError as error:
                 raise click.ClickException(str(error)) from error
 
@@ -15547,6 +16157,7 @@ def frontend_deploy(
             click.echo("   Cloud resources configured for this Studio:")
             for kind, tool_id in resolved_sandbox_tool_ids.items():
                 click.echo(f"   [{sandbox_tool_labels[kind]}]: {tool_id}")
+            click.echo(f"   [Studio Sandbox]: {workspace_tool_id}")
             click.echo(f"   TOS (private): https://{storage_config.object_host}")
             click.echo(f"   user pool id: {user_pool_id}")
             click.echo(f"   client id: {allowed_client_id}")
@@ -15605,6 +16216,13 @@ def frontend_deploy(
     "--site-title",
     default=None,
     help="Replace the deployed Studio title, at most 16 characters.",
+)
+@click.option(
+    "--super-admin",
+    "studio_super_admin",
+    default=None,
+    help="Enable Identity user management and migrate the deployed admin/developer "
+    "lists. Use an existing user's email or UID for the initial super administrator.",
 )
 @click.option(
     "--harness-sidecar-base-image",
@@ -15682,6 +16300,7 @@ def frontend_update(
     path: Path,
     site_logo: str | None,
     site_title: str | None,
+    studio_super_admin: str | None,
     harness_sidecar_base_image: str | None,
     harness_sidecar_regions: str | None,
     sandbox_dev_tool_id: str | None,
@@ -15858,6 +16477,7 @@ def frontend_update(
                 package_dir,
                 frontend_assets=frontend_assets,
                 provider=provider_id,
+                offline_runtime=False,
             )
         except ValueError as error:
             raise click.ClickException(str(error)) from error
@@ -15867,15 +16487,41 @@ def frontend_update(
                 requirements=requirements,
                 site_logo=branding_logo,
                 provider=provider_id,
+                bundle_agentkit_cli=False,
             )
         except ValueError as error:
             raise click.ClickException(
                 f"Could not assemble the Studio package: {error}"
             ) from error
 
+        identity_role_environment: dict[str, str] = {}
+        if studio_super_admin or (user_pool_id and user_pool_client_id):
+            from frontend.server.user_management.deployment import (
+                package_supports_identity_roles,
+                prepare_identity_roles,
+            )
+
+            if not package_supports_identity_roles(package_dir):
+                raise click.ClickException(
+                    "The target Studio package does not support Identity roles"
+                )
+
+            identity_role_environment = prepare_identity_roles(
+                pool_uid=user_pool_id,
+                client_uid=user_pool_client_id,
+                provider=provider_id,
+                region=current_env.get("VEIDENTITY_REGION") or target.region,
+                access_key=ak,
+                secret_key=sk,
+                session_token=session_token or "",
+                super_admin=studio_super_admin,
+                legacy_environment=current_env,
+            )
+
         click.echo(f"Updating '{vefaas_app_name}' in {target.region}/{target.project}…")
         environment_overrides = {"AGENTKIT_SANDBOX_REGION": target.region}
         environment_overrides.update(sidecar_environment)
+        environment_overrides.update(identity_role_environment)
         if remote_function is not None:
             from veadk.cli.frontend_deploy_iam import (
                 ensure_default_frontend_role_policy,
@@ -16339,6 +16985,26 @@ def frontend_update(
                 environment_overrides["SANDBOX_DEV"] = str(
                     byteplus_sandbox_tool_ids["dev"] or ""
                 )
+        from frontend.server.workspace_tool import workspace_update_environment
+
+        click.echo("Checking persistent Studio Sandbox Tool…")
+        try:
+            environment_overrides.update(
+                workspace_update_environment(
+                    current_env,
+                    provider=provider_id,
+                    region=target.region,
+                    access_key=ak,
+                    secret_key=sk,
+                    session_token=session_token or "",
+                )
+            )
+        except Exception as error:
+            detail = _safe_exception_detail(error, secrets=(ak, sk, session_token))
+            raise click.ClickException(
+                f"Failed to provision Studio Sandbox Tool: {detail}"
+            ) from error
+
         if branding_title is not None:
             environment_overrides["VEADK_SITE_TITLE"] = branding_title
         environment_overrides.update(_github_app_review_environment(current_env))

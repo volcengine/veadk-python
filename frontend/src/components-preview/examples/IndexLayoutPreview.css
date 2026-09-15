@@ -1,0 +1,9 @@
+.index-layout-preview__shortcut-icon {
+  display: block;
+  width: 22px;
+  height: 22px;
+  background: var(--item-compact-icon-color, #ebebf5);
+  mask-position: center;
+  mask-size: 22px 22px;
+  mask-repeat: no-repeat;
+}

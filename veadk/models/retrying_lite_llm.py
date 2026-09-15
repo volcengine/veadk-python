@@ -67,6 +67,21 @@ def _retry_delay_seconds(error: BaseException) -> float:
     return min(delay, _MAX_RETRY_DELAY_SECONDS)
 
 
+def _copy_retry_request(llm_request: LlmRequest) -> LlmRequest:
+    retry_request = LlmRequest(
+        model=llm_request.model,
+        contents=copy.deepcopy(llm_request.contents),
+        config=copy.deepcopy(llm_request.config),
+        live_connect_config=copy.deepcopy(llm_request.live_connect_config),
+        cache_config=copy.deepcopy(llm_request.cache_config),
+        cache_metadata=copy.deepcopy(llm_request.cache_metadata),
+        cacheable_contents_token_count=llm_request.cacheable_contents_token_count,
+        previous_interaction_id=llm_request.previous_interaction_id,
+    )
+    retry_request.tools_dict = dict(llm_request.tools_dict)
+    return retry_request
+
+
 class RetryingLiteLlm(LiteLlm):
     """Retry exactly one explicit 429 before any model output is emitted.
 
@@ -78,6 +93,18 @@ class RetryingLiteLlm(LiteLlm):
 
     def __init__(self, *, model: str, **kwargs: Any) -> None:
         super().__init__(model=model, **kwargs)
+        self._fallbacks_template = copy.deepcopy(
+            getattr(self, "_additional_args", {}).get("fallbacks")
+        )
+
+    def _refresh_fallbacks(self) -> None:
+        """Give LiteLLM a fresh fallback list for each call.
+
+        LiteLLM's lightweight fallback helper mutates dict fallback entries when
+        selecting their model. Keep VeADK's model object reusable across turns.
+        """
+        if self._fallbacks_template is not None:
+            self._additional_args["fallbacks"] = copy.deepcopy(self._fallbacks_template)
 
     @override
     async def generate_content_async(
@@ -85,9 +112,10 @@ class RetryingLiteLlm(LiteLlm):
         llm_request: LlmRequest,
         stream: bool = False,
     ) -> AsyncGenerator[LlmResponse, None]:
-        retry_request = copy.deepcopy(llm_request)
+        retry_request = _copy_retry_request(llm_request)
         emitted = False
         try:
+            self._refresh_fallbacks()
             async for response in super().generate_content_async(
                 llm_request,
                 stream=stream,
@@ -106,6 +134,7 @@ class RetryingLiteLlm(LiteLlm):
             )
             await asyncio.sleep(delay)
 
+        self._refresh_fallbacks()
         async for response in super().generate_content_async(
             retry_request,
             stream=stream,

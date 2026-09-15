@@ -148,6 +148,9 @@ export function IntelligentGoalPanel({
     () => models.filter(isSelectableModel),
     [models],
   );
+  const defaultModelIsSelectable = selectableModels.some(
+    (model) => model.id === defaultModelId,
+  );
   const modelSelectOptions = useMemo(() => {
     const options = selectableModels.map((model) => ({
       value: model.id,
@@ -189,6 +192,7 @@ export function IntelligentGoalPanel({
     void listModelOptions({
       signal: controller.signal,
       refresh: modelsReloadKey > 0,
+      scope: "development",
     })
       .then((response) => {
         if (controller.signal.aborted) return;
@@ -208,15 +212,21 @@ export function IntelligentGoalPanel({
   }, [modelsReloadKey, t]);
 
   useEffect(() => {
+    if (modelsLoading || modelsError || selectableModels.length === 0) return;
     if (
-      !selectedModelId
-      || selectedModelId === defaultModelId
-      || selectableModels.some((model) => model.id === selectedModelId)
+      selectedModelId
+      && selectableModels.some((model) => model.id === selectedModelId)
     ) {
       return;
     }
-    setSelectedModelId("");
-  }, [defaultModelId, selectableModels, selectedModelId]);
+    setSelectedModelId(defaultModelIsSelectable ? "" : selectableModels[0].id);
+  }, [
+    defaultModelIsSelectable,
+    modelsError,
+    modelsLoading,
+    selectableModels,
+    selectedModelId,
+  ]);
 
   useEffect(() => {
     setGoal("");

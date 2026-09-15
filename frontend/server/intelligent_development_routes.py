@@ -19,15 +19,16 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
-import logging
 import re
 import shlex
-from collections.abc import AsyncIterator, Callable
+import time
+from collections.abc import AsyncGenerator, Callable
 from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
+import anyio
 from agentkit.toolkit.cli.sandbox.env_config import build_exec_session_envs
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
@@ -75,12 +76,17 @@ from veadk.cli.frontend_sandbox import (
     SandboxStreamEvent,
     SandboxToolQuotaError,
     SandboxTransportError,
+    SandboxTurnInterruptedError,
     SandboxTurnTimeoutError,
     SandboxValidationError,
     mount_sandbox_routes,
 )
 from veadk.cli.frontend_skill_creator import _sandbox_model_config
+from veadk.cli.studio_model_catalog import (
+    provider_allows_studio_development_model,
+)
 from veadk.utils.cloud_provider import cloud_provider_from_env
+from veadk.utils.logger import get_logger
 
 INTELLIGENT_DEVELOPMENT_PREFIX = "/web/intelligent-development"
 INTELLIGENT_DEVELOPMENT_TOOL_NAME = "intelligent-development"
@@ -113,6 +119,7 @@ _INTERNAL_TASK_PROMPT_PREFIXES = (
     "Use the preinstalled veadk-agent-development Skill for this read-only question.",
 )
 _BUILDER_TURN_TIMEOUT_SECONDS = 3_300
+_SSE_HEARTBEAT_SECONDS = 15
 _BUILDER_PERMISSIONS = CodexPermissionSettings(
     approval_policy="never",
     approvals_reviewer="auto_review",
@@ -136,7 +143,52 @@ _COMMAND_PROGRESS = (
     ),
     (re.compile(r"(?:^|[\s;&|])(curl|wget)\b[^\n]*?/ping\b"), "正在检查本地服务。"),
 )
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
+
+
+def _error_types(error: BaseException) -> str:
+    """Keep causal diagnostics bounded and free of exception messages."""
+    names = []
+    for _ in range(5):
+        names.append(type(error).__name__)
+        if error.__cause__ is None:
+            break
+        error = error.__cause__
+    return ">".join(names)
+
+
+async def _with_sse_heartbeat(
+    source: AsyncGenerator[str, None],
+) -> AsyncGenerator[str, None]:
+    """Keep quiet responses active without timing out the underlying read."""
+    pending: asyncio.Task[str] | None = None
+    try:
+        while True:
+            if pending is None:
+                pending = asyncio.create_task(anext(source))
+            done, _ = await asyncio.wait((pending,), timeout=_SSE_HEARTBEAT_SECONDS)
+            if not done:
+                yield ": heartbeat\n\n"
+                continue
+            completed, pending = pending, None
+            try:
+                frame = completed.result()
+            except StopAsyncIteration:
+                return
+            yield frame
+    finally:
+        # Starlette cancels the response's AnyIO scope on disconnect. Wait for
+        # the original generator's cleanup before closing it or releasing locks.
+        with anyio.CancelScope(shield=True):
+            try:
+                if pending is not None:
+                    pending.cancel()
+                    with contextlib.suppress(
+                        asyncio.CancelledError, StopAsyncIteration
+                    ):
+                        await pending
+            finally:
+                await source.aclose()
 
 
 class IntelligentDevelopmentOutcomeError(SandboxSessionUnavailableError):
@@ -515,10 +567,11 @@ async def _sandbox_dev_model_capability(
 
 async def _require_sandbox_dev_model_configured(
     service: SandboxConversationService,
-) -> None:
+) -> dict[str, object]:
     model = await _sandbox_dev_model_capability(service)
     if not model["configured"]:
         raise SandboxConfigurationError(_MODEL_CONFIGURATION_UNAVAILABLE_REASON)
+    return model
 
 
 async def _request_object(request: Request, maximum: int) -> dict[str, object]:
@@ -779,6 +832,12 @@ def _stream_error_payload(error: SandboxError) -> dict[str, object]:
             SandboxProvisioningError.retryable,
         ),
         (
+            SandboxTurnInterruptedError,
+            SandboxTurnInterruptedError.code,
+            "本轮任务已中断，未发布新版本。请在当前会话继续。",
+            SandboxTurnInterruptedError.retryable,
+        ),
+        (
             SandboxTurnTimeoutError,
             SandboxTurnTimeoutError.code,
             "本轮任务长时间未产生新进度，已停止。开发环境已保留，请在当前会话重试。",
@@ -837,6 +896,15 @@ def mount_intelligent_development_routes(
     validation_project: str = "default",
 ) -> None:
     """Mount the Codex-gated SANDBOX_DEV surface."""
+
+    from frontend.server.workspace_preview import mount_workspace_preview_routes
+
+    mount_workspace_preview_routes(
+        app,
+        service._gateway,
+        owner_resolver,
+        creator_resolver,
+    )
 
     delegated = FastAPI()
     task_locks: dict[tuple[str, str], asyncio.Lock] = {}
@@ -939,17 +1007,14 @@ def mount_intelligent_development_routes(
             base_version_id = data.get("baseVersionId")
             if not isinstance(display_name, str):
                 raise SandboxValidationError("displayName 格式无效。")
-            if model_id is None:
-                session_envs = None
-            elif not isinstance(model_id, str):
+            if model_id is not None and not isinstance(model_id, str):
                 raise SandboxValidationError("模型 ID 必须是文本。")
-            else:
+            if isinstance(model_id, str):
                 model_id = model_id.strip()
                 if model_id and _MODEL_ID_RE.fullmatch(model_id) is None:
                     raise SandboxValidationError("模型 ID 格式无效。")
-                session_envs = (
-                    _selected_model_session_envs(model_id) if model_id else None
-                )
+            else:
+                model_id = ""
             if project_id is not None and not isinstance(project_id, str):
                 raise SandboxValidationError("projectId 格式无效。")
             if base_version_id is not None and not isinstance(base_version_id, str):
@@ -958,7 +1023,15 @@ def mount_intelligent_development_routes(
                 raise SandboxValidationError(
                     "baseVersionId 必须与 projectId 一起使用。"
                 )
-            await _require_sandbox_dev_model_configured(service)
+            default_model = await _require_sandbox_dev_model_configured(service)
+            effective_model_id = model_id or str(default_model["id"])
+            if not provider_allows_studio_development_model(
+                cloud_provider_from_env(), effective_model_id
+            ):
+                raise SandboxValidationError(
+                    "所选模型暂不支持智能构建，请选择其他模型。"
+                )
+            session_envs = _selected_model_session_envs(model_id) if model_id else None
             session = await service.create(
                 owner,
                 display_name,
@@ -1002,7 +1075,23 @@ def mount_intelligent_development_routes(
         owner = owner_resolver(request)
         try:
             await resolve_intelligent_development_session(service, session_id, owner)
-            await service.delete(session_id, owner, is_admin=False)
+            logger.info(
+                "Intelligent development reason=session_delete_requested trigger=user_request session_id=%s",
+                session_id,
+            )
+            try:
+                await service.delete(session_id, owner, is_admin=False)
+            except Exception as error:
+                logger.error(
+                    "Intelligent development reason=session_delete_failed trigger=user_request session_id=%s error_types=%s",
+                    session_id,
+                    _error_types(error),
+                )
+                raise
+            logger.info(
+                "Intelligent development reason=session_delete_completed trigger=user_request session_id=%s",
+                session_id,
+            )
         except SandboxError as error:
             raise _http_error(error) from error
         if project_service is not None:
@@ -1243,6 +1332,11 @@ def mount_intelligent_development_routes(
             conversation = service._owned(session_id, owner)
             async with task_locks_guard:
                 task_lock = task_locks.get(lock_key)
+            logger.info(
+                "Intelligent development reason=interrupt_requested session_id=%s thread_id=%s",
+                session_id,
+                conversation.codex.thread_id,
+            )
             await conversation.codex.interrupt()
             if task_lock is not None:
                 await task_lock.acquire()
@@ -1266,6 +1360,7 @@ def mount_intelligent_development_routes(
             if len(prompt) > 100_000:
                 raise SandboxValidationError("message is too large")
             service.require_owned(session_id, owner)
+            thread_id = service._owned(session_id, owner).codex.thread_id
             cloud = await resolve_intelligent_development_session(
                 service, session_id, owner
             )
@@ -1308,11 +1403,17 @@ def mount_intelligent_development_routes(
                 )
             await task_lock.acquire()
 
-        async def stream() -> AsyncIterator[str]:
+        async def stream() -> AsyncGenerator[str, None]:
             lease = None
             completion_path = ""
             emitted_progress: set[str] = set()
             failure_stage = "task_prepare"
+            started_at = time.monotonic()
+            logger.info(
+                "Intelligent development stream started session_id=%s thread_id=%s",
+                session_id,
+                thread_id,
+            )
 
             async def cleanup_task_files() -> None:
                 nonlocal completion_path, lease
@@ -1326,24 +1427,50 @@ def mount_intelligent_development_routes(
                         completion_path = ""
                     except Exception as error:  # noqa: BLE001
                         completion_error = error
+                        logger.warning(
+                            "Intelligent development reason=completion_cleanup_failed stage=%s session_id=%s thread_id=%s error_types=%s",
+                            failure_stage,
+                            session_id,
+                            thread_id,
+                            _error_types(error),
+                        )
                 if lease is not None:
                     try:
                         await lease.cleanup()
                         lease = None
                     except Exception as error:  # noqa: BLE001
                         credential_error = error
+                        logger.warning(
+                            "Intelligent development reason=credential_cleanup_failed stage=%s session_id=%s thread_id=%s error_types=%s",
+                            failure_stage,
+                            session_id,
+                            thread_id,
+                            _error_types(error),
+                        )
                 if credential_error is not None:
+                    logger.warning(
+                        "Intelligent development reason=session_delete_requested trigger=credential_cleanup_failure session_id=%s thread_id=%s",
+                        session_id,
+                        thread_id,
+                    )
                     try:
                         await service.delete(session_id, owner)
-                    except Exception:  # noqa: BLE001
+                    except Exception as error:  # noqa: BLE001
                         logger.error(
-                            "Credential cleanup and environment termination failed for intelligent development session %s",
+                            "Intelligent development reason=session_delete_failed trigger=credential_cleanup_failure session_id=%s thread_id=%s error_types=%s",
                             session_id,
+                            thread_id,
+                            _error_types(error),
                         )
                         raise SandboxError(
                             "临时凭据清理未能确认，开发环境自动终止也失败。"
                             "请勿继续使用当前会话，并联系管理员。"
                         ) from credential_error
+                    logger.warning(
+                        "Intelligent development reason=session_delete_completed trigger=credential_cleanup_failure session_id=%s thread_id=%s",
+                        session_id,
+                        thread_id,
+                    )
                     completion_path = ""
                     lease = None
                     raise SandboxSessionNotFoundError(
@@ -1354,6 +1481,12 @@ def mount_intelligent_development_routes(
                     raise IntelligentDevelopmentCleanupError(
                         "临时交付证据文件未能清理，本轮已停止交付。请重试。"
                     ) from completion_error
+                logger.info(
+                    "Intelligent development reason=task_cleanup_completed stage=%s session_id=%s thread_id=%s",
+                    failure_stage,
+                    session_id,
+                    thread_id,
+                )
 
             try:
                 failure_stage = "task_prepare"
@@ -1580,6 +1713,18 @@ def mount_intelligent_development_routes(
                     )
                 failure_stage = "complete"
                 yield "event: done\ndata: {}\n\n"
+            except (asyncio.CancelledError, GeneratorExit) as error:
+                logger.warning(
+                    "Intelligent development stream reason=%s stage=%s session_id=%s thread_id=%s elapsed_seconds=%.3f",
+                    "task_cancelled"
+                    if isinstance(error, asyncio.CancelledError)
+                    else "stream_closed",
+                    failure_stage,
+                    session_id,
+                    thread_id,
+                    time.monotonic() - started_at,
+                )
+                raise
             except SandboxError as error:
                 failure = error
                 try:
@@ -1591,21 +1736,25 @@ def mount_intelligent_development_routes(
                         "智能开发任务未能安全清理，请勿继续使用当前会话。"
                     )
                 logger.warning(
-                    "Intelligent development turn failed stage=%s code=%s error_type=%s session_id=%s",
+                    "Intelligent development turn failed stage=%s code=%s error_type=%s session_id=%s thread_id=%s elapsed_seconds=%.3f",
                     failure_stage,
                     failure.code,
                     type(failure).__name__,
                     session_id,
+                    thread_id,
+                    time.monotonic() - started_at,
                 )
                 payload = _stream_error_payload(failure)
                 yield f"event: error\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
                 yield 'event: done\ndata: {"reason":"failed"}\n\n'
             except Exception as error:  # noqa: BLE001
                 logger.error(
-                    "Unexpected intelligent development turn failure stage=%s error_type=%s session_id=%s",
+                    "Unexpected intelligent development turn failure stage=%s error_type=%s session_id=%s thread_id=%s elapsed_seconds=%.3f",
                     failure_stage,
                     type(error).__name__,
                     session_id,
+                    thread_id,
+                    time.monotonic() - started_at,
                 )
                 try:
                     await cleanup_task_files()
@@ -1638,9 +1787,16 @@ def mount_intelligent_development_routes(
                     if task_lock.locked():
                         task_lock.release()
                     task_locks.pop(lock_key, None)
+                logger.info(
+                    "Intelligent development stream ended stage=%s session_id=%s thread_id=%s elapsed_seconds=%.3f",
+                    failure_stage,
+                    session_id,
+                    thread_id,
+                    time.monotonic() - started_at,
+                )
 
         return StreamingResponse(
-            stream(),
+            _with_sse_heartbeat(stream()),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
@@ -1662,6 +1818,7 @@ def mount_intelligent_development_routes(
         cleanup_task = asyncio.create_task(_cleanup_loop())
 
     async def _stop() -> None:
+        logger.info("Intelligent development service reason=studio_shutdown")
         if cleanup_task is not None:
             cleanup_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):

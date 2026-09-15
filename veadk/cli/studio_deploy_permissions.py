@@ -99,6 +99,25 @@ _IAM_PERMISSIONS = (
 
 _IDENTITY_PERMISSIONS = (
     _permission(
+        "id:ListUsers",
+        "匹配存量用户与初始管理员",
+        "Match existing users and the initial administrator",
+    ),
+    _permission("id:GetUser", "校验用户角色", "Verify user roles"),
+    _permission("id:ListGroups", "读取 Studio 角色用户组", "Read Studio role groups"),
+    _permission(
+        "id:CreateGroup", "创建 Studio 角色用户组", "Create Studio role groups"
+    ),
+    _permission(
+        "id:UpdateGroup",
+        "保存初始超级管理员",
+        "Persist the initial super administrator",
+    ),
+    _permission("id:AddUsersToGroup", "分配 Studio 角色", "Assign Studio roles"),
+    _permission(
+        "id:RemoveUsersFromGroup", "移除旧角色关系", "Remove previous role memberships"
+    ),
+    _permission(
         "id:GetUserPool", "读取 Studio 身份用户池", "Read the Studio Identity user pool"
     ),
     _permission(

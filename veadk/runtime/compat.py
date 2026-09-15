@@ -147,6 +147,14 @@ def _model_name_fallbacks(agent: Any) -> list[str]:
     return []
 
 
+def _model_fallbacks(agent: Any) -> list[Any]:
+    """Return explicit ``model_fallbacks`` entries."""
+    model_fallbacks = getattr(agent, "model_fallbacks", None)
+    if isinstance(model_fallbacks, list):
+        return list(model_fallbacks)
+    return []
+
+
 SUPPORT_RULES: tuple[SupportRule, ...] = (
     # --- error: silently wrong results -------------------------------------
     SupportRule(
@@ -240,6 +248,17 @@ SUPPORT_RULES: tuple[SupportRule, ...] = (
             "builds; a backend failure will surface as an error instead of "
             "failing over. Pass a single model name, or use runtime='adk' if "
             "you need fallbacks."
+        ),
+    ),
+    SupportRule(
+        field="model_fallbacks",
+        policy="warn",
+        predicate=lambda agent, _explicit: bool(_model_fallbacks(agent)),
+        message=lambda agent, rt: (
+            f"{rt} runtime drops Agent(model_fallbacks=...), because the "
+            "fallback chain lives on the LiteLLM client this runtime never "
+            "builds; a backend failure will surface as an error instead of "
+            "failing over. Use runtime='adk' if you need fallbacks."
         ),
     ),
     SupportRule(

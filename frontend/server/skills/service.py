@@ -19,11 +19,45 @@ from __future__ import annotations
 from .archive import validate_skill_archive
 from .models import CreateSkillSpaceBody, SkillIdentity, UpdateSkillSpaceBody
 from .repository import AgentKitSkillRepository
+from .reviews import SkillReviewRepository
+from .versions import SkillVersionRepository
 
 
 class SkillService:
     def __init__(self, repository: AgentKitSkillRepository) -> None:
         self._repository = repository
+
+    @property
+    def reviews(self) -> SkillReviewRepository:
+        return self._repository.reviews
+
+    @property
+    def versions(self) -> SkillVersionRepository:
+        return self._repository.versions
+
+    def ensure_shared_space(
+        self, identity: SkillIdentity, *, region: str
+    ) -> dict[str, object]:
+        return {
+            **self._repository.ensure_shared_space(region=region),
+            "canWrite": identity.is_admin,
+        }
+
+    def ensure_review_space(
+        self, identity: SkillIdentity, *, region: str
+    ) -> dict[str, object]:
+        if not identity.is_admin:
+            from .repository import SkillRepositoryError
+
+            raise SkillRepositoryError(
+                "REVIEW_SKILL_SPACE_FORBIDDEN",
+                "仅管理员可以访问待审核空间",
+                status_code=403,
+            )
+        return {
+            **self._repository.ensure_review_space(region=region),
+            "canWrite": False,
+        }
 
     def list_spaces(
         self,
@@ -95,6 +129,7 @@ class SkillService:
             space_id=space_id,
             archive=archive,
             author=identity.author,
+            is_admin=identity.is_admin,
         )
 
     def validate_archive(
@@ -118,8 +153,9 @@ class SkillService:
         region: str,
         skill_id: str,
     ) -> None:
-        del identity  # Filtering is intentionally not an ownership ACL.
-        self._repository.delete_skill(region=region, skill_id=skill_id)
+        self._repository.delete_skill(
+            region=region, skill_id=skill_id, is_admin=identity.is_admin
+        )
 
     def skill_files(
         self,
@@ -132,7 +168,12 @@ class SkillService:
         skill_space_name: str | None = None,
         skill_name: str | None = None,
     ) -> dict[str, object]:
-        del identity
+        self._repository.require_review_read(
+            region=region,
+            space_id=space_id,
+            skill_id=skill_id,
+            is_admin=identity.is_admin,
+        )
         return self._repository.skill_files(
             region=region,
             space_id=space_id,
@@ -153,7 +194,12 @@ class SkillService:
         skill_space_name: str | None = None,
         skill_name: str | None = None,
     ) -> tuple[bytes, str]:
-        del identity
+        self._repository.require_review_read(
+            region=region,
+            space_id=space_id,
+            skill_id=skill_id,
+            is_admin=identity.is_admin,
+        )
         return self._repository.skill_archive(
             region=region,
             space_id=space_id,

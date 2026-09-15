@@ -38,9 +38,18 @@ def test_default_studio_deploy_requires_all_reachable_actions() -> None:
     specs = _default_specs()
     actions = [spec.action for spec in specs]
 
-    assert len(actions) == 45
+    assert len(actions) == 52
     assert len(actions) == len(set(actions))
     assert "id:CreateUserPool" in actions
+    assert {
+        "id:ListUsers",
+        "id:GetUser",
+        "id:ListGroups",
+        "id:CreateGroup",
+        "id:UpdateGroup",
+        "id:AddUsersToGroup",
+        "id:RemoveUsersFromGroup",
+    } <= set(actions)
     assert "iam:UpdatePolicy" in actions
     assert "tos:CreateBucket" in actions
     assert "agentkit:CreateTool" in actions

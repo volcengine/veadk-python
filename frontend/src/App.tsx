@@ -1,3 +1,4 @@
+import { UserManagement } from "./users/UserManagement";
 import {
   useCallback,
   useEffect,
@@ -113,6 +114,7 @@ import { Applications, type ApplicationId } from "./ui/Applications";
 import { CronJobs } from "./cronjobs/CronJobs";
 import { SystemInfo } from "./ui/SystemInfo";
 import { DeveloperResources } from "./ui/DeveloperResources";
+import { ReviewCenter } from "./reviews/ReviewCenter";
 import { GitHubIntegration } from "./ui/GitHubIntegration";
 import { GitLabIntegration } from "./ui/GitLabIntegration";
 import { FeishuBotIntegration } from "./automations/feishu/FeishuBotIntegration";
@@ -148,6 +150,9 @@ import {
 import { IntelligentDeployment } from "./create/IntelligentDeployment";
 import { CustomCreate } from "./create/CustomCreate";
 import { AgentCreationModePicker } from "./create/AgentCreationModePicker";
+import { NativeConfigPage } from "./create/deepseek/NativeConfigPage";
+import { createNativeDraft } from "./create/deepseek/nativeConfig";
+import { WorkspaceCreate, WorkspaceCreateIcon } from "./create/WorkspaceCreate";
 import { CodePackageCreate } from "./create/CodePackageCreate";
 import { MigrationWorkspace } from "./migrations/MigrationWorkspace";
 import type { AgentDraft } from "./create/types";
@@ -363,7 +368,7 @@ async function loadHydratedSessions(
   );
 }
 
-type CreateView = "custom" | "package" | "migration" | null;
+type CreateView = "custom" | "deepseek" | "package" | "migration" | "workspace" | null;
 type AppView = CreateView | "intelligent";
 type CustomCreateMode = "custom" | "yaml_import";
 type StudioPageId =
@@ -382,12 +387,16 @@ type StudioPageId =
   | "sandbox-agent-detail"
   | "sandbox-agent-workspace"
   | "developer-resources"
-  | "feedback";
+  | "review-center"
+  | "feedback"
+  | "users";
 type StudioStackPage =
+  | "users"
   | "system-info"
   | "agent-detail"
   | "sandbox-agent-detail"
-  | "developer-resources";
+  | "developer-resources"
+  | "review-center";
 
 interface StudioPageStackEntry {
   page: StudioStackPage;
@@ -604,7 +613,7 @@ function loadView(): AppView {
   if (["menu", "custom", "template", "workflow"].includes(v ?? "")) {
     return "custom";
   }
-  return v === "package" || v === "migration" ? v : null;
+  return v === "package" || v === "migration" || v === "deepseek" ? v : null;
 }
 import { TraceDrawer } from "./ui/TraceDrawer";
 import { LoginPage } from "./ui/LoginPage";
@@ -2079,6 +2088,7 @@ export default function App() {
     }
   };
   const [createView, setCreateView] = useState<AppView>(loadView);
+  const [deepseekDraft, setDeepseekDraft] = useState(createNativeDraft);
   const [deploymentTasks, setDeploymentTasks] = useState<
     DeploymentTaskUpdate[]
   >([]);
@@ -2127,6 +2137,9 @@ export default function App() {
   const [importedDraft, setImportedDraft] = useState<AgentDraft | null>(null);
   const [customCreateMode, setCustomCreateMode] =
     useState<CustomCreateMode>("custom");
+  const [workspaceLandingSection, setWorkspaceLandingSection] = useState<"workspaces" | "environments">("workspaces");
+  const [workspacePreviewOpened, setWorkspacePreviewOpened] = useState(false);
+  const [workspaceCreateRequest, setWorkspaceCreateRequest] = useState(0);
   const [savedAgentDrafts, setSavedAgentDrafts] = useState<WorkspaceAgentDraft[]>([]);
   const savedAgentDraftsRef = useRef<WorkspaceAgentDraft[]>([]);
   const pendingWorkspaceDraftRef = useRef<WorkspaceAgentDraft | null>(null);
@@ -2153,8 +2166,10 @@ export default function App() {
   const [pageStack, setPageStack] = useState<StudioPageStackEntry[]>([]);
   const activeStackEntry = pageStack[pageStack.length - 1];
   const activeStackPage = activeStackEntry?.page;
+  const userManagementView = activeStackPage === "users";
   const systemInfo = activeStackPage === "system-info";
   const developerResourcesView = activeStackPage === "developer-resources";
+  const reviewCenterView = activeStackPage === "review-center";
   const pushStudioPage = useCallback((entry: StudioPageStackEntry) => {
     setPageStack((current) =>
       current[current.length - 1]?.page === entry.page
@@ -3155,7 +3170,7 @@ export default function App() {
     identifyTelemetryUser({
       userUniqueId,
       accountId: access.telemetry.accountId ?? "",
-      userRole: access.role === "admin" ? "admin" : "member",
+      userRole: (access.role === "admin" || access.role === "super_admin") ? "admin" : "member",
       userSource: localMode ? "local" : "sso",
     });
     trackStudioSessionStarted({ agentsSource });
@@ -3185,14 +3200,22 @@ export default function App() {
       setDeploymentTasks([]);
     }
     if (!access.capabilities.manageAgents) setManageAgents(false);
+    if (!access.capabilities.manageUsers) setPageStack((current) => current.filter((entry) => entry.page !== "users"));
+    if (access.role !== "admin" && access.role !== "super_admin") {
+      setPageStack((current) => current.filter((entry) => entry.page !== "review-center"));
+    }
   }, [access]);
 
   let documentTitleTarget: StudioDocumentTitleTarget = { kind: "home" };
   if (authStatus === "authenticated") {
     if (platformFeedbackOrigin !== null) {
       documentTitleTarget = { kind: "page", title: t("titles.issueFeedback") };
+    } else if (userManagementView) {
+      documentTitleTarget = { kind: "page", title: t("title", { ns: "users" }) };
     } else if (systemInfo) {
       documentTitleTarget = { kind: "page", title: t("titles.systemInfo") };
+    } else if (reviewCenterView) {
+      documentTitleTarget = { kind: "page", title: t("titles.reviewCenter") };
     } else if (cronJobsView) {
       documentTitleTarget = { kind: "page", title: t("titles.cronJobs") };
     } else if (applicationsView) {
@@ -3235,9 +3258,13 @@ export default function App() {
           ? runtimeUpdateTarget?.name
             ? t("titles.updateAgent", { name: runtimeUpdateTarget.name })
             : t("titles.createAgent")
+          : createView === "deepseek"
+            ? t("deepseek:pageTitle")
           : createView === "package"
             ? t("titles.addFromPackage")
-            : t("titles.migrateAgent"),
+            : createView === "workspace"
+              ? t("titles.codeProjects")
+              : t("titles.migrateAgent"),
       };
     } else if (sandboxSession) {
       const activeThread = sandboxCommands.threads.find(
@@ -6367,7 +6394,8 @@ export default function App() {
     setError("");
   };
 
-  const openDeveloperResourcesPage = () => {
+  const openStandalonePage = (page: "developer-resources" | "review-center") => {
+    if (page === "review-center" && access.role !== "admin" && access.role !== "super_admin") return;
     setPlatformFeedbackOrigin(null);
     if (sandboxSession) exitSandboxSession();
     viewSidRef.current = "";
@@ -6386,9 +6414,12 @@ export default function App() {
     setEnvironmentView(false);
     setApplicationsView(null);
     setCronJobsView(false);
-    setPageStack([{ page: "developer-resources", returnTo: "new-chat" }]);
+    setPageStack([{ page, returnTo: "new-chat" }]);
     setError("");
   };
+
+  const openDeveloperResourcesPage = () => openStandalonePage("developer-resources");
+  const openReviewCenterPage = () => openStandalonePage("review-center");
 
   const talkToWorkspaceAgent = async (agent: AgentEntry) => {
     setFeedbackCaseReturnAgentId("");
@@ -6439,17 +6470,19 @@ export default function App() {
       }
     : null;
 
-  const currentStudioPage: StudioPageId = activeStackPage === "system-info"
+  const currentStudioPage: StudioPageId = userManagementView ? "users" : activeStackPage === "system-info"
     ? activeStackEntry?.returnTo ?? "new-chat"
     : developerResourcesView
       ? "developer-resources"
+    : reviewCenterView
+      ? "review-center"
     : activeStackPage === "agent-detail" || activeStackPage === "sandbox-agent-detail"
       ? activeStackPage
       : platformFeedbackOrigin !== null
         ? "feedback"
         : environmentView
           ? "environments"
-        : workspaceView
+        : workspaceView || visibleCreateView === "workspace"
           ? "workspaces"
         : skillCenter
           ? "library"
@@ -6471,15 +6504,17 @@ export default function App() {
                           ? "create"
                           : "new-chat";
 
-  const sidebarActivePage: SidebarPage = systemInfo
+  const sidebarActivePage: SidebarPage = userManagementView ? "users" : systemInfo
     ? null
+    : reviewCenterView
+      ? "review-center"
     : developerResourcesView
       ? "developer-resources"
     : platformFeedbackOrigin !== null
       ? "feedback"
       : environmentView
         ? "environments"
-      : workspaceView
+      : workspaceView || visibleCreateView === "workspace"
         ? "workspaces"
       : skillCenter
         ? "library"
@@ -6625,6 +6660,14 @@ export default function App() {
         onCronJobs={() => requestIntelligentNavigation(openCronJobsPage)}
         onAgentKitCli={() => setAgentKitCliOpen(true)}
         onDeveloperResources={() => requestIntelligentNavigation(openDeveloperResourcesPage)}
+        onUserManagement={() => requestIntelligentNavigation(() => {
+          if (!access.capabilities.manageUsers) return;
+          if (sandboxSession) exitSandboxSession();
+          setCreateView(null);
+          pushStudioPage({ page: "users", returnTo: currentStudioPage });
+          setError("");
+        })}
+        onReviewCenter={() => requestIntelligentNavigation(openReviewCenterPage)}
         onSystemInfo={() => requestIntelligentNavigation(() => {
           pushStudioPage({
             page: "system-info",
@@ -7021,7 +7064,22 @@ export default function App() {
                 </div>
               )}
 
-            {systemInfo ? (
+            {workspacePreviewOpened && canCreateRuntimeAgents && (
+              <WorkspaceCreate
+                key={`${userId}-${cloudProvider}`}
+                active={visibleCreateView === "workspace"}
+                createRequest={workspaceCreateRequest}
+                onReturnToProjects={() => { setAddMenu(false); setWorkspaceView(false); setCreateView("workspace"); }}
+                onBack={(section = "workspaces") => {
+                  setCreateView(null);
+                  setWorkspaceLandingSection(section);
+                  setWorkspaceView(true);
+                }}
+              />
+            )}
+            {userManagementView && access.capabilities.manageUsers ? (
+              <UserManagement onBack={() => popStudioPage("users")} />
+            ) : visibleCreateView === "workspace" ? null : systemInfo ? (
               <SystemInfo
                 version={version}
                 localMode={agentsSource === "local"}
@@ -7032,6 +7090,8 @@ export default function App() {
               />
             ) : developerResourcesView ? (
               <DeveloperResources cloudProvider={cloudProvider} />
+            ) : reviewCenterView ? (
+              <ReviewCenter role={access.role} cloudProvider={cloudProvider} onAgentChanged={() => invalidateRuntimeAgentCache()} />
             ) : platformFeedbackOrigin !== null ? (
               <PlatformFeedback
                 initialModule={issueFeedbackModuleForPage(platformFeedbackOrigin)}
@@ -7040,7 +7100,11 @@ export default function App() {
             ) : environmentView ? (
               <EnvironmentCenter cloudProvider={cloudProvider} />
             ) : workspaceView ? (
-              <WorkspaceCenter cloudProvider={cloudProvider} />
+              <WorkspaceCenter cloudProvider={cloudProvider} initialSection={workspaceLandingSection} onProjects={canCreateRuntimeAgents ? () => {
+                setWorkspaceView(false);
+                setWorkspacePreviewOpened(true);
+                setCreateView("workspace");
+              } : undefined} />
             ) : cronJobsView ? (
               <CronJobs cloudProvider={cloudProvider} />
             ) : applicationsView === "coding-agents" ? (
@@ -7348,6 +7412,10 @@ export default function App() {
                   editingDraftBaselineRef.current = null;
                   setCreateView("custom");
                 }}
+                onSelectDeepseek={() => {
+                  setAddMenu(false);
+                  setCreateView("deepseek");
+                }}
                 onSelectTraditional={() => {
                   setAddMenuSurface("traditional");
                 }}
@@ -7401,6 +7469,21 @@ export default function App() {
                       setAddMenu(false);
                       setImportedDraft(null);
                       setCreateView("package");
+                    },
+                  },
+                  {
+                    key: "workspace",
+                    icon: WorkspaceCreateIcon,
+                    title: t("workspaceProjectEntry.title"),
+                    desc: t("workspaceProjectEntry.description"),
+                    onClick: () => {
+                      setAddMenu(false);
+                      setImportedDraft(null);
+                      setRuntimeUpdateTarget(null);
+                      setWorkspacePreviewOpened(true);
+                      setWorkspaceView(false);
+                      setWorkspaceCreateRequest(value => value + 1);
+                      setCreateView("workspace");
                     },
                   },
                   {
@@ -7525,6 +7608,27 @@ export default function App() {
                 }}
                 onCreate={startIntelligentDevelopment}
               />
+            ) : visibleCreateView === "deepseek" ? (
+              <NativeConfigPage
+                draft={deepseekDraft}
+                onDraftChange={setDeepseekDraft}
+                cloudProvider={cloudProvider}
+                initialDeployRegion={newRuntimeRegion}
+                onDeploymentTaskChange={updateDeploymentTask}
+                onDeploymentStarted={startDeployment}
+                onDeploymentComplete={(result) => {
+                  invalidateRuntimeAgentCache();
+                  if (result.runtimeId) {
+                    setLibraryRuntimeIds((current) => new Set([...current ?? [], result.runtimeId!]));
+                  }
+                  setAgentInfoRefreshKey((key) => key + 1);
+                }}
+                onBack={() => {
+                  setCreateView(null);
+                  setAddMenuSurface("entry");
+                  setAddMenu(true);
+                }}
+              />
             ) : visibleCreateView === "custom" ? (
               <CustomCreate
                 key={editingDraftId || "custom"}
@@ -7639,7 +7743,7 @@ export default function App() {
               >
                 <div className="welcome-primary">
                   <div className="welcome-heading">
-                    <NewChatFeatureNotice canUpdate={access.role === "admin"} />
+                    <NewChatFeatureNotice canUpdate={access.role === "admin" || access.role === "super_admin"} />
                     <h1 className="welcome-title">
                       {sandboxSession
                         ? t("greetings.intelligentDevelopment")

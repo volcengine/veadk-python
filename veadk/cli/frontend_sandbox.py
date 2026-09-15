@@ -58,6 +58,7 @@ from veadk.cli.codex_app_server import (
     CodexAppServerEvent,
     CodexAppServerSession,
     CodexAppServerTransportError,
+    CodexAppServerTurnInterruptedError,
     CodexAppServerTurnTimeoutError,
     CodexDirectoryListing,
     CodexImportedImage,
@@ -324,6 +325,12 @@ class SandboxTransportError(SandboxInvocationError):
     """The coding agent transport disconnected during a conversation turn."""
 
     code = "SANDBOX_TRANSPORT_FAILED"
+
+
+class SandboxTurnInterruptedError(SandboxInvocationError):
+    """The coding agent reported an interrupted conversation turn."""
+
+    code = "SANDBOX_TURN_INTERRUPTED"
 
 
 class SandboxTurnTimeoutError(SandboxInvocationError):
@@ -2040,6 +2047,11 @@ class SandboxConversationService:
                     finally:
                         session.pending_prompt = ""
                         session.pending_prompt_timestamp = 0
+            except CodexAppServerTurnInterruptedError as error:
+                if listening:
+                    queue.put_nowait(
+                        SandboxTurnInterruptedError(_safe_error_message(error))
+                    )
             except CodexAppServerTurnTimeoutError as error:
                 if listening:
                     queue.put_nowait(

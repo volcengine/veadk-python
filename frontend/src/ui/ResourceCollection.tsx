@@ -331,6 +331,7 @@ export function ResourceDataTable<T>({
   onSearchChange,
   searchPlaceholder,
   searchLabel,
+  toolbarActions,
   primaryAction,
   rowActions,
   scrollRef,
@@ -347,6 +348,7 @@ export function ResourceDataTable<T>({
   onSearchChange: (value: string) => void;
   searchPlaceholder: string;
   searchLabel: string;
+  toolbarActions?: ReactNode;
   primaryAction?: ResourceDataTablePrimaryAction;
   rowActions?: (item: T) => readonly StudioActionMenuItem[];
   scrollRef?: Ref<HTMLDivElement>;
@@ -371,6 +373,7 @@ export function ResourceDataTable<T>({
             aria-label={searchLabel}
           />
         </div>
+        {toolbarActions}
         {primaryAction ? (
           <Button
             type="button"

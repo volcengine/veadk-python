@@ -85,6 +85,9 @@ async def test_skill_catalog_lists_spaces_and_space_skills_from_studio_client(
         def __init__(self, region: str) -> None:
             self.region = region
 
+        def get_skill_space(self, request: object) -> SimpleNamespace:
+            return SimpleNamespace(name="Writers", description="")
+
         def list_skill_spaces(self, request: object) -> SimpleNamespace:
             del request
             return SimpleNamespace(
@@ -92,6 +95,7 @@ async def test_skill_catalog_lists_spaces_and_space_skills_from_studio_client(
                     SimpleNamespace(
                         id=f"space-{self.region}",
                         name="Writers",
+                        tags=[SimpleNamespace(key="display_name", value="写作技能")],
                         description="Writing skills",
                         status="active",
                         project_name="default",
@@ -120,6 +124,8 @@ async def test_skill_catalog_lists_spaces_and_space_skills_from_studio_client(
     monkeypatch.setattr(catalog, "_client", lambda region: FakeClient(region))
 
     spaces = await catalog.list_spaces(region="all")
+    assert all(item["displayName"] == "写作技能" for item in spaces["items"])
+    assert all(item["name"] == "Writers" for item in spaces["items"])
     skills = await catalog.list_skills(
         space_id="space-cn-beijing",
         region="cn-beijing",
@@ -203,6 +209,9 @@ async def test_skill_catalog_does_not_fallback_for_other_errors(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class FakeClient:
+        def get_skill_space(self, request: object) -> SimpleNamespace:
+            return SimpleNamespace(name="Writers", description="")
+
         def list_skills_by_skill_space(self, request: object) -> SimpleNamespace:
             del request
             raise RuntimeError("AccessDenied")
@@ -228,6 +237,9 @@ async def test_skill_catalog_requires_exact_missing_skill_error_code(
         code = "ResourceNotFound.skillset"
 
     class FakeClient:
+        def get_skill_space(self, request: object) -> SimpleNamespace:
+            return SimpleNamespace(name="Writers", description="")
+
         def list_skills_by_skill_space(self, request: object) -> SimpleNamespace:
             del request
             raise SimilarError("ResourceNotFound.skill")

@@ -148,16 +148,19 @@ test("builds an editable provider-specific Dockerfile preview", () => {
   assert.match(volcengine, /# Install Lark CLI/);
   assert.match(volcengine, /# Install Python dependencies/);
   assert.match(volcengine, /# Copy the Agent application/);
-  const huawei = "https://repo.huaweicloud.com/repository/pypi/simple";
-  const aliyun = "https://mirrors.aliyun.com/pypi/simple/";
+  const tencent = "https://mirrors.cloud.tencent.com/pypi/simple";
+  const ustc = "https://pypi.mirrors.ustc.edu.cn/simple";
   const pypi = "https://pypi.org/simple";
-  assert.match(volcengine, new RegExp(huawei.replaceAll(".", "\\.")));
-  assert.match(volcengine, new RegExp(aliyun.replaceAll(".", "\\.")));
+  assert.match(volcengine, new RegExp(tencent.replaceAll(".", "\\.")));
+  assert.match(volcengine, new RegExp(ustc.replaceAll(".", "\\.")));
   assert.match(volcengine, new RegExp(pypi.replaceAll(".", "\\.")));
-  assert.ok(volcengine.indexOf(huawei) < volcengine.indexOf(aliyun));
-  assert.ok(volcengine.indexOf(aliyun) < volcengine.indexOf(pypi));
+  assert.ok(volcengine.indexOf(tencent) < volcengine.indexOf(ustc));
+  assert.ok(volcengine.indexOf(ustc) < volcengine.indexOf(pypi));
   assert.match(byteplus, /RUN uv pip install -r requirements\.txt/);
-  assert.doesNotMatch(byteplus, /repo\.huaweicloud\.com|mirrors\.aliyun\.com/);
+  assert.doesNotMatch(
+    byteplus,
+    /mirrors\.cloud\.tencent\.com|pypi\.mirrors\.ustc\.edu\.cn/,
+  );
 });
 
 test("exports cloud environment selections through YAML", () => {

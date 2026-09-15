@@ -1,0 +1,68 @@
+/* Figma: Ig6wLTUxhfAxb20bKrXqh1 / 817:442129 */
+.studio-promo-card {
+  position: relative;
+  box-sizing: border-box;
+  display: block;
+  width: 216px;
+  height: 52px;
+  overflow: hidden;
+  border-radius: 12px;
+  background: #030303;
+  box-shadow: 0 0 4px rgba(0, 0, 0, 0.06);
+  font-family: "Century Gothic", sans-serif;
+  font-style: normal;
+  font-weight: 400;
+  font-synthesis: none;
+  text-decoration: none;
+}
+
+.studio-promo-card__artwork {
+  position: absolute;
+  left: 97px;
+  top: -8px;
+  width: 201px;
+  height: 140px;
+  max-width: none;
+  object-fit: cover;
+  pointer-events: none;
+}
+
+.studio-promo-card__content {
+  position: absolute;
+  left: 16px;
+  right: 5px;
+  top: 6px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  white-space: nowrap;
+}
+
+.studio-promo-card__title {
+  color: var(--studio-text-subtle, #b8b7c3);
+  font-size: 14px;
+  line-height: 22px;
+  letter-spacing: 0;
+}
+
+.studio-promo-card__description {
+  color: var(--studio-text-tertiary, #7a7880);
+  font-size: 12px;
+  line-height: 18px;
+  letter-spacing: -0.6px;
+}
+
+.studio-promo-card::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--studio-fill-subtle, rgba(255, 255, 255, .06));
+  box-shadow: inset 0 0 0 .5px var(--studio-border-input, rgba(255, 255, 255, .2));
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--studio-motion-duration-normal, 160ms) ease-out;
+}
+@media (hover: hover) { .studio-promo-card:hover::after { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .studio-promo-card::after { transition: none; } }

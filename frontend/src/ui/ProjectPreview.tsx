@@ -679,6 +679,9 @@ export interface ProjectPreviewProps {
   onDeploymentStarted?: (task: DeploymentTaskUpdate) => void;
   /** Mirrors deployment progress into the app shell so it survives page switches. */
   onDeploymentTaskChange?: (task: DeploymentTaskUpdate) => void;
+  showGitSync?: boolean;
+  showMessageChannels?: boolean;
+  showEvaluationSets?: boolean;
   /** Whether Feishu Channel was enabled in the configuration step. */
   feishuEnabled?: boolean;
   /** Update the Feishu channel selection from the deploy page. */
@@ -830,6 +833,9 @@ export function ProjectPreview({
   onDeploymentRuntimeNameChange,
   onDeploymentStarted,
   onDeploymentTaskChange,
+  showGitSync = true,
+  showMessageChannels = true,
+  showEvaluationSets = true,
   feishuEnabled = false,
   onFeishuEnabledChange,
   configuredRuntimeEnvKeys = [],
@@ -966,8 +972,8 @@ export function ProjectPreview({
   const [maxInstance, setMaxInstance] = useState(
     inMemorySession || sidecarEnabled ? "1" : "5",
   );
-  const [createEvaluationSets, setCreateEvaluationSets] = useState(true);
-  const supportsEvaluationSets = cloudProvider !== "byteplus";
+  const [createEvaluationSets, setCreateEvaluationSets] = useState(false);
+  const supportsEvaluationSets = showEvaluationSets && cloudProvider !== "byteplus";
   const effectiveCreateEvaluationSets =
     supportsEvaluationSets && createEvaluationSets;
   const [deploymentActionTarget, setDeploymentActionTarget] =
@@ -1467,7 +1473,9 @@ export function ProjectPreview({
       return;
     }
     const missingSecret = requiredSecretEnv.find(
-      (env) => !(effectiveSecretEnvValues[env.key] ?? "").trim(),
+      (env) =>
+        !(effectiveSecretEnvValues[env.key] ?? "").trim() &&
+        !configuredRuntimeEnvKeySet.has(env.key),
     );
     if (missingSecret) {
       setSecretEnvErrorKey(missingSecret.key);
@@ -1478,6 +1486,7 @@ export function ProjectPreview({
     const missingFeatureEnvs = missingRuntimeEnvs(
       deploymentEnv,
       deploymentEnvValues,
+      configuredRuntimeEnvKeys,
     );
     const missingManagedModelEnv = deploymentEnv.find(
       (env) =>
@@ -2587,7 +2596,7 @@ export function ProjectPreview({
                     </div>
                   )}
                 </section>
-                <GithubCicdPanel
+                {showGitSync && <GithubCicdPanel
                   project={project}
                   region={deployRegion}
                   cloudProvider={cloudProvider}
@@ -2602,11 +2611,11 @@ export function ProjectPreview({
                     deployDisabled ||
                     !!deployDisabledReason
                   }
-                />
+                />}
                 </>
               )}
 
-              {!deploymentPrimaryPane && (
+              {!deploymentPrimaryPane && showMessageChannels && (
                 <section className="pp-config-section">
                 <div className="pp-config-label">{t("projectPreview.messageChannels")}</div>
                 <FeishuDeploymentCard
@@ -3059,6 +3068,9 @@ export function ProjectPreview({
                         {requiredSecretEnv.map((env) => {
                           const invalid = secretEnvErrorKey === env.key;
                           const errorId = `${env.key.toLowerCase()}-error`;
+                          const value = effectiveSecretEnvValues[env.key] ?? "";
+                          const configuredSecret =
+                            configuredRuntimeEnvKeySet.has(env.key);
                           return (
                             <div
                               className="pp-env-row pp-env-row-derived"
@@ -3076,8 +3088,12 @@ export function ProjectPreview({
                                   id={env.key}
                                   className="pp-env-value"
                                   type="password"
-                                  value={effectiveSecretEnvValues[env.key] ?? ""}
-                                  placeholder={t("projectPreview.releaseOnlySecret")}
+                                  value={value}
+                                  placeholder={
+                                    configuredSecret && !value
+                                      ? "••••••"
+                                      : t("projectPreview.releaseOnlySecret")
+                                  }
                                   disabled={deploying}
                                   autoComplete="new-password"
                                   spellCheck={false}
@@ -3110,7 +3126,11 @@ export function ProjectPreview({
                                   </span>
                                 )}
                               </div>
-                              <span className="pp-env-source">{t("projectPreview.thisRelease")}</span>
+                              <span className="pp-env-source">
+                                {configuredSecret && !value.trim()
+                                  ? t("projectPreview.synced")
+                                  : t("projectPreview.thisRelease")}
+                              </span>
                             </div>
                           );
                         })}

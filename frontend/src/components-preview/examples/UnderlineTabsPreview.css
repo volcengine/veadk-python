@@ -1,0 +1,9 @@
+.underline-tabs-preview-scroll {
+  min-width: 0;
+}
+
+.underline-tabs-preview-example {
+  width: 100%;
+}
+
+.underline-tabs-preview-overflow-title { margin: 24px 0 16px; font-size: 14px; line-height: 22px; font-weight: 400; }

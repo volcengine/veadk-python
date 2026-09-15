@@ -3,7 +3,217 @@
 A React web UI for VeADK / Google ADK agents. It talks to the standard ADK API
 server that `veadk frontend` launches — no separate backend.
 
+## Release notifications
+
+The release workflow sends one Feishu card after both cloud providers finish
+publishing. A separate VeFaaS Webhook discovers the app bot’s group memberships
+and persists delivery results to avoid duplicate notifications on retries.
+See [deployment and operation](service/studio_release_notifier/README.md).
+
 ## Features
+
+- **Agent publication review**: Developers deploy privately and apply from an
+  Agent card. The review center's Agent tab lets administrators inspect the
+  submitted Runtime metadata, approve with an optional comment, or return with
+  a required reason. Administrators can also publish directly. The applicant
+  sees the reviewer name/avatar, decision time, comment and return reason
+
+  Agent review is independent of SkillSpaces. Runtime `TagResources` writes
+  `veadk:visibility` and explicit `veadk:review:*` fields for application ID,
+  status, submission time/message, reviewer ID/name, decision time/reason/comment,
+  and withdrawal/unpublication actors and times. Agent details are read live from
+  the Runtime; applicant identity reuses its `veadk:owner` and `veadk:author` tags
+  instead of storing another snapshot. Display profiles resolve through the
+  configured Identity user pool. Cloud error bodies and request IDs are
+  returned intact. The repository uses provider-scoped clients for Volcengine
+  and BytePlus
+
+  Only an approved Runtime tagged enterprise-visible is shared. Other users can
+  use it through the server proxy and access their own conversations; management,
+  logs, credentials and other users' sessions remain restricted. Pending Agents
+  must be withdrawn before editing/deleting; published Agents must be unpublished
+  first. Unpublishing revokes subsequent shared proxy requests, including when
+  connection credentials were cached. An already running stream is not terminated
+
+  This first iteration stores the latest application on each Runtime and
+  replaces it on resubmission. Review covers name, description, model and Runtime
+  configuration metadata, not source files or automatic scoring. A configuration
+  fingerprint rejects approval if the submitted Runtime has changed. Version
+  upgrades, public-version selection and archived application history are deferred.
+  Studio guards do not prevent direct cloud changes; concurrent decisions are
+  serialized within one process, without a cross-replica transaction. The record
+  limits application messages to 20 characters and decision reasons/comments to
+  256 characters. Text unsupported by cloud tags is encoded per field, splitting
+  long values into numbered continuations. Every tag value fits within 256 bytes;
+  continuation tags are written first, then field heads and visibility together
+  within the 20-tag call limit. Writes are read back before reporting success
+  and reject exceeding the 50-tag Runtime quota. Existing packed applications
+  remain readable; new writes use explicit fields
+
+- **Skill publication requests**: Each personal Skill version can be submitted
+  from its action row. Studio copies its archive into an independent Skill in
+  `studio_review_space`, preserving the original name and writing the signed-in
+  submitter's display name to the `author` tag. Source space, Skill, version and
+  submission time are also recorded in tags. Matching names remain separate
+  requests; repeat submissions of the same source Skill version are rejected
+  while pending or approved. Administrators inspect submitted files, approve
+  with an optional comment, or return with a required reason and optional comment.
+  Approval copies that fixed snapshot into `studio_share_space`. A returned
+  version can be submitted again as a new request; earlier decisions remain in
+  history. Personal Skill rows, details and the version dialog show persisted
+  status, reviewer, decision time, comments and return reasons
+
+  Submission verifies source membership and authorship. Review list and file
+  endpoints require an administrator; generic catalog/download routes also block
+  review copies for ordinary users. The workflow requires readable Skill tags
+  from the cloud provider and fails without publishing a request if metadata
+  cannot be verified. Review copies survive Studio restarts. `TagResources`
+  directly updates Skill tags and each write is read back with `GetSkill`;
+  `UpdateSkillSpace` is not used for tags. Cloud tag values reject newlines,
+  some punctuation and values longer than 256 characters. Review text is encoded
+  in bounded tag chunks and restored on read, preserving multiline comments and
+  reasons up to 256 characters. Approval intent is stored before publication;
+  a retry after final metadata failure reuses the existing shared copy.
+  Duplicate checks and decisions are serialized within one server process;
+  multiple server processes do not have a transactional shared lock
+
+  Reviewer identity comes from the authenticated server principal. The configured
+  Identity user pool's `GetUser` resolves the stored stable UID to name, email and
+  avatar, with a short profile cache. Clients cannot supply the reviewer or time.
+  Local users without a pool UID, removed users and directory failures fall back
+  to the recorded name and a placeholder avatar; access checks remain unchanged
+
+- **Automatic Skill assessment**: New review copies are tagged `queued` on
+  submission and assessed in the background using the same provider-specific
+  model as automatic Agent creation. A Pydantic `output_schema` is sent through
+  Ark's structured-output API; the system prompt contains the rubric, not a
+  duplicate JSON schema. Safety (40%), usability (25%), completeness (15%),
+  reliability (10%) and maintainability (10%) each receive a score and reason;
+  Studio calculates the weighted total and includes risks and suggestions
+
+  Assessment reads the fixed submitted snapshot without running its code or
+  tools. At most 100 text files, 40,000 characters per file and 120,000 characters
+  total are included. Omitted, binary and truncated files are disclosed;
+  incomplete coverage leaves safety, completeness and total scores unset
+
+  Private JSON jobs and reports live in the configured Skill archive TOS bucket
+  under `review-scores/`. Conditional ETag writes prevent concurrent workers
+  from claiming the same job. Skill tags hold status, total, time, model, rubric
+  and report location. Startup and periodic scans recover queued or expired
+  running jobs, with up to two attempts and a ten-minute interrupted-job lease.
+  Recovery also reconciles stale status tags without repeating completed model
+  calls. Recorded bucket/key tags locate existing reports after storage config
+  changes; new jobs use the current configuration. Existing unscored requests
+  remain unscored until an administrator requests assessment
+
+  Administrators and the submitting user can read the full JSON report, using
+  the stored identity UID or owner ID for new requests and the recorded author
+  as a fallback for older requests;
+  administrators can retry failed jobs. Completed reports are immutable.
+  Errors preserve the upstream text and request IDs in the report and API
+  response, without translated summaries or truncation into cloud tags.
+  Manual decisions and published versions remain independent of AI scores
+
+- **Skill versions**: Personal Skills expose native version history. Uploading
+  a ZIP with the same Skill name creates a new version under the original Skill
+  ID and updates only its personal space association. Both ZIP uploads and
+  optimized source updates wait for a new ready version instead of reusing an old
+  running version. Users can inspect files and submit reviews for a selected
+  historical version. Shared copies remain independent and read-only in this
+  version dialog; new or pending personal versions do not change published files.
+  Shared rows and details show the source version and author, while file requests
+  retain the copy's native version so an approved source v2 is read correctly
+
+- **SkillSpace display names**: Personal space creation generates a unique cloud
+  name containing only lowercase letters, numbers and underscores. The name the
+  user enters is stored in the `display_name` tag alongside the `author` tag.
+  Library cards, details and selectors prefer that display name and fall back to
+  the cloud name when the tag is missing or blank. Skill lookups and exports keep
+  using the original cloud name. Renaming display names is not included
+
+- **System SkillSpaces**: `studio_share_space` is the enterprise shared space,
+  permanently shown first in the Skill library. `studio_review_space` stores
+  submitted versions for review and is excluded from the library and Skill
+  selectors. The library provisions the shared space; submitting a Skill or opening
+  Skill reviews provisions the review space. Each space
+  is created once per provider region and `VEADK_STUDIO_PROJECT` (or `default`).
+  Definitions live in `server/skills/consts.json`, consumed by `consts.py` and
+  `src/create/skills/consts.ts`, so both ends use the same names. User-facing create
+  and rename operations reject reserved names, and the backend enforces the same
+  restriction even when called directly. System spaces cannot be renamed or
+  deleted; review content can only be changed by the review workflow. Administrators
+  can maintain shared skills. No legacy names are recognized or migrated
+
+  Cloud names must use lowercase letters, numbers and underscores; hyphenated
+  names return `InvalidParameter.skillSpaceName`. Native SkillSpace tag support
+  varies by provider: Volcengine returns creation tags, while BytePlus may omit them.
+  Managed names and description markers identify system spaces independently
+  of tags. Do not change these identities through the cloud console.
+  Creation failures remain visible with a retry action
+
+- **Intelligent development stream diagnostics**: Quiet SSE responses send a
+  comment heartbeat every 15 seconds without resetting Codex's inactivity timeout.
+  Logs correlate stream stages and elapsed time with Session/Thread IDs, and
+  Codex interruption and transport recovery with Thread/Turn IDs. Explicit stop
+  requests, inactivity timeouts, task cancellation and transport failures have
+  distinct reasons; cancellation alone does not imply a user stop. Logs exclude
+  prompts, command arguments and credentials. The dedicated client preserves
+  intelligent-development identity when Session metadata is absent or generic.
+  Heartbeats mitigate idle disconnects; request deadlines and process restarts
+  still apply, and this does not add background delivery or stream replay.
+
+- **DeepSeek Harness native configuration**: Quick-create now offers VeADK
+  Agent or DeepSeek Harness (Beta) through a radio-selection dialog. Continuing closes
+  the dialog and opens the selected Agent type’s own configuration page. The
+  Harness page uses a separate settings form for session
+  defaults, the DeepSeek adapter, custom model providers, command execution,
+  tool concurrency, sub-agent model selection and DeepSeek web search. Catalog
+  fields use dropdowns, with provider-dependent model and reasoning choices;
+  custom presets, DeepSeek model IDs and search settings remain editable. Default
+  values are prefilled and included in the exported configuration. Preview and ZIP
+  export include a Dockerfile, native settings, startup script, Runtime adapter,
+  AgentKit configuration and credential-name placeholders. The image installs the
+  official DSH npm package and runs the web profile privately as a non-root user.
+  The Runtime plugin exposes health checks and JSON invocations through DSH's native
+  session controller, preserving the selected model and Agent preset. The Deploy
+  action opens Studio's shared Runtime deployment page for cloud region, CP/CR
+  resource selection and credentials. Git sync, message channels and evaluation
+  sets are hidden for Harness deployments in both cloud environments. The form supports Chinese and English and
+  custom Volcengine and BytePlus model endpoints. It follows upstream revision
+  [`aa8262ec`](https://github.com/deepseek-ai/deepseek-harness/blob/aa8262ec091698bae9a6b04773a6b5b06ad4aef2/docs/config-catalog.md).
+  Other plugin parameters and preset-file editing are outside this initial form.
+  Harness drafts remain in memory; export before refreshing or closing Studio.
+  The adapter uses the Runtime gateway for authentication and does not implement
+  Studio's ADK chat protocol. Sessions require persistent storage to survive
+  container replacement, and multiple replicas require appropriate session routing.
+
+- **Runtime IAM role reuse**: ordinary and quick Agent creation reuse the first
+  role with the `AgentKitDefaultRuntimeAccess` system policy in the selected
+  cloud account, including roles on later IAM result pages. If none matches,
+  Studio creates `AgentKit_Runtime_Default_ServiceRole_<7 random characters>`
+  with only that policy. Existing roles keep all their current permissions;
+  quick creation no longer adds `AgentKitFullAccess`. Lookup errors stop the
+  deployment instead of triggering role creation. This applies to Volcengine
+  and BytePlus; existing Runtime updates and Sidecar deployments keep their
+  existing role behavior
+
+- **User management** stores Studio roles in Identity user groups
+  scoped to the configured user pool and client. A super administrator can search
+  all pool users, filter roles, and assign super administrator, administrator,
+  developer, or ordinary-user access. The next page refresh reads current roles;
+  protected backend requests also resolve live membership. Only immutable
+  subject-to-user-ID mappings are cached
+
+- **Review center**: the sidebar's 管控 group contains 审核中心 and 用户管理,
+  showing only entries allowed by the current role and hiding an empty group.
+  Administrators can open 审核中心 and switch
+  between Skills and Agents. Skill requests and submitted files load from the
+  regional review space, with search, refresh and status filters. Agent requests
+  remain empty. Skill decisions include comments, reviewer details and history.
+  The list shows AI assessment status and total; details and applicant history
+  expose dimension reasons, risks, coverage, model metadata and JSON download.
+  Empty lists and filtered results have distinct messages.
+  Chinese and English, Volcengine and BytePlus are supported
 
 - **Sandbox updates** in System Information compare each Tool's current image
   with `ListToolTypes` for its cloud provider and actual region. Volcengine and
@@ -16,6 +226,20 @@ server that `veadk frontend` launches — no separate backend.
   Completion requires Tool `Ready` and the target image; this does not verify
   existing Sessions or rebuild their snapshots. BytePlus has automated coverage,
   but its image update has not been verified against a live account.
+
+- **Code projects**: open 工作区 → 代码项目 or 从工作区新建 to name,
+  create and reopen projects. Each user has one persistent cloud Sandbox;
+  projects are directories under `/home/gem/Projects`. Creating another project
+  reuses the same Session and opening a project changes VS Code's `folder` path.
+  The image initializes Git, `AGENTS.md` and a Python environment per project.
+  The dedicated Private Tool must enable snapshots. Studio reuses the user's
+  stable cloud session identity and automatically restores its latest ready
+  snapshot after hibernation, rather than creating an empty replacement.
+  Project lists are read from the Sandbox filesystem and survive Studio restarts.
+  The editor opens directly at `/code-server/`; signed routing parameters remain
+  private/no-store. Returning to management keeps the editor mounted, while
+  switching directories opens the selected project directly. Volcengine
+  defaults to Chinese and BytePlus to English.
 
 - **Streaming chat** over the ADK `/run_sse` event stream. While an Agent is
   generating, the composer exposes a stop control that cancels only the active
@@ -53,8 +277,13 @@ server that `veadk frontend` launches — no separate backend.
   Navigating away from an active build requires confirmation and stops that
   build before leaving, while the conversation remains available until expiry.
   Stopping preserves received output and blocks the next submission until
-  cleanup finishes. Users can inspect generated text files and download the
-  complete ZIP (including binary assets) as soon as the source is ready.
+  cleanup finishes. An interrupted Codex turn is reported explicitly, including
+  when Studio discovers it after reconnecting; it does not publish a new version
+  or wait for the inactivity timeout. Users can inspect generated text files and
+  download the complete ZIP (including binary assets) as soon as the source is ready.
+  Active turns resume on the same thread after a connection drops. New task
+  progress resets the recovery allowance; reconnecting and reading unchanged
+  state do not extend the inactivity deadline or restart the task.
   Each completed build or optimization is also saved as an immutable project
   version in the private Studio TOS bucket. Users can reopen any saved version,
   view, download, deploy, delete, or restore it into a new Sandbox for another
@@ -74,6 +303,23 @@ server that `veadk frontend` launches — no separate backend.
   versions; any version can be restored into the intelligent-development flow
   for another intent-driven iteration after the temporary migration environment
   has ended.
+  Pencil icons beside project and version names open the existing-style name
+  dialog; the check icon saves and the close icon cancels. Names are normalized
+  and trimmed, allow 1–128 Unicode characters, and reject control/invisible
+  formatting characters and `<` / `>` on both client and server. They are plain
+  display text: renaming never changes source archives, validation reports,
+  version IDs/order, the latest-version marker, or deployed Runtime names.
+  Historical names remain compatible; optional display metadata is stored
+  separately from immutable versions. Optimization session titles retain the
+  existing 40-character limit without shortening the saved project name.
+  An optional migration-effect evaluation is off by default; when enabled,
+  users can enter 1–100 evaluation cases by hand or bulk paste, while expected
+  outcomes and criteria remain optional.
+  Standard evaluation uses three dimensions; users can instead select custom
+  dimensions before upload. The locked dataset and final HTML report are stored
+  as immutable owner-only TOS assets. The report is fetched and rendered in a
+  side drawer only after the user selects “View report,” and remains available
+  for download.
 - **Reasoning & tool calls** shown inline (collapsible "thinking", tool blocks).
 - **Agent context rail** keeps the selected Agent's description, model, tools,
   skills, and optional live multi-Agent topology together in the conversation's
@@ -223,8 +469,13 @@ server that `veadk frontend` launches — no separate backend.
   update form and remain in the signed-in user's browser draft so a resumed
   draft shows the same editable values. Disabling Feishu during an update
   removes both Runtime variables; leaving it enabled preserves or replaces
-  them with the submitted values. Long descriptions and prompts
-  scroll within bounded editors, while the sidebar stays pinned to the
+  them with the submitted values. Model configuration supports ordered fallback
+  models. Same-provider fallbacks stay compact and are emitted through the
+  existing `model_name=[primary, ...fallbacks]` contract; cross-provider
+  fallbacks are emitted as `ModelFallbackEndpoint` entries and reference API
+  keys by Runtime environment variable name so secret values stay out of YAML,
+  source, and local browser drafts. Long descriptions and
+  prompts scroll within bounded editors, while the sidebar stays pinned to the
   viewport. On narrow desktop windows, the structure, configuration, and debug
   panels stack vertically instead of squeezing the form. The deployment page
   pairs an inspectable Agent topology with a vertically aligned action rail for
@@ -261,19 +512,26 @@ server that `veadk frontend` launches — no separate backend.
   creation, and service publishing as separate deployment stages.
 - **Existing-project migration**: upload one local ZIP of at most 20 MiB from
   the add-Agent menu. Studio creates one user-owned Dev Sandbox Session with a
-  one-hour TTL, then asks the preinstalled Codex to perform read-only framework,
-  entry-point, and migration-boundary analysis. Migration starts only after the
-  user confirms the framework, entry point, and open questions. Structured
-  frameworks run the preinstalled `ak migrate`; Dify and Any projects run
-  `ak migrate --execution in-place` with Codex in the same Session. State,
-  logs, and artifacts remain only under
-  `/home/gem/.studio/migration/v1/` in that Session. Preview, download, and
-  Runtime deployment stop when the Session expires. Runtime deployment resolves
-  and verifies the owned Session artifact on the server instead of trusting
-  browser-provided files or entry points. AgentKit CLI `0.51.1` is only the
-  current baseline; these CLI changes must be released as a new version. The
-  Dev Sandbox image must pin that migration-capable release and its SHA256 at
-  image build time.
+  one-hour TTL, extended to two hours when effect evaluation is enabled, then
+  asks the preinstalled Codex to perform read-only framework, entry-point, and
+  migration-boundary analysis. Migration starts only after the user confirms
+  the framework, entry point, and open questions. Structured frameworks run the
+  preinstalled `ak migrate`; Dify and Any projects run
+  `ak migrate --execution in-place` with Codex in the same Session. Evaluation
+  deploys a temporary Runtime, checkpoints per-case execution as JSONL, judges
+  batches in one fresh resumable Codex thread, and always reconciles Runtime
+  cleanup before completing or cancelling. Reports show 0–100 display scores,
+  execution success, evidence coverage, N/A counts, low-scoring and failed
+  cases, versions, evidence severity, and cleanup status without a pass/fail
+  verdict. Each raw judge score is rounded half up to a 0–100 integer before
+  aggregation. Case scores and dimension averages use those integers; the total
+  uses the rounded dimension averages. Each average rounds half up and excludes
+  N/A values, matching report validation and low-scoring case rankings.
+  Evaluation failure never hides or rolls back the migration artifact.
+  Runtime deployment resolves and verifies the owned Session artifact on the
+  server instead of trusting browser-provided files or entry points. The Dev
+  Sandbox image must pin AgentKit CLI `0.52.16` and its SHA256 at image build
+  time.
 - **Built-in code execution**: selecting `代码执行` adds VeADK's `run_code`
   tool to generated Python and reveals the required `AGENTKIT_TOOL_ID` sandbox
   field and optional `AGENTKIT_TOOL_REGION` field below the built-in tool list.
@@ -485,6 +743,90 @@ Rebuild the UI from source after changing it:
 cd frontend && npm install && npm run build   # -> veadk/webui
 ```
 
+If an existing checkout reports missing `i18next` or `react-i18next` modules,
+run `npm ci` from `frontend/` to synchronize dependencies with the lockfile
+before rebuilding. Reusing another checkout's `node_modules` can retain older
+dependencies even when the current `package.json` already declares them
+
+### Identity-backed user management
+
+Deploy with `--super-admin <existing-user-email-or-uid>` to select the first
+super administrator. This is the only deployment role flag; `deploy --admin`
+and `deploy --developer` are no longer supported
+
+Without `--super-admin`, deployment first warns that user and permission
+management will be inconvenient without a super administrator and asks
+`是否继续? [y/N]`. Press Enter or enter `n` to cancel before cloud operations;
+enter `y` to continue. Setting `VEADK_STUDIO_SUPER_ADMIN` also satisfies this
+check. Read-only `--precheck-only` does not prompt
+
+```bash
+veadk studio deploy --user-pool-id <pool-uid> \
+  --allowed-client-id <client-uid> --vefaas-app-name <app-name> \
+  --super-admin <existing-user-email-or-uid>
+```
+
+On first deployment, omitting `--super-admin` stores an **admin** default in
+Identity, so existing and future signed-in users are administrators. Specifying
+it stores a **regular-user** default for other users. Existing Identity roles
+and the stored default are preserved on subsequent deployments and updates
+
+Only super administrators can see **User management** or call its APIs. They
+also inherit all administrator capabilities, including visibility into all
+agents and resources available to the Studio. The initial super administrator
+is protected from demotion. If an existing Studio has none, use
+`veadk studio update --vefaas-app-name <app-name> --super-admin <email-or-uid>`
+to assign the first one without resetting other users' roles
+
+Role changes validate the browser Origin against the public OAuth callback URL
+configured by deployment, so HTTPS gateways can forward to an internal HTTP
+server without blocking legitimate changes. Other origins remain blocked, and
+client-supplied forwarding headers cannot change the accepted origin. For a
+custom public domain, set `--oauth2-redirect-uri` to its OAuth callback URL
+
+For local use, pass `--oauth2-user-pool-uid`, `--oauth2-user-pool-client-uid`, and
+optionally `--super-admin` to `veadk studio`, with the selected provider's AK/SK
+available. `VEIDENTITY_REGION` selects the Identity region. Volcengine and
+BytePlus use their respective credentials and API hosts. Local sessions without
+an Identity pool retain the legacy `--admin` / `--developer` options
+
+Four `studio-<client-uid>-<role>` Identity groups store application roles; their
+metadata stores the default role and the protected user's immutable UID. These
+application roles do not assign cloud IAM roles. Each authenticated backend
+request reads current group membership. OIDC subjects map to Identity management
+UIDs; email cannot substitute for an authenticated subject. Refreshing the page
+shows a newly assigned role. Multiple role memberships fail closed to regular
+user access and can be repaired by assigning a role again
+
+Cloud frontend updates automatically migrate `VEADK_STUDIO_ADMINS` and
+`VEADK_STUDIO_DEVELOPERS` into Identity. Each UID, subject, email or username
+must match exactly one pool user before any assignments are written. Admin
+membership takes precedence over developer membership. With either legacy list,
+unlisted users remain regular users; with neither list and no initial super
+administrator, everyone retains admin access. Migration never promotes a legacy
+admin to super administrator automatically
+
+After successful migration, the update clears the old role environment values
+and enables Identity roles. Failures retain the old configuration. Updates and
+restarts preserve subsequent role edits in Identity. When the running updater
+predates this feature, the new runtime performs the migration before accepting
+requests and clears the Function configuration. Existing immutable revisions
+may still contain their original environment snapshot; the new runtime ignores
+those old lists once Identity initialization is complete
+
+Deploy and CLI update provision the required Identity permissions on the
+managed Studio IAM policy. In-app updates check permissions and do not change
+IAM policies. For an older updater that lacks this check, grant Identity
+user/group read and group create/update/add/remove-member permissions before
+upgrading, or use the new `veadk studio update` CLI. Missing permissions stop
+migration instead of falling back to static role lists
+
+Initialize a new pool/client on one instance before starting additional
+instances. Identity membership updates are not transactional across instances;
+conflicting edits are denied or reported for retry, and multiple memberships
+grant no additional privileges. Audit logs include the actor, target, old/new
+roles and operation ID
+
 Dev loop with hot reload (Vite proxies the API):
 
 ```bash
@@ -494,6 +836,21 @@ cd frontend && npm run dev  # http://localhost:5173
 
 The Vite development server proxies the ADK API routes, including the
 `/dev/apps/.../debug/trace` session-trace endpoint, to the backend on port 8000.
+
+For code projects, configure `STUDIO_WORKSPACE_TOOL_ID` with a dedicated
+snapshot-enabled Tool in the selected provider and region. The former
+single-project `/web/workspace-preview/session` preview is replaced by the
+personal-workspace project APIs.
+
+### Dependencies in a new worktree
+
+Run `npm ci` inside this worktree's `frontend/` directory before starting Vite or
+running the build. Each worktree needs dependencies matching its own lockfile;
+avoid linking another checkout's older `node_modules` directory. If TypeScript
+reports missing `i18next` or `react-i18next` despite their entries in
+`package.json`, install from the current lockfile with `npm ci`, then rerun the
+check. Do not remove imports or change source types to work around missing
+dependencies
 
 ## Branding
 
@@ -968,3 +1325,82 @@ to `DeleteSessionSnapshot`; it deletes the selected saved record only. If that
 logical agent has older records, the next latest record can appear on refresh.
 Failed records remain visible for deletion but cannot be opened. The UI uses
 agent terminology rather than exposing these control-plane resource types.
+
+### Studio Sandbox 工作区
+
+`veadk studio deploy` 默认创建或复用启用持久化快照的 Studio Sandbox Tool，
+新建规格为 8 核 CPU、16 GB 内存，更新时自动补建也使用相同规格。
+
+部署、命令行更新和云上 OTA 共用 Studio Sandbox 创建流程：BytePlus 使用内置
+`StudioEnv`，火山引擎继续使用 `Private`。创建时获取模型凭据并配置模型名称、
+地址、API Key、鉴权和快照；已有工作区绑定保持不变。
+
+按云环境和地域选择 `studio-sandbox-1.0.1` 镜像：
+
+| 云环境 | 地域 | 镜像 |
+| --- | --- | --- |
+| 火山引擎 | cn-beijing | `enterprise-public-cn-beijing.cr.volces.com/vefaas-public/agentkit-sandbox:studio-sandbox-1.0.1` |
+| 火山引擎 | cn-shanghai | `enterprise-cn-shanghai-cn-shanghai.cr.volces.com/vefaas-public/agentkit-sandbox:studio-sandbox-1.0.1` |
+| BytePlus | ap-southeast-1 | `enterprise-public-ap-southeast-1.cr.volces.com/vefaas-public/agentkit-sandbox:studio-sandbox-1.0.1` |
+
+可通过 `STUDIO_WORKSPACE_IMAGE` 指定区域可访问的其他镜像。启动命令使用镜像内的
+`/opt/gem/run.sh`，不再注入编辑器补丁。火山引擎默认中文，BytePlus 默认英文，
+模型配置沿用相应云环境的 Studio 配置。
+
+部署时 Studio Sandbox 与其他 Sandbox Tool 并行创建，并自动获取模型凭据，
+注入 `MODEL_AGENT_NAME`、`MODEL_AGENT_BASE_URL` 和 `MODEL_AGENT_API_KEY`。
+可通过 `--studio-sandbox-tool-id t-xxx` 或环境变量 `STUDIO_WORKSPACE_TOOL_ID`
+指定已配置好的持久化 Tool，此时直接复用，不重新创建或修改配置。
+部署通过 `STUDIO_WORKSPACE_TOOL_ID` 绑定工作区，系统信息显示对应 Tool ID。
+`veadk studio update` 和前端更新都会自动补齐缺失的持久化工作区 Tool，
+配置上述模型凭据并保存绑定，火山引擎和 BytePlus 均适用。
+已有 Tool ID 时保留绑定，避免切换个人项目存储；创建失败时更新报错，不忽略失败。
+从尚不支持补建的旧版本更新时，新版本首次启动会在后台补建并保存函数环境中的 Tool ID。
+补建期间代码项目暂不可用，失败会记录日志，可检查权限后重试更新。
+每位用户的项目共用自己的持久化 Session，打开项目时剩余不足一小时会通过
+`SetSessionTtl` 续期为八小时。标题栏显示倒计时，项目管理右侧支持全屏展开；
+内嵌浏览器使用当前页面的可用空间。
+
+### 工作区项目模板
+
+默认模板位于 `frontend/server/templates/python-agent/`，由 Studio 在创建项目时传入
+Sandbox。修改这些模板只需要更新 Studio，不需要重建镜像，也不会覆盖已有项目。
+`${project_name}` 和 `${agent_name}` 在创建时替换为项目名和合法 Python Agent 名。
+
+新镜像的 `studio-project-create NAME --json --template-stdin` 从标准输入接收
+`{"version":1,"files":{"main.py":"...","README.md":"..."}}` 格式的 UTF-8 文件项目，
+支持子目录。最多 256 个文件、1 MiB，不接受绝对路径、父目录跳转或 `.git`、`.venv`
+文件。工具仅将模板写入新项目，保留离线 Python 环境初始化和 `git init`。
+模板中的新依赖不会自动安装，运行环境依赖仍由镜像管理。
+
+其他地域需要显式设置 `STUDIO_WORKSPACE_IMAGE`，避免错误使用跨地域镜像。
+
+## 统一组件库与预览
+
+AI APP 新增 [ConversationFlow](src/components/ai-app/ConversationFlow/README.md)，覆盖思考、工具调用、子智能体移交、图表、文件与授权等消息场景，提供现有 Studio Turn 的适配入口和明暗主题
+消息区域复用固定高度 ScrollArea，默认 600px；用户消息靠右、模型回复靠左，不显示头像和名称，不包含输入框，可通过 height / scrollAreaProps 配置滚动区域
+
+共享组件目录见 [组件库说明](src/components/README.md)，预览目录见
+[Components Preview](src/components-preview/README.md)
+
+运行 `npm run dev:components` 打开独立组件预览页，按基础组件、复合组件、布局、节点组件和 AI APP 分组浏览 Figma 组件
+预览包含可复用控件、完整 Radio 卡片、表格、页面布局和 Prompt Input，提供持久化明暗主题、语义 Token 展示及从 TypeScript 接口生成的参数表
+主次按钮默认等高，Select 支持选项副标题，Prompt Input 支持提示词列表轮播；组件交互与使用约定见预览说明
+Menu 提供文字与箭头触发的面板菜单，支持分组、多级子菜单及可选图标，预览中可查看交互示例与参数表
+Toast 提供四种状态和自定义操作，通过 ToastProvider 与 useToast 管理堆叠、自动关闭及悬停暂停，继承明暗主题
+Loading 提供无限路径与圆环两种加载图形，ScrollArea 和卡片触底加载复用无限路径，支持明暗主题与减少动态效果偏好
+EmptyState 支持圆形背景内的 24px 图标、标题与详细说明，以及复用 Button 的横排操作组；ErrorState 使用相同尺寸的红色断链图标且无按钮，两者均可在基础组件预览中查看
+Button 支持 loading，加载时自动禁用且只显示 Ring 图标，保留按钮尺寸与无障碍名称
+LongRunningState 使用居中的双栏工作区，左侧展示任务进度与可回看的已完成步骤，右侧复用 Drawer 的明暗主题玻璃材质与 ScrollArea 展示详情；查看历史不会改变执行进度，可返回当前步骤继续跟随，详情即时替换并短暂淡入，代码日志复用 CodeBlock 高亮并支持隐藏行号
+资源页首次加载统一复用 Infinity Path，详情布局不包含 Sidebar
+ModalButton 复用 ModalLayout 并提供遮罩和进出动效；Drawer 以留有屏幕边距的浮动卡片打开；FileExplorer 组合文件树、CodeBlock 与 ScrollArea 展示文件内容
+FileExplorer 按文件名显示常用文件图标并选择高亮语言，file.language 可覆盖，支持自动格式化、折行及可选编辑保存；CodeBlock 支持自动语法高亮、手动颜色 token 和纯文本，复制保留传入文本
+Drawer 默认提供毛玻璃背景；FileUpload 复用 DashedZone 并提供文件选择与校验，Slider 支持原生拖动和键盘调整
+DatePicker 在基础组件中展示日期与日期时间选择；IndexLayout 在布局分组中展示首页；侧边栏会话示例位于复合组件的 Sidebar / 会话
+
+
+### 组件库侧栏预览
+
+`npm run dev:components` 启动独立组件库，在布局分组打开 App layout 可查看完整侧栏
+支持 240px / 56px 展开折叠、会话菜单、账号区域与默认深色的主题切换
+全屏入口为 `/components-preview/?fullscreen=app-layout#app-layout`，详见 [组件预览说明](src/components-preview/README.md)

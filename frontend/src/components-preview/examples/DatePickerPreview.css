@@ -1,0 +1,8 @@
+.date-picker-preview { max-width: 900px; }
+.date-picker-preview__examples { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 36px 48px; }
+.date-picker-preview__example { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; min-width: 0; }
+.date-picker-preview__example h3 { margin: 0 0 4px; color: var(--studio-text-primary); font-size: 14px; line-height: 22px; font-weight: 400; }
+.date-picker-preview__example .studio-form-field { width: 100%; min-width: 0; }
+.date-picker-preview__example .studio-date-picker { width: 100%; }
+.date-picker-preview__summary { margin: 0; color: var(--studio-text-secondary); font-size: 12px; line-height: 20px; overflow-wrap: anywhere; }
+@media (max-width: 850px) { .date-picker-preview__examples { grid-template-columns: minmax(0, 1fr); } }

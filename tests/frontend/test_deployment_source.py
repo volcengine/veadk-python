@@ -27,6 +27,7 @@ from frontend.server.deployment_source import (
     DeploymentSourceError,
     ensure_default_agentkit_dockerfile,
     extract_migration_source,
+    resolve_agentkit_entry_point,
     write_inline_source,
 )
 
@@ -45,18 +46,48 @@ def test_default_agentkit_dockerfile_uses_volcengine_fallbacks(
     assert ensure_default_agentkit_dockerfile(tmp_path, "volcengine") is True
 
     dockerfile = (tmp_path / "Dockerfile").read_text(encoding="utf-8")
-    huawei = "https://repo.huaweicloud.com/repository/pypi/simple"
-    aliyun = "https://mirrors.aliyun.com/pypi/simple/"
+    assert 'CMD ["python", "-m", "app"]' in dockerfile
+    tencent = "https://mirrors.cloud.tencent.com/pypi/simple"
+    ustc = "https://pypi.mirrors.ustc.edu.cn/simple"
     pypi = "https://pypi.org/simple"
-    assert dockerfile.index(huawei) < dockerfile.index(aliyun) < dockerfile.index(pypi)
+    assert dockerfile.index(tencent) < dockerfile.index(ustc) < dockerfile.index(pypi)
 
 
 def test_default_agentkit_dockerfile_preserves_custom_file(tmp_path: Path) -> None:
     custom = "FROM example.com/custom:latest\n"
     (tmp_path / "Dockerfile").write_text(custom, encoding="utf-8")
 
-    assert ensure_default_agentkit_dockerfile(tmp_path, "volcengine") is False
+    assert (
+        ensure_default_agentkit_dockerfile(
+            tmp_path,
+            "volcengine",
+            entry_point="agentkit_app.py",
+        )
+        is False
+    )
     assert (tmp_path / "Dockerfile").read_text(encoding="utf-8") == custom
+
+
+def test_default_agentkit_dockerfile_uses_explicit_entry_point_and_ignores_nested_file(
+    tmp_path: Path,
+) -> None:
+    nested_dockerfile = tmp_path / ".agentkit" / "Dockerfile"
+    nested_dockerfile.parent.mkdir()
+    nested_content = 'FROM example.com/nested:latest\nCMD ["python", "wrong.py"]\n'
+    nested_dockerfile.write_text(nested_content, encoding="utf-8")
+
+    assert (
+        ensure_default_agentkit_dockerfile(
+            tmp_path,
+            "volcengine",
+            entry_point="runtime/agentkit_app.py",
+        )
+        is True
+    )
+
+    dockerfile = (tmp_path / "Dockerfile").read_text(encoding="utf-8")
+    assert 'CMD ["python", "runtime/agentkit_app.py"]' in dockerfile
+    assert nested_dockerfile.read_text(encoding="utf-8") == nested_content
 
 
 def test_default_agentkit_dockerfile_keeps_byteplus_default_index(
@@ -66,8 +97,8 @@ def test_default_agentkit_dockerfile_keeps_byteplus_default_index(
 
     dockerfile = (tmp_path / "Dockerfile").read_text(encoding="utf-8")
     assert "RUN uv pip install -r requirements.txt" in dockerfile
-    assert "repo.huaweicloud.com" not in dockerfile
-    assert "mirrors.aliyun.com" not in dockerfile
+    assert "mirrors.cloud.tencent.com" not in dockerfile
+    assert "pypi.mirrors.ustc.edu.cn" not in dockerfile
 
 
 def test_inline_source_uses_manifest_entry_and_keeps_app_py_fallback(
@@ -99,6 +130,22 @@ def test_inline_source_uses_manifest_entry_and_keeps_app_py_fallback(
     assert entry == "runtime/agent.py"
     assert (nested / entry).read_text() == "app = object()\n"
     assert fallback == "app.py"
+
+
+def test_agentkit_entry_point_falls_back_to_migration_startup(
+    tmp_path: Path,
+) -> None:
+    entry = tmp_path / "runtime" / "migrated.py"
+    entry.parent.mkdir()
+    entry.write_text("app = object()\n", encoding="utf-8")
+
+    assert (
+        resolve_agentkit_entry_point(
+            tmp_path,
+            fallback="runtime/migrated.py",
+        )
+        == "runtime/migrated.py"
+    )
 
 
 @pytest.mark.parametrize(

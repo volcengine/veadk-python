@@ -42,6 +42,7 @@ from frontend.server.migration.models import (
 )
 from frontend.server.migration.routes import mount_migration_routes
 from frontend.server.migration.service import (
+    EVALUATION_SESSION_TTL_SECONDS,
     MIGRATION_ROOT,
     MIGRATION_SESSION_TTL_SECONDS,
     MIGRATION_UNSUPPORTED_MODEL_IDS,
@@ -51,6 +52,7 @@ from frontend.server.migration.service import (
     _activity_payload,
     _activity_secret_values,
     _analysis_result_message,
+    _start_analysis_command,
     _codex_event_extractor,
     _parse_activity_log,
     _public_environment_defaults,
@@ -188,20 +190,23 @@ def test_public_environment_defaults_require_integrity_and_hide_secrets() -> Non
 class FakeMigrationGateway:
     def __init__(self) -> None:
         self.enabled = True
+        self.provider = "volcengine"
+        self.model_id = "doubao-seed-2-1-pro-260628"
         self.sessions: dict[str, MigrationSandboxSession] = {}
         self.files: dict[tuple[str, str], bytes] = {}
         self.commands: list[tuple[str, str, str]] = []
         self.command_timeouts: list[tuple[str, int]] = []
         self.created: list[str] = []
         self.created_models: list[str | None] = []
+        self.created_ttls: list[int] = []
         self.deleted: list[str] = []
 
     def capabilities(self) -> dict[str, object]:
         return {
             "enabled": self.enabled,
             "reason": "" if self.enabled else "Dev Sandbox 暂不可用",
-            "provider": "volcengine",
-            "model": {"configured": True, "id": "doubao-test"},
+            "provider": self.provider,
+            "model": {"configured": True, "id": self.model_id},
         }
 
     def create_session(
@@ -216,9 +221,13 @@ class FakeMigrationGateway:
     ) -> MigrationSandboxSession:
         assert creator_name == "Owner"
         assert display_name == "存量迁移"
-        assert ttl_seconds == MIGRATION_SESSION_TTL_SECONDS
+        assert ttl_seconds in {
+            MIGRATION_SESSION_TTL_SECONDS,
+            EVALUATION_SESSION_TTL_SECONDS,
+        }
         self.created.append(task_id)
         self.created_models.append(model_id)
+        self.created_ttls.append(ttl_seconds)
         existing = self.sessions.get(task_id)
         if existing is not None:
             return existing
@@ -230,7 +239,11 @@ class FakeMigrationGateway:
             region="cn-beijing",
             status="Ready",
             created_at="2099-01-01T00:00:00Z",
-            expire_at="2099-01-01T01:00:00Z",
+            expire_at=(
+                "2099-01-01T02:00:00Z"
+                if ttl_seconds == EVALUATION_SESSION_TTL_SECONDS
+                else "2099-01-01T01:00:00Z"
+            ),
             owner_id=owner_id,
         )
         self.sessions[task_id] = session
@@ -595,10 +608,11 @@ def test_migration_capability_and_session_contract_are_bounded() -> None:
         "enabled": True,
         "reason": "",
         "provider": "volcengine",
-        "model": {"configured": True, "id": "doubao-test"},
+        "model": {"configured": True, "id": "doubao-seed-2-1-pro-260628"},
         "unsupportedModelIds": ["deepseek-v4-pro-260425"],
         "maxUploadBytes": 20 * 1024 * 1024,
         "sessionTtlSeconds": 3600,
+        "evaluationSessionTtlSeconds": 7200,
         "frameworks": [
             "langchain",
             "langgraph",
@@ -636,7 +650,43 @@ def test_migration_capability_and_session_contract_are_bounded() -> None:
     assert "model_id" not in request
     assert "modelId" not in created
     assert gateway.created_models == [None]
+    assert gateway.created_ttls == [3600]
     assert "owner-1" not in json.dumps(request)
+
+
+def test_evaluation_enabled_task_uses_two_hour_session_and_locked_config() -> None:
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway)
+
+    created = service.create_task(
+        CreateMigrationTaskBody.model_validate(
+            {
+                "sourceFileName": "support-agent.zip",
+                "evaluation": {"enabled": True, "locale": "en-US"},
+            }
+        ),
+        "owner-1",
+        "Owner",
+    )
+
+    task_id = str(created["id"])
+    request = json.loads(
+        gateway.files[(task_id, f"{MIGRATION_ROOT}/request/task.json")]
+    )
+    assert gateway.created_ttls == [7200]
+    assert created["sessionTtlSeconds"] == 7200
+    assert created["evaluation"] == {
+        "enabled": True,
+        "preset": "standard",
+        "dimensions": [
+            "semantic_fidelity",
+            "output_contract",
+            "workflow_tool_fidelity",
+        ],
+        "locale": "en-US",
+    }
+    assert request["session_ttl_seconds"] == 7200
+    assert request["evaluation"] == created["evaluation"]
 
 
 def test_selected_model_is_immutable_session_configuration() -> None:
@@ -678,6 +728,60 @@ def test_migration_rejects_a_known_incompatible_codex_model() -> None:
 
     assert unsupported.value.code == "MIGRATION_MODEL_UNSUPPORTED"
     assert unsupported.value.status_code == 400
+    assert gateway.created_models == []
+
+
+def test_migration_rejects_any_model_outside_provider_allowlist() -> None:
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway)
+
+    with pytest.raises(MigrationError) as unsupported:
+        service.create_task(
+            CreateMigrationTaskBody(
+                sourceFileName="support-agent.zip",
+                modelId="unlisted-model",
+            ),
+            "owner-1",
+            "Owner",
+        )
+
+    assert unsupported.value.code == "MIGRATION_MODEL_UNSUPPORTED"
+    assert unsupported.value.status_code == 400
+    assert gateway.created_models == []
+
+
+def test_migration_uses_byteplus_specific_model_allowlist() -> None:
+    gateway = FakeMigrationGateway()
+    gateway.provider = "byteplus"
+    gateway.model_id = "dola-seed-2-1-turbo-260628"
+    service = MigrationService(gateway)
+
+    created = service.create_task(
+        CreateMigrationTaskBody(
+            sourceFileName="support-agent.zip",
+            modelId="deepseek-v4-pro-ga-260813",
+        ),
+        "owner-1",
+        "Owner",
+    )
+
+    assert created["modelId"] == "deepseek-v4-pro-ga-260813"
+    assert gateway.created_models == ["deepseek-v4-pro-ga-260813"]
+
+
+def test_migration_rejects_default_model_outside_provider_allowlist() -> None:
+    gateway = FakeMigrationGateway()
+    gateway.model_id = "unlisted-default-model"
+    service = MigrationService(gateway)
+
+    with pytest.raises(MigrationError) as unsupported:
+        service.create_task(
+            CreateMigrationTaskBody(sourceFileName="support-agent.zip"),
+            "owner-1",
+            "Owner",
+        )
+
+    assert unsupported.value.code == "MIGRATION_MODEL_UNSUPPORTED"
     assert gateway.created_models == []
 
 
@@ -1626,7 +1730,10 @@ def test_capabilities_expose_provider_model_and_per_session_runtime_checks() -> 
     capability = MigrationService(FakeMigrationGateway()).capabilities()
 
     assert capability["provider"] == "volcengine"
-    assert capability["model"] == {"configured": True, "id": "doubao-test"}
+    assert capability["model"] == {
+        "configured": True,
+        "id": "doubao-seed-2-1-pro-260628",
+    }
     assert capability["unsupportedModelIds"] == sorted(MIGRATION_UNSUPPORTED_MODEL_IDS)
     assert capability["cli"] == {
         "minimumVersion": "0.52.1",
@@ -2359,25 +2466,44 @@ def test_agentkit_gateway_waits_for_running_bash_command(
     assert calls[2][1]["stderr_offset"] == 2
 
 
-def test_agentkit_gateway_accepts_confirmed_background_launch(
+def test_agentkit_gateway_waits_for_confirmed_migration_launch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[dict[str, object]] = []
+    responses = [
+        {
+            "data": {
+                "session_id": "bash-session",
+                "command_id": "command-1",
+                "status": "running",
+                "stdout": "",
+                "offset": 0,
+                "stderr_offset": 0,
+            }
+        },
+        {
+            "data": {
+                "session_id": "bash-session",
+                "command": {
+                    "command_id": "command-1",
+                    "status": "running",
+                    "exit_code": None,
+                },
+                "stdout": "VEADK_MIGRATION_EXECUTION_STARTED_V1\n",
+                "offset": 39,
+                "stderr_offset": 0,
+            }
+        },
+    ]
 
     class Response:
         status_code = 200
 
+        def __init__(self, payload: dict[str, object]) -> None:
+            self._payload = payload
+
         def json(self) -> dict[str, object]:
-            return {
-                "data": {
-                    "session_id": "bash-session",
-                    "command_id": "command-1",
-                    "status": "running",
-                    "stdout": "VEADK_MIGRATION_ANALYSIS_STARTED_V1\n",
-                    "offset": 36,
-                    "stderr_offset": 0,
-                }
-            }
+            return self._payload
 
     def post(
         _url: str,
@@ -2386,7 +2512,7 @@ def test_agentkit_gateway_accepts_confirmed_background_launch(
         timeout: object,
     ) -> Response:
         calls.append({"json": json, "timeout": timeout})
-        return Response()
+        return Response(responses.pop(0))
 
     monkeypatch.setattr("frontend.server.migration.gateway.requests.post", post)
     gateway = MigrationSandboxGateway(
@@ -2408,18 +2534,98 @@ def test_agentkit_gateway_accepts_confirmed_background_launch(
 
     result = gateway.execute_bash(
         session,
-        "start-analysis",
-        operation="start_analysis",
+        "start-migration",
+        operation="start_migration",
         timeout_seconds=30,
     )
 
     assert result["status"] == "accepted"
-    assert len(calls) == 1
+    assert len(calls) == 2
     assert calls[0]["json"] == {
         "timeout": 1,
         "hard_timeout": 30,
-        "command": "start-analysis",
+        "command": "start-migration",
     }
+    assert calls[1]["json"] == {
+        "session_id": "bash-session",
+        "command_id": "command-1",
+        "offset": 0,
+        "stderr_offset": 0,
+        "wait": True,
+        "wait_timeout": 30,
+    }
+
+
+def test_agentkit_gateway_observes_migration_launch_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    responses = [
+        {
+            "data": {
+                "session_id": "bash-session",
+                "command_id": "command-1",
+                "status": "running",
+                "stdout": "",
+                "offset": 0,
+                "stderr_offset": 0,
+            }
+        },
+        {
+            "data": {
+                "session_id": "bash-session",
+                "command": {
+                    "command_id": "command-1",
+                    "status": "completed",
+                    "exit_code": 1,
+                },
+                "stdout": "",
+                "stderr": "failed to launch migration",
+                "offset": 0,
+                "stderr_offset": 27,
+            }
+        },
+    ]
+
+    class Response:
+        status_code = 200
+
+        def __init__(self, payload: dict[str, object]) -> None:
+            self._payload = payload
+
+        def json(self) -> dict[str, object]:
+            return self._payload
+
+    monkeypatch.setattr(
+        "frontend.server.migration.gateway.requests.post",
+        lambda *_args, **_kwargs: Response(responses.pop(0)),
+    )
+    gateway = MigrationSandboxGateway(
+        tool_id="tool-dev",
+        region="cn-beijing",
+        tools_client_factory=lambda region: None,
+    )
+    session = MigrationSandboxSession(
+        tool_id="tool-dev",
+        session_id="session-1",
+        task_id="migration-v1-" + "1" * 32,
+        endpoint="https://sandbox.invalid/proxy",
+        region="cn-beijing",
+        status="Ready",
+        created_at="2026-08-11T08:00:00Z",
+        expire_at="2026-08-11T09:00:00Z",
+        owner_id="owner-1",
+    )
+
+    with pytest.raises(MigrationGatewayError) as raised:
+        gateway.execute_bash(
+            session,
+            "start-migration",
+            operation="start_migration",
+            timeout_seconds=30,
+        )
+
+    assert raised.value.code == "MIGRATION_REMOTE_EXEC_FAILED"
+    assert responses == []
 
 
 @pytest.mark.parametrize(
@@ -2481,8 +2687,10 @@ def test_agentkit_gateway_rejects_unsuccessful_bash_terminal_states(
     assert raised.value.retryable is False
 
 
+@pytest.mark.parametrize("operation", ["prepare_source", "start_migration"])
 def test_agentkit_gateway_rejects_incomplete_running_bash_identity(
     monkeypatch: pytest.MonkeyPatch,
+    operation: str,
 ) -> None:
     class Response:
         status_code = 200
@@ -2522,7 +2730,7 @@ def test_agentkit_gateway_rejects_incomplete_running_bash_identity(
         gateway.execute_bash(
             session,
             "prepare-project",
-            operation="prepare_source",
+            operation=operation,
             timeout_seconds=120,
         )
 
@@ -2723,6 +2931,15 @@ def test_codex_analysis_uses_the_last_completed_agent_message(
 
     assert extracted.returncode == 0, extracted.stderr
     assert json.loads(result.read_text(encoding="utf-8")) == {"attempt": 2}
+
+
+def test_codex_analysis_accepts_a_valid_final_message_after_nonzero_cli_exit() -> None:
+    command = _start_analysis_command("migration-v1-" + "1" * 32, 1)
+
+    assert 'if [ "$code" -eq 0 ] &&' not in command
+    assert "python3 -c" in command
+    assert "analysis_result_status=" in command
+    assert "code=0" in command
 
 
 def test_codex_analysis_rejects_an_event_stream_without_an_agent_message(
@@ -3004,6 +3221,31 @@ def test_confirmed_migration_uses_the_one_cli_contract(
         assert "CODEX_API_KEY" not in command
 
 
+def test_confirm_returns_after_dispatch_without_refreshing_remote_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway)
+    task_id, _ = create_uploaded_task(service)
+    mark_analysis_ready(gateway, task_id, framework="dify", entry=None)
+    body = confirmation_body(
+        gateway,
+        task_id,
+        framework="dify",
+        entry=None,
+    )
+
+    def unexpected_refresh(*_args: object, **_kwargs: object) -> dict[str, object]:
+        raise AssertionError("confirm must not refresh remote state after dispatch")
+
+    monkeypatch.setattr(service, "get_task", unexpected_refresh)
+
+    started = service.confirm(task_id, "owner-1", body)
+
+    assert started["state"] == "migrating"
+    assert gateway.commands[-1][1] == "start_migration"
+
+
 def test_analysis_answers_reject_missing_or_unknown_question_ids() -> None:
     gateway = FakeMigrationGateway()
     service = MigrationService(gateway)
@@ -3076,7 +3318,7 @@ def test_analysis_answers_reject_missing_or_unknown_question_ids() -> None:
     ) == 1
 
 
-def test_structured_migration_runs_in_the_isolated_delivery_project() -> None:
+def test_structured_migration_prepares_the_delivery_project_in_the_background() -> None:
     gateway = FakeMigrationGateway()
     service = MigrationService(gateway)
     task_id, _ = create_uploaded_task(service)
@@ -3091,9 +3333,21 @@ def test_structured_migration_runs_in_the_isolated_delivery_project() -> None:
     command = gateway.commands[-1][2]
     assert f"ak migrate {MIGRATION_ROOT}/output/veadk --framework langchain" in command
     assert "--output ." in command
-    assert (
+    copy_command = (
         f"cp -a {MIGRATION_ROOT}/workspace/source {MIGRATION_ROOT}/output/veadk"
-    ) in command
+    )
+    background_launch = command[
+        command.index("setsid bash -c ") : command.index(
+            " </dev/null >/dev/null 2>&1 &"
+        )
+    ]
+    outer_launch = (
+        command[: command.index("setsid bash -c ")]
+        + command[command.index(" </dev/null >/dev/null 2>&1 &") :]
+    )
+    assert copy_command in background_launch
+    assert copy_command not in outer_launch
+    assert "process-exit.json" in background_launch
 
 
 def test_structured_migration_does_not_prepare_a_verification_runtime() -> None:
@@ -3433,7 +3687,7 @@ def test_service_recovers_terminal_state_and_verified_artifact_from_session() ->
 
 
 @pytest.mark.parametrize(
-    ("delivery_state", "verification", "deploy_ready"),
+    ("delivery_state", "verification", "cli_deploy_ready", "deploy_ready"),
     [
         (
             "succeeded",
@@ -3441,6 +3695,7 @@ def test_service_recovers_terminal_state_and_verified_artifact_from_session() ->
                 "status": "passed",
                 "checks": [{"name": "import", "status": "passed"}],
             },
+            False,
             True,
         ),
         (
@@ -3456,13 +3711,15 @@ def test_service_recovers_terminal_state_and_verified_artifact_from_session() ->
                 ],
             },
             False,
+            False,
         ),
     ],
 )
-def test_materialize_deployment_honors_cli_readiness_and_verifies_owner(
+def test_materialize_deployment_applies_structured_terminal_readiness(
     tmp_path: Path,
     delivery_state: str,
     verification: dict[str, object],
+    cli_deploy_ready: bool,
     deploy_ready: bool,
 ) -> None:
     gateway = FakeMigrationGateway()
@@ -3538,7 +3795,7 @@ def test_materialize_deployment_honors_cli_readiness_and_verifies_owner(
                 "state": "ready",
                 "preview_ready": True,
                 "download_ready": True,
-                "deploy_ready": deploy_ready,
+                "deploy_ready": cli_deploy_ready,
             },
             "updated_at": "2026-08-11T08:20:00Z",
         }
@@ -3781,6 +4038,73 @@ def test_recent_process_exit_waits_for_remote_delivery_state_visibility() -> Non
     assert expired_settle_window["error"]["code"] == "MIGRATION_DELIVERY_MISSING"
 
 
+def test_recent_process_exit_preserves_visible_active_delivery_state() -> None:
+    now = datetime(2026, 8, 11, 8, 30, tzinfo=timezone.utc).timestamp()
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway, clock=lambda: now)
+    task_id, _ = create_uploaded_task(service)
+    mark_analysis_ready(gateway, task_id)
+    service.confirm(
+        task_id,
+        "owner-1",
+        confirmation_body(gateway, task_id),
+    )
+    gateway.files[
+        (task_id, f"{MIGRATION_ROOT}/diagnostics/migration/process-exit.json")
+    ] = json.dumps(
+        {"schema_version": 1, "exit_code": 0, "finished_at": int(now)}
+    ).encode()
+
+    task = MigrationService(
+        gateway,
+        clock=lambda: now + 29,
+    ).get_task(task_id, "owner-1")
+
+    assert task["state"] == "migrating"
+    assert task["message"] == "正在迁移项目"
+
+
+@pytest.mark.parametrize(
+    ("exit_code", "expected_code"),
+    [
+        (0, "MIGRATION_DELIVERY_MISSING"),
+        (1, "MIGRATION_PROCESS_FAILED"),
+    ],
+)
+def test_process_exit_overrides_stale_active_delivery_after_settle_window(
+    exit_code: int,
+    expected_code: str,
+) -> None:
+    now = datetime(2026, 8, 11, 8, 30, tzinfo=timezone.utc).timestamp()
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway, clock=lambda: now)
+    task_id, _ = create_uploaded_task(service)
+    mark_analysis_ready(gateway, task_id)
+    service.confirm(
+        task_id,
+        "owner-1",
+        confirmation_body(gateway, task_id),
+    )
+    gateway.files[
+        (task_id, f"{MIGRATION_ROOT}/diagnostics/migration/process-exit.json")
+    ] = json.dumps(
+        {
+            "schema_version": 1,
+            "exit_code": exit_code,
+            "finished_at": int(now),
+        }
+    ).encode()
+
+    task = MigrationService(
+        gateway,
+        clock=lambda: now + 30,
+    ).get_task(task_id, "owner-1")
+
+    assert task["state"] == "failed"
+    assert task["error"]["code"] == expected_code
+    assert task["error"]["retryable"] is False
+
+
 def test_started_migration_waits_for_its_first_delivery_status() -> None:
     gateway = FakeMigrationGateway()
     service = MigrationService(gateway)
@@ -3899,11 +4223,8 @@ def test_terminal_delivery_requires_a_ready_artifact_contract() -> None:
     assert raised.value.retryable is False
 
 
-@pytest.mark.parametrize(
-    "state",
-    ["succeeded", "succeeded_with_warnings", "partial"],
-)
-def test_terminal_delivery_preserves_cli_deployment_readiness(state: str) -> None:
+@pytest.mark.parametrize("state", ["succeeded", "succeeded_with_warnings"])
+def test_structured_success_is_deployable_without_cli_verification(state: str) -> None:
     gateway = FakeMigrationGateway()
     service = MigrationService(gateway)
     task_id, _ = create_uploaded_task(service)
@@ -3932,6 +4253,9 @@ def test_terminal_delivery_preserves_cli_deployment_readiness(state: str) -> Non
             }
         ).encode()
     )
+    gateway.files[
+        (task_id, f"{MIGRATION_ROOT}/diagnostics/migration/process-exit.json")
+    ] = json.dumps({"schema_version": 1, "exit_code": 1}).encode()
 
     task = service.get_task(task_id, "owner-1")
 
@@ -3940,8 +4264,46 @@ def test_terminal_delivery_preserves_cli_deployment_readiness(state: str) -> Non
         "state": "ready",
         "previewReady": True,
         "downloadReady": True,
-        "deployReady": False,
+        "deployReady": True,
     }
+
+
+@pytest.mark.parametrize("cli_deploy_ready", [False, True])
+def test_agentic_success_preserves_cli_deployment_readiness(
+    cli_deploy_ready: bool,
+) -> None:
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway)
+    task_id, _ = create_uploaded_task(service)
+    mark_analysis_ready(gateway, task_id, framework="any", entry=None)
+    service.confirm(
+        task_id,
+        "owner-1",
+        confirmation_body(gateway, task_id, framework="any", entry=None),
+    )
+    gateway.files[(task_id, f"{MIGRATION_ROOT}/delivery/migration-status.json")] = (
+        json.dumps(
+            {
+                "schema_version": 1,
+                "run_id": task_id,
+                "sequence": 4,
+                "state": "succeeded",
+                "phase": "completed",
+                "message": "Migration artifact is ready",
+                "artifact": {
+                    "state": "ready",
+                    "preview_ready": True,
+                    "download_ready": True,
+                    "deploy_ready": cli_deploy_ready,
+                },
+                "updated_at": "2026-08-11T08:20:00Z",
+            }
+        ).encode()
+    )
+
+    task = service.get_task(task_id, "owner-1")
+
+    assert task["artifact"]["deployReady"] is cli_deploy_ready
 
 
 def test_partial_delivery_cannot_advertise_deployment_readiness() -> None:
@@ -4053,6 +4415,34 @@ def test_broken_session_does_not_fail_the_entire_task_list() -> None:
     broken = next(task for task in listed if task["id"] == broken_id)
     assert broken["state"] == "failed"
     assert broken["error"]["retryable"] is False
+
+
+def test_retryable_session_read_does_not_fake_a_failed_task(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway)
+    service.create_task(
+        CreateMigrationTaskBody(sourceFileName="support-agent.zip"),
+        "owner-1",
+        "Owner",
+    )
+
+    def fail_temporarily(_session: MigrationSandboxSession) -> dict[str, object]:
+        raise MigrationError(
+            "MIGRATION_REMOTE_READ_FAILED",
+            "远端状态暂时不可读。",
+            status_code=502,
+            retryable=True,
+        )
+
+    monkeypatch.setattr(service, "_task_from_session", fail_temporarily)
+
+    with pytest.raises(MigrationError) as raised:
+        service.list_tasks("owner-1")
+
+    assert raised.value.code == "MIGRATION_REMOTE_READ_FAILED"
+    assert raised.value.retryable is True
 
 
 def test_invalid_analysis_keeps_immutable_request_metadata_in_task_list() -> None:

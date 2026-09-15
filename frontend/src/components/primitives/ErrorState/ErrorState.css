@@ -1,0 +1,4 @@
+.studio-error-state .studio-empty-state__icon {
+  color: var(--studio-danger, #ed9696);
+  background: color-mix(in srgb, var(--studio-danger, #ed9696) 12%, transparent);
+}

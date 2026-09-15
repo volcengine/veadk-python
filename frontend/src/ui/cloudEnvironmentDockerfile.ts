@@ -8,8 +8,8 @@ const AGENTKIT_BASE_IMAGES: Record<CloudProvider, string> = {
     "agentkit-prod-public-ap-southeast-1.cr.bytepluses.com/base/py-simple:python3.12-bookworm-slim-latest",
 };
 const VOLCENGINE_PYPI_INDEXES = [
-  "https://repo.huaweicloud.com/repository/pypi/simple",
-  "https://mirrors.aliyun.com/pypi/simple/",
+  "https://mirrors.cloud.tencent.com/pypi/simple",
+  "https://pypi.mirrors.ustc.edu.cn/simple",
   "https://pypi.org/simple",
 ] as const;
 

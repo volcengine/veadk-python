@@ -168,7 +168,10 @@ def stage_studio_dependency_wheels(
     staged: list[Path] = []
     for dependency in studio_dependency_wheels(provider) + tuple(extra_wheels):
         if source_dir is None:
-            content = _download_dependency(dependency)
+            content = _download_dependency(
+                dependency,
+                prefer_primary=provider == "byteplus",
+            )
         else:
             source = source_dir / dependency.filename
             if not source.is_file():
@@ -231,9 +234,11 @@ def stage_studio_agentkit_cli_archive(
 
 def _download_dependency(
     dependency: StudioDependencyWheel | StudioDependencySource,
+    *,
+    prefer_primary: bool = False,
 ) -> bytes:
     last_error: OSError | ValueError | None = None
-    for url in _download_urls(dependency.url):
+    for url in _download_urls(dependency.url, prefer_primary=prefer_primary):
         try:
             with urllib.request.urlopen(url, timeout=60) as response:
                 content = response.read()
@@ -247,11 +252,12 @@ def _download_dependency(
     raise last_error
 
 
-def _download_urls(url: str) -> tuple[str, ...]:
+def _download_urls(url: str, *, prefer_primary: bool = False) -> tuple[str, ...]:
     if not url.startswith(f"{_PYPI_FILE_HOST}/packages/"):
         return (url,)
     path = url.removeprefix(_PYPI_FILE_HOST)
-    return tuple(f"{host}{path}" for host in _PYPI_MIRROR_HOSTS) + (url,)
+    mirrors = tuple(f"{host}{path}" for host in _PYPI_MIRROR_HOSTS)
+    return (url, *mirrors) if prefer_primary else (*mirrors, url)
 
 
 def write_studio_dependency_manifest(destination: Path) -> None:

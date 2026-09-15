@@ -314,48 +314,56 @@ frontend/service/studio_release_server/deploy.sh
 
 ### Studio 角色与 Runtime 权限
 
-`--admin` 和 `--developer` 分别接收逗号分隔的用户名或 OAuth 邮箱。空格会被
-忽略，身份匹配不区分大小写；同一身份同时出现在两个名单时，`admin` 优先。
-本地启动示例：
-
-```bash
-veadk studio \
-  --admin "admin,admin@example.com" \
-  --developer "alice,alice@example.com,bob"
-```
-
-也可以分别通过 `VEADK_STUDIO_ADMINS` 和 `VEADK_STUDIO_DEVELOPERS` 环境变量
-设置这两个名单。
-
-部署 Studio 时使用相同参数：
+部署时唯一的角色参数是 `--super-admin`，指定用户池内已有用户的邮箱或 UID：
 
 ```bash
 veadk studio deploy \
   --user-pool-id <pool-id> \
   --allowed-client-id <client-id> \
   --vefaas-app-name <app-name> \
-  --admin "admin@example.com" \
-  --developer "alice@example.com,bob@example.com"
+  --super-admin "owner@example.com"
 ```
 
-两项都不传时，所有登录用户都按管理员（`admin`）处理。只要传入任一名单就会启用
-角色权限；未命中名单的身份是普通用户。
+首次部署不指定超级管理员时，所有登录用户默认都是管理员，包括后续新增用户；指定后，
+其余用户默认是普通用户。默认角色和用户角色都存储在 Identity 中，后续部署和更新保留
+已保存的角色，不会重新套用初始化配置
 
-| 功能 | admin | developer | 普通用户 |
-| :-- | :-- | :-- | :-- |
-| 添加、调试和部署 Agent | 允许 | 允许 | 不允许；侧边栏隐藏添加/管理入口 |
-| 查看和连接 Runtime | 全部 Runtime | 仅自己创建的 Runtime | 仅自己创建的 Runtime |
-| 管理或删除 Runtime | 全部 Studio 管理的 Runtime | 仅自己创建的 Runtime | 不允许 |
+只有超级管理员可见并可使用“用户管理”，可查询当前用户池的用户、修改角色。
+超级管理员拥有管理员的全部权限，初始超级管理员不能在 Studio 内降级。
+已有部署没有超级管理员时，可运行
+`veadk studio update --vefaas-app-name <app-name> --super-admin <email-or-uid>`
+设置首位超级管理员，其他人的角色保持不变
 
-侧边栏底部的账号区域会在用户名下显示 OAuth 邮箱，并在用户名右侧用紫色、黄色、
-绿色徽标分别标识管理员、开发者和普通用户。
+| 功能 | super admin | admin | developer | 普通用户 |
+| :-- | :-- | :-- | :-- | :-- |
+| 用户管理 | 允许 | 不允许 | 不允许 | 不允许 |
+| 添加、调试和部署 Agent | 允许 | 允许 | 允许 | 不允许 |
+| 查看和连接 Runtime | 全部 | 全部 | 仅自己创建的 | 仅自己创建的 |
+| 管理或删除 Runtime | 全部 Studio 管理的 | 全部 Studio 管理的 | 仅自己创建的 | 不允许 |
+
+新版 Studio 在每次已认证的后端请求中读取 Identity 用户组，角色修改后刷新页面即可
+看到变化。账号区域显示对应角色徽标
+
+云上页面更新会把旧环境变量 `VEADK_STUDIO_ADMINS`、`VEADK_STUDIO_DEVELOPERS`
+中的账号逐一匹配到 Identity，保留原角色，成功后清空旧角色变量。名单中的账号必须
+唯一匹配；匹配失败或权限不足时停止迁移并保留旧配置。旧名单为空时保留“全部为管理员”；
+有名单时，其余人仍是普通用户。不会自动将旧管理员升级成超级管理员
+
+旧更新器不包含迁移逻辑时，由新版首次启动完成迁移并清理 Function 配置。
+已发布 Revision 的环境快照可能仍保留原值，但 Identity 初始化完成后不会再次覆盖角色。
+旧部署需要 Identity 用户组读写权限；可先补齐权限，或使用新版 CLI 更新，由 CLI 更新
+Studio 托管的 IAM 策略。火山引擎和 BytePlus 遵循同样规则
+
+本地未配置 Identity 用户池时，仍兼容 `veadk studio --admin ... --developer ...`；
+`deploy` 已移除这两个参数
+
 管理 Agent 页面默认展示北京区域的 Runtime，也可以切换到上海。
 新会话发送首条消息后会立即进入对话页面；服务端会话创建期间，会话 ID 显示为
 “初始化中”。
 
 Runtime 归属由服务端在创建时记录，不使用浏览器提交的作者字段做授权。升级前创建
 的 Runtime 会兼容 `veadk:author` 归属标签；同时缺少 `veadk:owner` 和
-`veadk:author` 归属标签的历史 Runtime 仅 admin 可见。
+`veadk:author` 归属标签的历史 Runtime 仅管理员和超级管理员可见。
 
 <Callout type="warning">
   本地用户名保存在浏览器中，可以被用户修改或冒充，只适合本地开发和功能验证。

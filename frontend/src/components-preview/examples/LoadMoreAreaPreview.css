@@ -1,0 +1,3 @@
+.load-more-preview-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.load-more-preview-grid > .studio-resource-card { width: 100%; min-width: 0; }
+@media (max-width: 800px) { .load-more-preview-grid { grid-template-columns: minmax(0, 1fr); } }

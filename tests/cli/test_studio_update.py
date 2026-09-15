@@ -41,6 +41,19 @@ _PNG = b"\x89PNG\r\n\x1a\n" + b"0" * 32
 
 @pytest.fixture(autouse=True)
 def _clear_provider_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "frontend.server.user_management.deployment.package_supports_identity_roles",
+        lambda path: True,
+    )
+    monkeypatch.setattr(
+        "frontend.server.user_management.deployment.prepare_identity_roles",
+        lambda **kwargs: {
+            "VEADK_STUDIO_IDENTITY_ROLES": "1",
+            "VEADK_STUDIO_ADMINS": "",
+            "VEADK_STUDIO_DEVELOPERS": "",
+            "VEADK_STUDIO_SUPER_ADMIN": "",
+        },
+    )
     monkeypatch.delenv("AGENTKIT_CLOUD_PROVIDER", raising=False)
     monkeypatch.delenv("CLOUD_PROVIDER", raising=False)
     monkeypatch.delenv("REGION", raising=False)
@@ -470,9 +483,11 @@ def test_studio_update_preserves_branding_and_updates_existing_ids(
         *,
         frontend_assets: Path,
         provider: str,
+        offline_runtime: bool,
     ) -> str:
         captured["frontend"] = (frontend_assets / "index.html").read_text()
         captured["requirements_provider"] = provider
+        captured["offline_runtime"] = offline_runtime
         return "./veadk.whl\n"
 
     def _write_package(
@@ -481,11 +496,13 @@ def test_studio_update_preserves_branding_and_updates_existing_ids(
         requirements: str,
         site_logo: SiteLogo | None,
         provider: str = "volcengine",
+        bundle_agentkit_cli: bool = True,
     ) -> None:
         package_dir.mkdir(parents=True, exist_ok=True)
         (package_dir / "run.sh").write_text("run", encoding="utf-8")
         captured["requirements"] = requirements
         captured["logo"] = site_logo
+        captured["bundle_agentkit_cli"] = bundle_agentkit_cli
 
     monkeypatch.setattr(
         "veadk.cli.studio_package.build_frontend_assets", _build_frontend
@@ -529,8 +546,10 @@ def test_studio_update_preserves_branding_and_updates_existing_ids(
     assert result.exit_code == 0, result.output
     assert captured["frontend"] == "built"
     assert captured["requirements_provider"] == "volcengine"
+    assert captured["offline_runtime"] is False
     assert captured["requirements"] == "./veadk.whl\n"
     assert captured["logo"] == logo
+    assert captured["bundle_agentkit_cli"] is False
     assert captured["scope"] == {
         "access_key": "ak",
         "secret_key": "sk",
@@ -545,6 +564,7 @@ def test_studio_update_preserves_branding_and_updates_existing_ids(
     assert update["function_id"] == "function-app-id"
     assert update["disable_gateway_cors"] is True
     assert update["environment_overrides"] == {
+        "STUDIO_WORKSPACE_TOOL_ID": "studio-workspace-tool",
         "AGENTKIT_SANDBOX_REGION": "cn-beijing",
         "VEADK_STUDIO_CRONJOB_SCHEDULER_BASE": "studio-app",
         "VEADK_STUDIO_KNOWLEDGE_SIGNING_KEY": ANY,
@@ -560,6 +580,7 @@ def test_studio_update_preserves_branding_and_updates_existing_ids(
     assert scheduler_call["provider"] == "volcengine"
     assert scheduler_call["project"] == "default"
     assert scheduler_call["environment_overrides"] == {
+        "STUDIO_WORKSPACE_TOOL_ID": "studio-workspace-tool",
         "AGENTKIT_SANDBOX_REGION": "cn-beijing",
         "VEADK_STUDIO_KNOWLEDGE_SIGNING_KEY": ANY,
         "VEADK_STUDIO_HARNESS_SIDECAR_BASE_IMAGE": (
@@ -928,8 +949,10 @@ def test_studio_update_supports_byteplus_provider(
         *,
         frontend_assets: Path,
         provider: str,
+        offline_runtime: bool,
     ) -> str:
         captured["requirements_provider"] = provider
+        captured["offline_runtime"] = offline_runtime
         package_dir.mkdir(parents=True, exist_ok=True)
         return "./veadk.whl\n./pydantic.whl\n"
 
@@ -944,13 +967,18 @@ def test_studio_update_supports_byteplus_provider(
         requirements: str,
         site_logo: SiteLogo | None,
         provider: str,
+        bundle_agentkit_cli: bool,
     ) -> None:
         from veadk.cli.studio_package import studio_run_script
 
         captured["package_requirements"] = requirements
         captured["package_logo"] = site_logo
         captured["package_provider"] = provider
-        run_script = studio_run_script(provider=provider)  # type: ignore[arg-type]
+        captured["bundle_agentkit_cli"] = bundle_agentkit_cli
+        run_script = studio_run_script(
+            provider=provider,  # type: ignore[arg-type]
+            bundle_agentkit_cli=bundle_agentkit_cli,
+        )
         captured["run_script"] = run_script
         package_dir.mkdir(parents=True, exist_ok=True)
         (package_dir / "run.sh").write_text(run_script, encoding="utf-8")
@@ -988,7 +1016,9 @@ def test_studio_update_supports_byteplus_provider(
 
     assert result.exit_code == 0, result.output
     assert captured["requirements_provider"] == "byteplus"
+    assert captured["offline_runtime"] is False
     assert captured["package_provider"] == "byteplus"
+    assert captured["bundle_agentkit_cli"] is False
     assert captured["package_requirements"] == "./veadk.whl\n./pydantic.whl\n"
     update = captured["update"]
     assert isinstance(update, dict)
@@ -1013,6 +1043,7 @@ def test_studio_update_supports_byteplus_provider(
         "provider": "byteplus",
     }
     assert update["environment_overrides"] == {
+        "STUDIO_WORKSPACE_TOOL_ID": "studio-workspace-tool",
         "AGENTKIT_SANDBOX_REGION": "ap-southeast-1",
         "CLOUD_PROVIDER": "byteplus",
         "AGENTKIT_CLOUD_PROVIDER": "byteplus",
@@ -1159,6 +1190,7 @@ def test_studio_update_explicit_branding_overrides_cloud_values(
         requirements: str,
         site_logo: SiteLogo | None,
         provider: str = "volcengine",
+        bundle_agentkit_cli: bool = True,
     ) -> None:
         package_dir.mkdir(parents=True, exist_ok=True)
         captured["logo"] = site_logo
@@ -1209,6 +1241,7 @@ def test_studio_update_explicit_branding_overrides_cloud_values(
     update = captured["update"]
     assert isinstance(update, dict)
     assert update["environment_overrides"] == {
+        "STUDIO_WORKSPACE_TOOL_ID": "studio-workspace-tool",
         "AGENTKIT_SANDBOX_REGION": "cn-beijing",
         "VEADK_SITE_TITLE": "新标题",
         "VEADK_STUDIO_CRONJOB_SCHEDULER_BASE": "studio-app",
@@ -1278,6 +1311,7 @@ def test_studio_update_only_overrides_explicit_sandbox_tool_id(
 
     assert result.exit_code == 0, result.output
     assert captured["environment_overrides"] == {
+        "STUDIO_WORKSPACE_TOOL_ID": "studio-workspace-tool",
         "AGENTKIT_SANDBOX_REGION": "cn-beijing",
         "SANDBOX_CHAT_CODEX": "chat-tool-new",
         "SANDBOX_CHAT_CODEX_SNAPSHOT": "chat-snapshot-tool-new",
@@ -1447,6 +1481,11 @@ def test_volcengine_studio_update_repairs_missing_snapshot_tools_and_oauth_callb
     assert {str(call["provider"]) for call in agent_credentials} == {"volcengine"}
     overrides = captured["environment_overrides"]
     assert overrides == {
+        "VEADK_STUDIO_IDENTITY_ROLES": "1",
+        "VEADK_STUDIO_SUPER_ADMIN": "",
+        "VEADK_STUDIO_ADMINS": "",
+        "VEADK_STUDIO_DEVELOPERS": "",
+        "STUDIO_WORKSPACE_TOOL_ID": "studio-workspace-tool",
         "AGENTKIT_SANDBOX_REGION": "cn-beijing",
         "VEADK_STUDIO_DEPLOY_ID": "stddep_update",
         "VEADK_STUDIO_USER_POOL_ID": "legacy-user-pool",
@@ -2001,11 +2040,132 @@ def test_release_failure_includes_status_when_logs_are_empty(
         service._release_application("application-id")
 
     message = str(exc.value)
-    assert "No application revision logs were returned" in message
-    assert "Application status response" in message
+    assert "控制面日志" in message
+    assert "未返回控制面日志。" in message
+    assert "FaaS 数据面日志" in message
+    assert "未发现可下载的 FaaS 数据面日志链接。" in message
+    assert "最终 VeFaaS 状态" in message
     assert "runtime start failed" in message
-    assert "sensitive-token-value" not in message
-    assert "******" in message
+    assert "sensitive-token-value" in message
+
+
+def test_release_failure_downloads_linked_log_before_redaction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = object.__new__(VeFaaS)
+    raw_url = (
+        "https://cp-v2.tos-cn-beijing.volces.com/v2/log/step-c4183.log"
+        "?X-Tos-Credential=TEST_CREDENTIAL"
+        "&X-Tos-Signature=be37d28bd7cf12e90dbb886729bd3a698d58996ec686745321dd"
+    )
+    downloaded_urls: list[str] = []
+
+    monkeypatch.setattr(
+        service,
+        "_start_application_release",
+        lambda _app_id: {"Result": {"RevisionNumber": 9}},
+    )
+    monkeypatch.setattr(
+        service,
+        "_get_application_status",
+        lambda _app_id: (
+            "deploy_fail",
+            {
+                "Result": {
+                    "Status": "deploy_fail",
+                    "NewRevisionNumber": 9,
+                    "ApiKey": "sensitive-token-value",
+                }
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        service,
+        "_get_application_logs",
+        lambda **_kwargs: [
+            "[function][mldo3uis][install][Error] 在线依赖安装失败",
+            f"[function][mldo3uis][install][Extra] {raw_url}",
+        ],
+    )
+
+    def _download(url: str) -> str:
+        downloaded_urls.append(url)
+        return "pip install failed: token=raw-token-secret\nmissing distribution"
+
+    monkeypatch.setattr(
+        "veadk.integrations.ve_faas.ve_faas._download_release_log_url",
+        _download,
+    )
+
+    with pytest.raises(Exception) as exc:
+        service._release_application("application-id")
+
+    message = str(exc.value)
+    assert downloaded_urls == [raw_url]
+    assert "控制面日志" in message
+    assert "FaaS 数据面日志" in message
+    assert "[1] FaaS 数据面日志" in message
+    assert "来源:" in message
+    assert "内容:" in message
+    assert "pip install failed" in message
+    assert "missing distribution" in message
+    assert raw_url in message
+    assert "raw-token-secret" in message
+    assert "sensitive-token-value" in message
+    assert "be37d28bd7cf12e90" in message
+
+
+def test_release_failure_uses_byteplus_labels_for_linked_logs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = object.__new__(VeFaaS)
+    cast(Any, service).provider = "byteplus"
+    raw_url = (
+        "https://cp-v2.tos-cn-beijing.volces.com/v2/log/step-c4183.log"
+        "?X-Tos-Credential=TEST_CREDENTIAL"
+        "&X-Tos-Signature=be37d28bd7cf12e90dbb886729bd3a698d58996ec686745321dd"
+    )
+
+    monkeypatch.setattr(
+        service,
+        "_start_application_release",
+        lambda _app_id: {"Result": {"RevisionNumber": 9}},
+    )
+    monkeypatch.setattr(
+        service,
+        "_get_application_status",
+        lambda _app_id: (
+            "deploy_fail",
+            {
+                "Result": {
+                    "Status": "deploy_fail",
+                    "NewRevisionNumber": 9,
+                    "ApiKey": "sensitive-token-value",
+                }
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        service,
+        "_get_application_logs",
+        lambda **_kwargs: [f"[function][mldo3uis][install][Extra] {raw_url}"],
+    )
+    monkeypatch.setattr(
+        "veadk.integrations.ve_faas.ve_faas._download_release_log_url",
+        lambda _url: "pip install failed: token=raw-token-secret",
+    )
+
+    with pytest.raises(Exception) as exc:
+        service._release_application("application-id")
+
+    message = str(exc.value)
+    assert "Release application failed. Details:" in message
+    assert "Control Plane Logs" in message
+    assert "FaaS Data Plane Logs" in message
+    assert "Final VeFaaS Status" in message
+    assert raw_url in message
+    assert "raw-token-secret" in message
+    assert "sensitive-token-value" in message
 
 
 def test_update_application_code_bundle_preserves_unspecified_sandbox_tool(
@@ -2067,3 +2227,11 @@ def test_update_application_code_bundle_does_not_read_or_replace_environment(
     assert request.id == "function-id"
     assert request.envs is None
     assert request.request_timeout is None
+
+
+@pytest.fixture(autouse=True)
+def _workspace_tool_provisioning(monkeypatch):
+    monkeypatch.setattr(
+        "frontend.server.workspace_tool.provision_workspace_tool",
+        lambda **kwargs: "studio-workspace-tool",
+    )

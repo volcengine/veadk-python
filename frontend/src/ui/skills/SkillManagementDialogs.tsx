@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import type { SkillSpaceRef } from "../../create/skills/skillspace";
+import { getSkillSpaceDisplayName, type SkillSpaceRef } from "../../create/skills/skillspace";
 import {
   createSkillSpace,
   updateSkillSpace,
@@ -186,7 +186,7 @@ export function UploadSkillDialog({ space, region, onClose, onUploaded }: { spac
     }
   };
   return (
-    <DialogFrame title={t("management.uploadTitle", { name: space.name })} className="skill-upload-dialog" onClose={onClose}>
+    <DialogFrame title={t("management.uploadTitle", { name: getSkillSpaceDisplayName(space) })} className="skill-upload-dialog" onClose={onClose}>
       <div className="skill-dialog__body">
         <input
           ref={fileInputRef}

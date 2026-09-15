@@ -120,6 +120,15 @@ export interface HarnessSidecarIntent {
   planHash?: string;
 }
 
+export interface ModelFallbackEndpointDraft {
+  modelName: string;
+  modelProvider?: string;
+  modelApiBase?: string;
+  modelApiKeyEnv?: string;
+}
+
+export type ModelFallbackDraft = string | ModelFallbackEndpointDraft;
+
 /** A draft VeADK agent configuration produced by a creation flow. */
 export interface AgentDraft {
   name: string;
@@ -146,6 +155,8 @@ export interface AgentDraft {
   /** Model configuration (optional). Empty values fall back to veadk config/env. */
   modelSource?: "ark" | "custom";
   modelName?: string;
+  /** Fallback models tried in order after modelName. Strings reuse the primary provider. */
+  modelFallbacks?: ModelFallbackDraft[];
   modelProvider?: string;
   modelApiBase?: string;
   /** Free-text tool names (legacy; intelligent/template modes still use these). */
@@ -228,6 +239,7 @@ export function emptyDraft(cloudProvider: CloudProvider = "volcengine"): AgentDr
       registryEndpoint: "",
     },
     modelName: defaultModelName(cloudProvider),
+    modelFallbacks: [],
     modelSource: "ark",
     modelProvider: "",
     modelApiBase: "",

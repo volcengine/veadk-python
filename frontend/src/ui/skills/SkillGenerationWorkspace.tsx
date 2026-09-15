@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { CloudProvider, CloudRegion } from "../../adk/cloudProvider";
 import { formatCloudRegion, isSupportedCloudRegion } from "../../adk/cloudProvider";
-import type { SkillSpaceRef } from "../../create/skills/skillspace";
+import { getSkillSpaceDisplayName, type SkillSpaceRef } from "../../create/skills/skillspace";
 import { TextShimmer } from "../text-shimmer/TextShimmer";
 import { SkillConversationStream } from "./SkillConversationStream";
 import {
@@ -327,7 +327,7 @@ export function SkillGenerationWorkspace({
   const publishSpace = space ?? selectedPublishSpace;
   const publishSpaceOptions = availableSpaces.map((item) => ({
     value: publishSpaceKey(item),
-    label: `${item.name.trim() || t("generation.unnamedSpace")} · ${formatCloudRegion(item.region || "cn-beijing", cloudProvider)}`,
+    label: `${getSkillSpaceDisplayName(item) || t("generation.unnamedSpace")} · ${formatCloudRegion(item.region || "cn-beijing", cloudProvider)}`,
   }));
   const nameError = skillNameProblem(name);
   const canGenerate = Boolean(
@@ -513,7 +513,7 @@ export function SkillGenerationWorkspace({
         </button>
         <div>
           <h1>{title}</h1>
-          <p>{space?.name || t("generation.home")}</p>
+          <p>{getSkillSpaceDisplayName(space) || t("generation.home")}</p>
         </div>
         {runs.length > 0 ? <span className="skill-generation__ttl">{remainingLabel(active?.task, now)}</span> : null}
       </header>

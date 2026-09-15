@@ -70,7 +70,16 @@
     "validateFailed": "Failed to validate the Skill",
     "deleteFailed": "Failed to delete the Skill",
     "listFilesFailed": "Failed to load Skill files",
-    "downloadFailed": "Failed to download the Skill"
+    "downloadFailed": "Failed to download the Skill",
+    "sharedSpaceFailed": "Shared space unavailable",
+    "reservedSpaceName": "This name is reserved for a system space; choose another name",
+    "reviewSpaceFailed": "The review space is unavailable",
+    "submitReviewFailed": "Could not submit the publication request",
+    "listReviewsFailed": "Could not load review requests",
+    "reviewFilesFailed": "Could not load submitted files",
+    "decideReviewFailed": "Review failed, please try again",
+    "listVersionsFailed": "Unable to load skill versions",
+    "uploadVersionFailed": "Unable to upload the new skill version"
   },
   "sse": {
     "truncatedData": "{{data}}… (truncated, {{count}} characters total)",
@@ -135,6 +144,10 @@
     "requestFailed": "Knowledge base request failed ({{status}})"
   },
   "intelligentDevelopment": {
+    "invalidName": "Names must contain 1–128 characters, without control or invisible formatting characters, or < >.",
+    "renameProjectFailed": "Unable to update the project name",
+    "renameVersionFailed": "Unable to update the version name",
+    "invalidNameUpdateResponse": "The name update response does not match the request. Refresh and try again.",
     "invalidSourceSnapshot": "The source snapshot response has an invalid format.",
     "invalidProjectList": "The project list response has an invalid format.",
     "invalidProjectVersion": "The project version response has an invalid format.",
@@ -187,6 +200,15 @@
     "loadArtifactFailed": "Failed to load the migration artifact",
     "loadArtifactFileFailed": "Failed to load the migration artifact file",
     "downloadArtifactFailed": "Failed to download the migration artifact",
+    "evaluation": {
+      "datasetSaveFailed": "Failed to save evaluation cases",
+      "datasetLoadFailed": "Failed to load evaluation cases",
+      "statusLoadFailed": "Failed to load evaluation status",
+      "resumeFailed": "Failed to continue evaluation",
+      "retryFailed": "Failed to retry evaluation",
+      "reportLoadFailed": "Failed to load the evaluation report",
+      "reportDownloadFailed": "Failed to download the evaluation report"
+    },
     "labels": {
       "analysisResult": "Migration analysis result",
       "recommendation": "Migration recommendation",
@@ -231,7 +253,22 @@
       "capabilities": "Migration capabilities",
       "framework": "Migration framework",
       "modelCapabilities": "Migration model capabilities",
-      "taskList": "Migration session list"
+      "taskList": "Migration session list",
+      "evaluationAsset": "Evaluation asset",
+      "evaluation": "Evaluation status",
+      "evaluationCapabilities": "Evaluation capabilities",
+      "evaluationDimension": "Evaluation dimension",
+      "evaluationCase": "Evaluation case",
+      "evaluationCriteria": "Evaluation criteria",
+      "evaluationMessage": "Evaluation conversation",
+      "evaluationDataset": "Evaluation dataset",
+      "evaluationDimensionResult": "Evaluation dimension result",
+      "evaluationEvidence": "Evaluation evidence",
+      "evaluationReport": "Evaluation report",
+      "evaluationSummary": "Evaluation summary",
+      "evaluationCaseResult": "Evaluation case result",
+      "evaluationOutput": "Evaluation output",
+      "evaluationLimitations": "Evaluation limitations"
     }
   },
   "sandbox": {
@@ -494,5 +531,27 @@
   },
   "jsonResponse": {
     "nonJson": "{{fallback}}: the server returned a non-JSON response (HTTP {{status}}, {{contentType}}){{detail}}"
+  },
+  "workspaceProjects": {
+    "busy": "The workspace is busy. Try again shortly",
+    "notFound": "Workspace not found",
+    "duplicates": "Multiple personal workspace sessions were found. Contact your administrator",
+    "timeout": "Workspace recovery timed out. Your projects are retained. Try again",
+    "unavailable": "The workspace cannot be restored right now. Your projects are retained. Try again",
+    "persistence": "Persistence is not enabled for this Sandbox. Check the workspace configuration",
+    "startup": "Workspace startup failed. Check the Sandbox status",
+    "exists": "This project already exists. Open it from the project list",
+    "directory": "Project directory not found",
+    "configuration": "Configure the workspace Sandbox image first",
+    "state": "Could not check workspace status. Try again",
+    "list": "Could not restore the workspace or load projects. Try again",
+    "create": "Project initialization failed. Check that the image is available and try again",
+    "open": "Could not restore the workspace or open the project. Try again",
+    "connection": "Could not connect to the workspace. Try again",
+    "invalidWorkspaceUrl": "The workspace returned an invalid URL",
+    "operation": "Project operation failed. Try again",
+    "invalidProjectUrl": "The project URL is invalid",
+    "listFallback": "Could not load projects",
+    "connectionState": "Could not connect to the workspace. Try again"
   }
 }

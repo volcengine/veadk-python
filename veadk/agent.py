@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import os
 import warnings
+from contextlib import aclosing
 from typing import TYPE_CHECKING, AsyncGenerator, Dict, Literal, Optional, Union
 
 from google.adk.flows.llm_flows.base_llm_flow import BaseLlmFlow
@@ -35,7 +36,7 @@ from google.adk.agents.context_cache_config import ContextCacheConfig
 from google.adk.agents.llm_agent import InstructionProvider, ToolUnion
 from google.adk.agents.run_config import ToolThreadPoolConfig
 from google.adk.examples.base_example_provider import BaseExampleProvider
-from pydantic import ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 from typing_extensions import Any
 
 from veadk.config import settings
@@ -75,6 +76,117 @@ patch_adk_sync_tool_thread_pool()
 logger = get_logger(__name__)
 
 
+class ModelFallbackEndpoint(BaseModel):
+    """A LiteLLM fallback endpoint with independent provider credentials."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    model_name: str = Field(validation_alias=AliasChoices("model_name", "model"))
+    model_provider: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("model_provider", "provider"),
+    )
+    model_api_base: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("model_api_base", "api_base", "base_url"),
+    )
+    model_api_key: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("model_api_key", "api_key"),
+    )
+    model_api_key_env: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("model_api_key_env", "api_key_env"),
+    )
+    model_extra_config: dict[str, Any] = Field(
+        default_factory=dict,
+        validation_alias=AliasChoices("model_extra_config", "extra_config"),
+    )
+
+
+ModelFallbackConfig = Union[str, ModelFallbackEndpoint]
+
+
+def _qualified_model_name(provider: str | None, model_name: str) -> str:
+    model = model_name.strip()
+    normalized_provider = (provider or "").strip()
+    if not normalized_provider:
+        return model
+    prefix = f"{normalized_provider}/"
+    if model.startswith(prefix):
+        return model
+    return f"{prefix}{model}"
+
+
+def _endpoint_model_name(
+    endpoint: ModelFallbackEndpoint,
+    *,
+    default_provider: str,
+) -> str:
+    if endpoint.model_provider:
+        return _qualified_model_name(endpoint.model_provider, endpoint.model_name)
+    model = endpoint.model_name.strip()
+    if "/" in model:
+        return model
+    return _qualified_model_name(default_provider, model)
+
+
+def _resolve_model_api_key(endpoint: ModelFallbackEndpoint) -> str | None:
+    if endpoint.model_api_key:
+        return endpoint.model_api_key
+    if endpoint.model_api_key_env:
+        value = os.getenv(endpoint.model_api_key_env)
+        if value:
+            return value
+        logger.warning(
+            "Model fallback api key env `%s` is not set; LiteLLM will use its "
+            "provider defaults if available.",
+            endpoint.model_api_key_env,
+        )
+    return None
+
+
+def _merged_fallback_extra_config(
+    base_extra_config: dict[str, Any],
+    endpoint_extra_config: dict[str, Any],
+) -> dict[str, Any]:
+    extra = dict(endpoint_extra_config)
+    for key in ("extra_headers", "extra_body"):
+        value = extra.get(key)
+        base_value = base_extra_config.get(key)
+        if isinstance(value, dict) and isinstance(base_value, dict):
+            extra[key] = {**base_value, **value}
+    return extra
+
+
+def _build_litellm_fallback(
+    fallback: ModelFallbackConfig,
+    *,
+    default_provider: str,
+    base_extra_config: dict[str, Any],
+) -> str | dict[str, Any]:
+    if isinstance(fallback, str):
+        return _qualified_model_name(default_provider, fallback)
+
+    values = _merged_fallback_extra_config(
+        base_extra_config=base_extra_config,
+        endpoint_extra_config=fallback.model_extra_config,
+    )
+    fallback_provider = (fallback.model_provider or "").strip()
+    is_cross_provider = bool(
+        fallback_provider and fallback_provider != default_provider
+    )
+    values["model"] = _endpoint_model_name(
+        fallback,
+        default_provider=default_provider,
+    )
+    if fallback.model_api_key or fallback.model_api_key_env or is_cross_provider:
+        values["api_key"] = _resolve_model_api_key(fallback)
+    if fallback.model_api_base or is_cross_provider:
+        values["api_base"] = fallback.model_api_base
+    return values
+
+
 class Agent(LlmAgent):
     """LLM-based Agent with Volcengine capabilities.
 
@@ -91,6 +203,8 @@ class Agent(LlmAgent):
         model_provider (str): Provider of the model (e.g., openai).
         model_api_base (str): The base URL of the model API.
         model_api_key (str): The API key for accessing the model.
+        model_fallbacks (list): LiteLLM fallback models or endpoints tried
+            after the primary model fails.
         model_extra_config (dict): Extra configurations to include in model requests.
         tool_thread_pool_config (Optional[ToolThreadPoolConfig]): Default thread
             pool config for synchronous tool execution.
@@ -131,6 +245,13 @@ class Agent(LlmAgent):
     """Name of the ARK API key to resolve the value from (defaults to env
     MODEL_AGENT_API_KEY_NAME). A key value always wins over a key name, so this
     is ignored when `model_api_key` or the MODEL_AGENT_API_KEY env is set."""
+    model_fallbacks: list[ModelFallbackConfig] = Field(default_factory=list)
+    """Fallback models passed to LiteLLM.
+
+    Strings are interpreted as same-provider model names. Use
+    ``ModelFallbackEndpoint`` or a matching dict when a fallback needs its own
+    provider, API base, API key, or LiteLLM parameters.
+    """
     model_extra_config: dict = Field(default_factory=dict)
     tool_thread_pool_config: Optional[ToolThreadPoolConfig] = None
 
@@ -290,13 +411,14 @@ class Agent(LlmAgent):
         logger.info(f"Model extra config: {self.model_extra_config}")
 
         if not self.model:
-            fallbacks = None
+            fallbacks: list[str | dict[str, Any]] = []
             if isinstance(self.model_name, list):
                 if self.model_name:
                     model_name = self.model_name[0]
-                    fallbacks = [
-                        f"{self.model_provider}/{m}" for m in self.model_name[1:]
-                    ]
+                    fallbacks.extend(
+                        _qualified_model_name(self.model_provider, m)
+                        for m in self.model_name[1:]
+                    )
                     logger.info(
                         f"Using primary model: {model_name}, with fallbacks: {self.model_name[1:]}"
                     )
@@ -308,14 +430,35 @@ class Agent(LlmAgent):
             else:
                 model_name = self.model_name
 
+            if self.model_fallbacks:
+                fallbacks.extend(
+                    _build_litellm_fallback(
+                        fallback,
+                        default_provider=self.model_provider,
+                        base_extra_config=self.model_extra_config,
+                    )
+                    for fallback in self.model_fallbacks
+                )
+
+            litellm_fallbacks = fallbacks or None
+
             if self.enable_responses:
+                unsupported_fallbacks = [
+                    fallback for fallback in fallbacks if not isinstance(fallback, str)
+                ]
+                if unsupported_fallbacks:
+                    raise ValueError(
+                        "Endpoint model_fallbacks are only supported when "
+                        "enable_responses=False. Ark Responses fallbacks must be "
+                        "same-provider model names."
+                    )
                 from veadk.models.ark_llm import ArkLlm
 
                 self.model = ArkLlm(
                     model=f"{self.model_provider}/{model_name}",
                     api_key=self.model_api_key,
                     api_base=self.model_api_base,
-                    fallbacks=fallbacks,
+                    fallbacks=litellm_fallbacks,
                     enable_responses_cache=self.enable_responses_cache,
                     **self.model_extra_config,
                 )
@@ -324,13 +467,18 @@ class Agent(LlmAgent):
                     model=f"{self.model_provider}/{model_name}",
                     api_key=self.model_api_key,
                     api_base=self.model_api_base,
-                    fallbacks=fallbacks,
+                    fallbacks=litellm_fallbacks,
                     **self.model_extra_config,
                 )
             logger.debug(
                 f"LiteLLM client created with config: {self.model_extra_config}"
             )
         else:
+            if self.model_fallbacks:
+                logger.warning(
+                    "Agent(model_fallbacks=...) is ignored when Agent(model=...) "
+                    "is provided. Configure fallbacks on the custom model object."
+                )
             logger.warning(
                 "You are trying to use your own LiteLLM client, some default request headers may be missing."
             )
@@ -410,7 +558,7 @@ class Agent(LlmAgent):
                 else:
                     self.after_agent_callback = save_session_to_long_term_memory
 
-        if self.skills:
+        if self.skills or self.enable_dynamic_load_skills:
             self.load_skills()
             if self.enable_skills_checklist:
                 logger.info("Skills checklist enabled")
@@ -510,17 +658,7 @@ class Agent(LlmAgent):
         )
 
     def load_skills(self):
-        from pathlib import Path
-
-        from veadk.skills.check_skills_callback import check_skills
-        from veadk.skills.skill import Skill
-        from veadk.skills.utils import (
-            load_skills_from_cloud,
-            load_skills_from_directory,
-        )
-        from veadk.tools.skills_tools.skills_toolset import SkillsToolset
-
-        self.skills_dict: Dict[str, Skill] = {}
+        from veadk.skills.check_skills_callback import check_skills, initialize_skills
 
         # Determine skills_mode if not set
         if not self.skills_mode:
@@ -609,58 +747,7 @@ class Agent(LlmAgent):
             warnings.warn(warning_message, DeprecationWarning, stacklevel=2)
             logger.warning(warning_message)
 
-        for item in self.skills:
-            if not item or str(item).strip() == "":
-                continue
-            path = Path(item)
-            if path.exists() and path.is_dir():
-                for skill in load_skills_from_directory(path):
-                    self.skills_dict[skill.name] = skill
-            else:
-                for skill in load_skills_from_cloud(item):
-                    self.skills_dict[skill.name] = skill
-        if self.skills_dict:
-            self.instruction += "\nYou have the following skills:\n"
-
-            self._skills_with_checklist = self.skills_dict
-
-            has_checklist = False
-            for skill in self.skills_dict.values():
-                self.instruction += (
-                    f"- name: {skill.name}\n- description: {skill.description}\n\n"
-                )
-                if skill.checklist:
-                    has_checklist = True
-
-            if has_checklist:
-                self.instruction += (
-                    "Some skills have a checklist that you must complete step by step. "
-                    "Use the `update_check_list` tool to mark each item as completed.\n\n"
-                )
-
-            if self.skills_mode not in [
-                "skills_sandbox",
-                "aio_sandbox",
-                "local",
-            ]:
-                raise ValueError(
-                    f"Unsupported skill mode {self.skills_mode}, use `skills_sandbox`, `aio_sandbox` or `local` instead."
-                )
-
-            if self.skills_mode == "skills_sandbox":
-                self.instruction += (
-                    "You can use the skills by calling the `execute_skills` tool.\n\n"
-                )
-
-            if self.skills_mode == "local":
-                self.instruction += (
-                    "You can use the skills by calling the `skills_tool` tool.\n\n"
-                )
-
-        else:
-            logger.warning("No skills loaded.")
-
-        self.tools.append(SkillsToolset(self.skills_dict, self.skills_mode))
+        initialize_skills(self)
 
         if self.enable_dynamic_load_skills:
             if self.before_agent_callback:
@@ -787,8 +874,12 @@ class Agent(LlmAgent):
         stream, so the surrounding ``Runner`` is unaffected.
         """
         if self.runtime == "adk":
-            async for event in super()._run_async_impl(ctx):
-                yield event
+            # A transfer can close this wrapper before the LLM stream ends.
+            # Close it in the same task so tracing contexts do not leak into
+            # async-generator finalization or the receiving sub-agent.
+            async with aclosing(super()._run_async_impl(ctx)) as events:
+                async for event in events:
+                    yield event
             return
 
         from veadk.runtime import get_runtime

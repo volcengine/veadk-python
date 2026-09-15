@@ -1,0 +1,48 @@
+/* Figma 547:69425: radius 4 glass effect with -45deg lighting
+   CSS blur and edge lighting approximate its refraction/depth/dispersion */
+.studio-glass-icon-button-group {
+  position: relative;
+  isolation: isolate;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  width: 174px;
+  height: 46px;
+  padding: 10px 20px;
+  border-radius: 92px;
+  background: var(--studio-surface-glass-group, rgba(28, 28, 30, 0.2));
+  box-shadow: inset 0 0 0 0.5px rgba(242, 242, 245, 0.1), 0 15px 35px -2px rgba(0, 0, 0, 0.05), 0 5px 15px rgba(0, 0, 0, 0.05);
+  -webkit-backdrop-filter: blur(4px);
+  backdrop-filter: blur(4px);
+}
+.studio-glass-icon-button-group::before {
+  position: absolute;
+  inset: 0;
+  padding: 0.5px;
+  border-radius: inherit;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.45), rgba(255, 255, 255, 0.06) 45%, rgba(255, 255, 255, 0.04) 65%, rgba(255, 255, 255, 0.28));
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  mask-composite: exclude;
+  pointer-events: none;
+  content: "";
+}
+.studio-glass-icon-button-group img { display: block; width: 18px; height: 18px; }
+.studio-glass-icon-button-group__layout { transform: rotate(-90deg); }
+.studio-glass-icon-button-group__zoom { display: flex; align-items: center; gap: 6px; }
+.studio-glass-icon-button-group button {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 26px;
+  width: 26px;
+  height: 26px;
+  padding: 4px;
+  margin: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}

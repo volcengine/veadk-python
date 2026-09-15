@@ -1,0 +1,2 @@
+export const APPLICATION_MESSAGE_LIMIT = 20;
+export const REVIEW_TEXT_LIMIT = 256;

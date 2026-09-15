@@ -18,6 +18,7 @@ import re
 import shutil
 import tempfile
 import time
+import urllib.request
 from pathlib import Path
 from typing import Any, cast
 
@@ -68,6 +69,7 @@ def _code_upload_timeout_seconds(code_zip_size: int) -> int:
 
 
 _APPLICATION_REVISION_LOG_MAX_BYTES = 50_000
+_RELEASE_LOG_URL_PATTERN = re.compile(r"https://[^\s<>\]\"']+")
 _TRANSIENT_VEFAAS_ERROR_MARKERS = (
     "connection aborted",
     "connection error",
@@ -101,15 +103,91 @@ def _is_transient_vefaas_error(error: BaseException) -> bool:
     return False
 
 
-def _redact_release_text(text: str) -> str:
-    return re.sub(
-        r'([{"\']?(key|secret|token|pass|auth|credential|access|api|ak|sk|doubao|volces|coze)[^"\'\s]*["\']?\s*[:=]\s*)(["\']?)([^"\'\s]+)(["\']?)|([A-Za-z0-9+/=]{20,})',
-        lambda m: (
-            f"{m.group(1)}{m.group(3)}******{m.group(5)}" if m.group(1) else "******"
-        ),
-        text,
-        flags=re.IGNORECASE,
+def _extract_release_log_urls(text: str) -> list[str]:
+    urls: list[str] = []
+    seen: set[str] = set()
+    for match in _RELEASE_LOG_URL_PATTERN.finditer(text):
+        url = match.group(0).rstrip(").,;")
+        if ".log" not in url or url in seen:
+            continue
+        seen.add(url)
+        urls.append(url)
+    return urls
+
+
+def _download_release_log_url(url: str) -> str:
+    with urllib.request.urlopen(url, timeout=30) as log_stream:
+        return log_stream.read().decode("utf-8", "replace")
+
+
+def _release_failure_labels(provider: CloudProvider) -> dict[str, str]:
+    if provider == "byteplus":
+        return {
+            "console_logs": "Control Plane Logs",
+            "tos_logs": "FaaS Data Plane Logs",
+            "final_status": "Final VeFaaS Status",
+            "empty_console_logs": "No control plane logs were returned.",
+            "empty_tos_logs": "No linked FaaS data plane logs were found.",
+            "tos_log": "FaaS data plane log",
+            "source": "Source",
+            "content": "Content",
+            "download_failed": "download failed",
+        }
+    return {
+        "console_logs": "控制面日志",
+        "tos_logs": "FaaS 数据面日志",
+        "final_status": "最终 VeFaaS 状态",
+        "empty_console_logs": "未返回控制面日志。",
+        "empty_tos_logs": "未发现可下载的 FaaS 数据面日志链接。",
+        "tos_log": "FaaS 数据面日志",
+        "source": "来源",
+        "content": "内容",
+        "download_failed": "下载失败",
+    }
+
+
+def _format_release_failure_text(
+    *,
+    raw_logs: str,
+    full_response: dict[str, Any],
+    provider: CloudProvider = DEFAULT_CLOUD_PROVIDER,
+) -> str:
+    labels = _release_failure_labels(provider)
+    linked_log_sections: list[str] = []
+    for index, url in enumerate(_extract_release_log_urls(raw_logs), start=1):
+        try:
+            linked_log = _download_release_log_url(url)
+        except Exception as error:  # noqa: BLE001 - diagnostics must not mask failure
+            linked_log_sections.append(
+                f"[{index}] {labels['tos_log']} {labels['download_failed']}: {error}"
+            )
+        else:
+            linked_log_sections.append(
+                "\n".join(
+                    (
+                        f"[{index}] {labels['tos_log']}",
+                        f"{labels['source']}: {url}",
+                        f"{labels['content']}:",
+                        linked_log,
+                    )
+                )
+            )
+
+    console_text = raw_logs.strip() or labels["empty_console_logs"]
+    tos_text = "\n\n".join(linked_log_sections) or labels["empty_tos_logs"]
+
+    status_text = json.dumps(
+        full_response.get("Result", full_response),
+        ensure_ascii=False,
+        sort_keys=True,
+        default=str,
     )
+    sections = [
+        f"{labels['console_logs']}\n{'-' * 40}\n{console_text}",
+        f"{labels['tos_logs']}\n{'-' * 40}\n{tos_text}",
+        f"{labels['final_status']}\n{'-' * 40}\n{status_text}",
+    ]
+    return "\n\n".join(sections)
 
 
 def _release_revision_number(response: dict[str, Any]) -> int | None:
@@ -400,27 +478,24 @@ class VeFaaS:
             logger.error(
                 f"Release application failed. Application ID: {app_id}, Status: {status}"
             )
-            logs = "\n".join(
+            raw_logs = "\n".join(
                 self._get_application_logs(
                     app_id=app_id,
                     revision_number=release_revision_number,
                 )
             )
-            log_text = _redact_release_text(logs)
-            if not log_text.strip():
-                log_text = "No application revision logs were returned."
-            status_text = _redact_release_text(
-                json.dumps(
-                    full_response.get("Result", full_response),
-                    ensure_ascii=False,
-                    sort_keys=True,
-                    default=str,
-                )
+            provider = getattr(self, "provider", DEFAULT_CLOUD_PROVIDER)
+            log_text = _format_release_failure_text(
+                raw_logs=raw_logs,
+                full_response=full_response,
+                provider=provider,
             )
-            if len(status_text) > 4000:
-                status_text = f"{status_text[:4000]}…"
-            log_text = f"{log_text}\n\nApplication status response:\n{status_text}"
-            raise Exception(f"Release application failed. Logs:\n{log_text}")
+            failure_prefix = (
+                "Release application failed. Details:"
+                if provider == "byteplus"
+                else "发布 VeFaaS 应用失败，详情："
+            )
+            raise Exception(f"{failure_prefix}\n{log_text}")
 
     def _get_application_status(
         self,

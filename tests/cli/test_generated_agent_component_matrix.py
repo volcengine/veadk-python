@@ -38,6 +38,7 @@ from veadk.cli.generated_agent_codegen import (
     GeneratedProject,
     McpTool,
     MemoryConfig,
+    _VEADK_VERSION,
     debug_runtime_env_from_draft,
     generate_project_from_draft,
 )
@@ -67,7 +68,7 @@ def _assert_python_files_compile(project: GeneratedProject) -> None:
 
 def _veadk_requirement(extras: set[str]) -> str:
     extras_str = f"[{','.join(sorted(extras))}]" if extras else ""
-    return f"veadk-python{extras_str}==1.1.9"
+    return f"veadk-python{extras_str}=={_VEADK_VERSION}"
 
 
 EXPECTED_LTM_EXTRAS = {
@@ -778,5 +779,5 @@ def test_deeply_nested_agent_types_generate_complete_component_project() -> None
     assert 'KnowledgeBase(backend="context_search"' in agent_py
     assert "OpentelemetryTracer()" in agent_py
     assert _env_keys(files[".env.example"]) == expected_env
-    assert "veadk-python[extensions]==1.1.9" in files["requirements.txt"]
+    assert _veadk_requirement({"extensions"}) in files["requirements.txt"]
     _assert_python_files_compile(project)

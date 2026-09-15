@@ -1,0 +1,71 @@
+.dsh-config-page {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  min-width: 0;
+  min-height: 0;
+  color: hsl(var(--foreground));
+  background: hsl(var(--background));
+}
+.dsh-config-page-head, .dsh-config-page-content, .dsh-config-page-actions {
+  width: min(1000px, 100%);
+  margin: 0 auto;
+  padding: 0 24px;
+  box-sizing: border-box;
+}
+.dsh-config-page-head { padding-top: 20px; padding-bottom: 20px; }
+.dsh-config-page-head h1 { display: flex; align-items: center; gap: 8px; margin: 16px 0 8px; font-size: 21px; font-weight: 600; line-height: 1.25; }
+.dsh-config-page-head .dsh-config-beta { flex-shrink: 0; font-size: 10px; font-weight: 500; line-height: 1.3; }
+.dsh-config-page-head h1:focus { outline: none; }
+.dsh-config-page-head p { margin: 0; }
+.dsh-config-page .dsh-page-back { padding: 4px 0; border: 0; background: transparent; color: hsl(var(--muted-foreground)); }
+.dsh-page-back svg { width: 16px; height: 16px; flex-shrink: 0; }
+.dsh-config-page .dsh-page-back:hover { color: hsl(var(--foreground)); }
+.dsh-config-page-scroll { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.dsh-config-page-content { padding-bottom: 24px; }
+.dsh-config-page .dsh-native-form .cw-help, .dsh-config-page .dsh-config-page-head .cw-help, .dsh-config-page .dsh-config-page-actions .cw-help { display: block; }
+.dsh-config-page :is(button, a, summary):focus-visible { outline: 2px solid hsl(var(--ring)); outline-offset: 1px; }
+.dsh-config-page-footer { border-top: 1px solid hsl(var(--border)); background: hsl(var(--background)); }
+.dsh-config-page-actions { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-top: 16px; padding-bottom: 16px; }
+.dsh-page-buttons { display: flex; flex-wrap: wrap; align-items: center; flex-shrink: 0; gap: 8px; }
+.dsh-native-form { display: flex; flex-direction: column; gap: 12px; }
+.dsh-config-section { min-width: 0; border: 1px solid hsl(var(--border)); border-radius: 12px; background: hsl(var(--panel)); }
+.dsh-config-section > summary { cursor: pointer; padding: 14px 16px; font-size: 14px; font-weight: 500; }
+.dsh-section-path { margin-left: 10px; color: hsl(var(--muted-foreground)); font-size: 12px; font-weight: 400; overflow-wrap: anywhere; }
+.dsh-config-section[open] > summary { border-bottom: 1px solid hsl(var(--border)); }
+.dsh-config-section-body { padding: 0 16px; }
+.dsh-section-note { margin: 12px 0 2px; }
+.dsh-config-table { table-layout: fixed; width: 100%; border-collapse: collapse; }
+.dsh-config-table tr + tr { border-top: 1px solid hsl(var(--border) / 0.6); }
+.dsh-config-table th { width: 45%; text-align: left; padding: 12px 16px 12px 0; vertical-align: top; font-size: 13px; font-weight: 400; }
+.dsh-config-table td { padding: 12px 0; vertical-align: top; }
+.dsh-native-path { display: block; margin-top: 4px; font-size: 12px; color: hsl(var(--muted-foreground)); overflow-wrap: anywhere; }
+.dsh-native-control { display: flex; flex-direction: column; gap: 6px; }
+.dsh-native-choice, .dsh-custom-value, .dsh-route-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.dsh-native-control[aria-invalid="true"] .pp-deployment-select-trigger { border-color: hsl(var(--destructive)); }
+.dsh-native-form .cw-input { min-height: 36px; height: 36px; padding: 7px 10px; border-radius: 6px; font-size: 13px; }
+.dsh-provider { min-width: 0; margin: 16px 0; padding: 0 12px 12px; border: 1px solid hsl(var(--border)); border-radius: 8px; }
+.dsh-provider legend { padding: 0 6px; font-size: 13px; font-weight: 500; }
+.dsh-provider-model { min-width: 0; margin: 12px 0; padding: 0 12px 8px; border: 1px solid hsl(var(--border)); border-radius: 8px; background: hsl(var(--secondary) / 0.2); }
+.dsh-provider-actions, .dsh-section-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.dsh-section-actions { padding: 12px 0 16px; }
+.dsh-model-routes { padding: 0 0 16px; }
+.dsh-route { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: 10px; align-items: end; margin: 12px 0; }
+.dsh-source-note { margin: 0; }
+.dsh-source-note a { color: hsl(var(--foreground)); text-underline-offset: 3px; text-decoration: underline; }
+@media (max-width: 600px) {
+  .dsh-config-page-head, .dsh-config-page-content, .dsh-config-page-actions { padding-right: 16px; padding-left: 16px; }
+  .dsh-config-page-head { padding-top: 12px; padding-bottom: 16px; }
+  .dsh-config-page-head h1 { margin-top: 12px; }
+  .dsh-section-path { display: block; margin: 4px 0 0; }
+  .dsh-config-section > summary { padding: 12px; }
+  .dsh-config-section-body { padding: 0 12px; }
+  .dsh-config-table, .dsh-config-table tbody, .dsh-config-table tr, .dsh-config-table th, .dsh-config-table td { display: block; width: 100%; }
+  .dsh-config-table th { padding: 12px 0 6px; }
+  .dsh-config-table td { padding: 0 0 12px; }
+  .dsh-config-page-actions { flex-direction: column; align-items: stretch; gap: 8px; padding-top: 12px; padding-bottom: 12px; }
+  .dsh-page-buttons { justify-content: flex-end; }
+  .dsh-route { grid-template-columns: minmax(0, 1fr); }
+  .dsh-route button { justify-self: start; }
+}

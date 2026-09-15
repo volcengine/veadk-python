@@ -1,0 +1,11 @@
+.quick-agent-type-backdrop { z-index: 1100; }
+.quick-agent-type-dialog { width: min(460px, calc(100vw - 32px)); height: auto; min-height: 0; max-height: calc(100dvh - 32px); }
+.quick-agent-type-dialog h2 { margin: 0; font-size: 17px; font-weight: 600; line-height: 1.3; }
+.quick-agent-type-dialog .cw-skill-dialog-close svg { width: 18px; height: 18px; }
+.quick-agent-type-dialog :is(button, input):focus-visible { outline: 2px solid hsl(var(--ring)); outline-offset: 2px; }
+.quick-agent-type-dialog form { min-height: 0; overflow-y: auto; }
+.quick-agent-type-options { grid-template-columns: minmax(0, 1fr); gap: 10px; min-width: 0; margin: 0; padding: 20px; border: 0; }
+.quick-agent-type-option { min-height: 48px; padding: 12px 14px; font-size: 14px; font-weight: 500; }
+.quick-agent-type-option input { appearance: auto; accent-color: hsl(var(--primary)); width: 16px; height: 16px; margin: 0; flex-shrink: 0; cursor: pointer; }
+.quick-agent-type-option .quick-agent-beta { flex-shrink: 0; font-size: 10px; font-weight: 500; line-height: 1.3; }
+.quick-agent-type-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 14px 20px; border-top: 1px solid hsl(var(--border)); }

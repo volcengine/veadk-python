@@ -29,6 +29,7 @@ from veadk.cli.legacy_runtime_recovery import (
     apply_source_preserving_edits,
     build_sidecar_mcp_servers_json,
     mcp_reuse_supplied_credentials,
+    mcp_supplied_secret_values_by_reference,
     mcp_secret_values_for_draft_references,
     retained_mcp_secret_values,
     build_source_preserving_overlay,
@@ -862,6 +863,194 @@ def test_sidecar_mcp_servers_json_uses_server_secret_values() -> None:
     ]
 
 
+def test_six_case_1_create_without_mcp_has_no_credential_state() -> None:
+    draft = {"name": "root", "mcpTools": []}
+
+    assert (
+        retained_mcp_secret_values(
+            published_draft=draft,
+            edited_draft=draft,
+            published_reference_values={},
+        )
+        == {}
+    )
+    assert (
+        build_sidecar_mcp_servers_json(
+            draft=draft,
+            secret_values={},
+        )
+        == "[]"
+    )
+
+
+def test_six_case_2_create_with_mcp_and_sidecar_materializes_one_secret() -> None:
+    draft = {
+        "name": "root",
+        "mcpTools": [
+            {
+                "name": "orders",
+                "transport": "http",
+                "url": "https://mcp.example.com/orders/mcp",
+                "authTokenEnv": "ORDERS_REF",
+            }
+        ],
+    }
+
+    assert json.loads(
+        build_sidecar_mcp_servers_json(
+            draft=draft,
+            secret_values={"ORDERS_REF": "orders-secret"},
+        )
+    ) == [
+        {
+            "name": "orders",
+            "url": "https://mcp.example.com/orders/mcp",
+            "headers": {"Authorization": "Bearer orders-secret"},
+        }
+    ]
+
+
+def test_six_case_3_update_adds_first_mcp_without_reusing_another_secret() -> None:
+    published = {"name": "root", "mcpTools": []}
+    edited = {
+        "name": "root",
+        "mcpTools": [
+            {
+                "name": "orders",
+                "transport": "http",
+                "url": "https://mcp.example.com/orders/mcp",
+                "authTokenEnv": "ORDERS_REF",
+            }
+        ],
+    }
+
+    assert (
+        retained_mcp_secret_values(
+            published_draft=published,
+            edited_draft=edited,
+            published_reference_values={},
+        )
+        == {}
+    )
+    assert json.loads(
+        build_sidecar_mcp_servers_json(
+            draft=edited,
+            secret_values={"ORDERS_REF": "new-orders-secret"},
+        )
+    )[0]["headers"] == {"Authorization": "Bearer new-orders-secret"}
+
+
+def test_six_case_4_update_adds_context_sidecar_without_changing_mcp_owner() -> None:
+    assert (
+        resolve_source_preserving_mcp_owner(
+            sidecar_enabled=True,
+            effective_components={"context_engine", "compressor"},
+            mcp_toolset_id="",
+        )
+        == "application"
+    )
+
+
+def test_six_case_5_changed_mcp_supports_replace_and_no_auth_without_reuse() -> None:
+    published = {
+        "name": "root",
+        "mcpTools": [
+            {
+                "name": "orders",
+                "transport": "http",
+                "url": "https://old.example.com/orders/mcp",
+                "authTokenEnv": "ORDERS_REF",
+            }
+        ],
+    }
+    replaced = {
+        "name": "root",
+        "mcpTools": [
+            {
+                "name": "orders",
+                "transport": "http",
+                "url": "https://new.example.com/orders/mcp",
+                "authTokenEnv": "ORDERS_REF",
+            }
+        ],
+    }
+    no_auth = {
+        "name": "root",
+        "mcpTools": [
+            {
+                "name": "orders",
+                "transport": "http",
+                "url": "https://new.example.com/orders/mcp",
+            }
+        ],
+    }
+
+    assert (
+        retained_mcp_secret_values(
+            published_draft=published,
+            edited_draft=replaced,
+            published_reference_values={"ORDERS_REF": "old-secret"},
+        )
+        == {}
+    )
+    assert json.loads(
+        build_sidecar_mcp_servers_json(
+            draft=replaced,
+            secret_values={"ORDERS_REF": "replacement-secret"},
+        )
+    )[0]["headers"] == {"Authorization": "Bearer replacement-secret"}
+    assert (
+        "headers"
+        not in json.loads(
+            build_sidecar_mcp_servers_json(draft=no_auth, secret_values={})
+        )[0]
+    )
+
+
+def test_six_case_6_update_adds_second_mcp_and_retains_only_first_secret() -> None:
+    published = {
+        "name": "root",
+        "mcpTools": [
+            {
+                "name": "orders",
+                "transport": "http",
+                "url": "https://mcp.example.com/orders/mcp",
+                "authTokenEnv": "ORDERS_REF",
+            }
+        ],
+    }
+    edited = {
+        **published,
+        "mcpTools": [
+            *published["mcpTools"],
+            {
+                "name": "inventory",
+                "transport": "http",
+                "url": "https://mcp.example.com/inventory/mcp",
+                "authTokenEnv": "INVENTORY_REF",
+            },
+        ],
+    }
+    retained = retained_mcp_secret_values(
+        published_draft=published,
+        edited_draft=edited,
+        published_reference_values={"ORDERS_REF": "orders-secret"},
+    )
+
+    assert retained == {"ORDERS_REF": "orders-secret"}
+    servers = json.loads(
+        build_sidecar_mcp_servers_json(
+            draft=edited,
+            secret_values={**retained, "INVENTORY_REF": "inventory-secret"},
+        )
+    )
+    assert [server["name"] for server in servers] == ["orders", "inventory"]
+    assert [server["headers"]["Authorization"] for server in servers] == [
+        "Bearer orders-secret",
+        "Bearer inventory-secret",
+    ]
+
+
 def test_unchanged_mcp_reference_resolves_from_structured_runtime_secret() -> None:
     published = {
         "name": "root",
@@ -1018,6 +1207,11 @@ def test_changed_unnamed_mcp_url_reuses_same_published_tool_slot() -> None:
             "value": "retained-secret",
         },
     )
+
+    assert mcp_supplied_secret_values_by_reference(
+        edited_draft=edited,
+        supplied_credentials=reuse,
+    ) == {"MCP_ROOT_TOOL_1_AUTH_TOKEN": "retained-secret"}
 
 
 def test_changed_unnamed_mcp_url_rejects_moved_credential_slot() -> None:

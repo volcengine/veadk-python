@@ -1,0 +1,7 @@
+# BASE_IMAGE must be a previously built Studio image, pinned by digest for release builds
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+USER root
+COPY runtime/ /opt/studio-sandbox/runtime/
+COPY settings.json /opt/studio-sandbox/settings.json
+RUN /opt/agentkit-code-env/venv/bin/python /opt/studio-sandbox/runtime/refresh-editor.py

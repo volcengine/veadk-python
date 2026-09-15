@@ -22,6 +22,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 
+from .evaluation.models import MigrationEvaluationConfig
+
 MigrationFramework = Literal[
     "langchain",
     "langgraph",
@@ -73,6 +75,9 @@ class CreateMigrationTaskBody(BaseModel):
     source_file_name: str = Field(alias="sourceFileName", min_length=1, max_length=255)
     instruction: str = Field(default="", max_length=20_000)
     model_id: str | None = Field(default=None, alias="modelId", max_length=128)
+    evaluation: MigrationEvaluationConfig = Field(
+        default_factory=MigrationEvaluationConfig
+    )
 
     model_config = {"populate_by_name": True, "extra": "forbid"}
 

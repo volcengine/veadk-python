@@ -324,6 +324,34 @@ def mount_agent_surface_proxy_routes(
 ) -> None:
     """Mount bounded HTTP and WebSocket proxies for branded agent WebUIs."""
 
+    http_client: httpx.AsyncClient | None = None
+
+    def _shared_http_client() -> httpx.AsyncClient:
+        nonlocal http_client
+        if http_client is None:
+            http_client = httpx.AsyncClient(
+                follow_redirects=False,
+                timeout=httpx.Timeout(60),
+                limits=httpx.Limits(
+                    max_connections=100,
+                    max_keepalive_connections=40,
+                    keepalive_expiry=30,
+                ),
+            )
+        return http_client
+
+    async def _close_http_client() -> None:
+        nonlocal http_client
+        client, http_client = http_client, None
+        close = getattr(client, "aclose", None)
+        if close is not None:
+            await close()
+
+    router = getattr(app, "router", None)
+    add_event_handler = getattr(router, "add_event_handler", None)
+    if callable(add_event_handler):
+        add_event_handler("shutdown", _close_http_client)
+
     @app.api_route(  # type: ignore[attr-defined]
         "/web/{kind}/sessions/{session_id}/surface/{proxy_token}/{path:path}",
         methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
@@ -361,16 +389,12 @@ def mount_agent_surface_proxy_routes(
                 headers["x-hermes-session-token"] = session_token
         headers["origin"] = f"{parsed.scheme}://{parsed.netloc}"
         try:
-            async with httpx.AsyncClient(
-                follow_redirects=False,
-                timeout=httpx.Timeout(60),
-            ) as client:
-                upstream = await client.request(
-                    request.method,
-                    target_url,
-                    headers=headers,
-                    content=await request.body(),
-                )
+            upstream = await _shared_http_client().request(
+                request.method,
+                target_url,
+                headers=headers,
+                content=await request.body(),
+            )
         except httpx.HTTPError:
             return Response("无法连接沙箱页面。", status_code=502)
         if len(upstream.content) > _MAX_BODY_BYTES:
