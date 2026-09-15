@@ -14,21 +14,34 @@
 
 """Runtime half of Studio's reverse WebSocket tool channel."""
 
-from veadk.integrations.agentkit.studio_channel.protocol import (
-    PROTOCOL_VERSION,
-    CatalogSnapshot,
-    StudioToolManifest,
-    catalog_revision,
-)
-from veadk.integrations.agentkit.studio_channel.routes import (
-    StudioChannelRunHandler,
-    mount_studio_channel_routes,
-)
-from veadk.integrations.agentkit.studio_channel.tool import (
-    StudioExternalToolset,
-    StudioRemoteTool,
-    bind_studio_tools,
-)
+from __future__ import annotations
+
+import importlib
+from typing import Any
+
+
+_EXPORT_MODULES = {
+    "PROTOCOL_VERSION": "protocol",
+    "CatalogSnapshot": "protocol",
+    "StudioChannelRunHandler": "routes",
+    "StudioExternalToolset": "tool",
+    "StudioRemoteTool": "tool",
+    "StudioToolManifest": "protocol",
+    "bind_studio_tools": "tool",
+    "catalog_revision": "protocol",
+    "mount_studio_channel_routes": "routes",
+}
+
+
+def __getattr__(name: str) -> Any:
+    module_name = _EXPORT_MODULES.get(name)
+    if module_name is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    module = importlib.import_module(f"{__name__}.{module_name}")
+    value = getattr(module, name)
+    globals()[name] = value
+    return value
+
 
 __all__ = [
     "PROTOCOL_VERSION",

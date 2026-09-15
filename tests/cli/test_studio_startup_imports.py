@@ -183,6 +183,52 @@ if unexpected:
     )
 
 
+def test_studio_tool_catalog_defers_builtin_execution_runtime() -> None:
+    root = Path(__file__).resolve().parents[2]
+    script = """
+import sys
+
+import veadk.cli.studio_start
+from frontend.server.studio_tools.registry import build_studio_tool_registry
+
+registry = build_studio_tool_registry()
+registered = {manifest["name"] for manifest in registry.manifests()}
+required = {
+    "coding",
+    "image_generate",
+    "run_code",
+    "video_generate",
+    "web_search",
+}
+if not required <= registered:
+    raise SystemExit("Studio built-in catalog is incomplete")
+
+unexpected = sorted(
+    name
+    for name in sys.modules
+    if name == "google.adk.auth"
+    or name.startswith("google.adk.auth.")
+    or name == "google.adk.agents"
+    or name.startswith("google.adk.agents.")
+    or name == "google.adk.tools"
+    or name.startswith("google.adk.tools.")
+    or name == "veadk.tools.builtin_tools._agentkit"
+    or name == "veadk.tools.builtin_tools.create_agent"
+    or name.startswith("veadk.tools.builtin_tools.create_agent.")
+)
+if unexpected:
+    raise SystemExit("built-in execution runtime loaded while building Studio catalog")
+"""
+
+    subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
 def test_frontend_branding_defers_optional_logo_network_stack() -> None:
     root = Path(__file__).resolve().parents[2]
     script = """

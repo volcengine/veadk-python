@@ -18,6 +18,7 @@ from collections.abc import Callable
 from typing import Any, cast
 
 import pytest
+from veadk.tools import list_builtin_tools as list_canonical_builtin_tools
 
 from frontend.server.studio_tools import veadk_builtin_tools
 from frontend.server.studio_tools.registry import (
@@ -38,7 +39,16 @@ def _context() -> StudioToolExecutionContext:
     )
 
 
-@pytest.mark.parametrize("name", ["image_edit", "link_reader"])
+def test_deferred_builtin_catalog_matches_canonical_names() -> None:
+    assert set(veadk_builtin_tools._DEFERRED_BUILTIN_DECLARATIONS) == set(
+        list_canonical_builtin_tools()
+    )
+
+
+@pytest.mark.parametrize(
+    "name",
+    sorted(veadk_builtin_tools._DEFERRED_BUILTIN_DECLARATIONS),
+)
 def test_deferred_builtin_declaration_matches_canonical_tool(name: str) -> None:
     function_tool = veadk_builtin_tools.FunctionTool(
         cast(Callable[..., Any], veadk_builtin_tools.get_builtin_tool(name))
