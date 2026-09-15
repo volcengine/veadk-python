@@ -18,26 +18,44 @@ from __future__ import annotations
 
 import asyncio
 import copy
-import inspect
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import quote
 
-from google.adk.agents import Agent
-from google.adk.agents.invocation_context import InvocationContext
-from google.adk.artifacts.in_memory_artifact_service import InMemoryArtifactService
-from google.adk.sessions import InMemorySessionService, Session
-from google.adk.tools.function_tool import FunctionTool
-from google.adk.tools.tool_context import ToolContext
-
+from frontend.server.studio_tools.builtin_declarations import (
+    BUILTIN_TOOL_DECLARATIONS,
+)
 from frontend.server.studio_tools.registry import (
     StudioTool,
     StudioToolExecutionContext,
     StudioToolRegistry,
 )
-from veadk.multimodal.service import MediaService
-from veadk.tools import get_builtin_tool, list_builtin_tools
+
+if TYPE_CHECKING:
+    from veadk.multimodal.service import MediaService
+
+
+def FunctionTool(*args: Any, **kwargs: Any) -> Any:  # noqa: N802
+    """Construct ADK's adapter only when a built-in tool is first invoked."""
+
+    from google.adk.tools.function_tool import FunctionTool as _FunctionTool
+
+    return _FunctionTool(*args, **kwargs)
+
+
+def get_builtin_tool(name: str) -> Any:
+    """Resolve a canonical VeADK callable only for an actual tool call."""
+
+    from veadk.tools import get_builtin_tool as _get_builtin_tool
+
+    return _get_builtin_tool(name)
+
+
+def list_builtin_tools() -> list[str]:
+    """Return the declaration-locked built-in catalog without loading VeADK tools."""
+
+    return sorted(BUILTIN_TOOL_DECLARATIONS)
 
 
 _DISPLAY_NAMES = {
@@ -79,128 +97,54 @@ _IDEMPOTENT_TOOLS = {
     "web_search",
 }
 
-_DEFERRED_BUILTIN_DECLARATIONS: dict[str, tuple[str, dict[str, Any]]] = {
-    "link_reader": (
-        inspect.cleandoc(
-            """
-            Use this tool when you need to fetch content from web pages, PDFs, or Douyin videos.
-            It retrieves the title and main content from the provided URLs.
-
-            Examples: {"url_list": ["abc.com", "xyz.com"]}
-            Args:
-                url_list (list[str]): A list of URLs to parse (maximum 3).
-            Returns:
-                list[dict]: A list of dictionaries, each containing the title and content of the corresponding URL.
-            """
-        ),
-        {
-            "properties": {
-                "url_list": {
-                    "items": {"type": "string"},
-                    "title": "Url List",
-                    "type": "array",
-                }
-            },
-            "required": ["url_list"],
-            "title": "link_readerParams",
-            "type": "object",
-        },
-    ),
-    "image_edit": (
-        inspect.cleandoc(
-            """
-            Edit images in batch according to prompts and optional settings.
-
-            Each item in `params` describes a single image-edit request.
-
-            Args:
-                params (list[dict]):
-                    A list of image editing requests. Each item supports:
-
-                    Required:
-                        - origin_image (str):
-                            The URL or Base64 string of the original image to edit.
-                            Example:
-                              * URL: "https://example.com/image.png"
-                              * Base64: "data:image/png;base64,<BASE64>"
-
-                        - prompt (str):
-                            The textual description/instruction for editing the image.
-                            Supports English and Chinese.
-
-                    Optional:
-                        - image_name (str):
-                            Name/identifier for the generated image.
-
-                        - response_format (str):
-                            Format of the returned image.
-                            * "url": JPEG link (default)
-                            * "b64_json": Base64 string in JSON
-
-                        - guidance_scale (float):
-                            How strongly the prompt affects the result.
-                            Range: [1.0, 10.0], default 2.5.
-
-                        - watermark (bool):
-                            Whether to add watermark.
-                            Default: True.
-
-                        - seed (int):
-                            Random seed for reproducibility.
-                            Range: [-1, 2^31-1], default -1 (random).
-
-            Returns:
-                Dict: API response containing generated image metadata.
-                Example:
-                {
-                    "status": "success",
-                    "success_list": [{"image_name": ""}],
-                    "error_list": [{}]
-                }
-
-            Notes:
-                - Uses SeedEdit 3.0 model.
-                - Provide the same `seed` for consistent outputs across runs.
-                - A high `guidance_scale` enforces stricter adherence to text prompt.
-            """
-        ),
-        {
-            "properties": {
-                "params": {
-                    "items": {},
-                    "title": "Params",
-                    "type": "array",
-                }
-            },
-            "required": ["params"],
-            "title": "image_editParams",
-            "type": "object",
-        },
-    ),
-}
+_DEFERRED_BUILTIN_DECLARATIONS = BUILTIN_TOOL_DECLARATIONS
 
 
 @dataclass
 class _BuiltinExecutionHost:
     """Own the BFF-local ADK context needed by existing tool callables."""
 
-    session_service: InMemorySessionService = field(
-        default_factory=InMemorySessionService
-    )
-    artifact_service: InMemoryArtifactService = field(
-        default_factory=InMemoryArtifactService
-    )
+    session_service: Any | None = None
+    artifact_service: Any | None = None
     media_service: MediaService | None = None
-    agent: Agent = field(default_factory=lambda: Agent(name="studio_bff_agent"))
+    agent: Any | None = None
     states: dict[str, dict[str, Any]] = field(default_factory=dict)
     locks: dict[str, asyncio.Lock] = field(default_factory=dict)
+    initialization_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+    async def _ensure_runtime(self) -> None:
+        if self.session_service is not None:
+            return
+        async with self.initialization_lock:
+            if self.session_service is not None:
+                return
+            from google.adk.agents import Agent
+            from google.adk.artifacts.in_memory_artifact_service import (
+                InMemoryArtifactService,
+            )
+            from google.adk.sessions import InMemorySessionService
+
+            self.session_service = InMemorySessionService()
+            self.artifact_service = InMemoryArtifactService()
+            self.agent = Agent(name="studio_bff_agent")
 
     async def execute(
         self,
-        function_tool: FunctionTool,
+        function_tool: Any,
         arguments: dict[str, Any],
         context: StudioToolExecutionContext,
     ) -> Any:
+        await self._ensure_runtime()
+        from google.adk.agents.invocation_context import InvocationContext
+        from google.adk.sessions import Session
+        from google.adk.tools.tool_context import ToolContext
+
+        session_service = self.session_service
+        artifact_service = self.artifact_service
+        agent = self.agent
+        if session_service is None or artifact_service is None or agent is None:
+            raise RuntimeError("Studio built-in execution runtime is unavailable")
+
         lock = self.locks.setdefault(context.scope_id, asyncio.Lock())
         async with lock:
             session = Session(
@@ -210,10 +154,10 @@ class _BuiltinExecutionHost:
                 state=dict(self.states.get(context.scope_id, {})),
             )
             invocation_context = InvocationContext(
-                artifact_service=self.artifact_service,
-                session_service=self.session_service,
+                artifact_service=artifact_service,
+                session_service=session_service,
                 invocation_id=context.run_id,
-                agent=self.agent,
+                agent=agent,
                 session=session,
             )
             tool_context = ToolContext(
@@ -237,16 +181,19 @@ class _BuiltinExecutionHost:
 
     async def _publish_artifacts(
         self,
-        tool_context: ToolContext,
+        tool_context: Any,
         context: StudioToolExecutionContext,
     ) -> list[dict[str, Any]]:
         """Make ADK artifacts produced in BFF execution available to Studio."""
 
         if self.media_service is None:
             return []
+        artifact_service = self.artifact_service
+        if artifact_service is None:
+            raise RuntimeError("Studio built-in artifact runtime is unavailable")
         published: list[dict[str, Any]] = []
         for filename, version in tool_context.actions.artifact_delta.items():
-            artifact = await self.artifact_service.load_artifact(
+            artifact = await artifact_service.load_artifact(
                 app_name=context.app_name,
                 user_id=context.user_id,
                 session_id=context.session_id,
@@ -288,7 +235,7 @@ class _BuiltinExecutionHost:
         return published
 
 
-def _schema(function_tool: FunctionTool) -> tuple[str, dict[str, Any]]:
+def _schema(function_tool: Any) -> tuple[str, dict[str, Any]]:
     declaration = function_tool._get_declaration()
     if declaration is None:
         raise ValueError(f"Built-in tool has no declaration: {function_tool.name}")
@@ -315,7 +262,7 @@ def register_veadk_builtin_tools(
     """Expose the existing VeADK built-ins through the Studio-owned channel."""
 
     host = _BuiltinExecutionHost(media_service=media_service)
-    resolved_tools: dict[str, FunctionTool] = {}
+    resolved_tools: dict[str, Any] = {}
     for name in list_builtin_tools():
         if name in _DEFERRED_BUILTIN_DECLARATIONS:
             description, input_schema = _deferred_schema(name)
