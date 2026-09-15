@@ -32,7 +32,7 @@ function RuntimeTasks({ runtime }: { runtime: MpaRuntime }) {
     });
     return () => controller.abort();
   }, [runtime.runtimeId, runtime.region, offset, query, refresh]);
-  const errorKey = ["mpa_identity_required", "mpa_runtime_config_required", "mpa_runtime_mismatch", "mpa_top_failed"].includes(error) ? `mpa.errors.${error}` : error === "MPA_HTTP_401" ? "mpa.authRequired"
+  const errorKey = error === "MPA_HTTP_401" ? "mpa.authRequired"
     : error === "MPA_HTTP_403" ? "mpa.forbidden"
       : error === "MPA_HTTP_404" ? "mpa.unsupported"
         : error === "MPA_INVALID_RESPONSE" ? "mpa.invalidResponse" : "mpa.loadFailed";
@@ -40,7 +40,7 @@ function RuntimeTasks({ runtime }: { runtime: MpaRuntime }) {
   return <section className="mpa-cron" aria-label={t("mpa.title")}>
     <div className="mpa-cron-target"><strong>{runtime.name}</strong><span>{runtime.runtimeId} · {runtime.region}</span></div>
     <p>{t("mpa.scope")}</p>
-    <form className="mpa-cron-auth" onSubmit={event => {
+    <form className="mpa-cron-search" onSubmit={event => {
       event.preventDefault(); setPage(null); setOffset(0); setQuery(draftQuery); setRefresh(value => value + 1);
     }}>
       <label>{t("mpa.search")}<input type="search" maxLength={200} value={draftQuery}
@@ -48,7 +48,6 @@ function RuntimeTasks({ runtime }: { runtime: MpaRuntime }) {
       <button className="cw-btn cw-btn-soft" type="submit" disabled={loading}>{t("mpa.search")}</button>
       <button className="cw-btn cw-btn-ghost" type="button" disabled={loading} onClick={() => setRefresh(value => value + 1)}>{t("mpa.refresh")}</button>
     </form>
-    <p>{t("mpa.automaticAuth")}</p>
     {page?.overview && <div className="mpa-cron-overview">
       <div><span>{t("mpa.executionCount")}</span><strong>{page.overview.executionCount}</strong></div>
       <div><span>{t("mpa.successRate")}</span><strong>{(page.overview.successRate * 100).toFixed(1)}%</strong></div>

@@ -24,12 +24,7 @@ export async function fetchMpaCronTasks(
     { signal }, {},
   );
   // Do not expose arbitrary upstream bodies, which may contain credentials.
-  if (!response.ok) {
-    const error = await response.json().catch(() => null);
-    const code = error?.detail;
-    if (["mpa_identity_required", "mpa_runtime_config_required", "mpa_runtime_mismatch", "mpa_top_failed"].includes(code)) throw new Error(code);
-    throw new Error(`MPA_HTTP_${response.status}`);
-  }
+  if (!response.ok) throw new Error(`MPA_HTTP_${response.status}`);
   let data;
   try { data = await response.json(); }
   catch { throw new Error("MPA_INVALID_RESPONSE"); }
