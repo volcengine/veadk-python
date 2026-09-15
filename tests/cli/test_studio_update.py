@@ -1857,11 +1857,132 @@ def test_release_failure_includes_status_when_logs_are_empty(
         service._release_application("application-id")
 
     message = str(exc.value)
-    assert "No application revision logs were returned" in message
-    assert "Application status response" in message
+    assert "控制面日志" in message
+    assert "未返回控制面日志。" in message
+    assert "FaaS 数据面日志" in message
+    assert "未发现可下载的 FaaS 数据面日志链接。" in message
+    assert "最终 VeFaaS 状态" in message
     assert "runtime start failed" in message
-    assert "sensitive-token-value" not in message
-    assert "******" in message
+    assert "sensitive-token-value" in message
+
+
+def test_release_failure_downloads_linked_log_before_redaction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = object.__new__(VeFaaS)
+    raw_url = (
+        "https://cp-v2.tos-cn-beijing.volces.com/v2/log/step-c4183.log"
+        "?X-Tos-Credential=TEST_CREDENTIAL"
+        "&X-Tos-Signature=be37d28bd7cf12e90dbb886729bd3a698d58996ec686745321dd"
+    )
+    downloaded_urls: list[str] = []
+
+    monkeypatch.setattr(
+        service,
+        "_start_application_release",
+        lambda _app_id: {"Result": {"RevisionNumber": 9}},
+    )
+    monkeypatch.setattr(
+        service,
+        "_get_application_status",
+        lambda _app_id: (
+            "deploy_fail",
+            {
+                "Result": {
+                    "Status": "deploy_fail",
+                    "NewRevisionNumber": 9,
+                    "ApiKey": "sensitive-token-value",
+                }
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        service,
+        "_get_application_logs",
+        lambda **_kwargs: [
+            "[function][mldo3uis][install][Error] 在线依赖安装失败",
+            f"[function][mldo3uis][install][Extra] {raw_url}",
+        ],
+    )
+
+    def _download(url: str) -> str:
+        downloaded_urls.append(url)
+        return "pip install failed: token=raw-token-secret\nmissing distribution"
+
+    monkeypatch.setattr(
+        "veadk.integrations.ve_faas.ve_faas._download_release_log_url",
+        _download,
+    )
+
+    with pytest.raises(Exception) as exc:
+        service._release_application("application-id")
+
+    message = str(exc.value)
+    assert downloaded_urls == [raw_url]
+    assert "控制面日志" in message
+    assert "FaaS 数据面日志" in message
+    assert "[1] FaaS 数据面日志" in message
+    assert "来源:" in message
+    assert "内容:" in message
+    assert "pip install failed" in message
+    assert "missing distribution" in message
+    assert raw_url in message
+    assert "raw-token-secret" in message
+    assert "sensitive-token-value" in message
+    assert "be37d28bd7cf12e90" in message
+
+
+def test_release_failure_uses_byteplus_labels_for_linked_logs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = object.__new__(VeFaaS)
+    cast(Any, service).provider = "byteplus"
+    raw_url = (
+        "https://cp-v2.tos-cn-beijing.volces.com/v2/log/step-c4183.log"
+        "?X-Tos-Credential=TEST_CREDENTIAL"
+        "&X-Tos-Signature=be37d28bd7cf12e90dbb886729bd3a698d58996ec686745321dd"
+    )
+
+    monkeypatch.setattr(
+        service,
+        "_start_application_release",
+        lambda _app_id: {"Result": {"RevisionNumber": 9}},
+    )
+    monkeypatch.setattr(
+        service,
+        "_get_application_status",
+        lambda _app_id: (
+            "deploy_fail",
+            {
+                "Result": {
+                    "Status": "deploy_fail",
+                    "NewRevisionNumber": 9,
+                    "ApiKey": "sensitive-token-value",
+                }
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        service,
+        "_get_application_logs",
+        lambda **_kwargs: [f"[function][mldo3uis][install][Extra] {raw_url}"],
+    )
+    monkeypatch.setattr(
+        "veadk.integrations.ve_faas.ve_faas._download_release_log_url",
+        lambda _url: "pip install failed: token=raw-token-secret",
+    )
+
+    with pytest.raises(Exception) as exc:
+        service._release_application("application-id")
+
+    message = str(exc.value)
+    assert "Release application failed. Details:" in message
+    assert "Control Plane Logs" in message
+    assert "FaaS Data Plane Logs" in message
+    assert "Final VeFaaS Status" in message
+    assert raw_url in message
+    assert "raw-token-secret" in message
+    assert "sensitive-token-value" in message
 
 
 def test_update_application_code_bundle_preserves_unspecified_sandbox_tool(
