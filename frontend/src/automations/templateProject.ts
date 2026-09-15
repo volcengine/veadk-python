@@ -41,7 +41,7 @@ const AGENTKIT_BASE_IMAGES: Record<CloudProvider, string> = {
     "agentkit-prod-public-ap-southeast-1.cr.bytepluses.com/base/py-simple:python3.12-bookworm-slim-latest",
 };
 
-const VEADK_VERSION = "1.1.10";
+const VEADK_VERSION = "1.1.11";
 const VOLCENGINE_PYPI_INDEXES = [
   "https://mirrors.cloud.tencent.com/pypi/simple",
   "https://pypi.mirrors.ustc.edu.cn/simple",
