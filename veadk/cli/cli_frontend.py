@@ -16343,6 +16343,8 @@ def frontend_update(
             environment_overrides["VEADK_SITE_TITLE"] = branding_title
         environment_overrides.update(_github_app_review_environment(current_env))
         environment_overrides.update(_gitlab_app_review_environment(current_env))
+        if "VEADK_GITLAB_TOKEN" in current_env:
+            environment_overrides["VEADK_GITLAB_TOKEN"] = ""
         if sandbox_dev_tool_id is not None:
             environment_overrides["SANDBOX_DEV"] = sandbox_dev_tool_id
         if sandbox_chat_codex_tool_id is not None:
