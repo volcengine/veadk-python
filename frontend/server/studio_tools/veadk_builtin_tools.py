@@ -254,6 +254,52 @@ def _deferred_schema(name: str) -> tuple[str, dict[str, Any]]:
     return description, copied_schema
 
 
+def _normalize_schema_value(value: Any) -> Any:
+    """Normalize the nullable schema form that varies across Pydantic runtimes."""
+
+    if isinstance(value, list):
+        return [_normalize_schema_value(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+
+    normalized = {key: _normalize_schema_value(item) for key, item in value.items()}
+    any_of = normalized.get("anyOf")
+    if (
+        not isinstance(any_of, list)
+        or len(any_of) != 2
+        or "default" not in normalized
+        or normalized["default"] is not None
+    ):
+        return normalized
+
+    null_branches = [branch for branch in any_of if branch == {"type": "null"}]
+    value_branches = [branch for branch in any_of if branch != {"type": "null"}]
+    if (
+        len(null_branches) != 1
+        or len(value_branches) != 1
+        or not isinstance(value_branches[0], dict)
+    ):
+        return normalized
+
+    merged = {key: item for key, item in normalized.items() if key != "anyOf"}
+    for key, item in value_branches[0].items():
+        if key in merged and merged[key] != item:
+            return normalized
+        merged[key] = item
+    return merged
+
+
+def _schemas_match(
+    left: tuple[str, dict[str, Any]],
+    right: tuple[str, dict[str, Any]],
+) -> bool:
+    """Compare deferred declarations across supported Python/Pydantic forms."""
+
+    return left[0] == right[0] and _normalize_schema_value(
+        left[1]
+    ) == _normalize_schema_value(right[1])
+
+
 def register_veadk_builtin_tools(
     registry: StudioToolRegistry,
     *,
@@ -284,7 +330,9 @@ def register_veadk_builtin_tools(
                 current_tool = FunctionTool(
                     cast(Callable[..., Any], get_builtin_tool(current_name))
                 )
-                if _schema(current_tool) != _deferred_schema(current_name):
+                if not _schemas_match(
+                    _schema(current_tool), _deferred_schema(current_name)
+                ):
                     raise RuntimeError(
                         f"Deferred built-in declaration changed: {current_name}"
                     )
