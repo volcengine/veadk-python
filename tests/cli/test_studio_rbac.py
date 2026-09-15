@@ -4348,71 +4348,52 @@ def test_runtime_update_capability_distinguishes_incompatible_and_network_errors
         "region": "cn-beijing",
         "appName": "selected-agent",
     }
+    headers = {"X-VeADK-Local-User": "developer"}
 
     with TestClient(app) as client:
-        incompatible = client.get(
-            "/web/runtime-update-capability",
-            params=params,
-            headers={"X-VeADK-Local-User": "developer"},
-        )
+
+        def capability(request_params: dict[str, Any]) -> Any:
+            deadline = time.monotonic() + 2.0
+            while True:
+                response = client.get(
+                    "/web/runtime-update-capability",
+                    params=request_params,
+                    headers=headers,
+                )
+                if response.status_code != 202:
+                    return response
+                assert response.json()["recoveryStatus"] == "preparing"
+                if time.monotonic() >= deadline:
+                    pytest.fail("Runtime update capability remained pending")
+                time.sleep(0.01)
+
+        incompatible = capability(params)
         mode = "agent-unsupported"
-        agent_unsupported = client.get(
-            "/web/runtime-update-capability",
-            params=params,
-            headers={"X-VeADK-Local-User": "developer"},
-        )
+        agent_unsupported = capability(params)
         mode = "empty"
-        no_apps = client.get(
-            "/web/runtime-update-capability",
-            params=params,
-            headers={"X-VeADK-Local-User": "developer"},
-        )
+        no_apps = capability(params)
         mode = "multiple"
-        multiple_apps = client.get(
-            "/web/runtime-update-capability",
-            params=params,
-            headers={"X-VeADK-Local-User": "developer"},
-        )
+        multiple_apps = capability(params)
         mode = "network"
-        network_error = client.get(
-            "/web/runtime-update-capability",
-            params=params,
-            headers={"X-VeADK-Local-User": "developer"},
-        )
-        network_without_app = client.get(
-            "/web/runtime-update-capability",
-            params={
+        network_error = capability(params)
+        network_without_app = capability(
+            {
                 "runtimeId": runtime.runtime_id,
                 "region": "cn-beijing",
-            },
-            headers={"X-VeADK-Local-User": "developer"},
+            }
         )
         mode = "server-error"
-        server_error = client.get(
-            "/web/runtime-update-capability",
-            params=params,
-            headers={"X-VeADK-Local-User": "developer"},
-        )
-        server_error_without_app = client.get(
-            "/web/runtime-update-capability",
-            params={
+        server_error = capability(params)
+        server_error_without_app = capability(
+            {
                 "runtimeId": runtime.runtime_id,
                 "region": "cn-beijing",
-            },
-            headers={"X-VeADK-Local-User": "developer"},
+            }
         )
         mode = "agent-server-error"
-        agent_server_error = client.get(
-            "/web/runtime-update-capability",
-            params=params,
-            headers={"X-VeADK-Local-User": "developer"},
-        )
+        agent_server_error = capability(params)
         mode = "forbidden"
-        forbidden = client.get(
-            "/web/runtime-update-capability",
-            params=params,
-            headers={"X-VeADK-Local-User": "developer"},
-        )
+        forbidden = capability(params)
 
     assert incompatible.status_code == 200
     assert incompatible.json()["canUpdate"] is False
