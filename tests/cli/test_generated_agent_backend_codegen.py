@@ -26,6 +26,7 @@ from pydantic import ValidationError
 from frontend.server.environments.models import EnvironmentSkillManifestEntry
 from veadk.cli.generated_agent_codegen import (
     _DYNAMIC_AGENT_DELEGATION_RULES,
+    _VEADK_VERSION,
     AgentDraft,
     DeploymentConfig,
     GeneratedAgentProjectRequest,
@@ -54,7 +55,7 @@ from veadk.tools.builtin_tools.create_agent.models import (
     LegacyAgentBlueprint,
 )
 
-VEADK_REQUIREMENT = "veadk-python==1.1.10"
+VEADK_REQUIREMENT = f"veadk-python=={_VEADK_VERSION}"
 
 
 def test_old_files_request_shape_is_rejected() -> None:

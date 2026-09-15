@@ -72,7 +72,7 @@ _AGENTKIT_BASE_IMAGES = {
     "volcengine": "agentkit-prod-public-cn-beijing.cr.volces.com/base/py-simple:python3.12-bookworm-slim-latest",
     "byteplus": "agentkit-prod-public-ap-southeast-1.cr.bytepluses.com/base/py-simple:python3.12-bookworm-slim-latest",
 }
-_VEADK_VERSION = "1.1.10"
+_VEADK_VERSION = "1.1.11"
 _VOLCENGINE_PYPI_INDEXES = (
     "https://mirrors.cloud.tencent.com/pypi/simple",
     "https://pypi.mirrors.ustc.edu.cn/simple",

@@ -14,12 +14,14 @@
 
 from __future__ import annotations
 
+import threading
 from types import SimpleNamespace
 
 import pytest
 from google.adk.models.lite_llm import LiteLlm
 from google.adk.models.llm_request import LlmRequest
 from google.adk.models.llm_response import LlmResponse
+from google.adk.tools.function_tool import FunctionTool
 from google.genai import types
 
 from veadk.models.retrying_lite_llm import RetryingLiteLlm
@@ -31,6 +33,14 @@ class _RateLimitError(RuntimeError):
     def __init__(self, retry_after: str = "0") -> None:
         super().__init__("rate limited")
         self.response = SimpleNamespace(headers={"Retry-After": retry_after})
+
+
+class _StatefulToolOwner:
+    def __init__(self) -> None:
+        self.lock = threading.RLock()
+
+    def stateful_tool(self) -> str:
+        return "ok"
 
 
 def _request() -> LlmRequest:
@@ -77,6 +87,41 @@ async def test_retries_one_pre_output_429_from_pristine_request(
     assert len(responses) == 1
     assert seen_lengths == [1, 1]
     assert sleeps == [0.25]
+
+
+@pytest.mark.asyncio
+async def test_retries_without_deepcopying_runtime_tools(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owner = _StatefulToolOwner()
+    tool = FunctionTool(owner.stateful_tool)
+    request = _request()
+    request.tools_dict[tool.name] = tool
+    seen_tools = []
+
+    async def generate(
+        _self: LiteLlm,
+        request: LlmRequest,
+        stream: bool = False,
+    ):
+        del stream
+        seen_tools.append(request.tools_dict[tool.name])
+        if len(seen_tools) == 1:
+            raise _RateLimitError("0")
+        yield LlmResponse(content=types.Content(role="model", parts=[]))
+
+    async def sleep(delay: float) -> None:
+        del delay
+
+    monkeypatch.setattr(LiteLlm, "generate_content_async", generate)
+    monkeypatch.setattr("veadk.models.retrying_lite_llm.asyncio.sleep", sleep)
+    model = RetryingLiteLlm(model="openai/test-model")
+
+    responses = [response async for response in model.generate_content_async(request)]
+
+    assert len(responses) == 1
+    assert seen_tools == [tool, tool]
+    assert request.tools_dict[tool.name] is tool
 
 
 @pytest.mark.asyncio
