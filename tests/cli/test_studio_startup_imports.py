@@ -496,6 +496,38 @@ if unexpected:
     )
 
 
+def test_workspace_preview_route_setup_defers_project_sandbox_runtime() -> None:
+    root = Path(__file__).resolve().parents[2]
+    script = """
+import sys
+
+from fastapi import FastAPI
+
+from frontend.server.workspace_preview import mount_workspace_preview_routes
+
+app = FastAPI()
+mount_workspace_preview_routes(app, object(), lambda _request: "owner", lambda _request: "creator")
+
+unexpected = sorted(
+    name
+    for name in sys.modules
+    if name == "frontend.server.workspace_projects"
+    or name == "frontend.server.sandbox_remote"
+    or name == "agentkit.toolkit.cli.sandbox.sandbox_client"
+)
+if unexpected:
+    raise SystemExit("workspace preview Sandbox runtime loaded during route setup")
+"""
+
+    subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
 def test_knowledge_routes_defer_document_extraction_stack() -> None:
     root = Path(__file__).resolve().parents[2]
     script = """
