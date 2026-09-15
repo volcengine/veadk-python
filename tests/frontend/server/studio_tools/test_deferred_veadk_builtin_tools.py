@@ -54,8 +54,85 @@ def test_deferred_builtin_declaration_matches_canonical_tool(name: str) -> None:
         cast(Callable[..., Any], veadk_builtin_tools.get_builtin_tool(name))
     )
 
-    assert veadk_builtin_tools._deferred_schema(name) == veadk_builtin_tools._schema(
-        function_tool
+    assert veadk_builtin_tools._schemas_match(
+        veadk_builtin_tools._deferred_schema(name),
+        veadk_builtin_tools._schema(function_tool),
+    )
+
+
+def test_schema_match_normalizes_nullable_pydantic_variants() -> None:
+    static_schema = {
+        "type": "object",
+        "properties": {
+            "optional_label": {
+                "default": None,
+                "title": "Optional Label",
+                "type": "string",
+            }
+        },
+    }
+    runtime_schema = {
+        "type": "object",
+        "properties": {
+            "optional_label": {
+                "anyOf": [{"type": "string"}, {"type": "null"}],
+                "default": None,
+                "title": "Optional Label",
+            }
+        },
+    }
+
+    assert veadk_builtin_tools._schemas_match(
+        ("description", static_schema), ("description", runtime_schema)
+    )
+    assert static_schema["properties"]["optional_label"]["type"] == "string"
+    assert "anyOf" in runtime_schema["properties"]["optional_label"]
+
+
+@pytest.mark.parametrize(
+    "runtime_property",
+    [
+        {
+            "anyOf": [
+                {"type": "string"},
+                {"type": "integer"},
+                {"type": "null"},
+            ],
+            "default": None,
+            "title": "Optional Label",
+        },
+        {
+            "anyOf": [{"type": "string"}, {"type": "null"}],
+            "default": "fallback",
+            "title": "Optional Label",
+        },
+        {
+            "anyOf": [{"type": "integer"}, {"type": "null"}],
+            "default": None,
+            "title": "Optional Label",
+        },
+    ],
+)
+def test_schema_match_rejects_non_equivalent_unions(
+    runtime_property: dict[str, Any],
+) -> None:
+    static_schema = {
+        "type": "object",
+        "properties": {
+            "optional_label": {
+                "default": None,
+                "title": "Optional Label",
+                "type": "string",
+            }
+        },
+    }
+    runtime_schema = {
+        "type": "object",
+        "properties": {"optional_label": runtime_property},
+    }
+
+    assert not veadk_builtin_tools._schemas_match(
+        ("description", static_schema), ("description", runtime_schema)
     )
 
 
