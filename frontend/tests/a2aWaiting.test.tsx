@@ -37,3 +37,13 @@ describe("A2A waiting presentation", () => {
     expect(projector.project({partial: true, custom_metadata: {a2aStatus: "working"}}).turn.meta?.a2aStatus).toBe("working");
   });
 });
+
+it("ignores user echo frames before and after assistant output", () => {
+  const projector = createAssistantEventProjector();
+  const echo = {id: "echo", author: "user", content: {role: "user", parts: [{text: "request"}]}};
+  expect(projector.project(echo).ignored).toBe(true);
+  const reply = {id: "reply", author: "agent", partial: true, content: {parts: [{text: "answer"}]}};
+  expect(projector.project(reply).ignored).not.toBe(true);
+  expect(projector.project(echo).ignored).toBe(true);
+  expect(projector.project(reply).ignored).toBe(true);
+});

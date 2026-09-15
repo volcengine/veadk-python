@@ -11170,6 +11170,10 @@ def _run_frontend_server(
             apikey=apikey,
             auth_type=auth_type,
         )
+        # Match scheduled-task ownership and never forward browser identity claims.
+        principal = _current_principal(request)
+        if principal is not None:
+            headers["x-user-id"] = principal.owner_id
         # GET/HEAD probes never need a request body. Avoid reading from an
         # already-disconnected browser request after the control-plane lookup;
         # detail/list navigation deliberately cancels stale probes.

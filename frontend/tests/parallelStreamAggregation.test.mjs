@@ -276,3 +276,22 @@ test("A2A malformed metadata is ignored; snake case metadata is supported", () =
   assert.equal(projection.turn.meta.a2aStatus, "working");
   assert.equal(projector.finish()[0].meta.streaming, false);
 });
+
+test("ignores streamed user echoes without dropping agent tool responses", () => {
+  const projector = createAssistantEventProjector("echo", {
+    role: "assistant", blocks: [], meta: { localId: "pending", streaming: true },
+  });
+  assert.equal(projector.project({ ...event("user", "request"), id: "echo" }).ignored, true);
+  const call = projector.project({ ...event("default", ""), id: "call", content: {
+    role: "model", parts: [{ functionCall: { id: "t1", name: "list_esa_cron_tasks", args: {} } }],
+  } });
+  assert.equal(call.turn.meta.localId, "pending");
+  const response = projector.project({ ...event("default", ""), id: "response", content: {
+    role: "user", parts: [{ functionResponse: { id: "t1", name: "list_esa_cron_tasks", response: { items: [] } } }],
+  } });
+  assert.notEqual(response.ignored, true);
+  assert.equal(response.turn.meta.localId, call.turn.meta.localId);
+  assert.equal(projector.project({ ...event("user", "request"), id: "echo-replay" }).ignored, true);
+  const answer = projector.project(event("default", "done", { partial: false }));
+  assert.equal(blockText(answer.turn, "text"), "done");
+});

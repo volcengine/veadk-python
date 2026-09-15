@@ -882,7 +882,9 @@ export function createAssistantEventProjector(
 
   return {
     project(ev: AdkEvent): AssistantEventProjection {
-      if (ev.id && seenEventIds.has(ev.id)) {
+      // Some Runtime streams replay the submitted user event. The UI already
+      // inserted that turn; agent-authored tool responses still belong here.
+      if (ev.author === "user" || (ev.id && seenEventIds.has(ev.id))) {
         return {
           turn: { role: "assistant", blocks: [] },
           completed: false,

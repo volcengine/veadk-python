@@ -2688,7 +2688,8 @@ def test_runtime_proxy_uses_authorizer_credential(
         response = client.get(
             "/web/runtime-proxy/runtime-1/dev/apps/demo_agent/debug/trace/"
             "session/session-1"
-            "?region=cn-beijing"
+            "?region=cn-beijing",
+            headers={"X-VeADK-Local-User": "studio-e2e-user", "x-user-id": "forged"},
         )
 
     assert response.status_code == 200
@@ -2697,6 +2698,7 @@ def test_runtime_proxy_uses_authorizer_credential(
         "https://runtime.example/dev/apps/demo_agent/debug/trace/session/session-1"
     )
     assert upstream_headers["Authorization"] == expected_authorization
+    assert upstream_headers["x-user-id"] == "studio-e2e-user"
 
 
 def test_runtime_proxy_exposes_safe_instance_context(
