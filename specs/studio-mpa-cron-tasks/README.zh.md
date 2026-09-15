@@ -1,14 +1,32 @@
-# MPA Runtime 任务查看器
+# MPA Runtime 定时任务管理
 
 [English](README.md)
 
-2026-09-15。Studio 面板负责只读展示并分页获取选中 Runtime 的 /api/v1/esa-cron-tasks 响应。MPA 负责存储、用户鉴权和调度，现有 Studio 代理负责 Runtime 访问和网关鉴权。选择包含 Runtime ID 和地域，未选择时不请求。请求使用 limit=20、offset 和 includeDisabled=true。可选 X-Jwt-Token 仅存在组件内存，切换目标或卸载时清除。列表仅展示令牌有权访问的任务。错误不能变成空成功，迟到响应不能跨目标显示。不增加修改或调度接口。参见[变更与验证](../../prd-spec/features/studio-mpa-cron-tasks/README.zh.md)。
+修订日期：2026-09-15。组件 ID：studio-mpa-cron-tasks。
 
-## 自动凭证修订 — 2026-09-15
-当前用户授权将手动 JWT 输入替换为服务端调用 TOP GetMpaInstanceToken（2026-03-01）。从已授权的所选 Runtime 读取 MPA_AGENT_ID、MPA_SPACE_ID/CLAW_SPACE_ID、MPA_IS_DEBUG_RUNTIME 和 ARKCLAW_TOP_SERVICE。使用可信企业身份 user_pool_user_uid；本地管理员在服务端配置 VEADK_STUDIO_MPA_USER_UID。禁止使用浏览器传入的身份申请凭证。JWT 由 TOP 签发。转发 Authorization 和 X-Jwt-Token 前校验其 HTTPS 地址与所选 Runtime 相同。每次列表请求获取新凭证，不缓存、持久化或向浏览器返回凭证。保持只读范围，参照 mono SharedAgent/Cron 增加任务提示词详情、执行次数与成功率。配置缺失和 TOP 失败需明确展示。测试覆盖身份、地址不匹配、上游错误、凭证隔离和取消，增量覆盖率超过 95%。本修订替代旧手动 JWT 契约；此前验证结果仅针对旧版本。
+Studio 展示所选 Runtime 内按用户隔离的定时任务。MPA 负责持久化、授权、调度和执行；Studio 服务端负责 Runtime 访问检查、可信用户身份及网关凭证。不获取 TOP/JWT，不回退到全用户读取。MPA 撤销提交 `91fd6a3` 后，本契约替代之前的全用户查看器。
 
-## 直接访问 Runtime 修订（2026-09-15）
-用户已关闭 Runtime 的 JWT 校验，并授权移除 TOP 凭证申请。替代此前的凭证契约：保留所选 Runtime 的权限检查及网关鉴权，使用当前 Studio 身份的 owner_id 作为 x-user-id；从 Runtime 配置读取 x-space-id 和 x-mpa-id，缺失时沿用 MPA 的本地默认值；不再申请或转发 X-Jwt-Token。移除企业 UID 配置及凭证相关页面提示。任务仍按用户筛选。本次不修改 Runtime 配置或业务逻辑。验证请求头、不调用 TOP、分页、上游异常与取消；增量覆盖率须超过 95%。
+## HTTP 和身份
 
-## 最终全量读取契约 — 2026-09-15
-用户明确授权在 Runtime 关闭 JWT 时开放全量用户读取，MPA 提交 833c6bc 已实现此行为。Studio 只携带网关鉴权，不发送 JWT、x-user-id、x-space-id 或 x-mpa-id，也不再要求业务用户身份。本节替代之前按用户筛选的直接访问修订。保留 Runtime 权限检查、只读范围、分页与现有错误处理。
+所有路由要求 `region` 并沿用所选 Runtime 授权。`x-user-id` 来自认证的 Studio 用户，不能使用浏览器传入的身份请求头。上游端点/密钥由已有 Runtime 连接逻辑解析，仅转发网关 Authorization 和 x-user-id。JWT 开启的 Runtime 保留其正常鉴权失败。
+
+| Studio 路由 | 方法 | MPA 路由 |
+| --- | --- | --- |
+| `/web/mpa-cron/{runtime_id}` | GET / POST | `/api/v1/esa-cron-tasks` |
+| `/web/mpa-cron/{runtime_id}/{task_id}` | POST / DELETE | `/api/v1/esa-cron-tasks/{task_id}` |
+| `/web/mpa-cron/{runtime_id}/{task_id}/run` | POST | `/api/v1/esa-cron-tasks/{task_id}/run` |
+| `/web/mpa-cron/{runtime_id}/{task_id}/runs` | GET | `/api/v1/esa-cron-tasks/{task_id}/runs` |
+
+任务 ID 只允许字母、数字、下划线和连字符。写入字段只允许现有 MPA schema 字段名，请求体上限 32 KiB，字段值由上游校验。请求超时 30 秒，不跟随重定向。HTTP 失败保留状态码，不回显上游响应体；格式错误、网络失败、重定向安全报错。列表使用 includeDisabled=true，每次服务端分页 20 条；执行历史保留分页。更新使用 expectedVersion，同一次创建/执行重试保留 clientToken。
+
+## 页面和状态
+
+参照 mono 的列表/日历、状态筛选、统计、任务详情/历史、创建/编辑/复制、删除确认、启停和立即执行交互。Studio 复用本地控件及样式，不引入 mono 的 workspace 依赖链。创建要求 Agent ID 和任务内容，支持 Web/飞书投递；编辑保留未改变的投递元数据。复制只打开表单，保存才写入。
+
+完整读取任务分页后再展示日历或筛选列表，按 ID 去重，列表前端每页 10 条。统计使用上游实际的全历史范围，不标为不存在的近七日统计。lastRunAt 与 nextRunAt 含义不同。日历展开 Once/Interval/Daily/Weekly/Monthly 和固定时间 Cron，处理周期时区与夏令时；复杂 Cron 仅显示服务端 nextRunAt。单元格按任务合并多次执行。日历按设备时区显示，周期文案标注配置时区。
+
+没有 Runtime 时不请求。切换目标取消读取并忽略过期结果，包括执行历史及写入完成响应。写入使用防重复提交保护；取消 HTTP 写请求不等于撤销服务端效果。写入失败保留表单，版本冲突要求刷新。加载、空数据、错误状态明确区分。既有 Studio/TOS 调度及 ADK 会话不受影响。
+
+## 验证
+
+见[实施和验收记录](../../prd-spec/features/studio-mpa-cron-tasks/2026-09-15-mono-task-management.zh.md)。覆盖代理边界、API schema、写入并发/幂等、分页、时区/夏令时、过期响应、IME、加载/错误/重试和键盘行为。增量覆盖率超过 95%。浏览器模拟数据验收与真实 Runtime 读取分开记录，不把模拟测试宣称为真实写入 E2E。

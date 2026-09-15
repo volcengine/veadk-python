@@ -1,4 +1,4 @@
-import { fetchMpaCronTasks, type MpaRuntime } from "./mpaCronTasks";
+import { fetchMpaCronTasks, manageMpaTask, fetchMpaRuns, type MpaRuntime } from "./mpaCronTasks";
 // Thin client for the Google ADK API server (the same server `veadk frontend`
 // launches). Uses relative URLs so it works same-origin in production and via
 // the Vite dev proxy in development.
@@ -5236,3 +5236,6 @@ export async function updateSandboxTool(kind: SandboxToolKind): Promise<{
 export function listMpaCronTasks(runtime: MpaRuntime, offset: number, query: string, signal?: AbortSignal) {
   return fetchMpaCronTasks(apiFetch, runtime, offset, query, signal);
 }
+
+export function requestMpaTask(runtime: MpaRuntime, method: string, suffix: string, payload?: unknown, signal?: AbortSignal) { return manageMpaTask(apiFetch, runtime, method, suffix, payload, signal); }
+export function listMpaRuns(runtime: MpaRuntime, taskId: string, offset: number, signal?: AbortSignal) { return fetchMpaRuns(apiFetch, runtime, taskId, offset, signal); }
