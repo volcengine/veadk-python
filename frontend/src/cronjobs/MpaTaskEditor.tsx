@@ -8,7 +8,6 @@ import { MpaIcon } from "./MpaTaskIcons";
 
 export function MpaTaskEditor({
   task,
-  defaultAgentId,
   copy,
   busy,
   error,
@@ -16,7 +15,6 @@ export function MpaTaskEditor({
   onSave,
 }: {
   task?: MpaCronTask;
-  defaultAgentId: string;
   copy: boolean;
   busy: boolean;
   error: string;
@@ -128,7 +126,7 @@ export function MpaTaskEditor({
     setValidation("");
     onSave({
       name: name.trim(),
-      agentId: task?.agentId || defaultAgentId,
+      ...(task?.agentId ? { agentId: task.agentId } : {}),
       prompt: prompt.trim(),
       enabled,
       schedule,
