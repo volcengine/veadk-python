@@ -22,17 +22,14 @@ import logging
 import shlex
 from collections.abc import Mapping
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
-from frontend.server.intelligent_development import DeliveryReference, release_path
-from frontend.server.intelligent_development_task import IntentDecision
-from frontend.server.sandbox_remote import SandboxRemoteTransport
 from frontend.server.source_project_limits import (
     SOURCE_PROJECT_MAX_BYTES,
     SOURCE_PROJECT_MAX_FILES,
     SOURCE_PROJECT_MAX_REPORT_BYTES,
 )
-from veadk.cli.frontend_sandbox import SandboxSessionUnavailableError
 
 from .models import (
     IntelligentDevelopmentProject,
@@ -48,6 +45,21 @@ from .repository import (
     TosIntelligentDevelopmentProjectRepository,
 )
 from .models import SourceVersionView
+
+if TYPE_CHECKING:
+    from frontend.server.intelligent_development import DeliveryReference
+    from frontend.server.intelligent_development_task import IntentDecision
+    from frontend.server.sandbox_remote import SandboxRemoteTransport
+else:
+
+    def SandboxRemoteTransport(endpoint: str):  # noqa: N802
+        """Preserve the injectable transport factory without loading it at startup."""
+        from frontend.server.sandbox_remote import (
+            SandboxRemoteTransport as _SandboxRemoteTransport,
+        )
+
+        return _SandboxRemoteTransport(endpoint)
+
 
 _MAX_ARTIFACT_BYTES = SOURCE_PROJECT_MAX_BYTES
 _MAX_REPORT_BYTES = SOURCE_PROJECT_MAX_REPORT_BYTES
@@ -183,6 +195,7 @@ class IntelligentDevelopmentProjectService:
         from frontend.server.intelligent_development_source import (
             load_intelligent_development_artifact,
         )
+        from veadk.cli.frontend_sandbox import SandboxSessionUnavailableError
 
         from .repository import IntelligentDevelopmentVersionIntegrityError
 
@@ -270,6 +283,8 @@ class IntelligentDevelopmentProjectService:
         delivery: DeliveryReference,
         decision: IntentDecision,
     ) -> tuple[IntelligentDevelopmentProject, IntelligentDevelopmentVersion]:
+        from frontend.server.intelligent_development import release_path
+
         binding = await self._resolved_binding(owner_id, session_id)
         base_version = (
             await self.repository.get_version(
