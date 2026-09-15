@@ -17,12 +17,14 @@
 from __future__ import annotations
 
 import ast
+from enum import Enum
 import importlib
 import importlib.machinery
 import importlib.util
 import os
 from pathlib import Path
 import sys
+from threading import RLock
 from types import ModuleType
 from typing import Any
 
@@ -108,6 +110,161 @@ def _install_lazy_module(name: str, eager: dict[str, Any]) -> ModuleType:
     proxy.__dict__["_load_real_module"] = _load_real
     sys.modules[name] = proxy
     return proxy
+
+
+class _DeferredGenaiTypeMeta(type):
+    """Resolve enum members only when a deferred GenAI type is first used."""
+
+    def __call__(cls, *args: Any, **kwargs: Any) -> Any:
+        load_real = cls.__dict__["_load_real_module"]
+        target_name = cls.__dict__["_target_name"]
+        return getattr(load_real(), target_name)(*args, **kwargs)
+
+    def __getattr__(cls, attribute: str) -> Any:
+        if attribute.startswith("_"):
+            raise AttributeError(
+                f"type object {cls.__name__!r} has no attribute {attribute!r}"
+            )
+        load_real = cls.__dict__["_load_real_module"]
+        target_name = cls.__dict__["_target_name"]
+        return getattr(getattr(load_real(), target_name), attribute)
+
+
+def _install_lazy_genai_types() -> ModuleType:
+    """Defer generated Google GenAI models until an ADK request uses them."""
+
+    name = "google.genai.types"
+    existing = sys.modules.get(name)
+    if existing is not None:
+        return existing
+    parent_name, _, child_name = name.rpartition(".")
+    parent = sys.modules.get(parent_name)
+    parent_path = getattr(parent, "__path__", None)
+    if parent is None or parent_path is None:
+        raise ImportError(f"Unable to locate parent package {parent_name!r}")
+    spec = importlib.machinery.PathFinder.find_spec(name, parent_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Unable to locate module {name!r}")
+    loader = spec.loader
+    proxy = ModuleType(name)
+    proxy.__file__ = spec.origin
+    proxy.__loader__ = loader
+    proxy.__package__ = parent_name
+    proxy.__spec__ = spec
+    loaded: list[ModuleType] = []
+    load_lock = RLock()
+
+    def _load_real_module() -> ModuleType:
+        with load_lock:
+            if loaded:
+                return loaded[0]
+            real = importlib.util.module_from_spec(spec)
+            sys.modules[name] = real
+            setattr(parent, child_name, real)
+            try:
+                loader.exec_module(real)
+            except BaseException:
+                sys.modules[name] = proxy
+                setattr(parent, child_name, proxy)
+                raise
+            loaded.append(real)
+            return real
+
+    class _DeferredGenaiType(str, Enum):
+        TYPE_UNSPECIFIED = "TYPE_UNSPECIFIED"
+        STRING = "STRING"
+        NUMBER = "NUMBER"
+        INTEGER = "INTEGER"
+        BOOLEAN = "BOOLEAN"
+        ARRAY = "ARRAY"
+        OBJECT = "OBJECT"
+        NULL = "NULL"
+
+    _DeferredGenaiType.__name__ = "Type"
+    _DeferredGenaiType.__qualname__ = "Type"
+    _DeferredGenaiType.__module__ = name
+    setattr(proxy, "Type", _DeferredGenaiType)
+
+    def _deferred_type(target_name: str) -> type[Any]:
+        def _validate(value: Any) -> Any:
+            target = getattr(_load_real_module(), target_name)
+            try:
+                if isinstance(value, target):
+                    return value
+            except TypeError:
+                pass
+            model_validate = getattr(target, "model_validate", None)
+            if callable(model_validate):
+                return model_validate(value)
+            from pydantic import TypeAdapter
+
+            return TypeAdapter(target).validate_python(value)
+
+        def _core_schema(
+            cls: type[Any],
+            source_type: Any,
+            handler: Any,
+        ) -> Any:
+            del cls, source_type, handler
+            from pydantic_core import core_schema
+
+            return core_schema.no_info_after_validator_function(
+                _validate,
+                core_schema.any_schema(),
+            )
+
+        def _json_schema(
+            cls: type[Any],
+            schema: Any,
+            handler: Any,
+        ) -> dict[str, Any]:
+            del cls, schema, handler
+            from pydantic import TypeAdapter
+
+            return TypeAdapter(getattr(_load_real_module(), target_name)).json_schema()
+
+        return _DeferredGenaiTypeMeta(
+            target_name,
+            (),
+            {
+                "__module__": name,
+                "_target_name": target_name,
+                "_load_real_module": staticmethod(_load_real_module),
+                "__get_pydantic_core_schema__": classmethod(_core_schema),
+                "__get_pydantic_json_schema__": classmethod(_json_schema),
+            },
+        )
+
+    def _load_attribute(attribute: str) -> Any:
+        if attribute.startswith("__"):
+            raise AttributeError(f"module {name!r} has no attribute {attribute!r}")
+        value = _deferred_type(attribute)
+        setattr(proxy, attribute, value)
+        return value
+
+    proxy.__getattr__ = _load_attribute  # type: ignore[attr-defined]
+    proxy.__dict__["_load_real_module"] = _load_real_module
+    proxy.__dict__["_veadk_real_module_loaded"] = lambda: bool(loaded)
+    sys.modules[name] = proxy
+    setattr(parent, child_name, proxy)
+    return proxy
+
+
+def _install_studio_genai_imports() -> None:
+    """Keep generated GenAI models out of the Studio readiness path."""
+
+    package = _install_lazy_package(
+        "google.genai",
+        {
+            "Client": ("google.genai.client", "Client"),
+            "interactions": ("google.genai.interactions", None),
+            "types": ("google.genai.types", None),
+            "version": ("google.genai.version", None),
+            "__version__": ("google.genai.version", "__version__"),
+        },
+    )
+    types_module = _install_lazy_genai_types()
+    setattr(package, "types", types_module)
 
 
 def _literal_assignment(module_name: str, assignment: str) -> Any:
@@ -282,6 +439,7 @@ def _bootstrap_provider() -> None:
 
 
 _bootstrap_provider()
+_install_studio_genai_imports()
 _install_studio_adk_imports()
 
 from veadk.cli.cli_frontend import studio  # noqa: E402

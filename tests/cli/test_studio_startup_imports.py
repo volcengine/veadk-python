@@ -639,6 +639,103 @@ with tempfile.TemporaryDirectory() as agents_dir:
     )
 
 
+def test_studio_fast_api_defers_genai_models_until_first_request() -> None:
+    root = Path(__file__).resolve().parents[2]
+    script = """
+import sys
+import tempfile
+from pathlib import Path
+
+from veadk.cli.studio_start import studio_fast_api_factory
+
+with tempfile.TemporaryDirectory() as agents_dir:
+    Path(agents_dir, "agent-test").mkdir()
+    app = studio_fast_api_factory()(agents_dir=agents_dir, web=False)
+    assert any(route.path == "/run_sse" for route in app.routes)
+
+    genai_types = sys.modules["google.genai.types"]
+    real_module_loaded = getattr(
+        genai_types,
+        "_veadk_real_module_loaded",
+        None,
+    )
+    if real_module_loaded is None or real_module_loaded():
+        raise SystemExit("Google GenAI models loaded while constructing Studio app")
+
+    from google.adk.cli.api_server import RunAgentRequest
+
+    request = RunAgentRequest.model_validate(
+        {
+            "app_name": "agent-test",
+            "user_id": "user-test",
+            "session_id": "session-test",
+            "new_message": {
+                "role": "user",
+                "parts": [{"text": "hello"}],
+            },
+        }
+    )
+    assert type(request.new_message).__name__ == "Content"
+    assert request.new_message.parts[0].text == "hello"
+    dumped = request.model_dump(mode="json")
+    assert dumped["new_message"]["parts"][0]["text"] == "hello"
+    if not real_module_loaded():
+        raise SystemExit("Google GenAI models not loaded for a real request")
+
+    from google.adk.tools.function_tool import FunctionTool
+
+    def sample_tool(value: str) -> str:
+        return value
+
+    declaration = FunctionTool(sample_tool)._get_declaration()
+    assert declaration.parameters_json_schema["properties"]["value"] == {
+        "title": "Value",
+        "type": "string",
+    }
+"""
+
+    subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_studio_deferred_genai_models_support_openapi_first_use() -> None:
+    root = Path(__file__).resolve().parents[2]
+    script = """
+import sys
+import tempfile
+from pathlib import Path
+
+from veadk.cli.studio_start import studio_fast_api_factory
+
+with tempfile.TemporaryDirectory() as agents_dir:
+    Path(agents_dir, "agent-test").mkdir()
+    app = studio_fast_api_factory()(agents_dir=agents_dir, web=False)
+    genai_types = sys.modules["google.genai.types"]
+    real_module_loaded = genai_types._veadk_real_module_loaded
+    if real_module_loaded():
+        raise SystemExit("Google GenAI models loaded before OpenAPI generation")
+
+    schema = app.openapi()
+    assert "/run_sse" in schema["paths"]
+    assert schema["components"]["schemas"]["RunAgentRequest"]
+    if not real_module_loaded():
+        raise SystemExit("Google GenAI models not loaded for OpenAPI generation")
+"""
+
+    subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
 def test_session_metadata_defers_agentkit_models_until_first_request() -> None:
     root = Path(__file__).resolve().parents[2]
     script = """
