@@ -32,7 +32,12 @@ from dataclasses import dataclass, field, replace
 from typing import Annotated, Any, Protocol
 
 from fastapi import File, Request, UploadFile
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import (
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    StreamingResponse,
+)
 
 from frontend.server.sandbox.tool_sessions import SandboxToolPair
 from veadk.cli.agentkit_sandbox_region import is_agentkit_resource_not_found
@@ -92,6 +97,30 @@ from veadk.cli.github_app_pr_review import (
     parse_pull_request_event,
     verify_webhook_signature,
 )
+from veadk.cli.gitlab_app_mr_review import (
+    GITLAB_WEBHOOK_PATH,
+    GitLabAppClient,
+    GitLabAppReviewError,
+    GitLabAppReviewStorageUnavailable,
+    GitLabOAuthClient,
+    GitLabOAuthCredential,
+    GitLabMergeRequestEvent,
+    GitLabMergeRequestReviewRecord,
+    GitLabProject,
+    GitLabAppConfig,
+    GitLabProjectBinding,
+    TosGitLabAppReviewProjectStore,
+    create_oauth_credential,
+    create_review_record as create_gitlab_review_record,
+    gitlab_app_public_config,
+    load_gitlab_app_config,
+    load_gitlab_oauth_config,
+    parse_merge_request_event,
+    parse_merge_request_url,
+    project_key,
+    refreshed_oauth_credential,
+    verify_gitlab_webhook_token,
+)
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -150,6 +179,9 @@ _CODEX_PROJECT_HANDOFF_HISTORY_MAX_IMAGE_TOTAL_BYTES = 8 * 1024 * 1024
 _CODEX_PROJECT_HANDOFF_HISTORY_IMAGE_MIME_TYPES = frozenset(
     {"image/png", "image/jpeg", "image/gif", "image/webp"}
 )
+_GITLAB_OAUTH_STATES: dict[str, tuple[str, float]] = {}
+_GITLAB_OAUTH_STATE_TTL_SECONDS = 10 * 60
+_GITLAB_MIN_WEBHOOK_ACCESS_LEVEL = 40
 _CODEX_PROJECT_HANDOFF_CONTINUATION_MAX_CHARACTERS = 20_000
 _GITHUB_PR_REVIEW_CONNECT_ATTEMPTS = 3
 _GITHUB_PR_REVIEW_CONNECT_RETRY_SECONDS = 2.0
@@ -174,6 +206,8 @@ _SESSION_CREATE_ENV_ALLOWLIST = frozenset(
         "GITHUB_TOKEN",
         "GH_PROMPT_DISABLED",
         "GIT_TERMINAL_PROMPT",
+        "GITLAB_API_BASE",
+        "GITLAB_TOKEN",
         "MODEL_BASE_URL",
         "OPENCODE_BASE_URL",
         "OPENCODE_MODEL",
@@ -190,6 +224,9 @@ _SESSION_CODEX_MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
 _GITHUB_PULL_REQUEST_URL_RE = re.compile(
     r"^https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/pull/([1-9][0-9]*)/?$"
 )
+_REVIEW_DISPLAY_NAME_ELLIPSIS = "..."
+_GITLAB_MR_REVIEW_NOTE_POLL_ATTEMPTS = 24
+_GITLAB_MR_REVIEW_NOTE_POLL_INTERVAL_SECONDS = 5.0
 _GITHUB_PULL_REQUEST_REVIEW_PROMPT = """请评审这个 Pull Request：{pull_request_url}
 
 要求：
@@ -198,6 +235,31 @@ _GITHUB_PULL_REQUEST_REVIEW_PROMPT = """请评审这个 Pull Request：{pull_req
 3.GitHub CLI 已通过 GitHub App installation token 授权；禁止执行 gh auth login、禁止请求设备码或浏览器授权。如果 gh 提示需要登录，请直接报告 GitHub App token 不可用或权限不足。
 4.不要修改仓库文件，不要执行破坏性命令。
 5.评审完成后，必须使用 GitHub CLI 将评审结论评论到这个 Pull Request。
+6.执行结束后，请告知我你都进行了哪些操作，给出明确且清晰的反馈"""
+
+
+def _bounded_review_display_name(prefix: str, subject: str) -> str:
+    name = f"{prefix}: {subject}".strip()
+    if len(name) <= STUDIO_SANDBOX_DISPLAY_NAME_MAX_LENGTH:
+        return name
+    limit = STUDIO_SANDBOX_DISPLAY_NAME_MAX_LENGTH - len(prefix) - 2
+    if limit <= len(_REVIEW_DISPLAY_NAME_ELLIPSIS):
+        return name[:STUDIO_SANDBOX_DISPLAY_NAME_MAX_LENGTH]
+    subject_limit = limit - len(_REVIEW_DISPLAY_NAME_ELLIPSIS)
+    head = max(1, subject_limit // 2)
+    tail = max(1, subject_limit - head)
+    shortened = subject[:head] + _REVIEW_DISPLAY_NAME_ELLIPSIS + subject[-tail:]
+    return f"{prefix}: {shortened}"
+
+
+_GITLAB_MERGE_REQUEST_REVIEW_PROMPT = """请评审这个 GitLab Merge Request：{merge_request_url}
+
+要求：
+1.你需要通过 GitLab API 获取 MR 信息、diff refs、changes/diffs 和必要的上下文。
+2.遵守 Code-Review Skill 的规范，对 MR 进行 CodeReview。
+3.GitLab API 已通过 GITLAB_TOKEN 授权，API 地址是 GITLAB_API_BASE；禁止请求浏览器登录或交互式认证。
+4.不要修改仓库文件，不要执行破坏性命令。
+5.评审完成后，必须优先使用 GitLab Discussions API 将可定位问题挂到具体代码行；无法可靠定位到 diff 行的问题，用普通 MR comment 兜底。
 6.执行结束后，请告知我你都进行了哪些操作，给出明确且清晰的反馈"""
 
 
@@ -3192,6 +3254,8 @@ def mount_sandbox_routes(
     creator_resolver: Callable[[Any], str] | None = None,
     github_app_review_storage_bucket: str = "",
     github_app_review_storage_client_factory: Callable[[], Any] | None = None,
+    gitlab_app_review_storage_bucket: str = "",
+    gitlab_app_review_storage_client_factory: Callable[[], Any] | None = None,
 ) -> None:
     """Mount Studio HTTP routes for reusable Sandbox Sessions."""
     from fastapi import HTTPException
@@ -3612,6 +3676,20 @@ def mount_sandbox_routes(
             },
         )
 
+    def _gitlab_app_http_error(
+        error: GitLabAppReviewError,
+        *,
+        status_code: int = 503,
+    ) -> HTTPException:
+        return HTTPException(
+            status_code=status_code,
+            detail={
+                "code": "GITLAB_APP_REVIEW_ERROR",
+                "message": str(error),
+                "retryable": False,
+            },
+        )
+
     def _github_app_review_store() -> TosGitHubAppReviewRepositoryStore | None:
         bucket = github_app_review_storage_bucket.strip()
         if not bucket or github_app_review_storage_client_factory is None:
@@ -3619,6 +3697,15 @@ def mount_sandbox_routes(
         return TosGitHubAppReviewRepositoryStore(
             bucket=bucket,
             client_factory=github_app_review_storage_client_factory,
+        )
+
+    def _gitlab_app_review_store() -> TosGitLabAppReviewProjectStore | None:
+        bucket = gitlab_app_review_storage_bucket.strip()
+        if not bucket or gitlab_app_review_storage_client_factory is None:
+            return None
+        return TosGitLabAppReviewProjectStore(
+            bucket=bucket,
+            client_factory=gitlab_app_review_storage_client_factory,
         )
 
     async def _remember_github_review_record(
@@ -3629,6 +3716,15 @@ def mount_sandbox_routes(
             await store.append_review_record(record)
         except GitHubAppReviewError as error:
             logger.warning("Failed to save GitHub PR review record: %s", error)
+
+    async def _remember_gitlab_review_record(
+        store: TosGitLabAppReviewProjectStore,
+        record: GitLabMergeRequestReviewRecord,
+    ) -> None:
+        try:
+            await store.append_review_record(record)
+        except GitLabAppReviewError as error:
+            logger.warning("Failed to save GitLab MR review record: %s", error)
 
     async def _github_app_installed_repositories() -> list[dict[str, object]]:
         config = load_github_app_config()
@@ -3715,7 +3811,7 @@ def mount_sandbox_routes(
         owner, repo, number = match.groups()
         session = await service.create(
             owner_id,
-            f"PR Review: {owner}/{repo}#{number}",
+            _bounded_review_display_name("PR Review", f"{owner}/{repo}#{number}"),
             creator_name,
             False,
             envs={
@@ -3799,6 +3895,770 @@ def mount_sandbox_routes(
                 )
 
         asyncio.create_task(_run_review_message())
+
+    async def _gitlab_oauth_credential_for_owner(
+        store: TosGitLabAppReviewProjectStore,
+        owner_id: str,
+    ) -> GitLabOAuthCredential | None:
+        config = load_gitlab_app_config()
+        if config is None:
+            return None
+        credential = await store.oauth_credential_for_owner(owner_id, config.base_url)
+        if credential is None or not credential.expired:
+            return credential
+
+        async def _mark_owner_bindings_invalid(reason: str) -> None:
+            bindings = await store.project_bindings()
+            for binding in bindings.values():
+                if (
+                    binding.credential_type == "oauth"
+                    and binding.credential_owner == owner_id
+                    and binding.credential_id == credential.credential_id
+                ):
+                    await store.update_project_binding_status(
+                        binding.instance_id,
+                        binding.project_id,
+                        status="auth_invalid",
+                        reason=reason,
+                    )
+
+        oauth_config = load_gitlab_oauth_config()
+        if oauth_config is None or not credential.refresh_token:
+            await store.delete_oauth_credential_for_owner(owner_id, config.base_url)
+            await _mark_owner_bindings_invalid("授权无法刷新，请重新连接 GitLab。")
+            raise GitLabAppReviewError("GitLab 授权无法刷新，请重新连接。")
+        try:
+            refreshed = refreshed_oauth_credential(
+                credential,
+                await GitLabOAuthClient(oauth_config).refresh_token(
+                    credential.refresh_token
+                ),
+            )
+        except GitLabAppReviewError:
+            await store.delete_oauth_credential_for_owner(owner_id, config.base_url)
+            await _mark_owner_bindings_invalid("授权已失效，请重新连接 GitLab。")
+            raise GitLabAppReviewError("GitLab 授权已失效，请重新连接。")
+        return await store.save_oauth_credential(refreshed)
+
+    async def _gitlab_config_for_owner(
+        owner_id: str,
+    ) -> tuple[GitLabAppConfig, GitLabOAuthCredential | None, str]:
+        config = load_gitlab_app_config()
+        if config is None:
+            raise GitLabAppReviewError("管理员未配置 GitLab OAuth。")
+        store = _gitlab_app_review_store()
+        if store is not None:
+            credential = await _gitlab_oauth_credential_for_owner(store, owner_id)
+            if credential is not None:
+                return (
+                    replace(
+                        config,
+                        token=credential.access_token,
+                    ),
+                    credential,
+                    "oauth",
+                )
+        raise GitLabAppReviewError("请先连接 GitLab 后再继续。")
+
+    async def _gitlab_config_for_binding(
+        store: TosGitLabAppReviewProjectStore,
+        binding: GitLabProjectBinding,
+    ) -> tuple[GitLabAppConfig, str, str]:
+        config = load_gitlab_app_config()
+        if config is None:
+            raise GitLabAppReviewError("管理员未配置 GitLab OAuth。")
+        credential = await store.oauth_credential(binding.credential_id)
+        if credential is None:
+            await store.update_project_binding_status(
+                binding.instance_id,
+                binding.project_id,
+                status="auth_invalid",
+                reason="授权已失效，请重新连接 GitLab。",
+            )
+            raise GitLabAppReviewError("GitLab 授权已失效，请重新连接。")
+        if credential.expired:
+            oauth_config = load_gitlab_oauth_config()
+            if oauth_config is None or not credential.refresh_token:
+                await store.update_project_binding_status(
+                    binding.instance_id,
+                    binding.project_id,
+                    status="auth_invalid",
+                    reason="授权无法刷新，请重新连接 GitLab。",
+                )
+                raise GitLabAppReviewError("GitLab 授权无法刷新，请重新连接。")
+            try:
+                credential = await store.save_oauth_credential(
+                    refreshed_oauth_credential(
+                        credential,
+                        await GitLabOAuthClient(oauth_config).refresh_token(
+                            credential.refresh_token
+                        ),
+                    )
+                )
+            except GitLabAppReviewError as error:
+                await store.update_project_binding_status(
+                    binding.instance_id,
+                    binding.project_id,
+                    status="auth_invalid",
+                    reason=str(error),
+                )
+                raise
+        return (
+            replace(
+                config,
+                token=credential.access_token,
+            ),
+            credential.owner_id,
+            credential.gitlab_name or credential.gitlab_username or credential.owner_id,
+        )
+
+    async def _gitlab_app_projects(owner_id: str) -> list[dict[str, object]]:
+        config, _, _credential_type = await _gitlab_config_for_owner(owner_id)
+        projects = await GitLabAppClient(config).projects()
+        store = _gitlab_app_review_store()
+        bindings: dict[str, GitLabProjectBinding] = {}
+        if store is not None:
+            bindings = await store.project_bindings()
+        return [
+            project.to_public_dict(
+                review_enabled=(
+                    (
+                        binding := bindings.get(
+                            project_key(project.instance_id, project.project_id)
+                        )
+                    )
+                    is not None
+                    and binding.enabled
+                    and binding.status == "active"
+                ),
+                review_binding=binding,
+            )
+            for project in projects
+        ]
+
+    async def _gitlab_app_projects_page(
+        page_request: PageRequest,
+        owner_id: str,
+        query: str = "",
+    ) -> dict[str, object]:
+        projects = await _gitlab_app_projects(owner_id)
+        keyword = query.strip().casefold()
+        if keyword:
+            projects = [
+                project
+                for project in projects
+                if keyword in str(project.get("pathWithNamespace") or "").casefold()
+                or keyword in str(project.get("namespace") or "").casefold()
+                or keyword in str(project.get("name") or "").casefold()
+            ]
+        start = page_request.offset
+        end = start + page_request.page_size
+        return {
+            "projects": projects[start:end],
+            "page": page_request.page,
+            "pageSize": page_request.page_size,
+            "hasNextPage": end < len(projects),
+        }
+
+    async def _create_gitlab_merge_request_review_session(
+        *,
+        owner_id: str,
+        creator_name: str,
+        config: GitLabAppConfig,
+        project: GitLabProject,
+        merge_request_url: str,
+    ) -> SandboxCloudSession:
+        _, merge_request_iid = parse_merge_request_url(config, merge_request_url)
+        session = await service.create(
+            owner_id,
+            _bounded_review_display_name(
+                "MR Review",
+                f"{project.path_with_namespace}!{merge_request_iid}",
+            ),
+            creator_name,
+            False,
+            envs={
+                "GITLAB_TOKEN": config.token,
+                "GITLAB_API_BASE": config.api_root,
+                "GIT_TERMINAL_PROMPT": "0",
+            },
+        )
+        await _connect_github_pull_request_review_session(
+            session.instance_id,
+            owner_id,
+        )
+        return session
+
+    def _schedule_gitlab_merge_request_review_message(
+        *,
+        session_id: str,
+        owner_id: str,
+        config: GitLabAppConfig,
+        project_id: int,
+        merge_request_iid: int,
+        merge_request_url: str,
+        store: TosGitLabAppReviewProjectStore | None,
+        record_id: str,
+    ) -> None:
+        prompt = _GITLAB_MERGE_REQUEST_REVIEW_PROMPT.format(
+            merge_request_url=merge_request_url
+        )
+        status_finalized = False
+
+        async def _update_status(status: str, reason: str = "") -> None:
+            nonlocal status_finalized
+            if store is None or not record_id:
+                return
+            if status_finalized and status == "failed":
+                return
+            try:
+                updated = await store.update_review_record_status(
+                    record_id,
+                    status=status,
+                    reason=reason,
+                )
+                if updated is not None and status in {"completed", "failed"}:
+                    status_finalized = True
+            except GitLabAppReviewError as error:
+                logger.warning(
+                    "Failed to update GitLab MR review record %s: %s",
+                    record_id,
+                    error,
+                )
+
+        async def _baseline_note_ids() -> set[int]:
+            try:
+                return await GitLabAppClient(config).merge_request_note_ids(
+                    project_id,
+                    merge_request_iid,
+                )
+            except Exception as error:  # noqa: BLE001 - best-effort status shortcut
+                logger.info(
+                    "Failed to read GitLab MR notes before review for session %s: %s",
+                    session_id,
+                    _safe_error_message(error),
+                )
+                return set()
+
+        async def _mark_completed_when_review_note_appears(
+            baseline_note_ids: set[int],
+        ) -> None:
+            if store is None or not record_id:
+                return
+            client = GitLabAppClient(config)
+            for _attempt in range(_GITLAB_MR_REVIEW_NOTE_POLL_ATTEMPTS):
+                if status_finalized:
+                    return
+                await asyncio.sleep(_GITLAB_MR_REVIEW_NOTE_POLL_INTERVAL_SECONDS)
+                try:
+                    note_ids = await client.merge_request_note_ids(
+                        project_id,
+                        merge_request_iid,
+                    )
+                except Exception as error:  # noqa: BLE001 - best-effort status shortcut
+                    logger.info(
+                        "Failed to poll GitLab MR notes for session %s: %s",
+                        session_id,
+                        _safe_error_message(error),
+                    )
+                    continue
+                if note_ids - baseline_note_ids:
+                    await _update_status("completed")
+                    return
+
+        async def _run_review_message() -> None:
+            baseline_note_ids = await _baseline_note_ids()
+            note_watcher = asyncio.create_task(
+                _mark_completed_when_review_note_appears(baseline_note_ids)
+            )
+            try:
+                async for _event in service.stream_message(
+                    session_id,
+                    owner_id,
+                    prompt,
+                ):
+                    pass
+                await _update_status("completed")
+            except SandboxError as error:
+                await _update_status("failed", _safe_error_message(error))
+                logger.warning(
+                    "GitLab merge request review message failed for session %s: %s",
+                    session_id,
+                    _safe_error_message(error),
+                )
+            finally:
+                note_watcher.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await note_watcher
+
+        asyncio.create_task(_run_review_message())
+
+    @app.get("/web/gitlab/app/config")
+    async def _gitlab_app_config(request: Request) -> dict[str, object]:
+        owner_id = owner_resolver(request)
+        credential = None
+        store = _gitlab_app_review_store()
+        if store is not None:
+            credential = await _gitlab_oauth_credential_for_owner(store, owner_id)
+        return gitlab_app_public_config(credential=credential)
+
+    def _gitlab_oauth_authorization_url(owner_id: str) -> str:
+        if _gitlab_app_review_store() is None:
+            raise _gitlab_app_http_error(
+                GitLabAppReviewStorageUnavailable(
+                    "管理员未配置 Studio 持久化存储，无法保存 GitLab 授权。"
+                )
+            )
+        oauth_config = load_gitlab_oauth_config()
+        if oauth_config is None:
+            raise _gitlab_app_http_error(
+                GitLabAppReviewError("管理员未配置 GitLab OAuth。")
+            )
+        now = time.monotonic()
+        for state, (_owner, created_at) in list(_GITLAB_OAUTH_STATES.items()):
+            if now - created_at > _GITLAB_OAUTH_STATE_TTL_SECONDS:
+                _GITLAB_OAUTH_STATES.pop(state, None)
+        state = secrets.token_urlsafe(32)
+        _GITLAB_OAUTH_STATES[state] = (owner_id, now)
+        return GitLabOAuthClient(oauth_config).authorization_url(state)
+
+    @app.get("/web/gitlab/oauth/start-url")
+    async def _gitlab_oauth_start_url(request: Request) -> dict[str, object]:
+        owner_id = owner_resolver(request)
+        return {"authorizationUrl": _gitlab_oauth_authorization_url(owner_id)}
+
+    @app.get("/web/gitlab/oauth/start")
+    async def _gitlab_oauth_start(request: Request) -> RedirectResponse:
+        owner_id = owner_resolver(request)
+        return RedirectResponse(_gitlab_oauth_authorization_url(owner_id))
+
+    @app.get("/web/gitlab/oauth/callback")
+    async def _gitlab_oauth_callback(request: Request) -> Any:
+        state = request.query_params.get("state", "")
+        code = request.query_params.get("code", "")
+        state_owner = _GITLAB_OAUTH_STATES.pop(state, None)
+        if (
+            state_owner is None
+            or time.monotonic() - state_owner[1] > _GITLAB_OAUTH_STATE_TTL_SECONDS
+        ):
+            return HTMLResponse(
+                "GitLab 授权状态已过期，请回到 Studio 重新连接。", status_code=400
+            )
+        if not code:
+            return HTMLResponse("GitLab 授权失败：缺少授权 code。", status_code=400)
+        store = _gitlab_app_review_store()
+        if store is None:
+            return HTMLResponse(
+                "管理员未配置 Studio 持久化存储，无法保存 GitLab 授权。",
+                status_code=503,
+            )
+        oauth_config = load_gitlab_oauth_config()
+        if oauth_config is None:
+            return HTMLResponse("管理员未配置 GitLab OAuth。", status_code=503)
+        owner_id = state_owner[0]
+        try:
+            oauth_client = GitLabOAuthClient(oauth_config)
+            token_payload = await oauth_client.exchange_code(code)
+            access_token = str(token_payload.get("access_token") or "")
+            user_payload = await oauth_client.current_user(access_token)
+            credential = create_oauth_credential(
+                owner_id=owner_id,
+                base_url=oauth_config.base_url,
+                token_payload=token_payload,
+                user_payload=user_payload,
+            )
+            await store.save_oauth_credential(credential)
+        except GitLabAppReviewError as error:
+            return HTMLResponse(f"GitLab 授权失败：{str(error)}", status_code=502)
+        return RedirectResponse("/?gitlabOAuth=connected")
+
+    @app.post("/web/gitlab/oauth/disconnect")
+    async def _gitlab_oauth_disconnect(request: Request) -> dict[str, object]:
+        owner_id = owner_resolver(request)
+        store = _gitlab_app_review_store()
+        if store is None:
+            raise _gitlab_app_http_error(
+                GitLabAppReviewStorageUnavailable(
+                    "管理员未配置 Studio 持久化存储，无法删除 GitLab 授权。"
+                )
+            )
+        config = load_gitlab_app_config()
+        if config is None:
+            return {"status": "disconnected"}
+        await store.delete_oauth_credential_for_owner(owner_id, config.base_url)
+        bindings = await store.project_bindings()
+        for binding in bindings.values():
+            if (
+                binding.credential_owner == owner_id
+                and binding.credential_type == "oauth"
+            ):
+                await store.update_project_binding_status(
+                    binding.instance_id,
+                    binding.project_id,
+                    status="auth_invalid",
+                    reason="用户已断开 GitLab 授权。",
+                )
+        return {"status": "disconnected"}
+
+    @app.get("/web/gitlab/app/projects")
+    async def _gitlab_app_project_list(request: Request) -> dict[str, object]:
+        owner_id = owner_resolver(request)
+        try:
+            page_request = _github_review_page_request(request)
+            page_result = await _gitlab_app_projects_page(
+                page_request,
+                owner_id,
+                request.query_params.get("q", ""),
+            )
+        except GitLabAppReviewError as error:
+            raise _gitlab_app_http_error(error) from error
+        except SandboxError as error:
+            raise _http_error(error) from error
+        storage_configured = _gitlab_app_review_store() is not None
+        return {
+            **page_result,
+            "reviewSettingsConfigured": storage_configured,
+            "reviewSettingsReason": ""
+            if storage_configured
+            else "管理员未配置 Studio 持久化存储，无法保存启用评审设置。",
+        }
+
+    @app.put("/web/gitlab/app/review-projects")
+    async def _gitlab_app_review_projects(request: Request) -> dict[str, object]:
+        owner_id = owner_resolver(request)
+        store = _gitlab_app_review_store()
+        if store is None:
+            raise _gitlab_app_http_error(
+                GitLabAppReviewStorageUnavailable(
+                    "管理员未配置 Studio 持久化存储，无法保存启用评审设置。"
+                )
+            )
+        try:
+            data = await _request_object(request)
+            project_id = data.get("projectId")
+            review_enabled = data.get("reviewEnabled")
+            if not isinstance(project_id, int) or not isinstance(review_enabled, bool):
+                raise SandboxValidationError("启用评审项目更新格式无效。")
+            config, credential, _credential_type = await _gitlab_config_for_owner(
+                owner_id
+            )
+            if credential is None:
+                raise GitLabAppReviewError("请先连接 GitLab 后再启用自动评审。")
+            client = GitLabAppClient(config)
+            projects = await client.projects()
+            by_id = {project.project_id: project for project in projects}
+            project = by_id.get(project_id)
+            if project is None:
+                raise SandboxValidationError("GitLab App 无法访问该项目。")
+            if not review_enabled:
+                saved = await store.disable_project_binding(
+                    project.instance_id,
+                    project.project_id,
+                )
+            else:
+                if project.access_level < _GITLAB_MIN_WEBHOOK_ACCESS_LEVEL:
+                    raise SandboxValidationError(
+                        "启用自动评审需要 GitLab Maintainer 权限。"
+                    )
+                webhook_id_value = await client.ensure_project_webhook(
+                    project.project_id
+                )
+                webhook_id = (
+                    webhook_id_value if isinstance(webhook_id_value, int) else 0
+                )
+                saved = await store.save_project_binding(
+                    GitLabProjectBinding(
+                        instance_id=project.instance_id,
+                        base_url=project.base_url,
+                        project_id=project.project_id,
+                        path_with_namespace=project.path_with_namespace,
+                        credential_owner=owner_id,
+                        credential_id=credential.credential_id,
+                        credential_type="oauth",
+                        webhook_id=webhook_id,
+                        enabled=True,
+                        status="active",
+                    )
+                )
+        except SandboxError as error:
+            raise _http_error(error) from error
+        except GitLabAppReviewError as error:
+            raise _gitlab_app_http_error(error) from error
+        return {"projects": saved}
+
+    @app.get("/web/gitlab/app/review-records")
+    async def _gitlab_app_review_records(request: Request) -> dict[str, object]:
+        owner_resolver(request)
+        store = _gitlab_app_review_store()
+        if store is None:
+            return {
+                "records": [],
+                "page": 1,
+                "pageSize": _GITHUB_REVIEW_DEFAULT_PAGE_SIZE,
+                "hasNextPage": False,
+                "reviewSettingsConfigured": False,
+                "reviewSettingsReason": "管理员未配置 Studio 持久化存储，无法读取评审记录。",
+            }
+        try:
+            page_request = _github_review_page_request(request)
+            records, page_result = await store.review_records_page(page_request)
+        except GitLabAppReviewError as error:
+            raise _gitlab_app_http_error(error) from error
+        except SandboxError as error:
+            raise _http_error(error) from error
+        return {
+            "records": [record.to_public_dict() for record in records],
+            "page": page_result.page,
+            "pageSize": page_result.page_size,
+            "hasNextPage": page_result.has_next_page,
+            "reviewSettingsConfigured": True,
+            "reviewSettingsReason": "",
+        }
+
+    @app.post(GITLAB_WEBHOOK_PATH, status_code=202)
+    async def _gitlab_app_webhook(request: Request) -> dict[str, object]:
+        store: TosGitLabAppReviewProjectStore | None = None
+        event: GitLabMergeRequestEvent | None = None
+        try:
+            config = load_gitlab_app_config()
+            if config is None:
+                raise GitLabAppReviewError("管理员未配置 GitLab OAuth。")
+            if not verify_gitlab_webhook_token(
+                request.headers.get("X-Gitlab-Token", ""),
+                config.webhook_secret,
+            ):
+                raise HTTPException(
+                    status_code=401,
+                    detail={
+                        "code": "GITLAB_WEBHOOK_TOKEN_INVALID",
+                        "message": "GitLab webhook token 无效。",
+                        "retryable": False,
+                    },
+                )
+            body = await request.body()
+            try:
+                payload = json.loads(body) if body else {}
+            except (json.JSONDecodeError, UnicodeDecodeError) as error:
+                raise SandboxValidationError(
+                    "GitLab webhook 不是有效 JSON。"
+                ) from error
+            if not isinstance(payload, dict):
+                raise SandboxValidationError("GitLab webhook 必须是 JSON 对象。")
+            event = parse_merge_request_event(
+                payload,
+                event_name=request.headers.get("X-Gitlab-Event", ""),
+                delivery_id=request.headers.get("X-Gitlab-Event-UUID", "")
+                or request.headers.get("X-Request-Id", ""),
+                config=config,
+            )
+            if event is None:
+                return {"status": "ignored", "reason": "unsupported-event"}
+            store = _gitlab_app_review_store()
+            if not event.should_review:
+                if store is not None:
+                    await _remember_gitlab_review_record(
+                        store,
+                        create_gitlab_review_record(
+                            instance_id=event.instance_id,
+                            base_url=event.base_url,
+                            project_id=event.project_id,
+                            path_with_namespace=event.path_with_namespace,
+                            merge_request_url=event.merge_request_url,
+                            merge_request_iid=event.merge_request_iid,
+                            status="ignored",
+                            trigger="webhook",
+                            delivery_id=event.delivery_id,
+                            action=event.action,
+                            reason="merge-request-not-reviewable",
+                        ),
+                    )
+                return {
+                    "status": "ignored",
+                    "reason": "merge-request-not-reviewable",
+                    "action": event.action,
+                }
+            if store is None:
+                return {
+                    "status": "ignored",
+                    "reason": "review-settings-unavailable",
+                    "projectId": event.project_id,
+                }
+            binding = await store.project_binding(event.instance_id, event.project_id)
+            if binding is None or not binding.enabled or binding.status != "active":
+                await _remember_gitlab_review_record(
+                    store,
+                    create_gitlab_review_record(
+                        instance_id=event.instance_id,
+                        base_url=event.base_url,
+                        project_id=event.project_id,
+                        path_with_namespace=event.path_with_namespace,
+                        merge_request_url=event.merge_request_url,
+                        merge_request_iid=event.merge_request_iid,
+                        status="ignored",
+                        trigger="webhook",
+                        delivery_id=event.delivery_id,
+                        action=event.action,
+                        reason="project-review-disabled",
+                    ),
+                )
+                return {
+                    "status": "ignored",
+                    "reason": "project-review-disabled",
+                    "projectId": event.project_id,
+                }
+            (
+                config,
+                credential_owner,
+                credential_creator,
+            ) = await _gitlab_config_for_binding(
+                store,
+                binding,
+            )
+            project = await GitLabAppClient(config).project(event.project_id)
+            session = await _create_gitlab_merge_request_review_session(
+                owner_id=credential_owner,
+                creator_name=credential_creator,
+                config=config,
+                project=project,
+                merge_request_url=event.merge_request_url,
+            )
+            record = create_gitlab_review_record(
+                instance_id=event.instance_id,
+                base_url=event.base_url,
+                project_id=event.project_id,
+                path_with_namespace=event.path_with_namespace,
+                merge_request_url=event.merge_request_url,
+                merge_request_iid=event.merge_request_iid,
+                status="started",
+                trigger="webhook",
+                delivery_id=event.delivery_id,
+                action=event.action,
+                session_id=session.instance_id,
+                display_name=session.display_name,
+            )
+            await _remember_gitlab_review_record(store, record)
+            _schedule_gitlab_merge_request_review_message(
+                session_id=session.instance_id,
+                owner_id=credential_owner,
+                config=config,
+                project_id=event.project_id,
+                merge_request_iid=event.merge_request_iid,
+                merge_request_url=event.merge_request_url,
+                store=store,
+                record_id=record.record_id,
+            )
+        except SandboxError as error:
+            if store is not None and event is not None:
+                await _remember_gitlab_review_record(
+                    store,
+                    create_gitlab_review_record(
+                        instance_id=event.instance_id,
+                        base_url=event.base_url,
+                        project_id=event.project_id,
+                        path_with_namespace=event.path_with_namespace,
+                        merge_request_url=event.merge_request_url,
+                        merge_request_iid=event.merge_request_iid,
+                        status="failed",
+                        trigger="webhook",
+                        delivery_id=event.delivery_id,
+                        action=event.action,
+                        reason=_safe_error_message(error),
+                    ),
+                )
+            raise _http_error(error) from error
+        except GitLabAppReviewError as error:
+            if store is not None and event is not None:
+                await _remember_gitlab_review_record(
+                    store,
+                    create_gitlab_review_record(
+                        instance_id=event.instance_id,
+                        base_url=event.base_url,
+                        project_id=event.project_id,
+                        path_with_namespace=event.path_with_namespace,
+                        merge_request_url=event.merge_request_url,
+                        merge_request_iid=event.merge_request_iid,
+                        status="failed",
+                        trigger="webhook",
+                        delivery_id=event.delivery_id,
+                        action=event.action,
+                        reason=str(error),
+                    ),
+                )
+            raise _gitlab_app_http_error(error) from error
+        return {
+            "status": "started",
+            "sessionId": session.instance_id,
+            "displayName": session.display_name,
+            "deliveryId": event.delivery_id,
+        }
+
+    @app.post("/web/gitlab/merge-request-reviews")
+    async def _start_gitlab_merge_request_review(request: Request) -> dict[str, object]:
+        owner_id = owner_resolver(request)
+        creator_name = creator_resolver(request) if creator_resolver else owner_id
+        try:
+            data = await _request_object(request)
+            merge_request_url = data.get("mergeRequestUrl")
+            if not isinstance(merge_request_url, str):
+                raise SandboxValidationError("Merge Request URL 必须是文本。")
+            config, _credential, _credential_type = await _gitlab_config_for_owner(
+                owner_id
+            )
+            project_path, mr_iid = parse_merge_request_url(config, merge_request_url)
+            projects = await GitLabAppClient(config).projects()
+            project = next(
+                (
+                    item
+                    for item in projects
+                    if item.path_with_namespace.casefold() == project_path.casefold()
+                ),
+                None,
+            )
+            if project is None:
+                raise SandboxValidationError("GitLab App 无法访问该项目。")
+            session = await _create_gitlab_merge_request_review_session(
+                owner_id=owner_id,
+                creator_name=creator_name,
+                config=config,
+                project=project,
+                merge_request_url=merge_request_url.strip(),
+            )
+            store = _gitlab_app_review_store()
+            record_id = ""
+            if store is not None:
+                record = create_gitlab_review_record(
+                    instance_id=project.instance_id,
+                    base_url=project.base_url,
+                    project_id=project.project_id,
+                    path_with_namespace=project.path_with_namespace,
+                    merge_request_url=merge_request_url.strip(),
+                    merge_request_iid=mr_iid,
+                    status="started",
+                    trigger="manual",
+                    session_id=session.instance_id,
+                    display_name=session.display_name,
+                )
+                record_id = record.record_id
+                await _remember_gitlab_review_record(store, record)
+        except SandboxError as error:
+            raise _http_error(error) from error
+        except GitLabAppReviewError as error:
+            raise _gitlab_app_http_error(error) from error
+        _schedule_gitlab_merge_request_review_message(
+            session_id=session.instance_id,
+            owner_id=owner_id,
+            config=config,
+            project_id=project.project_id,
+            merge_request_iid=mr_iid,
+            merge_request_url=merge_request_url.strip(),
+            store=store,
+            record_id=record_id,
+        )
+        return {
+            "status": "started",
+            "sessionId": session.instance_id,
+            "displayName": session.display_name,
+        }
 
     @app.get("/web/github/app/config")
     async def _github_app_config(request: Request) -> dict[str, object]:

@@ -545,6 +545,7 @@ def test_github_app_webhook_bypasses_studio_sso(
     )
 
     assert "/web/github/app/webhook" in captured["exempt_paths"]
+    assert "/web/gitlab/app/webhook" in captured["exempt_paths"]
 
 
 def test_no_sso_identity_endpoint_selects_local_username_mode(

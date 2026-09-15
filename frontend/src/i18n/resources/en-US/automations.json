@@ -79,6 +79,10 @@
         "modelBaseUrl": { "label": "Model API URL", "placeholder": "https://ark.example.com/api/v3", "help": "Must be an OpenAI-compatible HTTPS endpoint" }
       }
     },
+    "gitlab-review": {
+      "name": "GitLab MR review",
+      "description": "Use a GitLab integration to review merge requests in an isolated Sandbox."
+    },
     "feishu": {
       "name": "Feishu bot",
       "badge": "Beta",

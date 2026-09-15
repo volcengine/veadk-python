@@ -50,6 +50,16 @@ function WebsiteIntegrationIcon(props: SVGProps<SVGSVGElement>) {
   );
 }
 
+function GitLabIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 36 36" fill="none" aria-hidden="true" {...props}>
+      <path d="M18 31 5.5 21.8 8.7 6.5 14 17.1h8L27.3 6.5l3.2 15.3L18 31Z" fill="currentColor" opacity="0.12" />
+      <path d="M18 31 5.5 21.8 8.7 6.5 14 17.1h8L27.3 6.5l3.2 15.3L18 31Z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+      <path d="m14 17.1 4 13.9 4-13.9M5.5 21.8h25" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 export function Applications({ onOpen }: ApplicationsProps) {
   const { t } = useTranslation("automations");
   const [activeCategory, setActiveCategory] = useState("development");
@@ -133,6 +143,8 @@ export function Applications({ onOpen }: ApplicationsProps) {
                       <CodingAgentsIcon className="application-card-icon" />
                     ) : application.icon === "website-integration" ? (
                       <WebsiteIntegrationIcon className="application-card-icon" />
+                    ) : application.icon === "gitlab" ? (
+                      <GitLabIcon className="application-card-icon" />
                     ) : (
                       <GitHubLogo className="application-card-icon" />
                     )}
