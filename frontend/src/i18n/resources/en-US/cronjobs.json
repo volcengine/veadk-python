@@ -1,4 +1,41 @@
 {
+  "mpa": {
+    "source": "Task source",
+    "studio": "Studio scheduled tasks",
+    "title": "Runtime scheduled tasks",
+    "selectRuntime": "Select a connected cloud Runtime in the Agent list first.",
+    "scope": "MPA scheduled tasks visible to your user identity in the selected Runtime.",
+    "jwt": "User JWT (optional)",
+    "jwtHelp": "Used only in this panel; cleared when switching Runtime or leaving the panel. Never saved in browser storage.",
+    "apply": "Load tasks",
+    "refresh": "Refresh",
+    "loading": "Loading Runtime tasks",
+    "empty": "No scheduled tasks are visible to this user in this Runtime.",
+    "authRequired": "A valid MPA user JWT is required. Enter it and select Load tasks.",
+    "forbidden": "Access denied. Check the selected Runtime and user JWT.",
+    "unsupported": "This Runtime does not provide the MPA scheduled tasks API.",
+    "invalidResponse": "The tasks API returned unrecognized data. Check the Runtime version.",
+    "loadFailed": "Could not load tasks. Check the network and Runtime status, then refresh.",
+    "pagination": "Runtime task pagination",
+    "total": "{{total}} tasks",
+    "previous": "Previous",
+    "next": "Next",
+    "columns": {
+      "name": "Task name",
+      "enabled": "Status",
+      "schedule": "Schedule",
+      "next": "Next run",
+      "last": "Latest result"
+    },
+    "schedule": {
+      "once": "Once",
+      "interval": "Interval",
+      "daily": "Daily",
+      "weekly": "Weekly",
+      "monthly": "Monthly",
+      "cron": "Cron"
+    }
+  },
   "actions": {
     "backToList": "Back to scheduled tasks",
     "cancel": "Cancel",

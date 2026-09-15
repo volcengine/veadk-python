@@ -1,4 +1,41 @@
 {
+  "mpa": {
+    "source": "任务来源",
+    "studio": "Studio 定时任务",
+    "title": "Runtime 定时任务",
+    "selectRuntime": "请先在 Agent 列表中选择一个已连接的云端 Runtime。",
+    "scope": "展示当前 Runtime 中，你的用户身份有权查看的 mpa 定时任务。",
+    "jwt": "用户 JWT（可选）",
+    "jwtHelp": "仅在当前页面使用，切换 Runtime 或离开此模块后清除；不会保存在浏览器中。",
+    "apply": "加载任务",
+    "refresh": "刷新",
+    "loading": "正在获取 Runtime 任务",
+    "empty": "当前用户在此 Runtime 中没有定时任务。",
+    "authRequired": "需要有效的 mpa 用户 JWT。请填写后点击“加载任务”。",
+    "forbidden": "当前身份没有访问权限，请确认 Runtime 和用户 JWT。",
+    "unsupported": "此 Runtime 未提供 mpa 定时任务接口。",
+    "invalidResponse": "任务接口返回了无法识别的数据，请检查 Runtime 版本。",
+    "loadFailed": "获取任务失败，请检查网络和 Runtime 状态后刷新。",
+    "pagination": "Runtime 任务分页",
+    "total": "共 {{total}} 条",
+    "previous": "上一页",
+    "next": "下一页",
+    "columns": {
+      "name": "任务名称",
+      "enabled": "状态",
+      "schedule": "执行计划",
+      "next": "下次执行",
+      "last": "最近结果"
+    },
+    "schedule": {
+      "once": "单次",
+      "interval": "间隔",
+      "daily": "每天",
+      "weekly": "每周",
+      "monthly": "每月",
+      "cron": "Cron"
+    }
+  },
   "actions": {
     "backToList": "返回定时任务列表",
     "cancel": "取消",

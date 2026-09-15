@@ -1,0 +1,19 @@
+.mpa-cron { min-width: 0; padding-bottom: 24px; font-size: 13px; }
+.mpa-cron p { color: hsl(var(--muted-foreground)); line-height: 1.6; }
+.mpa-cron-target { display: flex; gap: 8px 16px; flex-wrap: wrap; overflow-wrap: anywhere; }
+.mpa-cron-target span { color: hsl(var(--muted-foreground)); }
+.mpa-cron-auth { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; margin-top: 20px; }
+.mpa-cron-auth label { display: flex; flex-direction: column; gap: 8px; flex: 1 1 240px; max-width: 480px; }
+.mpa-cron-auth input { height: 36px; border: 1px solid hsl(var(--border)); border-radius: 6px; padding: 0 12px; background: hsl(var(--panel)); color: inherit; }
+.mpa-cron-auth input:focus-visible { outline: 2px solid hsl(var(--primary)); outline-offset: 2px; }
+.mpa-cron .mpa-cron-error { color: hsl(var(--destructive)); }
+.mpa-cron-table { overflow-x: auto; margin-top: 20px; }
+.mpa-cron table { width: 100%; border-collapse: collapse; text-align: left; }
+.mpa-cron th, .mpa-cron td { padding: 12px; border-bottom: 1px solid hsl(var(--border)); vertical-align: top; }
+.mpa-cron th { font-weight: 500; }
+.mpa-cron th span { display: block; min-width: 160px; max-width: 320px; overflow-wrap: anywhere; }
+.mpa-cron small { display: block; color: hsl(var(--muted-foreground)); font-size: 12px; overflow-wrap: anywhere; }
+.mpa-cron summary { cursor: pointer; white-space: nowrap; }
+.mpa-cron pre { max-width: 280px; overflow: auto; }
+.mpa-cron-pages { display: flex; align-items: center; gap: 12px; margin-top: 16px; }
+.mpa-cron-pages span { margin-right: auto; }
