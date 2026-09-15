@@ -416,6 +416,32 @@ if unexpected:
     )
 
 
+def test_environment_service_defers_generated_project_runtime_until_build() -> None:
+    root = Path(__file__).resolve().parents[2]
+    script = """
+import sys
+
+import frontend.server.environments
+
+unexpected = sorted(
+    name
+    for name in sys.modules
+    if name == "veadk.cli.generated_agent_codegen"
+    or name == "veadk.cli.generated_agent_skills"
+)
+if unexpected:
+    raise SystemExit("generated project runtime loaded by environment composition")
+"""
+
+    subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
 def test_knowledge_routes_defer_document_extraction_stack() -> None:
     root = Path(__file__).resolve().parents[2]
     script = """
