@@ -28,3 +28,10 @@ AC-1：选中目标与真实请求路径一致，分页与状态通过测试。A
 
 ## 风险和限制
 按 Runtime 选择不代表可看所有用户任务。缺少 JWT 属于鉴权状态，不是没有任务。不修改调度器或 MPA 业务逻辑。包含构建产物以交付本地 Studio。交付前在此记录验证结果。
+
+## 自动凭证修订 — 2026-09-15
+当前用户授权将手动 JWT 输入替换为服务端调用 TOP GetMpaInstanceToken（2026-03-01）。从已授权的所选 Runtime 读取 MPA_AGENT_ID、MPA_SPACE_ID/CLAW_SPACE_ID、MPA_IS_DEBUG_RUNTIME 和 ARKCLAW_TOP_SERVICE。使用可信企业身份 user_pool_user_uid；本地管理员在服务端配置 VEADK_STUDIO_MPA_USER_UID。禁止使用浏览器传入的身份申请凭证。JWT 由 TOP 签发。转发 Authorization 和 X-Jwt-Token 前校验其 HTTPS 地址与所选 Runtime 相同。每次列表请求获取新凭证，不缓存、持久化或向浏览器返回凭证。保持只读范围，参照 mono SharedAgent/Cron 增加任务提示词详情、执行次数与成功率。配置缺失和 TOP 失败需明确展示。测试覆盖身份、地址不匹配、上游错误、凭证隔离和取消，增量覆盖率超过 95%。本修订替代旧手动 JWT 契约；此前验证结果仅针对旧版本。
+
+## 修订验证 — 2026-09-15
+
+通过：43 个前端契约/组件测试、31 个 Python 测试；新增模块范围的语句和分支覆盖率均为 100%。全部 1095 个前端回归测试、TypeScript/Vite 构建、国际化与 102 个打包资源检查通过。新增 Python 模块 Pyright 通过。CLI 文件有 34 个原有 Pyright 问题，基线对比确认诊断信息相同，没有新增问题。本地 Studio 已更新并重启；浏览器确认没有 JWT 输入框，所选 Runtime 正确，缺少企业用户 UID 时给出明确提示。使用现有 AK/SK 单独进行的只读 TOP 探测返回 403 AccessDenied，缺少 arkclaw:GetMpaInstanceToken 权限。真实任务数据仍需补齐该权限及企业 UserPoolUserUid。当前环境原有 Studio TOS 任务来源也加载失败，本次没有修改该来源。窄屏验证未执行。

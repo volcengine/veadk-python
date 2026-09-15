@@ -1050,12 +1050,25 @@ Sandbox。修改这些模板只需要更新 Studio，不需要重建镜像，也
 
 ### MPA Runtime scheduled tasks
 
-Scheduled tasks now has separate Studio and Runtime source tabs. Select a connected
-cloud Runtime, then open Runtime scheduled tasks to view its MPA tasks. The list
-uses `/api/v1/esa-cron-tasks` through the existing Runtime proxy, includes disabled
-tasks and pages in groups of 20. Visibility follows the MPA user JWT, not all users
-in that Runtime. If authentication is required, enter a valid user JWT in the masked
-field; it is kept only in this panel and cleared on target change or unmount.
-No task mutation or scheduling is performed by this panel.
+Scheduled tasks has separate Studio and Runtime source tabs. Select a connected
+cloud Runtime, then open Runtime scheduled tasks. Studio calls TOP
+`GetMpaInstanceToken` with its AK/SK and sends the returned API Key and JWT to the
+selected Runtime's `/api/v1/esa-cron-tasks`. Credentials stay on the server.
+The endpoint must match the selected Runtime, including its formal/debug binding.
+The Runtime must provide `MPA_AGENT_ID`, `MPA_SPACE_ID` (or `CLAW_SPACE_ID`), and
+optionally `MPA_IS_DEBUG_RUNTIME` and `ARKCLAW_TOP_SERVICE`.
 
-Run `npm run test:mpa-cron-coverage` for the isolated HTTP and component checks.
+The AK/SK needs `arkclaw:GetMpaInstanceToken` permission (or the corresponding
+staging service action). Enterprise sessions supply the trusted
+`user_pool_user_uid` claim. For local Studio without SSO, set
+`VEADK_STUDIO_MPA_USER_UID` to your enterprise user UID on the server and restart.
+A local display name or browser header is never used to obtain a JWT.
+
+The read-only list includes disabled tasks, search, groups of 20, prompt details,
+execution counts and success rate. Visibility follows the authenticated MPA user;
+selecting a Runtime does not imply all-user visibility. No task mutation or
+scheduling is performed by this panel.
+
+Run `npm run test:mpa-cron-coverage` for isolated HTTP and component checks, and
+`python -m pytest tests/frontend/server/test_mpa_cron.py --cov=frontend.server.mpa_cron --cov-branch --cov-fail-under=96`
+for server contract and credential isolation tests.

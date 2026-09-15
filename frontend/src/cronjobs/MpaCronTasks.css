@@ -17,3 +17,8 @@
 .mpa-cron pre { max-width: 280px; overflow: auto; }
 .mpa-cron-pages { display: flex; align-items: center; gap: 12px; margin-top: 16px; }
 .mpa-cron-pages span { margin-right: auto; }
+
+.mpa-cron-overview { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 20px; }
+.mpa-cron-overview > div { border: 1px solid hsl(var(--border)); border-radius: 8px; padding: 16px 24px; min-width: 150px; }
+.mpa-cron-overview span { display: block; color: hsl(var(--muted-foreground)); }
+.mpa-cron-overview strong { display: block; margin-top: 8px; font-size: 24px; font-weight: 500; }

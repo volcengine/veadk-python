@@ -12,14 +12,14 @@ const runtime = { runtimeId: "r-one", region: "cn-beijing", name: "One" };
 const task = { id: "t1", name: "Report", enabled: true, schedule: { type: "cron", timezone: "Asia/Shanghai", cronExpression: "0 9 * * *" }, nextRunAt: "2026-09-16T01:00:00Z", lastRunStatus: "success" };
 const page: MpaCronTaskPage = { items: [task], total: 21, hasMore: true, nextOffset: 20 };
 describe("MPA HTTP contract", () => {
-  it("uses only the selected Runtime, paging and transient JWT", async () => {
+  it("uses the server credential route with selected Runtime and encoded search", async () => {
     const nextPage = {...page, nextOffset: 40};
     const request = vi.fn().mockImplementation(() => Promise.resolve(new Response(JSON.stringify(nextPage))));
     const signal = new AbortController().signal;
-    expect(await fetchMpaCronTasks(request, runtime, 20, " token ", signal)).toEqual(nextPage);
-    expect(request).toHaveBeenCalledWith("/api/v1/esa-cron-tasks?includeDisabled=true&limit=20&offset=20", { headers: { "X-Jwt-Token": "token" }, signal }, runtime);
+    expect(await fetchMpaCronTasks(request, runtime, 20, "a b", signal)).toEqual(nextPage);
+    expect(request).toHaveBeenCalledWith("/web/mpa-cron/r-one?region=cn-beijing&offset=20&query=a%20b", { signal }, {});
     await fetchMpaCronTasks(request, runtime, 0, "", signal);
-    expect(request.mock.calls[1][1].headers).toEqual({});
+    expect(request.mock.calls[1][1].headers).toBeUndefined();
   });
   it.each([401, 403, 404, 500])("reports HTTP %s", async status => {
     await expect(fetchMpaCronTasks(vi.fn().mockResolvedValue(new Response("private server response", {status})), runtime, 0, "")).rejects.toThrow(`MPA_HTTP_${status}`);
@@ -47,16 +47,16 @@ it("does not request without a cloud Runtime", async () => {
   await act(async () => root.render(<MpaCronTasks />));
   expect(host.textContent).toContain("mpa.selectRuntime"); expect(list).not.toHaveBeenCalled();
 });
-it("shows data, pages, refreshes and masks a transient JWT", async () => {
+it("shows data, pages, refreshes and searches without JWT input", async () => {
   list.mockResolvedValue(page); await mount();
   expect(host.textContent).toContain("Report"); expect(host.textContent).toContain("r-one");
-  expect(host.querySelector('input')!.type).toBe("password");
+  expect(host.querySelector('input')!.type).toBe("search");
   await click("mpa.next"); expect(list.mock.calls.at(-1)![1]).toBe(20);
   await click("mpa.previous"); expect(list.mock.calls.at(-1)![1]).toBe(0);
   await click("mpa.refresh");
-  await act(async () => { const input=host.querySelector('input')!; Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')!.set!.call(input,'secret'); input.dispatchEvent(new Event('input',{bubbles:true})); });
+  await act(async () => { const input=host.querySelector('input')!; Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')!.set!.call(input,'report'); input.dispatchEvent(new Event('input',{bubbles:true})); });
   await act(async () => host.querySelector('form')!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})));
-  expect(list.mock.calls.at(-1)![2]).toBe('secret');
+  expect(list.mock.calls.at(-1)![2]).toBe('report');
   expect(localStorage.length).toBe(0); expect(sessionStorage.length).toBe(0);
   list.mockResolvedValue({items:[{...task,enabled:false,nextRunAt:null,lastRunStatus:null}],total:1,hasMore:false,nextOffset:null});
   await click("mpa.refresh"); expect(host.textContent).toContain('status.paused');
@@ -66,7 +66,7 @@ it.each([['MPA_HTTP_401','mpa.authRequired'],['MPA_HTTP_403','mpa.forbidden'],['
   expect(host.querySelector('[role="alert"]')).not.toBeNull();
   list.mockResolvedValue({items:[],total:0,hasMore:false,nextOffset:null}); await click('mpa.refresh'); expect(host.textContent).toContain('mpa.empty');
 });
-it("aborts stale responses on selection changes and clears credentials", async () => {
+it("aborts stale responses on selection changes and clears search", async () => {
   let resolve!: (value: MpaCronTaskPage) => void;
   list.mockImplementationOnce(() => new Promise(r => {resolve=r;})); await mount();
   expect(host.textContent).toContain('mpa.loading'); const signal = list.mock.calls[0][3] as AbortSignal;
@@ -89,4 +89,20 @@ it.each([{nextRunAt: {}}, {lastRunStatus: {} }])("rejects invalid optional task 
 it("accepts null optional task fields", async () => {
  const data={...page,items:[{...task,nextRunAt:null,lastRunStatus:null}]};
  expect(await fetchMpaCronTasks(vi.fn().mockResolvedValue(new Response(JSON.stringify(data))),runtime,0,"")).toEqual(data);
+});
+
+it.each(["mpa_identity_required", "mpa_runtime_config_required", "mpa_runtime_mismatch", "mpa_top_failed"])("handles safe server code %s", async code => {
+ await expect(fetchMpaCronTasks(vi.fn().mockResolvedValue(new Response(JSON.stringify({detail:code}),{status:409})),runtime,0,"")).rejects.toThrow(code);
+ list.mockRejectedValue(new Error(code)); await mount(); expect(host.textContent).toContain(`mpa.errors.${code}`);
+});
+it("does not echo unknown server error bodies", async () => {
+ await expect(fetchMpaCronTasks(vi.fn().mockResolvedValue(new Response(JSON.stringify({detail:"secret"}),{status:502})),runtime,0,"")).rejects.toThrow("MPA_HTTP_502");
+});
+it("shows reference overview metrics and prompt details", async () => {
+ const data={...page,overview:{executionCount:4,successRate:0.75},items:[{...task,prompt:"Summarize news"}]};
+ expect(await fetchMpaCronTasks(vi.fn().mockResolvedValue(new Response(JSON.stringify(data))),runtime,0,"")).toEqual(data);
+ list.mockResolvedValue(data); await mount(); expect(host.textContent).toContain("75.0%"); expect(host.textContent).toContain("Summarize news");
+});
+it.each([{overview:{executionCount:"4",successRate:1}},{overview:{executionCount:4,successRate:"1"}},{items:[{...task,prompt:{}}]}])("validates overview and prompt",async patch=>{
+ await expect(fetchMpaCronTasks(vi.fn().mockResolvedValue(new Response(JSON.stringify({...page,...patch}))),runtime,0,"")).rejects.toThrow("MPA_INVALID_RESPONSE");
 });

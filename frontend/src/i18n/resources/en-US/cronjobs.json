@@ -5,13 +5,10 @@
     "title": "Runtime scheduled tasks",
     "selectRuntime": "Select a connected cloud Runtime in the Agent list first.",
     "scope": "MPA scheduled tasks visible to your user identity in the selected Runtime.",
-    "jwt": "User JWT (optional)",
-    "jwtHelp": "Used only in this panel; cleared when switching Runtime or leaving the panel. Never saved in browser storage.",
-    "apply": "Load tasks",
     "refresh": "Refresh",
     "loading": "Loading Runtime tasks",
     "empty": "No scheduled tasks are visible to this user in this Runtime.",
-    "authRequired": "A valid MPA user JWT is required. Enter it and select Load tasks.",
+    "authRequired": "MPA rejected the automatically obtained credentials. Check the user identity and Runtime JWT configuration.",
     "forbidden": "Access denied. Check the selected Runtime and user JWT.",
     "unsupported": "This Runtime does not provide the MPA scheduled tasks API.",
     "invalidResponse": "The tasks API returned unrecognized data. Check the Runtime version.",
@@ -34,6 +31,17 @@
       "weekly": "Weekly",
       "monthly": "Monthly",
       "cron": "Cron"
+    },
+    "search": "Search tasks",
+    "automaticAuth": "Studio obtains MPA credentials on the server. Only tasks accessible to the enterprise user are shown.",
+    "executionCount": "Executions",
+    "successRate": "Success rate",
+    "prompt": "Task content",
+    "errors": {
+      "mpa_identity_required": "Enterprise user identity is missing. For local testing, set VEADK_STUDIO_MPA_USER_UID on the Studio server and restart it.",
+      "mpa_runtime_config_required": "The selected Runtime is missing its MPA instance or space configuration.",
+      "mpa_runtime_mismatch": "The TOP endpoint does not match the selected Runtime. Check the formal / debug Runtime binding.",
+      "mpa_top_failed": "TOP could not issue MPA credentials. Check AK/SK permissions and the instance space."
     }
   },
   "actions": {
