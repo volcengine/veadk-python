@@ -39,7 +39,7 @@ veadk harness create my-harness
 
 ### `harness.yaml`
 
-分层配置文件，每个组件自包含。`deploy` 会将其转换为 runtime 的环境变量：顶层字段与 `model` 直接展平（`model.name` → `MODEL_NAME`，`tools` → `TOOLS` 等），列表转为逗号分隔字符串；每个组件的 `type` 选择后端，组件下的其余参数映射为该后端实际读取的 VeADK 环境变量（如 viking 的 `project` → `DATABASE_VIKING_PROJECT`）。空值会被跳过，VeADK 回退到自身默认值。
+分层配置文件，每个组件自包含。`deploy` 会将其转换为 runtime 的环境变量：顶层字段与 `model` 直接展平（`model.name` → `MODEL_NAME`，`tools` → `TOOLS` 等），列表转为逗号分隔字符串；每个组件的 `type` 选择后端，组件下的其余参数映射为该后端实际读取的 VeADK 环境变量（如知识库 viking 的 `project` → `DATABASE_VIKING_PROJECT`，长期记忆 viking 的 `project` → `DATABASE_VIKINGMEM_PROJECT`）。空值会被跳过，VeADK 回退到自身默认值。
 
 ```yaml
 harness_name: ""          # -> HARNESS_NAME（runtime 名 + 知识库/长期记忆索引名）

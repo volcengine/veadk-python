@@ -39,7 +39,7 @@ It writes:
 
 ### `harness.yaml`
 
-A layered, self-contained-per-component config. `deploy` converts it into the runtime's environment variables: top-level fields and `model` are flattened (`model.name` → `MODEL_NAME`, `tools` → `TOOLS`, …) with lists comma-joined; each component's `type` selects its backend, and the component's other params map to the VeADK env vars that backend actually reads (e.g. viking `project` → `DATABASE_VIKING_PROJECT`). Empty values are skipped, so VeADK falls back to its own defaults.
+A layered, self-contained-per-component config. `deploy` converts it into the runtime's environment variables: top-level fields and `model` are flattened (`model.name` → `MODEL_NAME`, `tools` → `TOOLS`, …) with lists comma-joined; each component's `type` selects its backend, and the component's other params map to the VeADK env vars that backend actually reads (e.g. knowledgebase viking `project` → `DATABASE_VIKING_PROJECT`, long-term-memory viking `project` → `DATABASE_VIKINGMEM_PROJECT`). Empty values are skipped, so VeADK falls back to its own defaults.
 
 ```yaml
 harness_name: ""          # -> HARNESS_NAME (runtime name + knowledgebase/long-term-memory index name)

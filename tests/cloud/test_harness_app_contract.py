@@ -472,6 +472,35 @@ class TestHarnessConfig:
             "base_url": "https://api.mem0.ai",
         }
 
+    def test_viking_api_keys_map_to_component_specific_runtime_env(self):
+        envs = to_runtime_env(
+            {
+                "knowledgebase": {
+                    "type": "viking",
+                    "config": {
+                        "index": "kb-viking-index",
+                        "api_key": "kb-api-key",
+                    },
+                },
+                "long_term_memory": {
+                    "type": "viking",
+                    "config": {
+                        "index": "memory-index",
+                        "api_key": "mem-api-key",
+                        "project": "memory-project",
+                        "resource_id": "memory-resource",
+                        "memory_type": ["sys_event_v1", "sys_profile_v1"],
+                    },
+                },
+            }
+        )
+
+        assert envs["DATABASE_VIKING_API_KEY"] == "kb-api-key"
+        assert envs["DATABASE_VIKINGMEM_API_KEY"] == "mem-api-key"
+        assert envs["DATABASE_VIKINGMEM_PROJECT"] == "memory-project"
+        assert envs["DATABASE_VIKINGMEM_MEMORY_TYPE"] == "sys_event_v1,sys_profile_v1"
+        assert "DATABASE_VIKING_RESOURCE_ID" not in envs
+
     def test_cli_style_model_yaml_maps_current_and_legacy_model_env(self):
         envs = to_runtime_env(
             {

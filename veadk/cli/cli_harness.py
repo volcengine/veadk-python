@@ -49,8 +49,8 @@ _DEFAULT_HARNESS_NAME = "default"
 # Blank `harness.yaml` template written by `create`. Layered sections map to the
 # runtime env names consumed by `veadk.cloud.harness_app` (see env_mapping):
 # `model.name` -> MODEL_NAME, `knowledgebase.type` -> KNOWLEDGEBASE_TYPE, a
-# backend's params -> DATABASE_<BACKEND>_*. Each line is annotated with its env
-# var and the `veadk harness add` flag that sets it.
+# backend's params -> the env vars that specific component/backend reads. Each
+# line is annotated with its env var and the `veadk harness add` flag that sets it.
 _HARNESS_YAML = """\
 # =============================================================================
 # VeADK harness configuration.
@@ -59,7 +59,8 @@ _HARNESS_YAML = """\
 # variables: top-level fields and `model` are flattened (model.name -> MODEL_NAME,
 # tools -> TOOLS, ...); each component's `type` selects its backend, and the
 # component's other params map to the VeADK env vars that backend reads (e.g.
-# viking `project` -> DATABASE_VIKING_PROJECT). Empty values are skipped, so
+# knowledgebase viking `project` -> DATABASE_VIKING_PROJECT, long-term-memory
+# viking `project` -> DATABASE_VIKINGMEM_PROJECT). Empty values are skipped, so
 # VeADK falls back to its own defaults.
 #
 # Configure with `veadk harness add ...` or by editing this file. For a
@@ -114,6 +115,7 @@ harness_enhance:
 knowledgebase:
   type: ""
   # -- viking --      env DATABASE_VIKING_*    flags: --knowledgebase-project / --knowledgebase-region
+  # api_key: ""
   # project: my-project
   # region: cn-beijing
   # -- opensearch --  env DATABASE_OPENSEARCH_*  flags: --knowledgebase-host / -port / -username / -password / -use-ssl
@@ -134,7 +136,8 @@ knowledgebase:
 #   "" disables it. Supported: viking | opensearch | redis | mem0
 long_term_memory:
   type: ""
-  # -- viking --      env DATABASE_VIKING_*    flags: --long-term-memory-project / --long-term-memory-region
+  # -- viking --      env DATABASE_VIKINGMEM_* / DATABASE_VIKING_REGION    flags: --long-term-memory-project / --long-term-memory-region
+  # api_key: ""
   # project: my-project
   # region: cn-beijing
   # -- opensearch --  env DATABASE_OPENSEARCH_*  flags: --long-term-memory-host / -port / -username / -password

@@ -2388,6 +2388,134 @@ def test_viking_memories_list_route_uses_server_credentials(
     }
 
 
+def test_viking_memories_list_route_requires_server_credentials_with_api_key_only(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path)
+    monkeypatch.delenv("VOLCENGINE_ACCESS_KEY", raising=False)
+    monkeypatch.delenv("VOLCENGINE_SECRET_KEY", raising=False)
+    monkeypatch.setenv("DATABASE_VIKINGMEM_API_KEY", "mem-api-key")
+
+    with TestClient(app) as client:
+        response = client.get("/web/viking-memories?project=memory_project")
+
+    assert response.status_code == 409
+    assert "VOLCENGINE_ACCESS_KEY/SECRET_KEY" in response.json()["detail"]
+
+
+def test_viking_knowledgebases_list_route_requires_server_credentials_with_api_key_only(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path)
+    monkeypatch.delenv("VOLCENGINE_ACCESS_KEY", raising=False)
+    monkeypatch.delenv("VOLCENGINE_SECRET_KEY", raising=False)
+    monkeypatch.setenv("DATABASE_VIKING_API_KEY", "kb-api-key")
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/web/viking-knowledgebases?project=kb_project",
+            headers={"X-VeADK-Local-User": "admin"},
+        )
+
+    assert response.status_code == 409
+    assert "VOLCENGINE_ACCESS_KEY/SECRET_KEY" in response.json()["detail"]
+
+
+def test_viking_knowledgebases_list_route_prefers_server_credentials_for_management(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path, admins="admin")
+    monkeypatch.setenv("DATABASE_VIKING_API_KEY", "kb-api-key")
+    calls: list[str] = []
+
+    class _FakeKnowledgeClient:
+        def __init__(self, **kwargs: Any) -> None:
+            assert kwargs["access_key"] == "ak"
+            assert kwargs["secret_key"] == "sk"
+
+        def list_knowledge_bases(self, request: Any) -> SimpleNamespace:
+            calls.append("agentkit")
+            assert request.project_name == "kb_project"
+            return SimpleNamespace(
+                knowledge_bases=[
+                    SimpleNamespace(
+                        name="agentkit_docs",
+                        knowledge_id="kb-agentkit-docs",
+                        provider_knowledge_id="kb-provider-docs",
+                        provider_type="VIKINGDB_KNOWLEDGE",
+                        description="AgentKit docs",
+                        project_name="kb_project",
+                        region="cn-beijing",
+                        status="Ready",
+                        last_update_time="2026-09-14T11:00:00Z",
+                    )
+                ],
+                next_token="",
+            )
+
+    class _FakeKnowledgeService:
+        def __init__(self, **kwargs: Any) -> None:
+            assert kwargs["ak"] == "ak"
+            assert kwargs["sk"] == "sk"
+
+        def list_collections(self, **kwargs: Any) -> list[dict[str, Any]]:
+            calls.append("native")
+            assert kwargs == {"project": "kb_project", "brief": True}
+            return [
+                {
+                    "collection_name": "native_docs",
+                    "description": "Native docs",
+                    "project": "kb_project",
+                    "resource_id": "native-resource",
+                }
+            ]
+
+    class _FakeVikingDbApi:
+        def __init__(self, *_: Any, **__: Any) -> None:
+            pass
+
+        def list_vikingdb_collection(self, request: Any) -> SimpleNamespace:
+            calls.append("vector")
+            assert request.project_name == "kb_project"
+            return SimpleNamespace(
+                collections=[
+                    SimpleNamespace(
+                        collection_name="vector_docs",
+                        description="Vector docs",
+                        project_name="kb_project",
+                        resource_id="vector-resource",
+                        update_time="2026-09-14T12:00:00Z",
+                        index_count=2,
+                    )
+                ],
+                total_count=1,
+            )
+
+    monkeypatch.setattr(
+        "agentkit.sdk.knowledge.client.AgentkitKnowledgeClient",
+        _FakeKnowledgeClient,
+    )
+    monkeypatch.setattr(
+        "volcengine.viking_knowledgebase.VikingKnowledgeBaseService",
+        _FakeKnowledgeService,
+    )
+    monkeypatch.setattr("volcenginesdkvikingdb.VIKINGDBApi", _FakeVikingDbApi)
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/web/viking-knowledgebases?project=kb_project",
+            headers={"X-VeADK-Local-User": "admin"},
+        )
+
+    assert response.status_code == 200
+    assert calls == ["native", "agentkit", "vector"]
+    assert {item["sourceKind"] for item in response.json()["items"]} == {
+        "agentkit",
+        "knowledge",
+        "vector",
+    }
+
+
 @pytest.mark.parametrize(
     ("authorizer", "expected_authorization"),
     [

@@ -34,14 +34,11 @@ Two kinds of fields are converted differently:
 * **Component sections** (``knowledgebase`` / ``long_term_memory`` /
   ``short_term_memory``): ``type`` becomes the harness selector env, and the
   remaining connection params are mapped to the VeADK env vars the backend
-  actually reads via :data:`BACKEND_ENV` — these can't be derived by a generic
-  flatten (a Viking memory's ``project`` must become ``DATABASE_VIKING_PROJECT``,
-  read by :class:`veadk.configs.database_configs.VikingKnowledgebaseConfig`, not
-  ``LONG_TERM_MEMORY_PROJECT``).
+  actually reads via :data:`BACKEND_ENV` and component-specific mappings — these
+  can't be derived by a generic flatten.
 
-Note: VeADK keeps one ``DATABASE_<BACKEND>_*`` config per backend, so two
-components using the same backend share those vars (e.g. a Viking knowledge base
-and a Viking long-term memory).
+Note: Some backends share ``DATABASE_<BACKEND>_*`` vars across components, while
+backends with different runtime contracts use component-specific mappings.
 """
 
 import json
@@ -107,6 +104,7 @@ TOOL_CONFIG_ENV: dict[str, dict[str, str]] = {
 # connection params map to an empty dict (so a stray param fast-fails as a typo).
 BACKEND_ENV: dict[str, dict[str, str]] = {
     "viking": {
+        "api_key": "DATABASE_VIKING_API_KEY",
         "project": "DATABASE_VIKING_PROJECT",
         "region": "DATABASE_VIKING_REGION",
         "resource_id": "DATABASE_VIKING_RESOURCE_ID",
@@ -154,6 +152,17 @@ BACKEND_ENV: dict[str, dict[str, str]] = {
     "sqlite": {},
 }
 
+COMPONENT_BACKEND_ENV_OVERRIDES: dict[tuple[str, str], dict[str, str]] = {
+    ("long_term_memory", "viking"): {
+        "api_key": "DATABASE_VIKINGMEM_API_KEY",
+        "project": "DATABASE_VIKINGMEM_PROJECT",
+        "region": "DATABASE_VIKING_REGION",
+        "memory_type": "DATABASE_VIKINGMEM_MEMORY_TYPE",
+        "access_key": "VOLCENGINE_ACCESS_KEY",
+        "secret_key": "VOLCENGINE_SECRET_KEY",
+    },
+}
+
 
 # Backends each component supports (drives the `veadk harness add` connection
 # flags and lets a component offer only its relevant params). Backends with no
@@ -169,6 +178,16 @@ COMPONENT_BACKENDS: dict[str, list[str]] = {
 _CREDENTIAL_PARAMS = frozenset({"access_key", "secret_key"})
 
 
+def _backend_env_for_component(component: str, backend: str) -> dict[str, str] | None:
+    params = BACKEND_ENV.get(backend)
+    if params is None:
+        return None
+    override = COMPONENT_BACKEND_ENV_OVERRIDES.get((component, backend))
+    if override is None:
+        return params
+    return override
+
+
 def component_connection_params(component: str) -> list[str]:
     """Ordered, de-duplicated connection-param names a component's backends accept.
 
@@ -177,7 +196,7 @@ def component_connection_params(component: str) -> list[str]:
     """
     params: dict[str, None] = {}
     for backend in COMPONENT_BACKENDS.get(component, []):
-        for param in BACKEND_ENV.get(backend, {}):
+        for param in _backend_env_for_component(component, backend) or {}:
             if param not in _CREDENTIAL_PARAMS:
                 params.setdefault(param, None)
     return list(params)
@@ -251,7 +270,7 @@ def to_runtime_env(spec: dict[str, Any]) -> dict[str, str]:
         backend = str(section["type"])
         env[type_env] = backend
 
-        params = BACKEND_ENV.get(backend)
+        params = _backend_env_for_component(component, backend)
         if params is None:
             raise ValueError(
                 f"Unknown backend type '{backend}' for '{component}'. "

@@ -646,6 +646,40 @@ test("declares the VikingDB long-term memory runtime configuration", () => {
   assert.match(customCreateSource, /DATABASE_VIKINGMEM_PROJECT/);
 });
 
+test("declares the VikingDB knowledge runtime configuration", () => {
+  const viking = KB_BACKENDS.find((option) => option.id === "viking");
+
+  assert.ok(viking);
+  assert.equal(viking.label, "VikingDB Knowledge");
+  assert.deepEqual(
+    viking.env.map((env) => [
+      env.key,
+      env.required,
+      env.placeholder ?? "",
+      env.hidden,
+    ]),
+    [
+      ["DATABASE_VIKING_PROJECT", false, "default", undefined],
+      ["DATABASE_VIKING_REGION", false, "", undefined],
+      ["DATABASE_VIKING_COLLECTION_KIND", false, "", undefined],
+      ["DATABASE_VIKING_RESOURCE_ID", false, "", undefined],
+    ],
+  );
+  assert.deepEqual(
+    runtimeEnvVars(viking.env, {
+      DATABASE_VIKING_PROJECT: "kb-project",
+      DATABASE_VIKING_REGION: "cn-beijing",
+    }),
+    [
+      { key: "DATABASE_VIKING_PROJECT", value: "kb-project" },
+      { key: "DATABASE_VIKING_REGION", value: "cn-beijing" },
+    ],
+  );
+  assert.match(vikingKnowledgebasesSource, /\/web\/viking-knowledgebases/);
+  assert.match(customCreateSource, /function VikingKnowledgebaseSelect/);
+  assert.match(customCreateSource, /DATABASE_VIKING_PROJECT/);
+});
+
 test("declares the OpenViking long-term memory runtime configuration", () => {
   const openviking = LTM_BACKENDS.find((option) => option.id === "openviking");
 
