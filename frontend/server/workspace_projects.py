@@ -23,16 +23,28 @@ import os
 import shlex
 from dataclasses import replace
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING, Any
 
 from agentkit.sdk.tools.types import SetSessionTtlRequest
-from typing import Any
 
 from fastapi import HTTPException
 
-from frontend.server.sandbox_remote import SandboxRemoteTransport
 from frontend.server.workspace_preview import ProjectInput, _expired
 from veadk.cli.agentkit_session_metadata import build_create_session_request
 from veadk.cli.frontend_sandbox import SandboxCloudSession, STUDIO_SANDBOX_TTL_SECONDS
+
+if TYPE_CHECKING:
+    from frontend.server.sandbox_remote import SandboxRemoteTransport
+else:
+
+    def SandboxRemoteTransport(endpoint: str):  # noqa: N802
+        """Load the remote transport only when a workspace request needs it."""
+        from frontend.server.sandbox_remote import (
+            SandboxRemoteTransport as _SandboxRemoteTransport,
+        )
+
+        return _SandboxRemoteTransport(endpoint)
+
 
 _KIND = "studio-workspace"
 _TRANSITIONAL_SESSIONS = {
