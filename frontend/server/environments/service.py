@@ -29,21 +29,9 @@ import zlib
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
-from typing import Any, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 from urllib.parse import urlsplit
 from uuid import uuid4
-
-from veadk.cli.generated_agent_codegen import (
-    AgentDraft,
-    GeneratedFile,
-    GeneratedProject,
-    SelectedSkill,
-)
-from veadk.cli.generated_agent_skills import (
-    SkillSpaceResolver,
-    materialize_selected_skills,
-    skill_name_from_markdown,
-)
 
 from .dockerfile import (
     build_dockerfile,
@@ -90,6 +78,35 @@ from .repository import (
 )
 from .resources import EnvironmentCloudGateway
 from .tool_provisioning import EnvironmentToolProvisioner
+
+if TYPE_CHECKING:
+    from veadk.cli.generated_agent_codegen import GeneratedFile
+    from veadk.cli.generated_agent_skills import SkillSpaceResolver
+else:
+
+    def GeneratedFile(*args: Any, **kwargs: Any):  # noqa: N802
+        """Preserve the injectable file factory without loading codegen at startup."""
+        from veadk.cli.generated_agent_codegen import GeneratedFile as _GeneratedFile
+
+        return _GeneratedFile(*args, **kwargs)
+
+
+async def materialize_selected_skills(*args: Any, **kwargs: Any) -> None:
+    """Load generated-skill runtime only for a real environment build."""
+    from veadk.cli.generated_agent_skills import (
+        materialize_selected_skills as _materialize_selected_skills,
+    )
+
+    await _materialize_selected_skills(*args, **kwargs)
+
+
+def skill_name_from_markdown(content: str) -> str | None:
+    """Load generated-skill parsing only when materialized files are inspected."""
+    from veadk.cli.generated_agent_skills import (
+        skill_name_from_markdown as _skill_name_from_markdown,
+    )
+
+    return _skill_name_from_markdown(content)
 
 
 class WorkspaceReferenceLookup(Protocol):
@@ -1135,6 +1152,15 @@ class EnvironmentService:
         owner_id: str,
         environment: EnvironmentRecord,
     ) -> tuple[list[GeneratedFile], EnvironmentSkillManifest]:
+        if not environment.selected_skills:
+            return [], EnvironmentSkillManifest()
+
+        from veadk.cli.generated_agent_codegen import (
+            AgentDraft,
+            GeneratedProject,
+            SelectedSkill,
+        )
+
         selected: list[SelectedSkill] = []
         for item in environment.selected_skills:
             payload = item.model_dump(by_alias=True)
@@ -1150,8 +1176,6 @@ class EnvironmentService:
             payload.pop("artifactId", None)
             skill = SelectedSkill.model_validate(payload)
             selected.append(skill)
-        if not selected:
-            return [], EnvironmentSkillManifest()
         project = GeneratedProject(name="environment", files=[])
         await materialize_selected_skills(
             AgentDraft(name="environment", selectedSkills=selected),
