@@ -76,6 +76,55 @@ from veadk.cli.github_app_pr_review import (
     TosGitHubAppReviewRepositoryStore,
     create_review_record,
 )
+from veadk.cli.gitlab_app_mr_review import (
+    GitLabAppReviewError,
+    GITLAB_REVIEW_PROJECTS_KEY,
+    GitLabOAuthCredential,
+    GitLabProject,
+    TosGitLabAppReviewProjectStore,
+    create_review_record as create_gitlab_review_record,
+)
+
+
+def _configure_gitlab_oauth(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("VEADK_GITLAB_BASE_URL", "https://gitlab.example.com")
+    monkeypatch.setenv("VEADK_GITLAB_WEBHOOK_SECRET", "secret")
+    monkeypatch.setenv("VEADK_STUDIO_PUBLIC_BASE_URL", "https://studio.example.com")
+    monkeypatch.setenv("VEADK_GITLAB_OAUTH_CLIENT_ID", "client-id")
+    monkeypatch.setenv("VEADK_GITLAB_OAUTH_CLIENT_SECRET", "client-secret")
+    monkeypatch.setenv(
+        "VEADK_GITLAB_OAUTH_REDIRECT_URI",
+        "https://studio.example.com/web/gitlab/oauth/callback",
+    )
+
+
+def _save_gitlab_oauth_credential(
+    storage: object,
+    *,
+    owner_id: str = "alice",
+    credential_id: str = "cred-1",
+    token: str = "oauth-token",
+) -> TosGitLabAppReviewProjectStore:
+    store = TosGitLabAppReviewProjectStore(
+        bucket="studio-state",
+        client_factory=lambda: storage,
+    )
+    asyncio.run(
+        store.save_oauth_credential(
+            GitLabOAuthCredential(
+                credential_id=credential_id,
+                owner_id=owner_id,
+                base_url="https://gitlab.example.com",
+                access_token=token,
+                refresh_token="refresh-token",
+                expires_at=0,
+                gitlab_user_id=42,
+                gitlab_username=owner_id,
+                gitlab_name=owner_id.title(),
+            )
+        )
+    )
+    return store
 
 
 @pytest.mark.parametrize("is_vestack_deployment", [False, True])
@@ -546,6 +595,7 @@ def _app(
     tool_id: str | None = "tool-studio",
     snapshot_tool_id: str | None = "tool-studio-snapshot",
     github_app_review_storage_client: _FakeTosClient | None = None,
+    gitlab_app_review_storage_client: _FakeTosClient | None = None,
 ) -> FastAPI:
     app = FastAPI()
     service = SandboxConversationService(
@@ -578,6 +628,14 @@ def _app(
         github_app_review_storage_client_factory=(
             (lambda: github_app_review_storage_client)
             if github_app_review_storage_client is not None
+            else None
+        ),
+        gitlab_app_review_storage_bucket=(
+            "studio-state" if gitlab_app_review_storage_client is not None else ""
+        ),
+        gitlab_app_review_storage_client_factory=(
+            (lambda: gitlab_app_review_storage_client)
+            if gitlab_app_review_storage_client is not None
             else None
         ),
     )
@@ -1087,6 +1145,41 @@ def test_pull_request_review_record_status_can_be_completed() -> None:
     assert records[0].session_id == "remote-1"
 
 
+def test_gitlab_merge_request_review_record_status_can_be_completed() -> None:
+    storage = _FakeTosClient()
+    store = TosGitLabAppReviewProjectStore(
+        bucket="studio-state",
+        client_factory=lambda: storage,
+    )
+    record = create_gitlab_review_record(
+        instance_id="default",
+        base_url="https://gitlab.example.com",
+        project_id=123,
+        path_with_namespace="Group/nice",
+        merge_request_url="https://gitlab.example.com/Group/nice/-/merge_requests/7",
+        merge_request_iid=7,
+        status="started",
+        trigger="webhook",
+        session_id="remote-1",
+    )
+    asyncio.run(store.append_review_record(record))
+
+    updated = asyncio.run(
+        store.update_review_record_status(
+            record.record_id,
+            status="completed",
+        )
+    )
+
+    assert updated is not None
+    records, _page = asyncio.run(
+        store.review_records_page(frontend_sandbox.PageRequest(1, 10))
+    )
+    assert records[0].record_id == record.record_id
+    assert records[0].status == "completed"
+    assert records[0].session_id == "remote-1"
+
+
 def test_github_app_webhook_starts_pull_request_review(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1244,6 +1337,518 @@ def test_github_app_webhook_ignores_disabled_repository(
     assert record["trigger"] == "webhook"
     assert record["reason"] == "repository-review-disabled"
     assert record["pullRequestUrl"] == "https://github.com/Rhosmarie/nice/pull/23"
+    assert gateway.created == 0
+
+
+def test_gitlab_app_projects_include_review_enablement_and_create_webhook(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_gitlab_oauth(monkeypatch)
+    calls: list[tuple[str, int]] = []
+
+    class _FakeGitLabAppClient:
+        def __init__(self, config: object) -> None:
+            del config
+
+        async def projects(self) -> list[GitLabProject]:
+            return [
+                GitLabProject(
+                    instance_id="default",
+                    base_url="https://gitlab.example.com",
+                    project_id=123,
+                    path_with_namespace="Group/nice",
+                    name="nice",
+                    namespace="Group",
+                    web_url="https://gitlab.example.com/Group/nice",
+                    private=False,
+                    access_level=40,
+                )
+            ]
+
+        async def ensure_project_webhook(self, project_id: int) -> None:
+            calls.append(("hook", project_id))
+
+    monkeypatch.setattr(frontend_sandbox, "GitLabAppClient", _FakeGitLabAppClient)
+    storage = _FakeTosClient()
+    _save_gitlab_oauth_credential(storage)
+    client = TestClient(_app(_FakeGateway(), gitlab_app_review_storage_client=storage))
+
+    save_response = client.put(
+        "/web/gitlab/app/review-projects",
+        json={"projectId": 123, "reviewEnabled": True},
+        headers={"X-Test-User": "alice"},
+    )
+    disable_response = client.put(
+        "/web/gitlab/app/review-projects",
+        json={"projectId": 123, "reviewEnabled": False},
+        headers={"X-Test-User": "alice"},
+    )
+    list_response = client.get(
+        "/web/gitlab/app/projects",
+        headers={"X-Test-User": "alice"},
+    )
+
+    assert save_response.status_code == 200
+    assert save_response.json()["projects"] == [
+        {
+            "instanceId": "default",
+            "baseUrl": "https://gitlab.example.com",
+            "projectId": 123,
+            "pathWithNamespace": "Group/nice",
+            "credentialOwner": "alice",
+            "credentialId": "cred-1",
+            "credentialType": "oauth",
+            "webhookId": 0,
+            "enabled": True,
+            "status": "active",
+            "reason": "",
+        }
+    ]
+    assert disable_response.status_code == 200
+    assert disable_response.json()["projects"] == [
+        {
+            "instanceId": "default",
+            "baseUrl": "https://gitlab.example.com",
+            "projectId": 123,
+            "pathWithNamespace": "Group/nice",
+            "credentialOwner": "alice",
+            "credentialId": "cred-1",
+            "credentialType": "oauth",
+            "webhookId": 0,
+            "enabled": False,
+            "status": "disabled",
+            "reason": "用户已关闭自动评审。",
+        }
+    ]
+    assert list_response.status_code == 200
+    assert list_response.json()["projects"][0] == {
+        "instanceId": "default",
+        "baseUrl": "https://gitlab.example.com",
+        "projectId": 123,
+        "pathWithNamespace": "Group/nice",
+        "name": "nice",
+        "namespace": "Group",
+        "webUrl": "https://gitlab.example.com/Group/nice",
+        "private": False,
+        "reviewEnabled": False,
+        "permissionsNote": "",
+        "accessLevel": 40,
+        "canManageWebhooks": True,
+        "reviewBindingStatus": "disabled",
+        "reviewBindingReason": "用户已关闭自动评审。",
+        "reviewCredentialOwner": "alice",
+        "reviewCredentialType": "oauth",
+    }
+    assert calls == [("hook", 123)]
+
+
+def test_gitlab_app_projects_tolerate_legacy_project_binding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_gitlab_oauth(monkeypatch)
+
+    class _FakeGitLabAppClient:
+        def __init__(self, config: object) -> None:
+            del config
+
+        async def projects(self) -> list[GitLabProject]:
+            return [
+                GitLabProject(
+                    instance_id="default",
+                    base_url="https://gitlab.example.com",
+                    project_id=123,
+                    path_with_namespace="Group/nice",
+                    name="nice",
+                    namespace="Group",
+                    web_url="https://gitlab.example.com/Group/nice",
+                    private=False,
+                    access_level=40,
+                )
+            ]
+
+    monkeypatch.setattr(frontend_sandbox, "GitLabAppClient", _FakeGitLabAppClient)
+    storage = _FakeTosClient()
+    _save_gitlab_oauth_credential(storage)
+    storage.objects[("studio-state", GITLAB_REVIEW_PROJECTS_KEY)] = json.dumps(
+        {
+            "projects": [
+                {
+                    "instanceId": "default",
+                    "baseUrl": "https://gitlab.example.com",
+                    "projectId": 123,
+                    "pathWithNamespace": "Group/nice",
+                    "enabled": True,
+                    "status": "active",
+                }
+            ]
+        }
+    ).encode("utf-8")
+    client = TestClient(_app(_FakeGateway(), gitlab_app_review_storage_client=storage))
+
+    response = client.get(
+        "/web/gitlab/app/projects",
+        headers={"X-Test-User": "alice"},
+    )
+
+    assert response.status_code == 200
+    project = response.json()["projects"][0]
+    assert project["reviewEnabled"] is False
+    assert project["reviewBindingStatus"] == "auth_invalid"
+    assert (
+        project["reviewBindingReason"]
+        == "历史项目绑定缺少 OAuth 授权，请重新启用自动评审。"
+    )
+
+
+def test_gitlab_oauth_project_binding_uses_user_credential(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_gitlab_oauth(monkeypatch)
+    tokens: list[str] = []
+
+    class _FakeGitLabAppClient:
+        def __init__(self, config: object) -> None:
+            tokens.append(config.token)
+
+        async def projects(self) -> list[GitLabProject]:
+            return [
+                GitLabProject(
+                    instance_id="default",
+                    base_url="https://gitlab.example.com",
+                    project_id=123,
+                    path_with_namespace="Group/nice",
+                    name="nice",
+                    namespace="Group",
+                    web_url="https://gitlab.example.com/Group/nice",
+                    private=False,
+                    access_level=40,
+                )
+            ]
+
+        async def ensure_project_webhook(self, project_id: int) -> int:
+            assert project_id == 123
+            return 456
+
+    monkeypatch.setattr(frontend_sandbox, "GitLabAppClient", _FakeGitLabAppClient)
+    storage = _FakeTosClient()
+    _save_gitlab_oauth_credential(storage)
+    client = TestClient(_app(_FakeGateway(), gitlab_app_review_storage_client=storage))
+
+    config_response = client.get(
+        "/web/gitlab/app/config",
+        headers={"X-Test-User": "alice"},
+    )
+    save_response = client.put(
+        "/web/gitlab/app/review-projects",
+        json={"projectId": 123, "reviewEnabled": True},
+        headers={"X-Test-User": "alice"},
+    )
+
+    assert config_response.status_code == 200
+    assert config_response.json()["oauthConnected"] is True
+    assert save_response.status_code == 200
+    assert save_response.json()["projects"] == [
+        {
+            "instanceId": "default",
+            "baseUrl": "https://gitlab.example.com",
+            "projectId": 123,
+            "pathWithNamespace": "Group/nice",
+            "credentialOwner": "alice",
+            "credentialId": "cred-1",
+            "credentialType": "oauth",
+            "webhookId": 456,
+            "enabled": True,
+            "status": "active",
+            "reason": "",
+        }
+    ]
+    assert tokens == ["oauth-token"]
+
+
+def test_gitlab_expired_oauth_requires_reconnect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VEADK_GITLAB_BASE_URL", "https://gitlab.example.com")
+    monkeypatch.setenv("VEADK_GITLAB_WEBHOOK_SECRET", "secret")
+    monkeypatch.setenv("VEADK_STUDIO_PUBLIC_BASE_URL", "https://studio.example.com")
+    monkeypatch.setenv("VEADK_GITLAB_OAUTH_CLIENT_ID", "client-id")
+    monkeypatch.setenv("VEADK_GITLAB_OAUTH_CLIENT_SECRET", "client-secret")
+    monkeypatch.setenv(
+        "VEADK_GITLAB_OAUTH_REDIRECT_URI",
+        "https://studio.example.com/web/gitlab/oauth/callback",
+    )
+
+    class _FailingOAuthClient:
+        def __init__(self, config: object) -> None:
+            del config
+
+        async def refresh_token(self, refresh_token: str) -> dict[str, object]:
+            assert refresh_token == "refresh-token"
+            raise GitLabAppReviewError("refresh failed")
+
+    class _UnexpectedGitLabAppClient:
+        def __init__(self, config: object) -> None:
+            raise AssertionError(f"unexpected GitLab request with {config.token}")
+
+    monkeypatch.setattr(frontend_sandbox, "GitLabOAuthClient", _FailingOAuthClient)
+    monkeypatch.setattr(frontend_sandbox, "GitLabAppClient", _UnexpectedGitLabAppClient)
+    storage = _FakeTosClient()
+    store = TosGitLabAppReviewProjectStore(
+        bucket="studio-state",
+        client_factory=lambda: storage,
+    )
+    asyncio.run(
+        store.save_oauth_credential(
+            GitLabOAuthCredential(
+                credential_id="cred-1",
+                owner_id="alice",
+                base_url="https://gitlab.example.com",
+                access_token="expired-oauth-token",
+                refresh_token="refresh-token",
+                expires_at=1,
+                gitlab_user_id=42,
+                gitlab_username="alice",
+                gitlab_name="Alice",
+            )
+        )
+    )
+    client = TestClient(_app(_FakeGateway(), gitlab_app_review_storage_client=storage))
+
+    response = client.put(
+        "/web/gitlab/app/review-projects",
+        json={"projectId": 123, "reviewEnabled": True},
+        headers={"X-Test-User": "alice"},
+    )
+
+    assert response.status_code == 503
+    assert "GitLab 授权已失效" in response.json()["detail"]["message"]
+
+
+def test_gitlab_oauth_start_url_returns_authorization_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_gitlab_oauth(monkeypatch)
+    client = TestClient(
+        _app(_FakeGateway(), gitlab_app_review_storage_client=_FakeTosClient())
+    )
+
+    response = client.get(
+        "/web/gitlab/oauth/start-url",
+        headers={"X-Test-User": "alice"},
+    )
+
+    assert response.status_code == 200
+    authorization_url = response.json()["authorizationUrl"]
+    assert authorization_url.startswith("https://gitlab.example.com/oauth/authorize?")
+    assert "client_id=client-id" in authorization_url
+    assert "response_type=code" in authorization_url
+    assert "scope=api" in authorization_url
+
+
+def test_gitlab_app_webhook_starts_merge_request_review(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_gitlab_oauth(monkeypatch)
+
+    class _FakeGitLabAppClient:
+        def __init__(self, config: object) -> None:
+            del config
+
+        async def projects(self) -> list[GitLabProject]:
+            return [
+                GitLabProject(
+                    instance_id="default",
+                    base_url="https://gitlab.example.com",
+                    project_id=123,
+                    path_with_namespace="Group/nice",
+                    name="nice",
+                    namespace="Group",
+                    web_url="https://gitlab.example.com/Group/nice",
+                    private=False,
+                    access_level=40,
+                )
+            ]
+
+        async def project(self, project_id: int) -> GitLabProject:
+            assert project_id == 123
+            return (await self.projects())[0]
+
+        async def ensure_project_webhook(self, project_id: int) -> None:
+            assert project_id == 123
+
+    monkeypatch.setattr(frontend_sandbox, "GitLabAppClient", _FakeGitLabAppClient)
+    storage = _FakeTosClient()
+    _save_gitlab_oauth_credential(storage)
+    gateway = _FakeGateway()
+    client = TestClient(_app(gateway, gitlab_app_review_storage_client=storage))
+    assert (
+        client.put(
+            "/web/gitlab/app/review-projects",
+            json={"projectId": 123, "reviewEnabled": True},
+            headers={"X-Test-User": "alice"},
+        ).status_code
+        == 200
+    )
+    payload = {
+        "project": {"id": 123, "path_with_namespace": "Group/nice"},
+        "object_attributes": {
+            "iid": 7,
+            "action": "open",
+            "url": "https://gitlab.example.com/Group/nice/-/merge_requests/7",
+            "source_project_id": 123,
+            "target_project_id": 123,
+            "work_in_progress": False,
+            "title": "Add feature",
+            "last_commit": {"id": "abc123"},
+        },
+    }
+
+    response = client.post(
+        "/web/gitlab/app/webhook",
+        json=payload,
+        headers={
+            "X-Gitlab-Event": "Merge Request Hook",
+            "X-Gitlab-Token": "secret",
+            "X-Gitlab-Event-UUID": "delivery-1",
+        },
+    )
+
+    assert response.status_code == 202
+    assert response.json()["status"] == "started"
+    records = client.get(
+        "/web/gitlab/app/review-records",
+        headers={"X-Test-User": "alice"},
+    )
+    assert records.status_code == 200
+    record = records.json()["records"][0]
+    assert record | {"id": "record-id", "createdAt": "now", "status": "started"} == {
+        "id": "record-id",
+        "instanceId": "default",
+        "baseUrl": "https://gitlab.example.com",
+        "projectId": 123,
+        "pathWithNamespace": "Group/nice",
+        "mergeRequestUrl": "https://gitlab.example.com/Group/nice/-/merge_requests/7",
+        "mergeRequestIid": 7,
+        "status": "started",
+        "trigger": "webhook",
+        "createdAt": "now",
+        "deliveryId": "delivery-1",
+        "action": "open",
+        "sessionId": response.json()["sessionId"],
+        "displayName": response.json()["displayName"],
+        "reason": "",
+    }
+    assert gateway.display_names[-1] == "MR Review: Group/nice!7"
+    assert gateway.envs[-1] == {
+        "GITLAB_TOKEN": "oauth-token",
+        "GITLAB_API_BASE": "https://gitlab.example.com/api/v4",
+        "GIT_TERMINAL_PROMPT": "0",
+    }
+
+
+def test_gitlab_manual_review_bounds_long_session_display_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_gitlab_oauth(monkeypatch)
+    long_path = "Group/veadk-mr-review-test-with-a-very-long-project-name"
+
+    class _FakeGitLabAppClient:
+        def __init__(self, config: object) -> None:
+            del config
+
+        async def projects(self) -> list[GitLabProject]:
+            return [
+                GitLabProject(
+                    instance_id="default",
+                    base_url="https://gitlab.example.com",
+                    project_id=123,
+                    path_with_namespace=long_path,
+                    name="veadk-mr-review-test-with-a-very-long-project-name",
+                    namespace="Group",
+                    web_url=f"https://gitlab.example.com/{long_path}",
+                    private=False,
+                )
+            ]
+
+    monkeypatch.setattr(frontend_sandbox, "GitLabAppClient", _FakeGitLabAppClient)
+    storage = _FakeTosClient()
+    _save_gitlab_oauth_credential(storage)
+    gateway = _FakeGateway()
+    client = TestClient(_app(gateway, gitlab_app_review_storage_client=storage))
+
+    response = client.post(
+        "/web/gitlab/merge-request-reviews",
+        json={
+            "mergeRequestUrl": (
+                f"https://gitlab.example.com/{long_path}/-/merge_requests/7"
+            )
+        },
+        headers={"X-Test-User": "alice"},
+    )
+
+    assert response.status_code == 200
+    display_name = response.json()["displayName"]
+    assert display_name.startswith("MR Review: Group/")
+    assert display_name.endswith("name!7")
+    assert "..." in display_name
+    assert len(display_name) <= STUDIO_SANDBOX_DISPLAY_NAME_MAX_LENGTH
+    assert gateway.display_names[-1] == display_name
+
+
+def test_gitlab_app_webhook_ignores_disabled_project(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_gitlab_oauth(monkeypatch)
+
+    class _FakeGitLabAppClient:
+        def __init__(self, config: object) -> None:
+            del config
+
+        async def project(self, project_id: int) -> GitLabProject:
+            raise AssertionError("disabled projects must not fetch project details")
+
+    monkeypatch.setattr(frontend_sandbox, "GitLabAppClient", _FakeGitLabAppClient)
+    gateway = _FakeGateway()
+    client = TestClient(
+        _app(gateway, gitlab_app_review_storage_client=_FakeTosClient())
+    )
+    payload = {
+        "project": {"id": 123, "path_with_namespace": "Group/nice"},
+        "object_attributes": {
+            "iid": 7,
+            "action": "open",
+            "url": "https://gitlab.example.com/Group/nice/-/merge_requests/7",
+            "source_project_id": 123,
+            "target_project_id": 123,
+            "work_in_progress": False,
+            "title": "Add feature",
+        },
+    }
+
+    response = client.post(
+        "/web/gitlab/app/webhook",
+        json=payload,
+        headers={"X-Gitlab-Event": "Merge Request Hook", "X-Gitlab-Token": "secret"},
+    )
+
+    assert response.status_code == 202
+    assert response.json() == {
+        "status": "ignored",
+        "reason": "project-review-disabled",
+        "projectId": 123,
+    }
+    records = client.get(
+        "/web/gitlab/app/review-records",
+        headers={"X-Test-User": "alice"},
+    )
+    assert records.status_code == 200
+    record = records.json()["records"][0]
+    assert record["status"] == "ignored"
+    assert record["reason"] == "project-review-disabled"
+    assert (
+        record["mergeRequestUrl"]
+        == "https://gitlab.example.com/Group/nice/-/merge_requests/7"
+    )
     assert gateway.created == 0
 
 

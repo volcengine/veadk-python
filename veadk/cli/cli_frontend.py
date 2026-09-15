@@ -661,6 +661,38 @@ def _github_app_review_environment(
     return environment
 
 
+def _gitlab_app_review_environment(
+    source: Mapping[str, str | None],
+) -> dict[str, str]:
+    """Return GitLab MR review settings safe to ship to the Studio runtime."""
+    from veadk.cli.gitlab_app_mr_review import (
+        GITLAB_BASE_URL_ENV,
+        GITLAB_GROUP_ID_OR_PATH_ENV,
+        GITLAB_OAUTH_CLIENT_ID_ENV,
+        GITLAB_OAUTH_CLIENT_SECRET_ENV,
+        GITLAB_OAUTH_REDIRECT_URI_ENV,
+        GITLAB_WEBHOOK_SECRET_ENV,
+        STUDIO_PUBLIC_BASE_URL_ENV,
+    )
+
+    def _value(key: str) -> str:
+        return str(os.getenv(key) or source.get(key) or "").strip()
+
+    return {
+        key: value
+        for key in (
+            GITLAB_BASE_URL_ENV,
+            GITLAB_WEBHOOK_SECRET_ENV,
+            GITLAB_OAUTH_CLIENT_ID_ENV,
+            GITLAB_OAUTH_CLIENT_SECRET_ENV,
+            GITLAB_OAUTH_REDIRECT_URI_ENV,
+            GITLAB_GROUP_ID_OR_PATH_ENV,
+            STUDIO_PUBLIC_BASE_URL_ENV,
+        )
+        if (value := _value(key))
+    }
+
+
 def _byteplus_vefaas_application_name_suggestion(name: str) -> str:
     suggestion = re.sub(r"[^a-z0-9-]+", "-", name.strip().lower()).strip("-")
     suggestion = re.sub(r"-{2,}", "-", suggestion)
@@ -3807,6 +3839,10 @@ def _run_frontend_server(
         _sandbox_creator,
         github_app_review_storage_bucket=github_app_review_storage.bucket,
         github_app_review_storage_client_factory=(
+            github_app_review_storage_client_factory
+        ),
+        gitlab_app_review_storage_bucket=github_app_review_storage.bucket,
+        gitlab_app_review_storage_client_factory=(
             github_app_review_storage_client_factory
         ),
     )
@@ -13292,6 +13328,7 @@ def _run_frontend_server(
                     "/embed/run_sse",
                     "/web/auth-config",
                     "/web/github/app/webhook",
+                    "/web/gitlab/app/webhook",
                     "/web/site-logo",
                     "/web/sandbox/codex-project-handoff/sessions",
                     "/web/sandbox/codex-project-upload/sessions",
@@ -17660,6 +17697,7 @@ def frontend_deploy(
         ),
     )
     github_app_review_environment = _github_app_review_environment(veadk_environments)
+    gitlab_app_review_environment = _gitlab_app_review_environment(veadk_environments)
 
     # SECURITY: VeFaaS._create_function uploads *everything* in veadk_environments
     # (i.e. the deployer's whole .env) as function env vars. The frontend must
@@ -17725,6 +17763,7 @@ def frontend_deploy(
     veadk_environments.update(studio_storage_environment)
     veadk_environments.update(studio_environment_resource_environment)
     veadk_environments.update(github_app_review_environment)
+    veadk_environments.update(gitlab_app_review_environment)
     if client_secret:
         veadk_environments["OAUTH2_CLIENT_SECRET"] = client_secret
     veadk_environments.update(sidecar_environment)
@@ -18122,6 +18161,14 @@ def frontend_deploy(
     default=None,
     help="Replace the snapshot-enabled Hermes AgentKit Tool ID.",
 )
+@click.option(
+    "--skip-cronjob-scheduler",
+    is_flag=True,
+    help=(
+        "Update only the main Studio Application and leave the existing cronjob "
+        "scheduler unchanged."
+    ),
+)
 @click.option("--volcengine-access-key", default=None)
 @click.option("--volcengine-secret-key", default=None)
 @click.option("--volcengine-session-token", default=None)
@@ -18146,6 +18193,7 @@ def frontend_update(
     sandbox_chat_codex_snapshot_tool_id: str | None,
     sandbox_chat_openclaw_snapshot_tool_id: str | None,
     sandbox_chat_hermes_snapshot_tool_id: str | None,
+    skip_cronjob_scheduler: bool,
     volcengine_access_key: str | None,
     volcengine_secret_key: str | None,
     volcengine_session_token: str | None,
@@ -18845,6 +18893,10 @@ def frontend_update(
 
         if branding_title is not None:
             environment_overrides["VEADK_SITE_TITLE"] = branding_title
+        environment_overrides.update(_github_app_review_environment(current_env))
+        environment_overrides.update(_gitlab_app_review_environment(current_env))
+        if "VEADK_GITLAB_TOKEN" in current_env:
+            environment_overrides["VEADK_GITLAB_TOKEN"] = ""
         if sandbox_dev_tool_id is not None:
             environment_overrides["SANDBOX_DEV"] = sandbox_dev_tool_id
         if sandbox_chat_codex_tool_id is not None:
@@ -18894,23 +18946,26 @@ def frontend_update(
                 ),
             }
         )
-        from frontend.service.studio_scheduler.deploy import (
-            deploy_scheduler_for_studio_update,
-        )
-
-        click.echo("Updating the Studio cronjob scheduler and minute timer…")
         try:
-            _, _, _, _, scheduler_base = deploy_scheduler_for_studio_update(
-                service,
-                studio_function_id=target.function_id,
-                package_root=package_dir,
-                provider=provider_id,
-                project=target.project,
-                environment_overrides=environment_overrides,
-            )
-            environment_overrides["VEADK_STUDIO_CRONJOB_SCHEDULER_BASE"] = (
-                scheduler_base
-            )
+            if skip_cronjob_scheduler:
+                click.echo("Skipping the Studio cronjob scheduler update.")
+            else:
+                from frontend.service.studio_scheduler.deploy import (
+                    deploy_scheduler_for_studio_update,
+                )
+
+                click.echo("Updating the Studio cronjob scheduler and minute timer…")
+                _, _, _, _, scheduler_base = deploy_scheduler_for_studio_update(
+                    service,
+                    studio_function_id=target.function_id,
+                    package_root=package_dir,
+                    provider=provider_id,
+                    project=target.project,
+                    environment_overrides=environment_overrides,
+                )
+                environment_overrides["VEADK_STUDIO_CRONJOB_SCHEDULER_BASE"] = (
+                    scheduler_base
+                )
             url = service.update_application_code_bundle(
                 application_id=target.application_id,
                 function_id=target.function_id,

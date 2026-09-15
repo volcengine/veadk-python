@@ -26,6 +26,18 @@ const apiSource = readFileSync(
   new URL("../src/adk/githubIntegration.ts", import.meta.url),
   "utf8",
 );
+const gitlabSource = readFileSync(
+  new URL("../src/ui/GitLabIntegration.tsx", import.meta.url),
+  "utf8",
+);
+const gitlabApiSource = readFileSync(
+  new URL("../src/adk/gitlabIntegration.ts", import.meta.url),
+  "utf8",
+);
+const gitlabAutomationSource = readFileSync(
+  new URL("../src/automations/gitlabMergeRequestReview.ts", import.meta.url),
+  "utf8",
+);
 const cliFrontendSource = readFileSync(
   new URL("../../veadk/cli/cli_frontend.py", import.meta.url),
   "utf8",
@@ -125,14 +137,18 @@ test("renders category-filtered automations from independent capability modules"
   const templateIndex = registrySource.indexOf("templateProjectAutomation", registryListIndex);
   const deliveryIndex = registrySource.indexOf("runtimeDeliveryAutomation", registryListIndex);
   const reviewIndex = registrySource.indexOf("pullRequestReviewAutomation", registryListIndex);
+  const gitlabReviewIndex = registrySource.indexOf("gitLabMergeRequestReviewAutomation", registryListIndex);
   const feishuIndex = registrySource.indexOf("feishuBotAutomation", registryListIndex);
   assert.equal(templateIndex >= 0, true);
   assert.equal(templateIndex < deliveryIndex, true);
   assert.equal(deliveryIndex < reviewIndex, true);
-  assert.equal(reviewIndex < feishuIndex, true);
+  assert.equal(reviewIndex < gitlabReviewIndex, true);
+  assert.equal(gitlabReviewIndex < feishuIndex, true);
   assert.match(templateSource, /name: "Import starter project"/);
   assert.match(deliverySource, /name: "AgentKit Runtime delivery"/);
   assert.match(reviewSource, /name: "Automated PR review"/);
+  assert.match(gitlabAutomationSource, /name: "GitLab MR review"/);
+  assert.match(gitlabAutomationSource, /kind: "gitlab"/);
   assert.match(feishuSource, /name: "Feishu bot"/);
   assert.match(feishuSource, /badge: "Beta"/);
   assert.match(feishuSource, /category: "channels"/);
@@ -142,6 +158,7 @@ test("renders category-filtered automations from independent capability modules"
   assert.match(applicationsSource, /isCodingAgentsAutomationAvailable\(window\.location\.hostname\)/);
   assert.match(applicationsSource, /application\.id === "coding-agents" && !codingAgentsAvailable/);
   assert.match(applicationsSource, /<GitHubLogo className="application-card-icon"/);
+  assert.match(applicationsSource, /function GitLabIcon/);
   assert.match(applicationsSource, /feishu-logo\.svg/);
   assert.match(applicationsSource, /application-card-badge is-\$\{application\.badgeTone \|\| "default"\}/);
   assert.match(applicationsStyles, /\.application-card-badge\s*\{[\s\S]*?background: hsl\(var\(--destructive\)\);[\s\S]*?color: hsl\(0 0% 100%\)/);
@@ -301,6 +318,22 @@ test("GitHub detail keeps credentials ephemeral and exposes accessible submissio
   );
   assert.match(appSource, /useState<"catalog" \| ApplicationId \| null>/);
   assert.doesNotMatch(apiSource, /console\.(?:log|warn|error)/);
+});
+
+test("GitLab MR review uses separate integration routes and keeps review writes in Sandbox", () => {
+  assert.match(gitlabSource, /export function GitLabIntegration/);
+  assert.match(gitlabSource, /GitLab MR Review/);
+  assert.match(gitlabSource, /getGitLabProjects/);
+  assert.match(gitlabSource, /updateGitLabReviewProject/);
+  assert.match(gitlabSource, /startGitLabMergeRequestReview/);
+  assert.match(gitlabSource, /aria-label="Merge Request URL"/);
+  assert.match(gitlabSource, /record\.status === "completed" \? "" : record\.sessionId/);
+  assert.match(gitlabSource, /onOpenSandboxSession\(reviewSessionId\)/);
+  assert.match(gitlabApiSource, /\/web\/gitlab\/app\/projects/);
+  assert.match(gitlabApiSource, /\/web\/gitlab\/app\/review-projects/);
+  assert.match(gitlabApiSource, /\/web\/gitlab\/app\/review-records/);
+  assert.match(gitlabApiSource, /\/web\/gitlab\/merge-request-reviews/);
+  assert.doesNotMatch(gitlabApiSource, /GITLAB_TOKEN|PRIVATE-TOKEN/);
 });
 
 test("Feishu detail deploys a new basic Runtime from customer credentials", () => {
