@@ -30,3 +30,5 @@ No target means no request. Target changes abort reads and ignore stale results,
 ## Verification
 
 See the [implementation and acceptance record](../../prd-spec/features/studio-mpa-cron-tasks/2026-09-15-mono-task-management.md). Cover proxy boundaries, API schemas, mutation concurrency/idempotency, paging, timezone/DST, stale responses, IME, loading/error/retry and keyboard behavior. Incremental coverage must exceed 95%. Browser fixture verification is distinct from live Runtime reads; do not claim live write E2E from mocked tests.
+
+The task editor hides executor Agent input. New tasks automatically use the selected Runtime ID as agentId; edits/copies preserve the original value.
