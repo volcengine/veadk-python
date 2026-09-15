@@ -349,7 +349,7 @@ it("binds WeCom through SDK popup without exposing or persisting returned secret
   wecomSdk.open.mockResolvedValue({ botid: "sdk-bot", secret: "sdk-secret" });
   await render();
   await click("channels.provider_wecom");
-  await click("channels.wecomScan");
+  await click("channels.bind");
   expect(wecomSdk.open).toHaveBeenCalledWith(
     expect.objectContaining({ source: "mpa-agent", debug: false }),
   );
@@ -374,7 +374,7 @@ it("ignores a late SDK authorization after switching providers", async () => {
   );
   await render();
   await click("channels.provider_wecom");
-  await click("channels.wecomScan");
+  await click("channels.bind");
   await click("channels.provider_dingtalk");
   await act(async () => resolve({ botid: "late-bot", secret: "late-secret" }));
   expect(
@@ -389,14 +389,14 @@ it("sanitizes a blocked popup and permits retry", async () => {
   });
   await render();
   await click("channels.provider_wecom");
-  await click("channels.wecomScan");
+  await click("channels.bind");
   expect(host.textContent).toContain("channels.wecomPopupBlocked");
   expect(host.textContent).not.toContain("secret-provider-error");
   wecomSdk.open.mockResolvedValue({
     botid: "retry-bot",
     secret: "retry-secret",
   });
-  await click("channels.wecomScan");
+  await click("channels.bind");
   expect(
     request.mock.calls.filter(([, path]) => path === "/wecom/bindings"),
   ).toHaveLength(1);
@@ -405,10 +405,10 @@ it("cancels popup waiting and rejects malformed results without registering", as
   wecomSdk.open.mockReturnValue(new Promise(() => {}));
   await render();
   await click("channels.provider_wecom");
-  await click("channels.wecomScan");
+  await click("channels.bind");
   await click("channels.cancelAuthorization");
   wecomSdk.open.mockResolvedValue({ botid: "bot" });
-  await click("channels.wecomScan");
+  await click("channels.bind");
   expect(host.textContent).toContain("channels.wecomInvalidResult");
   expect(
     request.mock.calls.some(([, path]) => path === "/wecom/bindings"),
@@ -419,7 +419,7 @@ it("times out popup waiting and releases the SDK", async () => {
   wecomSdk.open.mockReturnValue(new Promise(() => {}));
   await render();
   await click("channels.provider_wecom");
-  await click("channels.wecomScan");
+  await click("channels.bind");
   await act(async () => {
     await vi.advanceTimersByTimeAsync(300000);
   });
@@ -708,9 +708,7 @@ it.each(["feishu", "wecom", "dingtalk"])(
     expect(host.querySelector("form[data-channel-binding]")).not.toBeNull();
     expect(
       [...host.querySelectorAll("button")].some((b) =>
-        ["channels.bind", "channels.wecomScan", "channels.newQr"].includes(
-          b.textContent || "",
-        ),
+        ["channels.bind", "channels.newQr"].includes(b.textContent || ""),
       ),
     ).toBe(false);
     await selectMethod("quick");
@@ -850,7 +848,7 @@ it("cancels SDK waiting when switching to manual and ignores late credentials", 
   );
   await render();
   await click("channels.provider_wecom");
-  await click("channels.wecomScan");
+  await click("channels.bind");
   await selectMethod("manual");
   expect(wecomSdk.destroy).toHaveBeenCalled();
   await act(async () => resolve({ botid: "late-bot", secret: "late-secret" }));
@@ -966,3 +964,16 @@ it("preserves an uncertain QR registration after changing configuration methods"
     )?.disabled,
   ).toBe(true);
 });
+
+it.each(["feishu", "wecom", "dingtalk"])(
+  "uses the common QR binding label for %s",
+  async (provider) => {
+    await render();
+    if (provider !== "feishu") await click(`channels.provider_${provider}`);
+    expect(
+      [...host.querySelectorAll("button")].some(
+        (b) => b.textContent === "channels.bind",
+      ),
+    ).toBe(true);
+  },
+);

@@ -1776,7 +1776,7 @@
     "wecomBotId": "Bot ID",
     "wecomSecret": "Secret",
     "bindCredentials": "Connect bot",
-    "wecomScan": "Authorize with QR code",
+    "wecomScan": "Bind with QR code",
     "wecomAuthorizing": "Waiting for WeCom authorization…",
     "cancelAuthorization": "Cancel authorization",
     "wecomPopupBlocked": "Allow popups in your browser, then try authorizing again.",

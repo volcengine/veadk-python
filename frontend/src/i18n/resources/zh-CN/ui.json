@@ -1776,7 +1776,7 @@
     "wecomBotId": "Bot ID",
     "wecomSecret": "Secret",
     "bindCredentials": "绑定机器人",
-    "wecomScan": "扫码授权绑定",
+    "wecomScan": "扫码绑定",
     "wecomAuthorizing": "等待企业微信授权…",
     "cancelAuthorization": "取消授权",
     "wecomPopupBlocked": "授权窗口被浏览器拦截，请允许弹窗后重试。",

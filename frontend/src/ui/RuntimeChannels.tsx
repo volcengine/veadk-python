@@ -399,7 +399,7 @@ function ProviderChannel({
         disabled={busy || loading || uncertain || !capability.bindingReady}
         onClick={beginWecom}
       >
-        {t(diagnostics?.configured ? "channels.newQr" : "channels.wecomScan")}
+        {t(diagnostics?.configured ? "channels.newQr" : "channels.bind")}
       </Button>
       {authorizing && (
         <>
@@ -535,7 +535,14 @@ function ProviderChannel({
                   value={value}
                   checked={method === value}
                   disabled={methodDisabled}
-                  label={t(`channels.${value}Setup`)}
+                  label={
+                    <span
+                      className="runtime-channels-method-label"
+                      data-selected={method === value}
+                    >
+                      {t(`channels.${value}Setup`)}
+                    </span>
+                  }
                   onChange={() => changeMethod(value)}
                 />
               ))}
@@ -851,7 +858,13 @@ function ProviderChannel({
                 <label>
                   {t("channels.scope")}
                   <Select
-                    style={{ width: "100%", minWidth: 0 }}
+                    style={{
+                      width: "100%",
+                      minWidth: 0,
+                      background: "hsl(var(--background))",
+                      color: "hsl(var(--foreground))",
+                      border: "1px solid hsl(var(--border))",
+                    }}
                     value={scope}
                     disabled={busy}
                     options={scopes.map((value) => ({

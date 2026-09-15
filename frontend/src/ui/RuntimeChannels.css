@@ -206,6 +206,14 @@
   gap: 16px 24px;
   padding-block: 4px;
 }
+.runtime-channels-method-label {
+  color: hsl(var(--muted-foreground));
+  font-weight: 400;
+}
+.runtime-channels-method-label[data-selected="true"] {
+  color: hsl(var(--foreground));
+  font-weight: 600;
+}
 .runtime-channels-form label {
   display: grid;
   gap: 6px;
