@@ -528,6 +528,52 @@ if unexpected:
     )
 
 
+def test_workspace_tool_defers_agentkit_types_until_request() -> None:
+    root = Path(__file__).resolve().parents[2]
+    script = """
+import sys
+
+import frontend.server.workspace_tool
+
+if "agentkit.sdk.tools.types" in sys.modules:
+    raise SystemExit("workspace Tool SDK types loaded during route setup")
+"""
+
+    subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_agent_review_repository_defers_runtime_sdk_until_request() -> None:
+    root = Path(__file__).resolve().parents[2]
+    script = """
+import sys
+
+import frontend.server.agent_reviews.repository
+
+unexpected = sorted(
+    name
+    for name in sys.modules
+    if name == "agentkit.sdk.runtime.types"
+    or name == "agentkit.sdk.runtime.client"
+)
+if unexpected:
+    raise SystemExit("Agent review Runtime SDK loaded during route setup")
+"""
+
+    subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
 def test_knowledge_routes_defer_document_extraction_stack() -> None:
     root = Path(__file__).resolve().parents[2]
     script = """
