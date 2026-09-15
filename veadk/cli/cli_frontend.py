@@ -2828,17 +2828,16 @@ def _run_frontend_server(
                 detail="Only Studio administrators can update Studio",
             )
 
-    from veadk.cli.studio_self_update import (
-        StudioSelfUpdater,
-        StudioUpdateSettings,
+    from veadk.cli.studio_self_update_bootstrap import (
+        LazyStudioSelfUpdater,
         current_studio_display_version,
-        mount_studio_update_routes,
+        mount_lazy_studio_update_routes,
     )
 
-    mount_studio_update_routes(
+    mount_lazy_studio_update_routes(
         app,
-        StudioSelfUpdater(
-            settings=StudioUpdateSettings.from_env(provider=provider),
+        LazyStudioSelfUpdater(
+            provider=provider,
             credential_resolver=_resolve_ve_credentials,
             branding_logo=branding_logo,
         ),
