@@ -1,0 +1,296 @@
+.message-channels {
+  width: 100%;
+  max-width: 1040px;
+  min-width: 0;
+  display: grid;
+  gap: 20px;
+}
+.message-channels-header {
+  display: grid;
+  gap: 8px;
+}
+.message-channels h2,
+.message-channels h3,
+.message-channels p {
+  margin: 0;
+}
+.message-channels h2 {
+  font-size: 20px;
+  line-height: 1.25;
+  font-weight: 600;
+}
+.message-channels h3 {
+  font-size: 15px;
+  line-height: 1.5;
+  font-weight: 600;
+}
+.message-channels p {
+  font-size: 13px;
+  line-height: 1.6;
+  color: hsl(var(--muted-foreground));
+  overflow-wrap: anywhere;
+}
+.message-channels-tabs {
+  display: flex;
+  width: fit-content;
+  max-width: 100%;
+  gap: 4px;
+  padding: 4px;
+  min-height: 44px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 10px;
+  background: hsl(var(--secondary));
+}
+.message-channels-tabs button {
+  min-height: 34px;
+  min-width: 96px;
+  padding: 6px 16px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  color: hsl(var(--muted-foreground));
+  background: transparent;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.message-channels-tabs button:hover {
+  background: hsl(var(--muted));
+  color: hsl(var(--foreground));
+}
+.message-channels-tabs button[aria-selected="true"] {
+  color: hsl(var(--foreground));
+  background: hsl(var(--panel));
+  border-color: hsl(var(--border));
+}
+.message-channels :is(button, input, a, [role="tabpanel"]):focus-visible {
+  outline: 2px solid hsl(var(--primary));
+  outline-offset: 2px;
+}
+.message-channels [role="tabpanel"] {
+  min-width: 0;
+  border-radius: 12px;
+}
+.runtime-channels {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 16px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 12px;
+  padding: 24px;
+  background: hsl(var(--panel));
+}
+.runtime-channels-heading,
+.runtime-channels-binding-summary {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+}
+.runtime-channels-binding-summary {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+}
+.runtime-channels-badge {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: hsl(var(--muted));
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.runtime-channels-badge.is-bound {
+  color: hsl(145 65% 30%);
+  background: hsl(145 50% 95%);
+}
+.runtime-channels-actions,
+.runtime-channels-groups li {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.runtime-channels-diagnostics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 4px 0;
+}
+.runtime-channels-status-card {
+  min-width: 0;
+  padding: 16px;
+  border-radius: 8px;
+  background: hsl(var(--muted));
+}
+.runtime-channels-status-card dt {
+  font-size: 12px;
+  color: hsl(var(--muted-foreground));
+  margin-bottom: 8px;
+}
+.runtime-channels-status-card dd {
+  margin: 0;
+}
+.runtime-channels-status-card dd p {
+  margin-top: 8px;
+  font-size: 12px;
+}
+.runtime-channels-status-value {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 500;
+  color: hsl(var(--foreground));
+}
+.runtime-channels-status-value svg {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+.runtime-channels-status-value.is-complete svg {
+  color: hsl(145 65% 36%);
+}
+.runtime-channels-binding-progress {
+  display: grid;
+  justify-items: start;
+  gap: 12px;
+  padding: 20px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+}
+.runtime-channels-qr {
+  width: 180px;
+  height: 180px;
+  max-width: 100%;
+  object-fit: contain;
+}
+.runtime-channels-permissions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+  gap: 12px;
+  margin-top: 8px;
+}
+.runtime-channels-count {
+  font-size: 12px;
+  color: hsl(var(--muted-foreground));
+}
+.runtime-channels-form {
+  min-width: 0;
+  display: flex;
+  align-items: end;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.runtime-channels-methods {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.runtime-channels-methods legend {
+  padding: 0;
+  margin-bottom: 12px;
+  font-size: 13px;
+  font-weight: 500;
+}
+.runtime-channels-methods > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px 24px;
+  padding-block: 4px;
+}
+.runtime-channels-form label {
+  display: grid;
+  gap: 6px;
+  flex: 1 1 180px;
+  min-width: 0;
+  font-size: 12px;
+}
+.runtime-channels-form input {
+  box-sizing: border-box;
+  width: 100%;
+  height: 36px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 6px;
+  background: hsl(var(--background));
+  color: inherit;
+  padding: 6px 10px;
+  font: inherit;
+}
+.runtime-channels-form input:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.runtime-channels-empty {
+  padding: 20px;
+  text-align: center;
+  background: hsl(var(--muted));
+  border-radius: 8px;
+}
+.runtime-channels-groups {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.runtime-channels-groups li {
+  flex-wrap: nowrap;
+  padding: 12px;
+  background: hsl(var(--muted));
+  border-radius: 8px;
+}
+.runtime-channels-groups li > span {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+.message-channels-unavailable {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  padding: 56px 24px;
+  text-align: center;
+  border: 1px solid hsl(var(--border));
+  border-radius: 12px;
+  background: hsl(var(--panel));
+}
+@media (max-width: 720px) {
+  .runtime-channels {
+    padding: 16px;
+  }
+  .runtime-channels-diagnostics {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .runtime-channels-form label {
+    flex-basis: 100%;
+  }
+  .message-channels-tabs {
+    width: 100%;
+    box-sizing: border-box;
+  }
+  .message-channels-tabs button {
+    flex: 1;
+    min-width: 0;
+    padding-inline: 8px;
+  }
+}
+
+.runtime-channels-remove-group {
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+}
+.runtime-channels-remove-group svg {
+  width: 16px;
+  height: 16px;
+}

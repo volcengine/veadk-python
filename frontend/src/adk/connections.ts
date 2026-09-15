@@ -43,6 +43,8 @@ export interface AgentEntry {
   currentVersion?: number | null;
   /** Server-authorized permission for Studio-managed Runtime deletion. */
   canDelete?: boolean;
+  /** Product category supplied by the Runtime list; unknown entries hide MPA-only UI. */
+  agentCategory?: "general" | "mpa";
 }
 
 const STORAGE_KEY = "veadk_agentkit_connections";

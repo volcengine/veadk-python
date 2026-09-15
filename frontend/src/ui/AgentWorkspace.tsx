@@ -1,3 +1,4 @@
+import { RuntimeChannels } from "./RuntimeChannels";
 import {
   useEffect,
   useMemo,
@@ -85,7 +86,7 @@ import { TextShimmer } from "./text-shimmer/TextShimmer";
 import "./AgentWorkspace.css";
 
 type WorkspaceView = "library" | "evaluation";
-type AgentSection = "basic" | "usage" | "evaluations" | "optimizations" | "integrations" | "versions";
+type AgentSection = "basic" | "usage" | "evaluations" | "optimizations" | "integrations" | "channels" | "versions";
 type IntegrationProtocol = "api-server" | "a2a";
 type EvaluationSection = "config" | "history";
 type CaseKind = "good" | "bad";
@@ -287,6 +288,7 @@ const AGENT_SECTIONS: AgentSection[] = [
   "evaluations",
   "optimizations",
   "integrations",
+  "channels",
   "versions",
 ];
 
@@ -1284,9 +1286,11 @@ export function AgentWorkspace({
       : null;
   const selectedAgentAppName =
     selectedAgentInfo?.appName || selectedAgent?.runtimeApp || selectedAgent?.app || "";
-  const visibleAgentSectionIds = canViewUsage && selectedAgent?.runtimeId
+  const canViewMessageChannels = Boolean(selectedAgent?.runtimeId) && selectedAgent?.agentCategory === "mpa";
+  const visibleAgentSectionIds = (canViewUsage && selectedAgent?.runtimeId
     ? AGENT_SECTIONS
-    : AGENT_SECTIONS.filter((item) => item !== "usage");
+    : AGENT_SECTIONS.filter((item) => item !== "usage"))
+    .filter((item) => item !== "channels" || canViewMessageChannels);
   const visibleAgentSections = visibleAgentSectionIds.map((id) => ({
     id,
     label: t(`agentWorkspace.sections.${id}`),
@@ -1632,7 +1636,8 @@ export function AgentWorkspace({
     : `draft:${selectedPendingTask?.id ?? selectedDraft?.id ?? selectedAgent?.id ?? selectedName}:${draftFlowKey}`;
   useEffect(() => {
     if (section === "usage" && !canViewUsage) setSection("basic");
-  }, [canViewUsage, section]);
+    if (section === "channels" && !canViewMessageChannels) setSection("basic");
+  }, [canViewUsage, canViewMessageChannels, section]);
 
   useEffect(() => {
     if (!focusedDeploymentTaskId) return;
@@ -3401,6 +3406,11 @@ export function AgentWorkspace({
                     </div>
                   )}
                 </section>
+              )}
+              {section === "channels" && canViewMessageChannels && (
+                selectedAgent?.runtimeId ? (
+                  <RuntimeChannels key={`${selectedAgent.region}:${selectedAgent.runtimeId}`} runtimeId={selectedAgent.runtimeId} region={selectedAgent.region || "cn-beijing"} />
+                ) : <p className="aw-integration-intro">{t("channels.runtimeRequired")}</p>
               )}
               {section === "integrations" && (
                 <div className="aw-integration-stack">

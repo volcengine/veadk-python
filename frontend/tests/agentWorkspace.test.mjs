@@ -235,7 +235,7 @@ test("agent details show capability badges and deployment state before the flow"
 test("agent details expose detected integration methods without inventing unavailable endpoints", () => {
   assert.match(
     workspaceSource,
-    /type AgentSection = "basic" \| "usage" \| "evaluations" \| "optimizations" \| "integrations" \| "versions"/,
+    /type AgentSection = "basic" \| "usage" \| "evaluations" \| "optimizations" \| "integrations" \| "channels" \| "versions"/,
   );
   assert.match(
     workspaceSource,
@@ -1218,4 +1218,31 @@ test("evaluation tab remains the PR 748 placeholder until the real feature lands
   assert.match(workspaceSource, /view === "evaluation"/);
   assert.match(workspaceSource, /aw-evaluation-glass/);
   assert.match(workspaceSource, /t\("agentWorkspace\.comingSoon"\)/);
+});
+
+test("message channels has a separate detail section", () => {
+  assert.match(workspaceSource, /section === "channels"[\s\S]*?<RuntimeChannels/);
+  const integration = workspaceSource.slice(workspaceSource.indexOf('section === "integrations" && ('));
+  assert.doesNotMatch(integration, /<RuntimeChannels/);
+  assert.equal(zhUiCatalog.agentWorkspace.sections.channels, "消息渠道");
+  assert.equal(enUiCatalog.agentWorkspace.sections.channels, "Message channels");
+});
+
+
+test("message channels is restricted to explicitly classified MPA runtimes", () => {
+  const expression = workspaceSource.match(/const canViewMessageChannels =([\s\S]*?);/);
+  assert.ok(expression, "category predicate must be explicit");
+  const visible = new Function("selectedAgent", `return (${expression[1]});`);
+  assert.equal(visible({runtimeId:"r",agentCategory:"mpa"}), true);
+  for (const agent of [undefined, {}, {runtimeId:"r"}, {runtimeId:"r",agentCategory:"general"}, {agentCategory:"mpa"}]) assert.equal(visible(agent), false);
+  assert.match(workspaceSource, /filter\(\(item\) => item !== "channels" \|\| canViewMessageChannels\)/);
+  assert.match(workspaceSource, /section === "channels" && canViewMessageChannels &&/);
+  assert.match(workspaceSource, /section === "channels" && !canViewMessageChannels[\s\S]*?setSection\("basic"\)/);
+});
+test("runtime category reaches detail entries through both live and cached cards", () => {
+  const cards = readFileSync(new URL("../src/ui/MyAgents.tsx", import.meta.url), "utf8");
+  assert.match(cards, /agentCategory: runtime\.agentCategory \?\? agentCategory/);
+  assert.equal((cards.match(/runtimeToAgent\(runtime, t, agentCategory\)/g) || []).length, 2);
+  assert.match(appSource, /agentCategory: agentDetailTarget\.runtime\.agentCategory/);
+  assert.match(connectionsSource, /agentCategory\?: "general" \| "mpa"/);
 });

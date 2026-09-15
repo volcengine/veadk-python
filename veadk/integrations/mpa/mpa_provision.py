@@ -33,6 +33,7 @@ SECRET_ENV_KEYS: frozenset[str] = frozenset(
         "MODEL_AGENT_API_KEY",
         "OPENVIKING_API_KEY",
         "FEISHU_APP_SECRET",
+        "CHANNEL_STATE_ENCRYPTION_KEY",
         "CODEX_MCP_RUNTIME_API_KEY",
     }
 )
@@ -161,6 +162,7 @@ def build_runtime_env(
         "PGCHANNELBINDING": params.pg_channel_binding,
         # Channels + scheduler share the PostgreSQL backend by default.
         "CHANNEL_BACKEND": "postgresql",
+        "CHANNEL_ADMIN_AUTH_MODE": "runtime_key",
         "SCHEDULED_TASK_BACKEND": "postgresql",
         # Identity adaptation (FR-10): no arkclaw identity pools in this scenario.
         "IDENTITY_STARTUP_ENABLED": "false",

@@ -1394,6 +1394,7 @@ def _build_agentkit_proxy_headers(
         "content-length",
         "x-agentkit-base",
         "x-agentkit-key",
+        "x-mpa-channel-key",
         # Local VeADK/SSO credentials must not leak to the remote runtime.
         "authorization",
         "cookie",
@@ -4491,6 +4492,25 @@ def _run_frontend_server(
         target_url = f"{target_base.rstrip('/')}/{path}"
 
         headers = _build_agentkit_proxy_headers(dict(request.headers), api_key)
+        from veadk.integrations.mpa.channel_proxy import channel_management_headers
+
+        headers.update(
+            channel_management_headers(
+                path, is_admin=_request_role(request).is_admin, api_key=api_key
+            )
+        )
+        if "X-MPA-Channel-Key" in headers:
+            headers = {
+                name: value
+                for name, value in headers.items()
+                if name.lower() != "x-user-id"
+            }
+            channel_principal = _current_principal(request)
+            headers["X-User-Id"] = (
+                channel_principal.owner_id
+                if channel_principal
+                else "studio-local-admin"
+            )
 
         try:
             async with httpx.AsyncClient() as client:
@@ -11451,6 +11471,25 @@ def _run_frontend_server(
             apikey=apikey,
             auth_type=auth_type,
         )
+        from veadk.integrations.mpa.channel_proxy import channel_management_headers
+
+        headers.update(
+            channel_management_headers(
+                path, is_admin=_request_role(request).is_admin, api_key=apikey
+            )
+        )
+        if "X-MPA-Channel-Key" in headers:
+            headers = {
+                name: value
+                for name, value in headers.items()
+                if name.lower() != "x-user-id"
+            }
+            channel_principal = _current_principal(request)
+            headers["X-User-Id"] = (
+                channel_principal.owner_id
+                if channel_principal
+                else "studio-local-admin"
+            )
         # GET/HEAD probes never need a request body. Avoid reading from an
         # already-disconnected browser request after the control-plane lookup;
         # detail/list navigation deliberately cancels stale probes.

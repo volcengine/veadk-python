@@ -6570,6 +6570,7 @@ export default function App() {
         app: agentDetailTarget.appName ?? agentDetailTarget.name,
         remote: true,
         runtimeApp: detailConnection?.apps[0],
+        agentCategory: agentDetailTarget.runtime.agentCategory,
         runtimeId: agentDetailTarget.runtime.runtimeId,
         region: agentDetailTarget.runtime.region,
         currentVersion: agentDetailTarget.runtime.currentVersion,
