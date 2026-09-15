@@ -152,6 +152,37 @@ def test_codex_sandbox_default_connection_factory_is_lazy(
     assert created_endpoints == ["https://sandbox.example"]
 
 
+def test_studio_tools_defer_builtin_model_clients_until_first_call() -> None:
+    root = Path(__file__).resolve().parents[2]
+    script = """
+import sys
+
+from frontend.server.studio_tools.registry import build_studio_tool_registry
+
+registry = build_studio_tool_registry()
+names = {item["name"] for item in registry.manifests()}
+assert {"image_edit", "link_reader"} <= names
+
+unexpected = sorted(
+    name
+    for name in sys.modules
+    if name == "pydantic.v1.tools"
+    or name == "volcenginesdkarkruntime"
+    or name.startswith("volcenginesdkarkruntime.")
+)
+if unexpected:
+    raise SystemExit("built-in model clients loaded during Studio cold start")
+"""
+
+    subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
 def test_frontend_branding_defers_optional_logo_network_stack() -> None:
     root = Path(__file__).resolve().parents[2]
     script = """

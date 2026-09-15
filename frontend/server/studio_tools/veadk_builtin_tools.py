@@ -17,15 +17,19 @@
 from __future__ import annotations
 
 import asyncio
+import copy
+import inspect
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 from urllib.parse import quote
 
 from google.adk.agents import Agent
 from google.adk.agents.invocation_context import InvocationContext
 from google.adk.artifacts.in_memory_artifact_service import InMemoryArtifactService
 from google.adk.sessions import InMemorySessionService, Session
-from google.adk.tools import FunctionTool, ToolContext
+from google.adk.tools.function_tool import FunctionTool
+from google.adk.tools.tool_context import ToolContext
 
 from frontend.server.studio_tools.registry import (
     StudioTool,
@@ -75,6 +79,106 @@ _IDEMPOTENT_TOOLS = {
     "web_search",
 }
 
+_DEFERRED_BUILTIN_DECLARATIONS: dict[str, tuple[str, dict[str, Any]]] = {
+    "link_reader": (
+        inspect.cleandoc(
+            """
+            Use this tool when you need to fetch content from web pages, PDFs, or Douyin videos.
+            It retrieves the title and main content from the provided URLs.
+
+            Examples: {"url_list": ["abc.com", "xyz.com"]}
+            Args:
+                url_list (list[str]): A list of URLs to parse (maximum 3).
+            Returns:
+                list[dict]: A list of dictionaries, each containing the title and content of the corresponding URL.
+            """
+        ),
+        {
+            "properties": {
+                "url_list": {
+                    "items": {"type": "string"},
+                    "title": "Url List",
+                    "type": "array",
+                }
+            },
+            "required": ["url_list"],
+            "title": "link_readerParams",
+            "type": "object",
+        },
+    ),
+    "image_edit": (
+        inspect.cleandoc(
+            """
+            Edit images in batch according to prompts and optional settings.
+
+            Each item in `params` describes a single image-edit request.
+
+            Args:
+                params (list[dict]):
+                    A list of image editing requests. Each item supports:
+
+                    Required:
+                        - origin_image (str):
+                            The URL or Base64 string of the original image to edit.
+                            Example:
+                              * URL: "https://example.com/image.png"
+                              * Base64: "data:image/png;base64,<BASE64>"
+
+                        - prompt (str):
+                            The textual description/instruction for editing the image.
+                            Supports English and Chinese.
+
+                    Optional:
+                        - image_name (str):
+                            Name/identifier for the generated image.
+
+                        - response_format (str):
+                            Format of the returned image.
+                            * "url": JPEG link (default)
+                            * "b64_json": Base64 string in JSON
+
+                        - guidance_scale (float):
+                            How strongly the prompt affects the result.
+                            Range: [1.0, 10.0], default 2.5.
+
+                        - watermark (bool):
+                            Whether to add watermark.
+                            Default: True.
+
+                        - seed (int):
+                            Random seed for reproducibility.
+                            Range: [-1, 2^31-1], default -1 (random).
+
+            Returns:
+                Dict: API response containing generated image metadata.
+                Example:
+                {
+                    "status": "success",
+                    "success_list": [{"image_name": ""}],
+                    "error_list": [{}]
+                }
+
+            Notes:
+                - Uses SeedEdit 3.0 model.
+                - Provide the same `seed` for consistent outputs across runs.
+                - A high `guidance_scale` enforces stricter adherence to text prompt.
+            """
+        ),
+        {
+            "properties": {
+                "params": {
+                    "items": {},
+                    "title": "Params",
+                    "type": "array",
+                }
+            },
+            "required": ["params"],
+            "title": "image_editParams",
+            "type": "object",
+        },
+    ),
+}
+
 
 @dataclass
 class _BuiltinExecutionHost:
@@ -101,8 +205,8 @@ class _BuiltinExecutionHost:
         async with lock:
             session = Session(
                 id=context.session_id,
-                appName=context.app_name,
-                userId=context.user_id,
+                app_name=context.app_name,
+                user_id=context.user_id,
                 state=dict(self.states.get(context.scope_id, {})),
             )
             invocation_context = InvocationContext(
@@ -151,13 +255,17 @@ class _BuiltinExecutionHost:
             )
             if artifact is None or artifact.inline_data is None:
                 continue
+            mime_type = artifact.inline_data.mime_type
+            data = artifact.inline_data.data
+            if not mime_type or data is None:
+                continue
             record = await self.media_service.save_bytes(
                 app_name=context.app_name,
                 user_id=context.user_id,
                 session_id=context.session_id,
                 file_name=filename,
-                mime_type=artifact.inline_data.mime_type,
-                data=artifact.inline_data.data,
+                mime_type=mime_type,
+                data=data,
                 origin="model",
             )
             ref = record.ref
@@ -184,10 +292,19 @@ def _schema(function_tool: FunctionTool) -> tuple[str, dict[str, Any]]:
     declaration = function_tool._get_declaration()
     if declaration is None:
         raise ValueError(f"Built-in tool has no declaration: {function_tool.name}")
-    schema = dict(declaration.parameters_json_schema or {"type": "object"})
+    schema: dict[str, Any] = dict(
+        declaration.parameters_json_schema or {"type": "object"}
+    )
     schema.setdefault("additionalProperties", False)
     description = (declaration.description or function_tool.name).strip()[:4096]
     return description, schema
+
+
+def _deferred_schema(name: str) -> tuple[str, dict[str, Any]]:
+    description, schema = _DEFERRED_BUILTIN_DECLARATIONS[name]
+    copied_schema = copy.deepcopy(schema)
+    copied_schema.setdefault("additionalProperties", False)
+    return description, copied_schema
 
 
 def register_veadk_builtin_tools(
@@ -198,16 +315,33 @@ def register_veadk_builtin_tools(
     """Expose the existing VeADK built-ins through the Studio-owned channel."""
 
     host = _BuiltinExecutionHost(media_service=media_service)
+    resolved_tools: dict[str, FunctionTool] = {}
     for name in list_builtin_tools():
-        function_tool = FunctionTool(get_builtin_tool(name))
-        description, input_schema = _schema(function_tool)
+        if name in _DEFERRED_BUILTIN_DECLARATIONS:
+            description, input_schema = _deferred_schema(name)
+        else:
+            function_tool = FunctionTool(
+                cast(Callable[..., Any], get_builtin_tool(name))
+            )
+            resolved_tools[name] = function_tool
+            description, input_schema = _schema(function_tool)
 
         async def execute(
             arguments: dict[str, Any],
             context: StudioToolExecutionContext,
             *,
-            current_tool: FunctionTool = function_tool,
+            current_name: str = name,
         ) -> Any:
+            current_tool = resolved_tools.get(current_name)
+            if current_tool is None:
+                current_tool = FunctionTool(
+                    cast(Callable[..., Any], get_builtin_tool(current_name))
+                )
+                if _schema(current_tool) != _deferred_schema(current_name):
+                    raise RuntimeError(
+                        f"Deferred built-in declaration changed: {current_name}"
+                    )
+                resolved_tools[current_name] = current_tool
             return await host.execute(current_tool, arguments, context)
 
         registry.register(

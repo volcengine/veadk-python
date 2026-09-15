@@ -52,6 +52,7 @@ def test_sidecar_release_gate_runs_backend_and_frontend_in_parallel() -> None:
     aggregate_run = _run_script(aggregate)
     assert "test_studio_sidecar.py" in backend_run
     assert "tests/cli/test_studio_startup_imports.py" in backend_run
+    assert "test_deferred_veadk_builtin_tools.py" in backend_run
     assert "test_legacy_runtime_recovery.py" in backend_run
     assert "zero_mcp_servers_json" in backend_run
     assert "test_zero_structured_mcp_is_valid" in backend_run
