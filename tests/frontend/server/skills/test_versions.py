@@ -62,7 +62,11 @@ def version(name: str, status: str = "running") -> Any:
 
 class VersionClient:
     def __init__(self) -> None:
-        self.space = SimpleNamespace(name="personal", description="", tags=[])
+        self.space = SimpleNamespace(
+            name="personal",
+            description="",
+            tags=[SimpleNamespace(key="author", value="alice")],
+        )
         self.skill = SimpleNamespace(
             name="daily-summary", tags=[SimpleNamespace(key="author", value="alice")]
         )
@@ -186,7 +190,7 @@ def test_shared_history_only_exposes_shared_versions_without_update(setup):
     assert not cloud.updated
 
 
-def test_skill_space_listing_filters_personal_skills_by_author():
+def test_skill_space_listing_returns_all_skills_in_readable_personal_space():
     from agentkit.sdk.skills import types as sdk
     from frontend.server.skills.repository import list_skill_space_items
 
@@ -197,16 +201,6 @@ def test_skill_space_listing_filters_personal_skills_by_author():
                 description="",
                 tags=[SimpleNamespace(key="author", value="alice")],
             )
-            self.skills = {
-                "alice-skill": SimpleNamespace(
-                    id="alice-skill",
-                    tags=[SimpleNamespace(key="author", value="alice")],
-                ),
-                "bob-skill": SimpleNamespace(
-                    id="bob-skill",
-                    tags=[SimpleNamespace(key="author", value="bob")],
-                ),
-            }
             self.relations = [
                 SimpleNamespace(
                     skill_id="bob-skill",
@@ -227,9 +221,6 @@ def test_skill_space_listing_filters_personal_skills_by_author():
         def get_skill_space(self, _: Any) -> Any:
             return self.space
 
-        def get_skill(self, request: Any) -> Any:
-            return self.skills[request.id]
-
         def list_skills_by_skill_space(self, request: Any) -> Any:
             start = (request.page_number - 1) * request.page_size
             return SimpleNamespace(
@@ -243,30 +234,28 @@ def test_skill_space_listing_filters_personal_skills_by_author():
         space_id="personal",
         page=1,
         page_size=1,
-        visible_author="alice",
     )
 
-    assert catalog.total_count == 1
-    assert [item["skillName"] for item in catalog.items] == ["alice-only"]
+    assert catalog.total_count == 2
+    assert [item["skillName"] for item in catalog.items] == ["bob-only"]
 
 
-def test_personal_skill_files_reject_other_users(setup):
+def test_personal_space_read_rejects_other_users(setup):
     cloud, repository, _ = setup
 
     with pytest.raises(SkillRepositoryError) as raised:
-        repository.require_skill_read(
+        repository.require_space_read(
             region="cn-beijing",
             space_id="space",
-            skill_id="skill",
             author="bob",
             is_admin=False,
         )
 
     assert raised.value.status_code == 403
-    repository.require_skill_read(
+    assert raised.value.code == "SKILL_SPACE_READ_FORBIDDEN"
+    repository.require_space_read(
         region="cn-beijing",
         space_id="space",
-        skill_id="skill",
         author="alice",
         is_admin=False,
     )
@@ -275,10 +264,9 @@ def test_personal_skill_files_reject_other_users(setup):
         description=SHARE_SPACE.managed_description,
         tags=[],
     )
-    repository.require_skill_read(
+    repository.require_space_read(
         region="cn-beijing",
         space_id="space",
-        skill_id="skill",
         author="bob",
         is_admin=False,
     )
@@ -295,12 +283,13 @@ def test_review_version_history_is_admin_only_and_never_updatable(setup):
     assert listed(versions, "admin", True)["canUpdate"] is False
 
 
-def test_legacy_missing_author_history_readable_but_not_claimed_for_update(setup):
+def test_personal_version_history_requires_space_owner_tag(setup):
     cloud, _, versions = setup
-    cloud.skill.tags = []
-    assert listed(versions)["canUpdate"] is False
-    cloud.space.tags = [SimpleNamespace(key="author", value="alice")]
-    assert listed(versions)["canUpdate"] is True
+    cloud.skill.tags = [SimpleNamespace(key="author", value="alice")]
+    cloud.space.tags = []
+    with pytest.raises(SkillRepositoryError) as error:
+        listed(versions)
+    assert error.value.status_code == 403
 
 
 def test_upload_rejects_renamed_archive_before_cloud_mutation(setup):

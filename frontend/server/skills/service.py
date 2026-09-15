@@ -168,10 +168,9 @@ class SkillService:
         skill_space_name: str | None = None,
         skill_name: str | None = None,
     ) -> dict[str, object]:
-        self._repository.require_skill_read(
+        self._repository.require_space_read(
             region=region,
             space_id=space_id,
-            skill_id=skill_id,
             author=identity.author,
             is_admin=identity.is_admin,
         )
@@ -195,10 +194,9 @@ class SkillService:
         skill_space_name: str | None = None,
         skill_name: str | None = None,
     ) -> tuple[bytes, str]:
-        self._repository.require_skill_read(
+        self._repository.require_space_read(
             region=region,
             space_id=space_id,
-            skill_id=skill_id,
             author=identity.author,
             is_admin=identity.is_admin,
         )

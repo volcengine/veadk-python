@@ -14102,7 +14102,7 @@ def _run_frontend_server(
         AgentKitSkillRepository,
         DEGRADED_SKILLSPACE_WARNING,
         list_skill_space_items,
-        require_skill_read,
+        require_space_read,
         resolve_skill_response,
         skill_space_visible_to_author,
     )
@@ -14113,7 +14113,6 @@ def _run_frontend_server(
     from frontend.server.skills.space_names import skill_space_display_name
     from frontend.server.skills.system_spaces import (
         is_review_space,
-        require_review_read,
     )
 
     identity_management = getattr(app.state, "studio_user_management", None)
@@ -14260,9 +14259,11 @@ def _run_frontend_server(
             client = _skills_client(region)
             identity = _skill_identity(request)
             await asyncio.to_thread(
-                require_review_read,
+                require_space_read,
                 client,
-                space_id,
+                skills_types,
+                space_id=space_id,
+                author=identity.author,
                 is_admin=identity.is_admin,
             )
             result = await asyncio.to_thread(
@@ -14273,7 +14274,6 @@ def _run_frontend_server(
                 page=page,
                 page_size=page_size,
                 include_display_metadata=True,
-                visible_author=None if identity.is_admin else identity.author,
             )
         except HTTPException:
             raise
@@ -14315,11 +14315,10 @@ def _run_frontend_server(
             client = _skills_client(region)
             identity = _skill_identity(request)
             await asyncio.to_thread(
-                require_skill_read,
+                require_space_read,
                 client,
                 skills_types,
-                space_id,
-                skill_id=skill_id,
+                space_id=space_id,
                 author=identity.author,
                 is_admin=identity.is_admin,
             )
