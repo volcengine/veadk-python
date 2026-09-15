@@ -14102,7 +14102,9 @@ def _run_frontend_server(
         AgentKitSkillRepository,
         DEGRADED_SKILLSPACE_WARNING,
         list_skill_space_items,
+        require_skill_read,
         resolve_skill_response,
+        skill_space_visible_to_author,
     )
     from frontend.server.skills.routes import _convert_error, mount_skill_routes
     from frontend.server.skills.auto_scoring import SkillAutoScoring
@@ -14134,6 +14136,7 @@ def _run_frontend_server(
 
     @app.get("/web/skill-spaces")
     async def _web_list_skill_spaces(
+        request: Request,
         region: str = "",
         page: int = Query(default=1, ge=1),
         page_size: int = Query(default=50, ge=1, le=100),
@@ -14156,21 +14159,60 @@ def _run_frontend_server(
         all_items = []
         total_count = 0
         project_name = (project or "").strip() or None
+        identity = _skill_identity(request)
 
         for reg in regions:
             try:
                 client = _skills_client(reg)
-                request_page = 1 if aggregate_regions else page
-                request_page_size = 50 if aggregate_regions else page_size
-                resp = await asyncio.to_thread(
-                    client.list_skill_spaces,
-                    ListSkillSpacesRequest(
-                        PageNumber=request_page,
-                        PageSize=request_page_size,
-                        ProjectName=project_name,
-                    ),
+                visible_spaces = []
+                scan_page = (
+                    1 if not identity.is_admin else (1 if aggregate_regions else page)
                 )
-                for s in resp.items or []:
+                scan_page_size = (
+                    100
+                    if not identity.is_admin
+                    else (50 if aggregate_regions else page_size)
+                )
+                scanned = 0
+                while True:
+                    resp = await asyncio.to_thread(
+                        client.list_skill_spaces,
+                        ListSkillSpacesRequest(
+                            PageNumber=scan_page,
+                            PageSize=scan_page_size,
+                            ProjectName=project_name,
+                        ),
+                    )
+                    spaces = list(resp.items or [])
+                    for s in spaces:
+                        if is_review_space(s):
+                            continue
+                        if skill_space_visible_to_author(
+                            s, author=identity.author, is_admin=identity.is_admin
+                        ):
+                            visible_spaces.append(s)
+                    scanned += len(spaces)
+                    native_total = resp.total_count
+                    if (
+                        identity.is_admin
+                        or len(spaces) < scan_page_size
+                        or (native_total is not None and scanned >= native_total)
+                    ):
+                        break
+                    scan_page += 1
+                if not identity.is_admin and not aggregate_regions:
+                    start = (page - 1) * page_size
+                    page_spaces = visible_spaces[start : start + page_size]
+                    total_count = len(visible_spaces)
+                else:
+                    page_spaces = visible_spaces
+                    if not aggregate_regions:
+                        total_count = (
+                            resp.total_count
+                            if identity.is_admin and resp.total_count is not None
+                            else len(visible_spaces)
+                        )
+                for s in page_spaces:
                     if is_review_space(s):
                         continue
                     all_items.append(
@@ -14185,12 +14227,6 @@ def _run_frontend_server(
                             "updatedAt": s.update_time_stamp or "",
                             "skillCount": len(s.relations or []),
                         }
-                    )
-                if not aggregate_regions:
-                    total_count = (
-                        resp.total_count
-                        if resp.total_count is not None
-                        else len(all_items)
                     )
             except HTTPException:
                 raise
@@ -14222,11 +14258,12 @@ def _run_frontend_server(
         region = _coerce_studio_resource_region(region)
         try:
             client = _skills_client(region)
+            identity = _skill_identity(request)
             await asyncio.to_thread(
                 require_review_read,
                 client,
                 space_id,
-                is_admin=_skill_identity(request).is_admin,
+                is_admin=identity.is_admin,
             )
             result = await asyncio.to_thread(
                 list_skill_space_items,
@@ -14236,6 +14273,7 @@ def _run_frontend_server(
                 page=page,
                 page_size=page_size,
                 include_display_metadata=True,
+                visible_author=None if identity.is_admin else identity.author,
             )
         except HTTPException:
             raise
@@ -14270,15 +14308,20 @@ def _run_frontend_server(
         skill_name: str | None = None,
     ):
         """Fetch a specific skill version's SKILL.md content plus package files."""
+        from agentkit.sdk.skills import types as skills_types
+
         region = _coerce_studio_resource_region(region)
         try:
             client = _skills_client(region)
+            identity = _skill_identity(request)
             await asyncio.to_thread(
-                require_review_read,
+                require_skill_read,
                 client,
+                skills_types,
                 space_id,
                 skill_id=skill_id,
-                is_admin=_skill_identity(request).is_admin,
+                author=identity.author,
+                is_admin=identity.is_admin,
             )
             resp = await asyncio.to_thread(
                 resolve_skill_response,

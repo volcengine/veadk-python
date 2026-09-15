@@ -46,6 +46,74 @@ class SkillSpaceListResult:
     degraded: bool = False
 
 
+def _tags(value: Any) -> dict[str, str]:
+    return {
+        str(getattr(tag, "key", "") or ""): str(getattr(tag, "value", "") or "")
+        for tag in (getattr(value, "tags", None) or [])
+    }
+
+
+def skill_space_visible_to_author(
+    space: Any, *, author: str, is_admin: bool = False
+) -> bool:
+    from .system_spaces import is_shared_space
+
+    if is_admin:
+        return True
+    return is_shared_space(space) or _tags(space).get("author") == author
+
+
+def _skill_author(
+    client: Any,
+    skills_types: Any,
+    *,
+    skill_id: str,
+    fallback: str = "",
+) -> str:
+    if not skill_id:
+        return fallback
+    try:
+        skill = client.get_skill(skills_types.GetSkillRequest(Id=skill_id))
+    except Exception:
+        if fallback:
+            return fallback
+        raise
+    return _tags(skill).get("author") or fallback
+
+
+def require_skill_read(
+    client: Any,
+    skills_types: Any,
+    *,
+    space_id: str,
+    skill_id: str,
+    author: str,
+    is_admin: bool = False,
+) -> None:
+    from .system_spaces import is_review_space, is_shared_space, require_review_read
+
+    require_review_read(client, space_id, skill_id=skill_id, is_admin=is_admin)
+    if is_admin:
+        return
+    space = client.get_skill_space(skills_types.GetSkillSpaceRequest(Id=space_id))
+    if is_shared_space(space):
+        return
+    if is_review_space(space):
+        raise SkillRepositoryError(
+            "SKILL_REVIEW_FORBIDDEN", "仅管理员可以查看审核申请", status_code=403
+        )
+    owner = _skill_author(
+        client,
+        skills_types,
+        skill_id=skill_id,
+        fallback=_tags(space).get("author", ""),
+    )
+    if owner != author:
+        raise SkillRepositoryError(
+            "SKILL_READ_FORBIDDEN", "只能查看自己创建的 Skill", status_code=403
+        )
+
+
 def _is_missing_skill_relation(error: BaseException) -> bool:
     expected = "ResourceNotFound.skill"
     for name in ("code", "error_code", "Code"):
@@ -62,21 +130,41 @@ def list_skill_space_items(
     page: int = 1,
     page_size: int = 100,
     include_display_metadata: bool = False,
+    visible_author: str | None = None,
 ) -> SkillSpaceListResult:
     """List authoritative relations, recovering readable names only on one 404."""
 
-    try:
-        response = client.list_skills_by_skill_space(
+    def load_space() -> Any:
+        return client.get_skill_space(skills_types.GetSkillSpaceRequest(Id=space_id))
+
+    def visible(item: Any, space: Any) -> bool:
+        from .system_spaces import is_shared_space
+
+        if not visible_author or is_shared_space(space):
+            return True
+        owner = _skill_author(
+            client,
+            skills_types,
+            skill_id=str(getattr(item, "skill_id", "") or ""),
+            fallback=_tags(space).get("author", ""),
+        )
+        return owner == visible_author
+
+    def list_relations(request_page: int, request_page_size: int) -> Any:
+        return client.list_skills_by_skill_space(
             skills_types.ListSkillsBySkillSpaceRequest(
                 SkillSpaceId=space_id,
-                PageNumber=page,
-                PageSize=page_size,
+                PageNumber=request_page,
+                PageSize=request_page_size,
             )
         )
+
+    try:
+        response = list_relations(page, page_size)
     except Exception as relation_error:
         if not _is_missing_skill_relation(relation_error):
             raise
-        space = client.get_skill_space(skills_types.GetSkillSpaceRequest(Id=space_id))
+        space = load_space()
         space_name = str(getattr(space, "name", "") or "").strip()
         if not space_name:
             raise relation_error
@@ -87,37 +175,40 @@ def list_skill_space_items(
             )
         )
         recovered: list[dict[str, object]] = []
-        for basic in list(getattr(fallback, "items", None) or []):
-            name = str(getattr(basic, "name", "") or "").strip()
-            if not name:
-                continue
-            try:
-                info = client.get_skill_info(
-                    skills_types.GetSkillInfoRequest(
-                        SkillName=name,
-                        SkillSpaceName=space_name,
-                        SkillSpaceId=space_id,
-                    )
-                )
-            except Exception as info_error:
-                if _is_missing_skill_relation(info_error):
+        if skill_space_visible_to_author(
+            space, author=visible_author or "", is_admin=not visible_author
+        ):
+            for basic in list(getattr(fallback, "items", None) or []):
+                name = str(getattr(basic, "name", "") or "").strip()
+                if not name:
                     continue
-                raise
-            recovered.append(
-                {
-                    "skillId": "",
-                    "skillName": str(getattr(info, "skill_name", "") or name),
-                    "skillDescription": str(
-                        getattr(info, "description", "")
-                        or getattr(basic, "description", "")
-                        or ""
-                    ),
-                    "version": "",
-                    "skillStatus": "",
-                    "lookupByName": True,
-                    "degraded": True,
-                }
-            )
+                try:
+                    info = client.get_skill_info(
+                        skills_types.GetSkillInfoRequest(
+                            SkillName=name,
+                            SkillSpaceName=space_name,
+                            SkillSpaceId=space_id,
+                        )
+                    )
+                except Exception as info_error:
+                    if _is_missing_skill_relation(info_error):
+                        continue
+                    raise
+                recovered.append(
+                    {
+                        "skillId": "",
+                        "skillName": str(getattr(info, "skill_name", "") or name),
+                        "skillDescription": str(
+                            getattr(info, "description", "")
+                            or getattr(basic, "description", "")
+                            or ""
+                        ),
+                        "version": "",
+                        "skillStatus": "",
+                        "lookupByName": True,
+                        "degraded": True,
+                    }
+                )
         start = (page - 1) * page_size
         return SkillSpaceListResult(
             items=tuple(recovered[start : start + page_size]),
@@ -126,19 +217,38 @@ def list_skill_space_items(
         )
 
     raw_items = list(getattr(response, "items", None) or [])
+    filtered_total_count: int | None = None
+    space = None
+    if visible_author:
+        space = load_space()
+        if not skill_space_visible_to_author(space, author=visible_author):
+            return SkillSpaceListResult(items=(), total_count=0)
+        filtered: list[Any] = []
+        scanned = 0
+        request_page = 1
+        while True:
+            page_response = list_relations(request_page, 100)
+            page_items = list(getattr(page_response, "items", None) or [])
+            filtered.extend(item for item in page_items if visible(item, space))
+            scanned += len(page_items)
+            total = getattr(page_response, "total_count", None)
+            if len(page_items) < 100 or (total is not None and scanned >= total):
+                break
+            request_page += 1
+        start = (page - 1) * page_size
+        raw_items = filtered[start : start + page_size]
+        filtered_total_count = len(filtered)
     metadata: dict[str, dict[str, str]] = {}
     if include_display_metadata and raw_items:
         from .system_spaces import is_shared_space
 
-        space = client.get_skill_space(skills_types.GetSkillSpaceRequest(Id=space_id))
+        space = space or load_space()
         if is_shared_space(space):
             for item in raw_items:
                 skill_id = str(getattr(item, "skill_id", "") or "")
                 if skill_id and skill_id not in metadata:
                     skill = client.get_skill(skills_types.GetSkillRequest(Id=skill_id))
-                    tags = {
-                        tag.key: tag.value for tag in getattr(skill, "tags", None) or []
-                    }
+                    tags = _tags(skill)
                     metadata[skill_id] = {
                         "author": tags.get("author", ""),
                         "sourceVersion": tags.get(SHARED_SOURCE_VERSION_TAG, ""),
@@ -155,7 +265,9 @@ def list_skill_space_items(
             }
             for item in raw_items
         ),
-        total_count=(
+        total_count=filtered_total_count
+        if filtered_total_count is not None
+        else (
             int(response.total_count)
             if getattr(response, "total_count", None) is not None
             else len(raw_items)
@@ -283,6 +395,26 @@ class AgentKitSkillRepository:
 
         require_review_read(
             self._client_factory(region), space_id, skill_id=skill_id, is_admin=is_admin
+        )
+
+    def require_skill_read(
+        self,
+        *,
+        region: str,
+        space_id: str,
+        skill_id: str,
+        author: str,
+        is_admin: bool,
+    ) -> None:
+        from agentkit.sdk.skills import types as skills_types
+
+        require_skill_read(
+            self._client_factory(region),
+            skills_types,
+            space_id=space_id,
+            skill_id=skill_id,
+            author=author,
+            is_admin=is_admin,
         )
 
     def ensure_shared_space(self, *, region: str) -> dict[str, object]:
@@ -798,4 +930,6 @@ __all__ = [
     "SkillRepositoryError",
     "SkillSpaceListResult",
     "list_skill_space_items",
+    "require_skill_read",
+    "skill_space_visible_to_author",
 ]

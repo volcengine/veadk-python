@@ -186,6 +186,104 @@ def test_shared_history_only_exposes_shared_versions_without_update(setup):
     assert not cloud.updated
 
 
+def test_skill_space_listing_filters_personal_skills_by_author():
+    from agentkit.sdk.skills import types as sdk
+    from frontend.server.skills.repository import list_skill_space_items
+
+    class CatalogClient:
+        def __init__(self) -> None:
+            self.space = SimpleNamespace(
+                name="personal",
+                description="",
+                tags=[SimpleNamespace(key="author", value="alice")],
+            )
+            self.skills = {
+                "alice-skill": SimpleNamespace(
+                    id="alice-skill",
+                    tags=[SimpleNamespace(key="author", value="alice")],
+                ),
+                "bob-skill": SimpleNamespace(
+                    id="bob-skill",
+                    tags=[SimpleNamespace(key="author", value="bob")],
+                ),
+            }
+            self.relations = [
+                SimpleNamespace(
+                    skill_id="bob-skill",
+                    skill_name="bob-only",
+                    skill_description="Hidden",
+                    version="v1",
+                    skill_status="running",
+                ),
+                SimpleNamespace(
+                    skill_id="alice-skill",
+                    skill_name="alice-only",
+                    skill_description="Visible",
+                    version="v2",
+                    skill_status="running",
+                ),
+            ]
+
+        def get_skill_space(self, _: Any) -> Any:
+            return self.space
+
+        def get_skill(self, request: Any) -> Any:
+            return self.skills[request.id]
+
+        def list_skills_by_skill_space(self, request: Any) -> Any:
+            start = (request.page_number - 1) * request.page_size
+            return SimpleNamespace(
+                items=self.relations[start : start + request.page_size],
+                total_count=len(self.relations),
+            )
+
+    catalog = list_skill_space_items(
+        CatalogClient(),
+        sdk,
+        space_id="personal",
+        page=1,
+        page_size=1,
+        visible_author="alice",
+    )
+
+    assert catalog.total_count == 1
+    assert [item["skillName"] for item in catalog.items] == ["alice-only"]
+
+
+def test_personal_skill_files_reject_other_users(setup):
+    cloud, repository, _ = setup
+
+    with pytest.raises(SkillRepositoryError) as raised:
+        repository.require_skill_read(
+            region="cn-beijing",
+            space_id="space",
+            skill_id="skill",
+            author="bob",
+            is_admin=False,
+        )
+
+    assert raised.value.status_code == 403
+    repository.require_skill_read(
+        region="cn-beijing",
+        space_id="space",
+        skill_id="skill",
+        author="alice",
+        is_admin=False,
+    )
+    cloud.space = SimpleNamespace(
+        name=SHARE_SPACE.name,
+        description=SHARE_SPACE.managed_description,
+        tags=[],
+    )
+    repository.require_skill_read(
+        region="cn-beijing",
+        space_id="space",
+        skill_id="skill",
+        author="bob",
+        is_admin=False,
+    )
+
+
 def test_review_version_history_is_admin_only_and_never_updatable(setup):
     cloud, _, versions = setup
     cloud.space = SimpleNamespace(
