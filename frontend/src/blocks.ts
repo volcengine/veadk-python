@@ -799,7 +799,6 @@ export function eventsToTurns(
       if (files.length) blocks.push({ kind: "attachment", files });
       if (text) blocks.push({ kind: "text", text });
       turns.push({ role: "user", blocks, meta: { ts: ev.timestamp } });
-      projector = createAssistantEventProjector("adk-history");
     } else {
       const projection = projector.project(ev);
       if (!projection.ignored) {
