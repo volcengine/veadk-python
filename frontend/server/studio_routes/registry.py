@@ -21,18 +21,17 @@ import inspect
 import os
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any, Literal, cast
 from urllib.parse import parse_qs
 
 from frontend.server.storage import StudioProvider
-from frontend.server.studio_routes.skill_catalog import (
-    StudioSkillCatalog,
-    StudioSkillCatalogError,
-)
-from veadk.integrations.agentkit.studio_routes import (
+from veadk.integrations.agentkit.studio_routes.protocol import (
     StudioRouteManifest,
     route_catalog_revision,
 )
+
+if TYPE_CHECKING:
+    from frontend.server.studio_routes.skill_catalog import StudioSkillCatalog
 
 RouteExecutor = Callable[[dict[str, Any]], Any]
 
@@ -61,11 +60,11 @@ class StudioRoute:
     def manifest(self) -> StudioRouteManifest:
         return StudioRouteManifest(
             id=self.id,
-            method=self.method.upper(),
+            method=cast(Literal["GET", "POST"], self.method.upper()),
             path=self.path,
             handler_revision=self.handler_revision,
             timeout_ms=self.timeout_ms,
-            response_mode=self.response_mode,
+            response_mode=cast(Literal["json", "text"], self.response_mode),
         )
 
 
@@ -130,7 +129,7 @@ class StudioRouteRegistry:
 def _query_values(request: dict[str, Any]) -> dict[str, list[str]]:
     raw_query = request.get("query_string")
     if not isinstance(raw_query, str):
-        raise StudioSkillCatalogError(400, "invalid route query string")
+        raise _skill_catalog_error(400, "invalid route query string")
     try:
         return parse_qs(
             raw_query,
@@ -139,7 +138,7 @@ def _query_values(request: dict[str, Any]) -> dict[str, list[str]]:
             max_num_fields=20,
         )
     except ValueError as error:
-        raise StudioSkillCatalogError(400, "invalid route query string") from error
+        raise _skill_catalog_error(400, "invalid route query string") from error
 
 
 def _single_query(
@@ -151,7 +150,7 @@ def _single_query(
     if not values:
         return default
     if len(values) != 1:
-        raise StudioSkillCatalogError(400, f"duplicate query parameter: {name}")
+        raise _skill_catalog_error(400, f"duplicate query parameter: {name}")
     return values[0]
 
 
@@ -164,13 +163,19 @@ def _positive_int_query(
     try:
         return int(raw_value)
     except ValueError as error:
-        raise StudioSkillCatalogError(
+        raise _skill_catalog_error(
             400,
             f"invalid integer query parameter: {name}",
         ) from error
 
 
-def _catalog_response(error: StudioSkillCatalogError) -> StudioRouteResponse:
+def _skill_catalog_error(status_code: int, detail: str) -> Exception:
+    from frontend.server.studio_routes.skill_catalog import StudioSkillCatalogError
+
+    return StudioSkillCatalogError(status_code, detail)
+
+
+def _catalog_response(error: Any) -> StudioRouteResponse:
     return StudioRouteResponse(
         status=error.status_code,
         headers={"content-type": "application/json"},
@@ -182,6 +187,8 @@ def _register_skill_catalog_routes(
     registry: StudioRouteRegistry,
     catalog: StudioSkillCatalog,
 ) -> None:
+    from frontend.server.studio_routes.skill_catalog import StudioSkillCatalogError
+
     async def findskill(request: dict[str, Any]) -> StudioRouteResponse:
         try:
             query = _query_values(request)
@@ -266,6 +273,8 @@ def build_studio_route_registry(
     registry = StudioRouteRegistry()
     mode = os.getenv("VEADK_STUDIO_ROUTE_CHANNEL", "").strip().lower()
     if mode in {"1", "true", "yes", "demo", "skill-catalog"}:
+        from frontend.server.studio_routes.skill_catalog import StudioSkillCatalog
+
         _register_skill_catalog_routes(
             registry,
             skill_catalog or StudioSkillCatalog(provider),

@@ -23,13 +23,14 @@ from typing import Any
 
 from veadk.utils.logger import get_logger
 
-from .client import ModelApiKeyClient, ModelCatalogClient, ModelCatalogError, Provider
+from .client import ModelApiKeyClient, ModelCatalogClient
 from .models import (
     ModelApiKeyOption,
     ModelApiKeysResponse,
     ModelOption,
     ModelOptionsResponse,
 )
+from .protocol import ModelCatalogError, Provider
 
 logger = get_logger(__name__)
 

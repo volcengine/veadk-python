@@ -44,8 +44,6 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal, cast
 
-import requests
-from agentkit.auth.errors import NetworkError
 from fastapi import HTTPException, Query, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import Response, StreamingResponse
@@ -66,6 +64,22 @@ from .prompts import STYLE_PRESETS, decorate_intent
 from .repair import skill_workbench_runner_source
 
 logger = get_logger(__name__)
+
+
+def _requests() -> Any:
+    import requests
+
+    return requests
+
+
+class _LazyRequests:
+    """Preserve the patchable module surface without importing it at startup."""
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(_requests(), name)
+
+
+requests = _LazyRequests()
 
 
 def AgentkitSkillsClient(*args: Any, **kwargs: Any) -> Any:
@@ -304,6 +318,9 @@ def _exception_chain(error: BaseException) -> list[BaseException]:
 
 
 def _is_transient_dependency_error(error: BaseException) -> bool:
+    import requests
+    from agentkit.auth.errors import NetworkError
+
     for current in _exception_chain(error):
         if isinstance(
             current,
