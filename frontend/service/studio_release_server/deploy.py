@@ -264,7 +264,28 @@ def _stage_deployment(source_root: Path, destination: Path) -> None:
     (site_packages / ".installed").touch()
     run_script = destination / "run.sh"
     shutil.copy2(deployment_root / "run.sh", run_script)
-    run_script.chmod(0o755)
+    _normalize_runtime_permissions(destination)
+
+
+def _normalize_runtime_permissions(deployment_root: Path) -> None:
+    """Make staged files readable by the unprivileged VeFaaS runtime user."""
+    deployment_root.chmod(0o755)
+    for current_root, directory_names, file_names in os.walk(deployment_root):
+        current_path = Path(current_root)
+        for directory_name in directory_names:
+            directory = current_path / directory_name
+            if not directory.is_symlink():
+                directory.chmod(0o755)
+        for file_name in file_names:
+            file_path = current_path / file_name
+            if file_path.is_symlink():
+                continue
+            relative_path = file_path.relative_to(deployment_root)
+            executable = file_path.suffix == ".sh" or relative_path.parts[:2] == (
+                "site-packages",
+                "bin",
+            )
+            file_path.chmod(0o755 if executable else 0o644)
 
 
 def _stage_node_archive(service_destination: Path) -> None:

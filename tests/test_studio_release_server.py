@@ -1958,7 +1958,9 @@ def test_stage_deployment_uses_frontend_service_package(
     for dependency_name in ("tos", "crcmod"):
         dependency_root = tmp_path / "dependencies" / dependency_name
         dependency_root.mkdir(parents=True)
-        (dependency_root / "__init__.py").write_text("", encoding="utf-8")
+        dependency_init = dependency_root / "__init__.py"
+        dependency_init.write_text("", encoding="utf-8")
+        dependency_init.chmod(0o600)
         spec = importlib.machinery.ModuleSpec(
             dependency_name, loader=None, is_package=True
         )
@@ -1966,7 +1968,15 @@ def test_stage_deployment_uses_frontend_service_package(
         dependency_specs[dependency_name] = spec
 
     def _install_runtime_wheels(*_args: Any, **_kwargs: Any) -> None:
-        (destination / "site-packages").mkdir()
+        site_packages = destination / "site-packages"
+        site_packages.mkdir(mode=0o700)
+        private_module = site_packages / "private_module.py"
+        private_module.write_text("VALUE = 1\n", encoding="utf-8")
+        private_module.chmod(0o600)
+        console_script = site_packages / "bin" / "runtime-helper"
+        console_script.parent.mkdir(mode=0o700)
+        console_script.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        console_script.chmod(0o600)
 
     monkeypatch.setattr(release_deploy.shutil, "which", lambda _name: "uv")
     monkeypatch.setattr(release_deploy.subprocess, "run", _install_runtime_wheels)
@@ -1991,9 +2001,21 @@ def test_stage_deployment_uses_frontend_service_package(
     assert not (package_root / "deploy.py").exists()
     assert not (package_root / "deploy.sh").exists()
     assert not (destination / "veadk").exists()
-    assert "frontend.service.studio_release_server.app:app" in (
-        destination / "run.sh"
-    ).read_text(encoding="utf-8")
+    run_script = destination / "run.sh"
+    assert "frontend.service.studio_release_server.app:app" in run_script.read_text(
+        encoding="utf-8"
+    )
+    assert run_script.stat().st_mode & 0o777 == 0o755
+    assert (destination / "site-packages").stat().st_mode & 0o777 == 0o755
+    assert (
+        destination / "site-packages" / "private_module.py"
+    ).stat().st_mode & 0o777 == 0o644
+    assert (
+        destination / "site-packages" / "bin" / "runtime-helper"
+    ).stat().st_mode & 0o777 == 0o755
+    assert (
+        destination / "site-packages" / "tos" / "__init__.py"
+    ).stat().st_mode & 0o777 == 0o644
 
 
 def test_function_lookup_paginates() -> None:
