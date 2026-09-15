@@ -5,13 +5,10 @@
     "title": "Runtime 定时任务",
     "selectRuntime": "请先在 Agent 列表中选择一个已连接的云端 Runtime。",
     "scope": "展示当前 Runtime 中，你的用户身份有权查看的 mpa 定时任务。",
-    "jwt": "用户 JWT（可选）",
-    "jwtHelp": "仅在当前页面使用，切换 Runtime 或离开此模块后清除；不会保存在浏览器中。",
-    "apply": "加载任务",
     "refresh": "刷新",
     "loading": "正在获取 Runtime 任务",
     "empty": "当前用户在此 Runtime 中没有定时任务。",
-    "authRequired": "需要有效的 mpa 用户 JWT。请填写后点击“加载任务”。",
+    "authRequired": "MPA 拒绝了自动获取的凭证，请检查用户身份和 Runtime 的 JWT 配置。",
     "forbidden": "当前身份没有访问权限，请确认 Runtime 和用户 JWT。",
     "unsupported": "此 Runtime 未提供 mpa 定时任务接口。",
     "invalidResponse": "任务接口返回了无法识别的数据，请检查 Runtime 版本。",
@@ -34,6 +31,17 @@
       "weekly": "每周",
       "monthly": "每月",
       "cron": "Cron"
+    },
+    "search": "搜索任务",
+    "automaticAuth": "由 Studio 后端自动获取 MPA 凭证。仅展示当前企业用户可访问的任务。",
+    "executionCount": "执行次数",
+    "successRate": "成功率",
+    "prompt": "任务内容",
+    "errors": {
+      "mpa_identity_required": "缺少企业用户身份。本地测试请在 Studio 服务端设置 VEADK_STUDIO_MPA_USER_UID，然后重启服务。",
+      "mpa_runtime_config_required": "所选 Runtime 缺少 MPA 实例或空间配置，无法自动获取凭证。",
+      "mpa_runtime_mismatch": "TOP 返回的地址与所选 Runtime 不一致。请检查实例的正式 / 调试 Runtime 绑定。",
+      "mpa_top_failed": "TOP 获取 MPA 凭证失败，请检查 AK/SK 的权限及实例所属空间。"
     }
   },
   "actions": {

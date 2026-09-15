@@ -5233,6 +5233,6 @@ export async function updateSandboxTool(kind: SandboxToolKind): Promise<{
   return { updated: payload.updated, state: sandboxImageState(payload.state) };
 }
 
-export function listMpaCronTasks(runtime: MpaRuntime, offset: number, jwt: string, signal?: AbortSignal) {
-  return fetchMpaCronTasks(apiFetch, runtime, offset, jwt, signal);
+export function listMpaCronTasks(runtime: MpaRuntime, offset: number, query: string, signal?: AbortSignal) {
+  return fetchMpaCronTasks(apiFetch, runtime, offset, query, signal);
 }
