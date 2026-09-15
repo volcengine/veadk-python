@@ -21,9 +21,10 @@ import os
 import secrets
 import time
 from collections.abc import Mapping
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from agentkit.sdk.tools import types
+if TYPE_CHECKING:
+    from frontend.server.storage import StudioProvider
 
 DEFAULT_WORKSPACE_IMAGES = {
     (
@@ -41,6 +42,12 @@ DEFAULT_WORKSPACE_IMAGES = {
 }
 
 
+def _tools_types():
+    from agentkit.sdk.tools import types
+
+    return types
+
+
 def resolve_workspace_image(provider: str, region: str) -> str:
     override = os.getenv("STUDIO_WORKSPACE_IMAGE", "").strip()
     if override:
@@ -56,6 +63,7 @@ def resolve_workspace_image(provider: str, region: str) -> str:
 def workspace_tool_request(
     image: str, provider: str, model_environment: Mapping[str, str]
 ) -> Any:
+    types = _tools_types()
     if provider not in {"volcengine", "byteplus"}:
         raise ValueError("Unsupported workspace provider")
     if not image or image != image.strip() or "://" in image or "/" not in image:
@@ -116,6 +124,7 @@ def ensure_workspace_tool(
     model_environment: Mapping[str, str],
     timeout: float = 600,
 ) -> str:
+    types = _tools_types()
     request = workspace_tool_request(image, provider, model_environment)
     response = client.list_tools(
         types.ListToolsRequest(
@@ -239,7 +248,9 @@ def workspace_update_environment(
     return {"STUDIO_WORKSPACE_TOOL_ID": tool_id}
 
 
-def repair_deployed_workspace_binding(*, provider: str, resolve_credentials) -> str:
+def repair_deployed_workspace_binding(
+    *, provider: StudioProvider, resolve_credentials
+) -> str:
     """Backfill older releases whose updater did not know about workspace Tools."""
     import volcenginesdkvefaas as faas
     from veadk.integrations.ve_faas.ve_faas import VeFaaS
@@ -258,7 +269,9 @@ def repair_deployed_workspace_binding(*, provider: str, resolve_credentials) -> 
     )
 
     def read_environment():
-        function = service.client.get_function(faas.GetFunctionRequest(id=function_id))
+        function: Any = service.client.get_function(
+            faas.GetFunctionRequest(id=function_id)
+        )
         return {item.key: item.value for item in function.envs or []}
 
     environment = read_environment()
@@ -291,7 +304,9 @@ def repair_deployed_workspace_binding(*, provider: str, resolve_credentials) -> 
     return overrides["STUDIO_WORKSPACE_TOOL_ID"]
 
 
-def mount_workspace_upgrade_repair(app, *, provider: str, resolve_credentials) -> None:
+def mount_workspace_upgrade_repair(
+    app, *, provider: StudioProvider, resolve_credentials
+) -> None:
     """Run only for deployed Studios lacking the new binding, without blocking HTTP."""
     if os.getenv("STUDIO_WORKSPACE_TOOL_ID", "").strip() or not os.getenv(
         "VEADK_STUDIO_FUNCTION_ID"
