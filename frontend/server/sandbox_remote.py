@@ -49,6 +49,10 @@ class SandboxRemoteSizeError(SandboxRemoteResponseError):
     pass
 
 
+class SandboxRemoteFileNotFound(SandboxRemoteResponseError, FileNotFoundError):
+    """An authoritative missing file, distinct from a failed download."""
+
+
 def _exact_file_path(value: str) -> str:
     if (
         not isinstance(value, str)
@@ -85,6 +89,58 @@ class SandboxRemoteTransport:
             raise ValueError("read_attempts must be positive")
         self._endpoint = endpoint
         self._read_attempts = read_attempts
+
+    async def start_command(self, command: str, *, hard_timeout: int) -> dict[str, Any]:
+        """Return the native command identity; a timeout has an unknown outcome."""
+        return await self._shell_request(
+            "/v1/shell/exec",
+            {
+                "id": "",
+                "exec_dir": "/home/gem",
+                "command": command,
+                "timeout": 1,
+                "hard_timeout": hard_timeout,
+                "strict": True,
+            },
+            timeout=15,
+        )
+
+    async def wait_command(self, command_id: str) -> dict[str, Any]:
+        if not command_id:
+            raise ValueError("Sandbox command ID is required")
+        return await self._shell_request(
+            "/v1/shell/wait",
+            {
+                "id": command_id,
+                "seconds": 1,
+                "max_wait_seconds": 1,
+            },
+            timeout=15,
+        )
+
+    async def _shell_request(
+        self, route: str, body: dict[str, Any], *, timeout: int
+    ) -> dict[str, Any]:
+        def operation():
+            response = requests.post(
+                build_file_url(self._endpoint, route), json=body, timeout=(5, timeout)
+            )
+            self._check_response(response, retry_conflict=False)
+            payload = response.json()
+            if not isinstance(payload, dict) or not isinstance(
+                payload.get("data"), dict
+            ):
+                raise SandboxRemoteResponseError("Sandbox command state is invalid")
+            return payload["data"]
+
+        try:
+            return await asyncio.to_thread(operation)
+        except SandboxRemoteError:
+            raise
+        except Exception as error:
+            raise SandboxRemoteError(
+                "Sandbox command state is unknown", retryable=True
+            ) from error
 
     async def exec_text(self, command: str, *, timeout: int = 12) -> str:
         """Execute once. Callers reconcile ambiguous mutating outcomes themselves."""
@@ -198,6 +254,8 @@ class SandboxRemoteTransport:
                 timeout=(10, 120),
                 stream=True,
             ) as response:
+                if response.status_code == 404:
+                    raise SandboxRemoteFileNotFound("Sandbox file does not exist")
                 self._check_response(response, retry_conflict=True)
                 content = bytearray()
                 for chunk in response.iter_content(chunk_size=64 * 1024):

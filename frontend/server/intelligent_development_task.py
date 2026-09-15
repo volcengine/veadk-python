@@ -23,15 +23,15 @@ writes the explicit completion contract described below.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable, Mapping
-from dataclasses import dataclass
-from datetime import datetime, timezone
 import hashlib
 import json
-from pathlib import PurePosixPath
 import re
 import shlex
-from typing import Literal, cast
+from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import PurePosixPath
+from typing import Any, Literal, cast
 from uuid import uuid4
 
 import yaml
@@ -43,7 +43,6 @@ from frontend.server.intelligent_development import (
     release_path,
 )
 from frontend.server.sandbox_remote import SandboxRemoteTransport
-
 
 CredentialResolver = Callable[[], StudioCredentials]
 
@@ -623,12 +622,16 @@ def parse_completion_contract(content: bytes) -> CompletionContract:
 async def create_credential_lease(
     endpoint: str,
     resolve_credentials: CredentialResolver,
+    *,
+    lease_id: str | None = None,
 ) -> TaskCredentialLease:
     credentials = resolve_credentials()
     if not isinstance(credentials, StudioCredentials):
         raise TypeError("Credential resolver must return StudioCredentials")
     transport = SandboxRemoteTransport(endpoint)
-    token = uuid4().hex
+    token = lease_id or uuid4().hex
+    if not re.fullmatch(r"[a-f0-9]{32}", token):
+        raise ValueError("Invalid credential lease ID")
     root = f"{_TASK_ROOT}/{token}"
     credential_path = f"{root}/credentials.json"
     launcher_path = f"{root}/with-agentkit-credentials"
@@ -637,7 +640,7 @@ async def create_credential_lease(
         f"parent={_TASK_ROOT!r}; root={root!r}\n"
         "os.makedirs(parent,mode=0o700,exist_ok=True)\n"
         "os.chmod(parent,0o700)\n"
-        "os.mkdir(root,mode=0o700)\n"
+        "os.makedirs(root,mode=0o700,exist_ok=True)\n"
         "metadata=os.stat(root,follow_symlinks=False)\n"
         "assert stat.S_ISDIR(metadata.st_mode)\n"
     )
@@ -808,17 +811,22 @@ class DeliveryPublisher:
         exact_secrets: tuple[str, ...],
         acceptance_criteria: tuple[str, ...] = (),
         trusted_manifest_metadata: tuple[str, str] | None = None,
+        delivery_id: str | None = None,
+        validated_at: str | None = None,
+        execute_command: Callable[..., Awaitable[dict[str, Any]]] | None = None,
     ) -> DeliveryReference:
         trusted_metadata = (
             _validate_delivery_metadata(*trusted_manifest_metadata)
             if trusted_manifest_metadata is not None
             else None
         )
-        token = uuid4().hex
+        token = delivery_id or uuid4().hex
+        if not re.fullmatch(r"[a-f0-9]{32}", token):
+            raise ValueError("Invalid delivery ID")
         worker_path = f"{task_root}/delivery-{token}.py"
         request_path = f"{task_root}/delivery-{token}.json"
         secret_path = f"{task_root}/delivery-secrets-{token}.json"
-        now = datetime.now(timezone.utc).isoformat()
+        now = validated_at or datetime.now(timezone.utc).isoformat()
         verified = completion is not None and completion.verified
         gates = (
             completion.gates
@@ -879,6 +887,7 @@ class DeliveryPublisher:
             json.dumps(request, separators=(",", ":")).encode(),
             media_type="application/json",
         )
+        completed = False
         try:
             await self._transport.upload(
                 secret_path,
@@ -886,10 +895,11 @@ class DeliveryPublisher:
                 media_type="application/json",
                 mode=0o600,
             )
-            value = await self._transport.exec_json(
+            value = await (execute_command or self._transport.exec_json)(
                 f"python3 {shlex.quote(worker_path)} {shlex.quote(request_path)}",
                 timeout=180,
             )
+            completed = True
             return self._reference(
                 value,
                 session_id,
@@ -899,7 +909,10 @@ class DeliveryPublisher:
                 gate_summary=tuple(name for name in _REQUIRED_GATES if gates[name]),
             )
         finally:
-            await self._unlink_many(secret_path, request_path, worker_path)
+            # A recoverable executor can still be reading these after HTTP loss.
+            # Its task lease owns cleanup until the command receipt is confirmed.
+            if completed or execute_command is None:
+                await self._unlink_many(secret_path, request_path, worker_path)
 
     async def _manifest_bytes(self, project_root: str, *, allow_missing: bool) -> bytes:
         manifest_path = f"{project_root}/agentkit.yaml"
@@ -1007,10 +1020,10 @@ class DeliveryPublisher:
 
 __all__ = [
     "COMPLETION_FILE_PREFIX",
+    "INTENT_DECISION_OUTPUT_SCHEMA",
     "CompletionContract",
     "CredentialResolver",
     "DeliveryPublisher",
-    "INTENT_DECISION_OUTPUT_SCHEMA",
     "IntentDecision",
     "TaskCredentialLease",
     "builder_prompt",
@@ -1019,7 +1032,7 @@ __all__ = [
     "invalidate_current_delivery",
     "parse_completion_contract",
     "parse_intent_decision",
-    "read_only_prompt",
     "read_completion_contract",
+    "read_only_prompt",
     "remove_completion_file",
 ]

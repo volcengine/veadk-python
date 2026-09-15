@@ -450,6 +450,9 @@ class _FakeGateway:
         }
         self.snapshots: dict[str, SandboxCloudSnapshot] = {}
 
+    async def renew_session(self, session: SandboxCloudSession) -> SandboxCloudSession:
+        return session
+
     async def get_tool(self, tool_id: str) -> SimpleNamespace:
         self.tool_ids.append(tool_id)
         return SimpleNamespace(envs=[])
@@ -4670,3 +4673,50 @@ async def test_delete_snapshot_sends_exact_control_plane_identifiers() -> None:
     )
     await AgentkitSandboxGateway(Client()).delete_snapshot(snapshot)
     assert calls == [{"ToolId": "tool-history", "SnapshotId": "snap-history"}]
+
+
+@pytest.mark.asyncio
+async def test_gateway_renews_using_native_ttl_response_and_owner_scope() -> None:
+    from datetime import datetime, timedelta, timezone
+    from agentkit.sdk.tools.types import SetSessionTtlResponse
+
+    calls = []
+    expiry = (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat()
+    confirmed_expiry = (datetime.now(timezone.utc) + timedelta(hours=24)).isoformat()
+
+    class Client:
+        def set_session_ttl(self, request):
+            calls.append(request.model_dump(by_alias=True, exclude_none=True))
+            return SetSessionTtlResponse(
+                ExpireAt=confirmed_expiry, SessionId="session-1", ToolId="tool-1"
+            )
+
+    gateway = AgentkitSandboxGateway(Client())
+    session = SandboxCloudSession(
+        tool_id="tool-1",
+        instance_id="session-1",
+        user_session_id="workspace",
+        endpoint="https://sandbox.example",
+        expire_at=expiry,
+        created_by="alice",
+    )
+    renewed = await gateway.renew_session(session)
+    assert renewed.expire_at == confirmed_expiry
+    assert renewed.created_by == "alice"
+    assert calls == [
+        {
+            "ToolId": "tool-1",
+            "SessionId": "session-1",
+            "Ttl": frontend_sandbox.STUDIO_SANDBOX_TTL_SECONDS,
+            "TtlUnit": "second",
+        }
+    ]
+    assert await gateway.renew_session(renewed) is renewed
+    assert len(calls) == 1
+
+    class MissingExpiryClient:
+        def set_session_ttl(self, request):
+            return SetSessionTtlResponse(SessionId="session-1", ToolId="tool-1")
+
+    with pytest.raises(SandboxProvisioningError, match="续期结果无法确认"):
+        await AgentkitSandboxGateway(MissingExpiryClient()).renew_session(session)

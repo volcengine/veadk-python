@@ -29,6 +29,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass, field, replace
+from datetime import datetime, timezone
 from typing import Annotated, Any, Protocol
 
 from fastapi import File, Request, UploadFile
@@ -87,8 +88,8 @@ from veadk.cli.github_app_pr_review import (
     GitHubAppClient,
     GitHubAppReviewError,
     GitHubAppReviewStorageUnavailable,
-    PageRequest,
     GitHubPullRequestReviewRecord,
+    PageRequest,
     TosGitHubAppReviewRepositoryStore,
     create_review_record,
     github_app_public_config,
@@ -469,6 +470,11 @@ def _public_event_text(value: object) -> str:
             value.get("text") or value.get("content") or value.get("summary")
         )
     return ""
+
+
+def redact_sandbox_text(value: str) -> str:
+    """Apply the shared credential policy before storing task text."""
+    return _redact_public_text(value, maximum=100_000)
 
 
 def _utc_timestamp(value: int) -> str:
@@ -880,6 +886,33 @@ class SandboxStreamEvent:
     usage: CodexTokenUsage | None = None
     thread_total: CodexTokenUsage | None = None
     model_context_window: int | None = None
+    item_type: str = ""
+    phase: str = ""
+    duration_ms: int | None = None
+
+
+def public_codex_event(event: CodexAppServerEvent) -> SandboxStreamEvent:
+    """Project native output through the Sandbox surface's redaction boundary."""
+    return SandboxStreamEvent(
+        kind=event.kind,
+        item_type=event.item_type,
+        phase=event.phase,
+        duration_ms=event.duration_ms,
+        item_id=event.item_id,
+        status=event.status,
+        text=_public_event_text(event.text),
+        name=_safe_error_message(event.name),
+        arguments=_safe_public_value(event.arguments),
+        response=_safe_public_value(event.response),
+        approval=_safe_public_value(event.approval.public_dict())
+        if event.approval is not None
+        else None,
+        approval_resolved_id=event.approval_resolved_id,
+        turn_id=event.turn_id,
+        usage=event.usage,
+        thread_total=event.thread_total,
+        model_context_window=event.model_context_window,
+    )
 
 
 class SandboxCodexConnection(Protocol):
@@ -1042,6 +1075,10 @@ class SandboxCloudGateway(Protocol):
 
     async def get_session(self, tool_id: str, session_id: str) -> SandboxCloudSession:
         """Resolve one existing Session and its private Endpoint."""
+        raise NotImplementedError
+
+    async def renew_session(self, session: SandboxCloudSession) -> SandboxCloudSession:
+        """Extend an authorized active environment's lifetime."""
         raise NotImplementedError
 
     async def create_session(
@@ -1363,6 +1400,31 @@ class AgentkitSandboxGateway:
                     f"读取 AgentKit Session 失败：{_safe_error_message(error)}"
                 ) from error
         raise SandboxSessionNotFoundError("AgentKit Session 不存在或已过期。")
+
+    async def renew_session(self, session: SandboxCloudSession) -> SandboxCloudSession:
+        """Renew an active environment using the control plane's authoritative TTL."""
+        from agentkit.sdk.tools.types import SetSessionTtlRequest
+
+        if not session.expire_at:
+            return session
+        expiry = datetime.fromisoformat(session.expire_at.replace("Z", "+00:00"))
+        if expiry.tzinfo is None:
+            expiry = expiry.replace(tzinfo=timezone.utc)
+        if (expiry - datetime.now(timezone.utc)).total_seconds() >= 3600:
+            return session
+        response = await self._call(
+            "set_session_ttl",
+            SetSessionTtlRequest(
+                ToolId=session.tool_id,
+                SessionId=session.instance_id,
+                Ttl=STUDIO_SANDBOX_TTL_SECONDS,
+                TtlUnit="second",
+            ),
+            region=session.region,
+        )
+        if not response.expire_at:
+            raise SandboxProvisioningError("开发环境续期结果无法确认。")
+        return replace(session, expire_at=response.expire_at)
 
     async def create_session(
         self,
@@ -1718,6 +1780,23 @@ class SandboxConversationService:
                 continue
             return cloud
         raise SandboxSessionNotFoundError("AgentKit Session 不存在或已过期。")
+
+    async def owned_cloud_session(
+        self, session_id: str, owner_id: str
+    ) -> SandboxCloudSession:
+        """Resolve fresh control-plane state without requiring a local connection."""
+        cloud = await self._cloud_session(session_id)
+        if not owner_id or cloud.created_by != owner_id:
+            raise SandboxSessionNotFoundError(
+                "AgentKit Session 不存在或不属于当前用户。"
+            )
+        return cloud
+
+    async def renew_owned_session(
+        self, cloud: SandboxCloudSession
+    ) -> SandboxCloudSession:
+        """Renew only an already authorized environment."""
+        return await self._gateway.renew_session(cloud)
 
     async def list_sessions(
         self, owner_id: str, *, is_admin: bool = False

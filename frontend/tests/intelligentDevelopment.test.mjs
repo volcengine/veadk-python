@@ -454,7 +454,7 @@ test("intelligent development errors preserve specific recovery guidance", async
   );
   assert.match(
     appSource,
-    /activeSession\.intelligentDevelopment\s*\?\s*intelligentDevelopmentErrorMessage\(messageError\)/,
+    /errorText=\{sandboxSession\.intelligentDevelopment \? development\.error : undefined\}/,
   );
 });
 
@@ -469,7 +469,7 @@ test("intelligent busy state follows the backend across reconnect and recovery",
   );
   assert.match(
     appSource,
-    /let remainingBusy = false[\s\S]*?remainingBusy = activeSession\.intelligentDevelopment[\s\S]*?activeClient\.getStatus[\s\S]*?remainingBusy = status\.busy[\s\S]*?setSandboxBusy\(remainingBusy\)/,
+    /useDevelopmentRun\([\s\S]*?onBusy: \(busy\) => \{\s*setSandboxBusy\(busy\)/,
   );
 });
 
@@ -637,7 +637,7 @@ test("intelligent streams preserve thinking and assistant message order", async 
   );
 
   assert.deepEqual(reply.blocks, [
-    { kind: "thinking", text: "验收标准已经明确", done: true },
+    { id: "thought-1", kind: "thinking", text: "验收标准已经明确", done: true },
     { kind: "text", text: "我会先实现核心能力。然后完成真实验证。" },
   ]);
   assert.equal(updates.some((blocks) => blocks[0]?.done === false), true);
@@ -717,11 +717,13 @@ test("intelligent stream keeps progress, reasoning, output, and tools distinct",
     true,
   );
   assert.deepEqual(reply.blocks, [
-    { kind: "thinking", text: "验收标准已明确", done: true },
-    { kind: "text", text: "项目结构检查完成。" },
+    { id: "thought-1", kind: "thinking", text: "验收标准已明确", done: true },
+    { id: "comment-1", kind: "text", text: "项目结构检查完成。" },
     {
       kind: "tool",
       name: "运行命令",
+      id: "tool-1",
+      status: "completed",
       args: { command: "ak build" },
       response: { output: "build complete" },
       done: true,
@@ -1575,34 +1577,16 @@ test("authentication does not load Codex sessions into the global Sidebar", () =
   assert.doesNotMatch(appSource, /intelligentDevelopmentClient\.listSessions/);
   assert.doesNotMatch(appSource, /intelligentHistory=/);
   assert.doesNotMatch(sidebarSource, /SidebarIntelligentHistory|intelligentHistory/);
-  assert.match(
-    appSource,
-    /function requestIntelligentNavigation[\s\S]*?sandboxSession\?\.intelligentDevelopment && sandboxBusy[\s\S]*?setIntelligentLeaveOpen\(true\)/,
-  );
-  assert.match(appSource, /description=\{t\("dialogs\.buildRunning\.description"\)\}/);
+  assert.match(appSource, /function requestIntelligentNavigation\(action: \(\) => void\) \{\s*action\(\);\s*\}/);
 });
 
-test("leaving an active intelligent build does not wait for remote cleanup", () => {
-  const handler = appSource.match(
-    /function confirmIntelligentNavigation\(\) \{[\s\S]*?\n  \}/,
-  )?.[0] ?? "";
-
-  assert.ok(handler, "intelligent navigation confirmation handler should exist");
-  assert.doesNotMatch(handler, /async function/);
-  assert.doesNotMatch(handler, /await intelligentDevelopmentClient\.interruptSession/);
-  assert.match(
-    handler,
-    /const interrupt = intelligentDevelopmentClient\.interruptSession\(activeSession\.id\)/,
-  );
-  assert.ok(
-    handler.indexOf("const interrupt =") < handler.indexOf("action();"),
-    "the stop request must start before navigation",
-  );
-  assert.ok(
-    handler.indexOf("action();") < handler.indexOf("void interrupt.catch"),
-    "navigation must not wait for remote cleanup",
-  );
-  assert.doesNotMatch(appSource, /intelligentLeaveBusy/);
+test("leaving an active intelligent build detaches without interrupting", () => {
+  const handler = appSource.match(/function requestIntelligentNavigation[\s\S]*?\n  \}/)?.[0] ?? "";
+  assert.ok(handler);
+  assert.match(handler, /action\(\)/);
+  assert.doesNotMatch(handler, /interrupt|abort|confirm/);
+  assert.match(appSource, /closingSession && closeRemote && !closingSession.intelligentDevelopment/);
+  assert.match(appSource, /<DevelopmentTaskNotice/);
 });
 
 test("verified delivery uses repository-owned visuals and user-facing copy", () => {
