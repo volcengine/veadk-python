@@ -578,6 +578,11 @@
     "webSearch": "搜索网页 · {{target}}",
     "processSummary": "已处理 {{count}} 项",
     "duration": "{{seconds}} 秒",
+    "durationUnits": {
+      "hours": "{{value}} 小时",
+      "minutes": "{{value}} 分",
+      "seconds": "{{value}} 秒"
+    },
     "failedTools": "{{count}} 项执行失败",
     "toolFailed": "执行失败",
     "toolCalls": "{{count}} 次工具调用",

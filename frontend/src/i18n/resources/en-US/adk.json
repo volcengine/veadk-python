@@ -578,6 +578,11 @@
     "webSearch": "Search web · {{target}}",
     "processSummary": "Processed {{count}} items",
     "duration": "{{seconds}}s",
+    "durationUnits": {
+      "hours": "{{value}} h",
+      "minutes": "{{value}} min",
+      "seconds": "{{value}} s"
+    },
     "failedTools": "{{count}} tools failed",
     "toolFailed": "Failed",
     "toolCalls": "{{count}} tool calls",

@@ -1,4 +1,4 @@
-import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Fragment, memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   ChevronRight,
   Download,
@@ -15,7 +15,7 @@ import type { Block } from "../blocks";
 import { DevelopmentTurnSummary } from "../create/DevelopmentTurnSummary";
 import { DevelopmentItemIcon } from "../create/DevelopmentItemIcon";
 import { DevelopmentProcess } from "../create/DevelopmentProcess";
-import { developmentToolLabel } from "../create/developmentPresentation";
+import { developmentToolLabel, formatDevelopmentDuration } from "../create/developmentPresentation";
 import { buildSurfaces, SurfaceView } from "../a2ui/Surface";
 import { useStickToBottom } from "./useStickToBottom";
 import { Markdown } from "./Markdown";
@@ -358,6 +358,9 @@ function DeliveryCard({
   onDeploy?: (value: Extract<Block, { kind: "delivery" }>["value"]) => void;
 }) {
   const { t, i18n } = useTranslation("conversation");
+  const breakableIdentifier = (text: string) => text.split(/(?<=[/_-])/).map((part, index) =>
+    <Fragment key={`${index}:${part}`}>{part}<wbr /></Fragment>
+  );
   const [resolved, setResolved] = useState<
     Extract<Block, { kind: "delivery" }>["value"] | null
   >(value.files ? value : null);
@@ -466,18 +469,16 @@ function DeliveryCard({
           <span className="delivery-card-icon">
             {value.verified ? <DeliveryVerifiedIcon /> : <DeliverySourceIcon />}
           </span>
-          <div>
-            <strong>
-              {value.verified ? t("blocks.verifiedDelivery") : t("blocks.generatedSource")}
-            </strong>
-            <span>{value.agentName}</span>
+          <div className="delivery-card-heading">
+            <strong>{breakableIdentifier(value.agentName)}</strong>
+            <span>{value.verified ? t("blocks.verifiedDelivery") : t("blocks.generatedSource")}</span>
           </div>
         </header>
         <dl className="delivery-card-grid">
-          <div>
+          <div className="delivery-card-entry">
             <dt>{t("blocks.entryPoint")}</dt>
             <dd>
-              <code>{value.entryPoint}</code>
+              <code>{breakableIdentifier(value.entryPoint)}</code>
             </dd>
           </div>
           <div>
@@ -488,7 +489,7 @@ function DeliveryCard({
             <dt>{t("blocks.size")}</dt>
             <dd>{(value.artifactSize / 1024).toFixed(1)} KiB</dd>
           </div>
-          <div>
+          <div className="delivery-card-time">
             <dt>{value.verified ? t("blocks.validationTime") : t("blocks.generationTime")}</dt>
             <dd>{time}</dd>
           </div>
@@ -505,6 +506,7 @@ function DeliveryCard({
           </p>
         ) : null}
         <div className="delivery-card-actions">
+          <div className="delivery-card-secondary-actions">
           <button
             type="button"
             className="delivery-card-secondary"
@@ -541,8 +543,10 @@ function DeliveryCard({
             ) : null}
             {busyAction === "download" ? t("blocks.preparing") : t("blocks.downloadSource")}
           </button>
+          </div>
           <button
             type="button"
+            className="delivery-card-primary"
             onClick={() => void deploy()}
             disabled={
               !value.deployable ||
@@ -550,12 +554,12 @@ function DeliveryCard({
               !onResolve ||
               busyAction !== null
             }
-            title={value.deployable ? undefined : t("blocks.sourceNotReady")}
+            title={value.deployable ? t("blocks.manualDeploy") : t("blocks.sourceNotReady")}
           >
             {busyAction === "deploy" ? (
               <Loader2 className="spin" aria-hidden="true" />
             ) : null}
-            {t("blocks.manualDeploy")}
+            {t("blocks.deployAgent")}
           </button>
         </div>
         {error ? (
@@ -838,7 +842,7 @@ function ToolBlock({
             </TextShimmer>
           )}
           {native && toolStatus === "failed" && <span className="development-tool-failure"><Trans ns="adk" i18nKey="developmentRuns.toolFailed" /></span>}
-          {native && durationMs != null && <span className="development-tool-meta">{Math.round(durationMs).toLocaleString()} ms</span>}
+          {native && durationMs != null && <span className="development-tool-meta">{formatDevelopmentDuration(durationMs)}</span>}
           <ToolDisclosureIcon
             className={`tool-chevron${open ? " is-open" : ""}`}
           />
