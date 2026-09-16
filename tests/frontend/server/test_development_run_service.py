@@ -43,8 +43,11 @@ async def test_browser_detach_preserves_worker_and_replays_output(tmp_path):
         await subscription.aclose()
         assert not (await repository.get("alice", run.id)).stop_requested
         complete.set()
-        async with asyncio.timeout(2):
-            replay = [event async for event in service.subscribe("alice", run.id)]
+
+        async def collect_replay():
+            return [event async for event in service.subscribe("alice", run.id)]
+
+        replay = await asyncio.wait_for(collect_replay(), 2)
         assert any(event and event["payload"].get("text") == "kept" for event in replay)
         assert (await repository.get("alice", run.id)).state == "succeeded"
     finally:
