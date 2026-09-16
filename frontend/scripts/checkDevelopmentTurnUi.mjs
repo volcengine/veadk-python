@@ -7,8 +7,9 @@ await mkdir(out,{recursive:true});
 const browser=await chromium.launch({executablePath:process.env.CHROMIUM_EXECUTABLE,headless:true,args:['--no-sandbox','--no-proxy-server']});
 const page=await browser.newPage({viewport:{width:1440,height:960},colorScheme:'dark'});
 const errors=[], requests=[], events=[];
-let run=null, nextSeq=1, startedAt=0, firstSubscription=0, breakConnection=0;
+let run=null, nextSeq=1, startedAt=0, firstSubscription=0, breakConnection=0, sourceAttempts=0;
 const session={sessionId:'ux-session',status:'Ready',toolName:'intelligent-development',displayName:'构建体验验收',isMine:true,region:'cn-beijing',workspaceLocked:true,busy:false,model:'doubao-seed-2-1-pro-260628'};
+const delivery={sessionId:session.sessionId,agentName:'customer_analysis_assistant_with_a_long_project_name',entryPoint:'src/customer_analysis/agents/project_with_very_long_nested_directory_names/assistant_with_a_long_filename_for_preview_verification.py',fileCount:2,artifactSize:20480,artifactSha256:'a'.repeat(64),validationReportSha256:'b'.repeat(64),validatedAt:'2026-09-16T04:00:00Z',gateSummary:['ruff','pytest'],verified:true,deployable:true,validationSummary:'检查通过'};
 function emit(type,payload){events.push({type,payload:{...payload,seq:nextSeq++,runId:'ux-run'}});if(run)run.lastSeq=nextSeq-1;}
 page.on('pageerror',e=>errors.push(e.message));
 await page.addInitScript(()=>{localStorage.setItem('veadk_local_user','studio-ux-verification');sessionStorage.setItem('veadk_local_user_tab','studio-ux-verification');localStorage.setItem('agentkit.studio.locale','zh-CN');});
@@ -18,6 +19,7 @@ await page.route('**/web/intelligent-development/**',async route=>{
  const json=v=>route.fulfill({json:v});
  if(path.endsWith('/capabilities'))return json({enabled:true,reason:'',model:{configured:true,id:session.model},projectStorageEnabled:true});
  if(path.endsWith('/projects'))return json({projects:[]});
+ if(path.endsWith('/releases/summary')){sourceAttempts++;await new Promise(r=>setTimeout(r,400));if(sourceAttempts===1)return route.fulfill({status:503,json:{detail:'预览暂时不可用，请重试'}});return json({...delivery,files:[{path:delivery.entryPoint,content:'print("preview verified")'},{path:'README.md',content:'# Preview project'}]});}
  if(path.endsWith('/sessions')&&method==='POST'){await new Promise(r=>setTimeout(r,900));return json(session);}
  if(path.endsWith('/connect')){await new Promise(r=>setTimeout(r,700));return json(session);}
  if(path.endsWith('/sessions'))return json({sessions:run?[session]:[]});
@@ -36,7 +38,7 @@ await page.route('**/web/intelligent-development/**',async route=>{
   return route.fulfill({contentType:'text/event-stream',body:events.filter(e=>e.payload.seq>after).map(e=>`event: ${e.type}\ndata: ${JSON.stringify(e.payload)}\n\n`).join('')+'event: done\ndata: {}\n\n'});
  }
  if(path.endsWith('/inputs')){const body=req.postDataJSON();emit('run.input',{clientId:body.clientId,message:body.message,status:'delivered'});return json({accepted:true});}
- if(path.endsWith('/stop')){emit('run.turn',{turnId:'turn-ux',status:'interrupted',durationMs:42318,model:session.model,usageIncomplete:true,usage:{totalTokens:8000,inputTokens:6000,cachedInputTokens:4000,cacheWriteInputTokens:100,outputTokens:2000,reasoningOutputTokens:500}});run={...run,state:'cancelled',phase:'cancelled',statusMessage:'任务已停止',stopRequested:true};emit('run.status',run);return json(run);}
+ if(path.endsWith('/stop')){emit('development.succeeded',{turnId:'turn-ux',payload:{delivery}});emit('run.turn',{turnId:'turn-ux',status:'interrupted',durationMs:1542277,model:session.model,usageIncomplete:true,usage:{totalTokens:8000,inputTokens:6000,cachedInputTokens:4000,cacheWriteInputTokens:100,outputTokens:2000,reasoningOutputTokens:500}});run={...run,state:'cancelled',phase:'cancelled',statusMessage:'任务已停止',stopRequested:true};emit('run.status',run);return json(run);}
  if(path.endsWith('/runs/ux-run'))return json(run);
  if(path.endsWith('/sessions/ux-session'))return json(session);
  return json({});
@@ -124,9 +126,10 @@ try{
  const summary=page.locator('.development-turn-summary');
  assert.match(await summary.innerText(),/2 次工具调用/);
  assert.equal(await page.locator('.turn-empty').count(),0);
- assert.match(await summary.innerText(),/42,318 ms/);
+ assert.match(await summary.innerText(),/25 分 42\.3 秒/);
  assert.match(await summary.innerText(),/432 ms/);
  const tokens=summary.getByRole('button');
+ assert.equal(await tokens.evaluate(el=>getComputedStyle(el).borderTopWidth),'0px');
  await tokens.hover();
  await page.locator('.development-token-popup').waitFor();
  let detail=await page.locator('.development-token-popup').innerText();
@@ -144,9 +147,22 @@ try{
  await page.keyboard.press('Enter');
  await page.locator('.development-token-popup').waitFor();
  await page.keyboard.press('Escape');
+ const card=page.locator('.delivery-card');await card.waitFor();
+ assert.equal(await card.locator('strong').innerText(),delivery.agentName);
+ assert.equal(await card.locator('.delivery-card-entry dd').innerText(),delivery.entryPoint);
+ await card.scrollIntoViewIfNeeded();await page.screenshot({path:out+'/delivery-desktop.png'});
+ const sourceButton=card.getByRole('button',{name:'查看源码',exact:true});
+ await sourceButton.click();assert.equal(await sourceButton.isDisabled(),true);
+ await card.getByRole('alert').waitFor();assert.equal(await sourceButton.isEnabled(),true);
+ await sourceButton.click();await page.locator('.code-browser-dialog').waitFor();
+ await page.keyboard.press('Escape');await page.locator('.code-browser-dialog').waitFor({state:'hidden'});
  await page.setViewportSize({width:820,height:900});await page.emulateMedia({reducedMotion:'reduce'});
  await tokens.hover();await page.locator('.development-token-popup').waitFor();await page.screenshot({path:out+'/stopped-narrow.png'});
  const layout=await page.evaluate(()=>({width:document.documentElement.clientWidth,scrollWidth:document.documentElement.scrollWidth}));assert.ok(layout.scrollWidth<=layout.width);
+ await page.keyboard.press('Escape');await page.setViewportSize({width:600,height:900});await card.scrollIntoViewIfNeeded();
+ const cardLayout=await card.evaluate(el=>({width:el.clientWidth,scrollWidth:el.scrollWidth,entryHeight:el.querySelector('.delivery-card-entry dd').getBoundingClientRect().height}));
+ assert.ok(cardLayout.scrollWidth<=cardLayout.width);assert.ok(cardLayout.entryHeight>18);
+ await page.screenshot({path:out+'/delivery-narrow.png'});
  assert.deepEqual(errors,[]);
  await writeFile(out+'/browser.json',JSON.stringify({alignment,turnSummary:await summary.innerText(),tokenDetails:detail,startupGeometry,startupSamples:samples,subscriptionDelayMs:firstSubscription-startedAt,keyboardDisclosure:true,expansionPreserved:true,toolLogEndVisible:true,planAndDiff:true,reconnectPreservesOutput:true,steer:true,backgroundNoticeReturn:true,stop:true,ime:true,layout,pageErrors:errors,apiBoundary:'controlled Codex event and Sandbox API responses; actual built App, HTTP client, hook, projection and UI'},null,2));
  console.log('Browser journey passed');

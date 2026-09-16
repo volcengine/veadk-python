@@ -4,7 +4,7 @@ import type { Block } from "../blocks";
 import { DevelopmentItemIcon } from "./DevelopmentItemIcon";
 import { TextShimmer } from "../ui/text-shimmer/TextShimmer";
 import { ToolDisclosureIcon } from "../ui/builtin-tools/icons";
-import { developmentProcessGroups, developmentToolLabel } from "./developmentPresentation";
+import { developmentProcessGroups, developmentToolLabel, formatDevelopmentDuration } from "./developmentPresentation";
 import "./DevelopmentProcess.css";
 
 function ProcessGroup({ blocks, active, status, render }: {
@@ -28,7 +28,7 @@ function ProcessGroup({ blocks, active, status, render }: {
       <ToolDisclosureIcon className={`tool-chevron${open ? " is-open" : ""}`} />
       <span className="tool-icon"><DevelopmentItemIcon kind={running?.kind === "thinking" || running?.kind === "plan" || running?.kind === "diff" ? running.kind : "tool"} /></span>
       {active ? <TextShimmer className="development-process__title" aria-live="polite">{title}</TextShimmer> : <span className="development-process__title">{title}</span>}
-      {!active && tools.length > 0 && <span className="development-process__duration">{t("developmentRuns.toolCalls", {count: tools.length})}{measured.length > 0 ? ` · ${t(measured.length === tools.length ? "developmentRuns.toolDuration" : "developmentRuns.toolDurationPartial", {duration: `${duration.toLocaleString()} ms`})}` : ""}</span>}
+      {!active && tools.length > 0 && <span className="development-process__duration">{t("developmentRuns.toolCalls", {count: tools.length})}{measured.length > 0 ? ` · ${t(measured.length === tools.length ? "developmentRuns.toolDuration" : "developmentRuns.toolDurationPartial", {duration: formatDevelopmentDuration(duration)})}` : ""}</span>}
     </button>
     <div className="development-process__items" hidden={!open}>{render(blocks)}</div>
   </section>;

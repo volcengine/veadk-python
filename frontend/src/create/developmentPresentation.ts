@@ -1,5 +1,21 @@
 import type { Block } from "../blocks";
-import { adkT } from "../adk/i18n";
+import { activeLocale, adkT } from "../adk/i18n";
+
+export function formatDevelopmentDuration(value: number | undefined): string {
+  if (value == null || !Number.isFinite(value) || value < 0) return adkT("developmentRuns.notReported");
+  const ms = Math.round(value);
+  if (ms < 1000) return `${ms.toLocaleString(activeLocale())} ms`;
+  // Round before splitting units so 59.95 seconds becomes one minute.
+  const tenths = Math.round(ms / 100);
+  const parts = [
+    ["hours", Math.floor(tenths / 36000)],
+    ["minutes", Math.floor(tenths % 36000 / 600)],
+    ["seconds", tenths % 600 / 10],
+  ] as const;
+  return parts.filter(([, count]) => count > 0).map(([unit, count]) =>
+    adkT(`developmentRuns.durationUnits.${unit}`, { value: count.toLocaleString(activeLocale(), { maximumFractionDigits: 1 }) })
+  ).join(" ");
+}
 
 const record = (value: unknown): Record<string, unknown> =>
   value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};

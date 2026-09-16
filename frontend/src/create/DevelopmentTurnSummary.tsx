@@ -2,13 +2,15 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Popover } from "@base-ui/react/popover";
 import type { DevelopmentTurnMetrics } from "../blocks";
+import { ToolDisclosureIcon } from "../ui/builtin-tools/icons";
+import { formatDevelopmentDuration } from "./developmentPresentation";
 import "./DevelopmentTurnSummary.css";
 
 export function DevelopmentTurnSummary({value}: {value: DevelopmentTurnMetrics}) {
   const {t, i18n} = useTranslation("adk");
   const [open, setOpen] = useState(false);
   const format = (n: number | undefined) => n == null ? t("developmentRuns.notReported") : n.toLocaleString(i18n.resolvedLanguage || i18n.language);
-  const time = (n: number | undefined) => n == null ? format(n) : `${format(n)} ms`;
+  const time = formatDevelopmentDuration;
   const usage = value.usage;
   const uncached = usage?.inputTokens != null && usage.cachedInputTokens != null && usage.cachedInputTokens <= usage.inputTokens
     ? usage.inputTokens - usage.cachedInputTokens : undefined;
@@ -26,7 +28,9 @@ export function DevelopmentTurnSummary({value}: {value: DevelopmentTurnMetrics})
     <span title={t("developmentRuns.toolDurationHelp")}>{t(value.toolDurationComplete ? "developmentRuns.toolDuration" : "developmentRuns.toolDurationPartial", {duration: time(value.toolDurationMs)})}</span>
     <Popover.Root open={open} onOpenChange={setOpen}>
       <Popover.Trigger className="development-token-trigger" openOnHover delay={150} closeDelay={150} onFocus={event => { if (event.currentTarget.matches(":focus-visible")) setOpen(true); }}>
-        Tokens {format(usage?.totalTokens)}{value.usageIncomplete ? ` · ${t("developmentRuns.partial")}` : ""}
+        <span>Tokens</span><span className="development-token-value">{format(usage?.totalTokens)}</span>
+        {value.usageIncomplete && <span>· {t("developmentRuns.partial")}</span>}
+        <ToolDisclosureIcon className="development-token-chevron" />
       </Popover.Trigger>
       <Popover.Portal>
         <Popover.Positioner side="top" align="end" sideOffset={8} className="development-token-positioner">
