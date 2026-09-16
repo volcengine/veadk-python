@@ -84,6 +84,10 @@
       "badge": "Beta",
       "description": "Create a Feishu bot and connect its messages directly to AgentKit Runtime."
     },
+    "mpa-channels": {
+      "name": "MPA agent messaging channels",
+      "description": "Connect an existing MPA agent to Feishu, WeCom and DingTalk."
+    },
     "website-integration": {
       "name": "Website integration",
       "description": "Embed an AgentKit Runtime on your website as a floating chat window."
@@ -190,6 +194,24 @@
       "notPreviewable": "This file is not previewable UTF-8 text.",
       "noFiles": "No previewable files."
     }
+  },
+  "mpaChannels": {
+    "noDescription": "No description",
+    "unknownCreator": "Unknown creator",
+    "optionMetadata": "{{creator}} | {{createdAt}}",
+    "selectAgent": "Select an MPA agent",
+    "chooseAgent": "Choose an MPA agent",
+    "search": "Search by name, Runtime ID or region",
+    "noMatches": "No matching MPA agents",
+    "loading": "Loading MPA agents…",
+    "empty": "No manageable MPA agents. Create or deploy an MPA agent first.",
+    "unauthorized": "Studio administrator access is required to manage MPA messaging channels. Contact an administrator.",
+    "loadFailed": "Could not load MPA agents. Please retry.",
+    "retry": "Retry",
+    "refresh": "Refresh list",
+    "loadMore": "Load more",
+    "moreAvailable": "More agents are available. Search matches loaded results; load more to continue.",
+    "chooseHint": "Select an MPA agent to configure Feishu, WeCom and DingTalk."
   },
   "feishu": {
     "title": "Feishu bot",

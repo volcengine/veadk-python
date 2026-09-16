@@ -1,3 +1,4 @@
+import { mpaChannelsAutomation } from "./mpaChannels";
 import { codingAgentsAutomation } from "./codingAgents";
 import { feishuBotAutomation } from "./feishuBot";
 import { pullRequestReviewAutomation } from "./pullRequestReview";
@@ -25,6 +26,7 @@ export const AUTOMATIONS: readonly AutomationDefinition[] = [
   runtimeDeliveryAutomation,
   pullRequestReviewAutomation,
   feishuBotAutomation,
+  mpaChannelsAutomation,
   websiteIntegrationAutomation,
 ];
 

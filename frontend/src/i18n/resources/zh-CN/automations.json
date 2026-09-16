@@ -84,6 +84,10 @@
       "badge": "Beta",
       "description": "创建飞书机器人，并将消息直接接入 AgentKit Runtime。"
     },
+    "mpa-channels": {
+      "name": "MPA智能体消息渠道",
+      "description": "为已有 MPA 智能体绑定飞书、企业微信和钉钉。"
+    },
     "website-integration": {
       "name": "网站集成",
       "description": "将 AgentKit Runtime 以悬浮聊天窗口嵌入网站。"
@@ -190,6 +194,24 @@
       "notPreviewable": "此文件不是可预览的 UTF-8 文本。",
       "noFiles": "没有可预览的文件。"
     }
+  },
+  "mpaChannels": {
+    "noDescription": "暂无描述",
+    "unknownCreator": "未知创建者",
+    "optionMetadata": "{{creator}} | {{createdAt}}",
+    "selectAgent": "选择 MPA 智能体",
+    "chooseAgent": "请选择 MPA 智能体",
+    "search": "搜索名称、Runtime ID 或地域",
+    "noMatches": "没有匹配的 MPA 智能体",
+    "loading": "正在加载 MPA 智能体…",
+    "empty": "暂无可管理的 MPA 智能体，请先创建或部署一个 MPA 智能体。",
+    "unauthorized": "需要 Studio 管理员权限才能管理 MPA 消息渠道，请联系管理员。",
+    "loadFailed": "加载 MPA 智能体失败，请重试。",
+    "retry": "重试",
+    "refresh": "刷新列表",
+    "loadMore": "加载更多",
+    "moreAvailable": "还有更多智能体。搜索仅匹配已加载的结果，可继续加载。",
+    "chooseHint": "选择一个 MPA 智能体后，即可配置飞书、企业微信和钉钉。"
   },
   "feishu": {
     "title": "飞书机器人",

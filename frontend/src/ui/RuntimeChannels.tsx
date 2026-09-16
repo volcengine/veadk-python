@@ -24,17 +24,17 @@ const providers = ["feishu", "wecom", "dingtalk"] as const;
 type Provider = (typeof providers)[number];
 type ConfigurationMethod = "quick" | "manual";
 
-export function RuntimeChannels(props: { runtimeId: string; region: string }) {
+export function RuntimeChannels(props: { runtimeId: string; region: string; showHeader?: boolean }) {
   const { t } = useTranslation("ui");
   const [provider, setProvider] = useState<Provider>("feishu");
   const id = useId();
   const tabs = useRef<Array<HTMLButtonElement | null>>([]);
   return (
     <div className="message-channels">
-      <div className="message-channels-header">
+      {props.showHeader !== false && <div className="message-channels-header">
         <h2>{t("channels.workspaceTitle")}</h2>
         <p>{t("channels.workspaceDescription")}</p>
-      </div>
+      </div>}
       <div
         className="message-channels-tabs"
         role="tablist"
@@ -255,7 +255,7 @@ function ProviderChannel({
       }
     })();
     return () => controller.abort();
-    // Remounted by AgentWorkspace when the Runtime changes.
+    // Remounted by the channels automation when the Runtime changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ep, reload]);
   useEffect(() => {

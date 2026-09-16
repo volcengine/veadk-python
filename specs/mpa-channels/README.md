@@ -14,7 +14,7 @@ Database boundary: each MPA/formal-debug deployment needs an isolated channel da
 
 
 ## Studio navigation
-Message channels is a dedicated Agent detail section alongside Integrations and Versions. Feishu, WeCom and DingTalk are distinct provider categories. Only implemented provider flows expose setup actions; unavailable providers are explicitly labeled. Gateway/route configuration and observed delivery retain distinct semantics. See [workspace design](../../prd-spec/features/message-channel-workspace/2026-09-15-message-channel-workspace.md).
+Message channels is managed through Automations → Messaging channels → MPA agent messaging channels, alongside Feishu bot creation and website integration. Selecting an existing MPA Runtime exposes Feishu, WeCom and DingTalk; Agent detail no longer has a channels section. Only implemented provider flows expose setup actions; unsupported capabilities are explicit. Gateway/route configuration and observed delivery retain distinct semantics. See [migration design](../../prd-spec/features/mpa-channels-automation/2026-09-16-mpa-channels-automation.md).
 
 ## Multi-provider binding (2026-09-15)
 
@@ -34,7 +34,7 @@ CON-12: Configured WeCom bots also expose Regenerate QR code. This reopens the e
 
 CON-13: Pairing QR display and polling are transient to the mounted provider panel. Channel/page navigation, browser reload and panel Refresh discard pairing UI; persisted binding IDs are no longer resumed and legacy keys are cleaned. Existing bot configuration is still fetched. PENDING waiting text and the authorization-page link are hidden. Server-side binding state/expiry is unchanged; UI dismissal is not revocation.
 
-CON-14: Agent detail Message channels is available only for a selected Runtime with agentCategory=mpa. Runtime list category metadata is propagated through cards and detail entries; an older list response can use its explicit request filter. General, unknown and local entries hide the section and never mount RuntimeChannels. An unsupported channels selection falls back to basic.
+CON-14: Automations MPA channels management is limited to Studio admin/super_admin; other roles see an explanation and issue no list or channel requests. List requests use the authorized scope, all regions and agentCategory=mpa with pagination; region and Runtime ID identify the target. Options display the name once, description, creator and localized relative creation time without field-name prefixes, followed by region/ID. Missing creators show “Unknown creator”; missing/invalid times show an em dash. Selected-target context also retains region/ID. Explicit general records are excluded; older responses omitting category may rely on the explicit request filter. Only explicit selection mounts RuntimeChannels. Target, role or scope changes clear transient state and ignore stale responses; durable bindings remain intact. Search covers loaded pages with further pagination available; failures, empty lists and no search matches remain distinct. Existing backend administrator authorization is unchanged.
 
 ## Configuration modes (2026-09-15)
 
