@@ -67,6 +67,29 @@ try{
  assert.ok(samples.every(s=>!s.welcome&&s.goal),'task startup must never flash a welcome or clear the request');
  await page.getByRole('button',{name:'正在思考',exact:true}).waitFor();
  await page.screenshot({path:out+'/initial-thinking.png'});
+ if(process.env.CHECK_DELIVERY_STAGES){
+  emit('activity',{id:'r1',turnId:'turn-ux',itemType:'reasoning',kind:'thinking',status:'done',text:'检查完成'});
+  emit('delta',{id:'answer',turnId:'turn-ux',text:'数学辅导智能体已完成开发和验证。',snapshot:true});
+  emit('run.turn',{turnId:'turn-ux',status:'completed',durationMs:1234,model:session.model,usage:{totalTokens:120,inputTokens:100,outputTokens:20}});
+  for(const [phase,label] of [['outcome_read','正在整理产物'],['delivery','正在整理产物'],['version','正在保存版本'],['reporting','正在补齐交付信息']]){
+   run={...run,phase,statusMessage:label};emit('run.status',run);
+   await page.getByText(label,{exact:true}).last().waitFor();
+   assert.equal(await page.locator('.delivery-card').count(),0,'native turn completion must not publish an unfinished artifact');
+   assert.equal(await page.locator('.development-turn-summary').count(),1,'delivery stages must not invent native turns');
+   assert.match(await page.locator('.development-turn-summary').innerText(),/1\.2 秒/);
+   assert.ok(await page.getByRole('button',{name:'停止生成',exact:true}).isEnabled());
+   await page.screenshot({path:out+'/stage-'+phase+'.png'});
+  }
+  emit('development.succeeded',{turnId:'turn-ux',payload:{delivery}});
+  run={...run,state:'succeeded',phase:'complete',statusMessage:''};emit('run.status',run);
+  await page.locator('.delivery-card').waitFor();
+  assert.equal(await page.locator('.delivery-card').count(),1);
+  assert.equal(await page.locator('.development-turn-summary').count(),1);
+  await page.getByRole('button',{name:'停止生成',exact:true}).waitFor({state:'hidden'});
+  assert.deepEqual(errors,[]);
+  await page.screenshot({path:out+'/artifact-ready.png'});
+  await writeFile(out+'/delivery-stages.json',JSON.stringify({stages:4,nativeTurns:1,artifactCards:1,stopAvailableDuringDelivery:true,errors},null,2));
+ } else {
  const startupGeometry=await page.locator('.turn--user .bubble').first().boundingBox();
  assert.ok(firstSubscription-startedAt<500,`subscription delayed ${firstSubscription-startedAt}ms`);
  const group=page.locator('.development-process__toggle').first();
@@ -170,5 +193,6 @@ try{
  assert.deepEqual(errors,[]);
  await writeFile(out+'/browser.json',JSON.stringify({alignment,turnSummary:await summary.innerText(),tokenDetails:detail,startupGeometry,startupSamples:samples,subscriptionDelayMs:firstSubscription-startedAt,keyboardDisclosure:true,expansionPreserved:true,toolLogEndVisible:true,planAndDiff:true,reconnectPreservesOutput:true,steer:true,backgroundNoticeReturn:true,stop:true,ime:true,layout,pageErrors:errors,apiBoundary:'controlled Codex event and Sandbox API responses; actual built App, HTTP client, hook, projection and UI'},null,2));
  console.log('Browser journey passed');
+ }
 }catch(e){await page.screenshot({path:out+'/browser-failure.png'});console.log('failure body', (await page.locator('body').innerText()).slice(-4000));throw e;}
 finally{await browser.close();}

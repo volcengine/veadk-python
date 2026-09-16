@@ -25,7 +25,7 @@ from pathlib import Path
 import pytest
 from websockets.asyncio.server import ServerConnection, serve
 
-import veadk.cli.codex_app_server as codex_app_server
+from veadk.cli import codex_app_server
 from veadk.cli.codex_app_server import (
     CodexAppServerError,
     CodexAppServerSession,
@@ -2678,5 +2678,107 @@ async def test_task_observer_emits_terminal_metrics_even_before_raising(status):
         assert len(ended) == 1
         assert ended[0].status == status
         assert ended[0].turn_id
+    finally:
+        await session.close()
+
+
+@pytest.mark.asyncio
+async def test_dynamic_result_call_returns_validation_feedback_in_same_turn():
+    from unittest.mock import AsyncMock
+
+    session = CodexAppServerSession("https://sandbox")
+    session.thread_id = "thread-1"
+    session.dynamic_tools = (
+        {
+            "type": "function",
+            "name": "submit_build_result",
+            "description": "Submit",
+            "inputSchema": {"type": "object"},
+        },
+    )
+    session.dynamic_tool_handler = AsyncMock(
+        return_value={
+            "success": False,
+            "contentItems": [
+                {"type": "inputText", "text": "Missing acceptanceCriteria"}
+            ],
+        }
+    )
+    session._send = AsyncMock()
+    params = {
+        "threadId": "thread-1",
+        "turnId": "turn-1",
+        "callId": "call-1",
+        "namespace": None,
+        "tool": "submit_build_result",
+        "arguments": {},
+    }
+    await session._handle_server_request("request-1", "item/tool/call", params)
+    session.dynamic_tool_handler.assert_awaited_once_with(params)
+    assert session._send.call_args.args[0]["result"]["success"] is False
+    assert (
+        "Missing acceptanceCriteria"
+        in session._send.call_args.args[0]["result"]["contentItems"][0]["text"]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        {"threadId": "another-thread"},
+        {"namespace": "another-namespace"},
+        {"tool": "unknown"},
+        {"callId": ""},
+    ],
+)
+async def test_dynamic_tool_requests_cannot_escape_registered_thread(invalid):
+    from unittest.mock import AsyncMock
+
+    session = CodexAppServerSession("https://sandbox")
+    session.thread_id = "thread-1"
+    session.dynamic_tools = ({"name": "submit_build_result"},)
+    session.dynamic_tool_handler = AsyncMock()
+    session._send = AsyncMock()
+    params = {
+        "threadId": "thread-1",
+        "turnId": "turn-1",
+        "callId": "call-1",
+        "namespace": None,
+        "tool": "submit_build_result",
+        "arguments": {},
+        **invalid,
+    }
+    await session._handle_server_request("request-1", "item/tool/call", params)
+    session.dynamic_tool_handler.assert_not_called()
+    assert session._send.call_args.args[0]["result"]["success"] is False
+
+
+@pytest.mark.asyncio
+async def test_dynamic_tools_register_only_on_start_and_survive_resume():
+    from unittest.mock import AsyncMock
+
+    socket = _FakeWebSocket()
+    session = CodexAppServerSession(
+        "https://sandbox", websocket_factory=AsyncMock(return_value=socket)
+    )
+    tool = {
+        "type": "function",
+        "name": "submit_build_result",
+        "description": "Submit",
+        "inputSchema": {"type": "object"},
+    }
+    session.dynamic_tools = (tool,)
+    await session.connect()
+    try:
+        start = next(m for m in socket.messages if m.get("method") == "thread/start")
+        assert start["params"]["dynamicTools"] == [tool]
+        assert "sandbox" in start["params"] and "sandboxPolicy" not in start["params"]
+        await session._resume_or_start_thread(
+            session.thread_id, previous_workspace_locked=True
+        )
+        resume = next(m for m in socket.messages if m.get("method") == "thread/resume")
+        assert "dynamicTools" not in resume["params"]
+        assert session.dynamic_tools == (tool,)
     finally:
         await session.close()

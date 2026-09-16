@@ -152,6 +152,15 @@ class RunRepository:
                     FOREIGN KEY (owner_id, run_id) REFERENCES runs(owner_id, id)
                         ON DELETE CASCADE
                 );
+                CREATE TABLE IF NOT EXISTS run_results (
+                    owner_id TEXT NOT NULL, run_id TEXT NOT NULL,
+                    thread_id TEXT NOT NULL, turn_id TEXT NOT NULL, call_id TEXT NOT NULL,
+                    input_revision INTEGER NOT NULL, digest TEXT NOT NULL,
+                    completion TEXT NOT NULL, response TEXT NOT NULL,
+                    created_at REAL NOT NULL,
+                    PRIMARY KEY (owner_id, run_id, thread_id, turn_id, call_id),
+                    FOREIGN KEY (owner_id, run_id) REFERENCES runs(owner_id, id) ON DELETE CASCADE
+                );
                 PRAGMA user_version=1;
             """)
             # Expand existing local databases without discarding retained runs.
@@ -274,6 +283,7 @@ class RunRepository:
         *,
         thread_id: str = "",
         message_digest: str = "",
+        result_protocol: str = "file-v1",
     ) -> Run:
         if not owner or not session_id or not request_id or not message.strip():
             raise ValueError("Task identity and message are required")
@@ -281,6 +291,8 @@ class RunRepository:
             raise ValueError("Task input exceeds the size limit")
 
         digest = message_digest or hashlib.sha256(message.encode()).hexdigest()
+        if result_protocol not in {"file-v1", "tool-v1"}:
+            raise ValueError("Unknown result protocol")
 
         def operation(db):
             existing = db.execute(
@@ -310,8 +322,8 @@ class RunRepository:
             run_id = uuid4().hex
             try:
                 db.execute(
-                    "INSERT INTO runs(owner_id,id,session_id,request_id,message,thread_id,created_at,updated_at,message_digest) "
-                    "VALUES(?,?,?,?,?,?,?,?,?)",
+                    "INSERT INTO runs(owner_id,id,session_id,request_id,message,thread_id,created_at,updated_at,message_digest,checkpoint) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?)",
                     (
                         owner,
                         run_id,
@@ -322,6 +334,7 @@ class RunRepository:
                         self.clock(),
                         self.clock(),
                         digest,
+                        json.dumps({"result_protocol": result_protocol}),
                     ),
                 )
             except sqlite3.IntegrityError as error:
@@ -425,7 +438,15 @@ class RunRepository:
             ).rowcount
         )
 
-    async def update(self, owner: str, run_id: str, token: str, **changes: Any) -> Run:
+    async def update(
+        self,
+        owner: str,
+        run_id: str,
+        token: str,
+        *,
+        checkpoint_updates: dict[str, Any] | None = None,
+        **changes: Any,
+    ) -> Run:
         allowed = {
             "state",
             "phase",
@@ -447,6 +468,10 @@ class RunRepository:
             if run.stop_requested and state not in {"stopping", "cancelled", "failed"}:
                 raise RunConflict("任务正在停止。")
             values = dict(changes)
+            if checkpoint_updates is not None:
+                if "checkpoint" in values:
+                    raise ValueError("Cannot replace and patch a checkpoint together")
+                values["checkpoint"] = {**run.checkpoint, **checkpoint_updates}
             if "checkpoint" in values:
                 values["checkpoint"] = json.dumps(
                     values["checkpoint"], ensure_ascii=False, allow_nan=False
@@ -852,6 +877,23 @@ class RunRepository:
             run = self._leased(db, owner, run_id, token)
             if run.stop_requested or run.input_revision != revision:
                 return False
+            if run.checkpoint.get("result_protocol") == "tool-v1":
+                if (
+                    not self._revision_current(db, run, revision)
+                    or run.checkpoint.get("completion_revision") != revision
+                ):
+                    return False
+                delivery = run.checkpoint.get("version")
+                if delivery and not run.checkpoint.get("delivery_emitted"):
+                    self._event(
+                        db,
+                        owner,
+                        run_id,
+                        "development.succeeded"
+                        if delivery.get("verified")
+                        else "development.source_ready",
+                        {"payload": {"delivery": delivery}, "inputRevision": revision},
+                    )
             db.execute(
                 "UPDATE runs SET state='succeeded',phase='complete',state_message='',expires_at=?,checkpoint=? WHERE owner_id=? AND id=?",
                 (
@@ -867,6 +909,107 @@ class RunRepository:
             return True
 
         return await self._write(operation)
+
+    @staticmethod
+    def _revision_current(db: sqlite3.Connection, run: Run, revision: int) -> bool:
+        return (
+            not run.stop_requested
+            and not run.terminal
+            and run.input_revision == revision
+            and not db.execute(
+                "SELECT 1 FROM run_inputs WHERE owner_id=? AND run_id=? AND status IN ('pending','sending') LIMIT 1",
+                (run.owner_id, run.id),
+            ).fetchone()
+        )
+
+    async def revision_current(
+        self, owner: str, run_id: str, token: str, revision: int
+    ) -> bool:
+        return await self._read(
+            lambda db: self._revision_current(
+                db, self._leased(db, owner, run_id, token), revision
+            )
+        )
+
+    async def submit_result(
+        self,
+        owner: str,
+        run_id: str,
+        token: str,
+        *,
+        thread_id: str,
+        turn_id: str,
+        call_id: str,
+        revision: int,
+        digest: str,
+        completion: dict[str, Any],
+        response: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Commit before acknowledging; the call identity survives lost RPC replies."""
+
+        def operation(db):
+            run = self._leased(db, owner, run_id, token)
+            if (
+                run.checkpoint.get("result_protocol") != "tool-v1"
+                or run.phase not in {"coding", "reporting"}
+                or run.thread_id != thread_id
+                or run.turn_id != turn_id
+            ):
+                raise RunConflict("Result does not belong to the active build turn.")
+            if (
+                not self._revision_current(db, run, revision)
+                or run.checkpoint.get("accepted_revision") != revision
+            ):
+                raise RunConflict(
+                    "Requirements changed or the task stopped. Apply the latest accepted input revision before submitting."
+                )
+            key = (owner, run_id, thread_id, turn_id, call_id)
+            existing = db.execute(
+                "SELECT digest,response FROM run_results WHERE owner_id=? AND run_id=? AND thread_id=? AND turn_id=? AND call_id=?",
+                key,
+            ).fetchone()
+            if existing:
+                if existing["digest"] != digest:
+                    raise RunConflict(
+                        "A tool call ID cannot be reused for different results."
+                    )
+                return json.loads(existing["response"])
+            count = db.execute(
+                "SELECT COUNT(*) FROM run_results WHERE owner_id=? AND run_id=?",
+                (owner, run_id),
+            ).fetchone()[0]
+            if count >= 512:
+                raise RunCapacity("Result submission limit reached.")
+            db.execute(
+                "INSERT INTO run_results VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (
+                    *key,
+                    revision,
+                    digest,
+                    json.dumps(completion, ensure_ascii=False, allow_nan=False),
+                    json.dumps(response, ensure_ascii=False, allow_nan=False),
+                    self.clock(),
+                ),
+            )
+            return response
+
+        return await self._write(operation)
+
+    async def result_for_turn(
+        self, owner: str, run_id: str, token: str
+    ) -> dict[str, Any] | None:
+        def operation(db):
+            run = self._leased(db, owner, run_id, token)
+            revision = int(run.checkpoint.get("accepted_revision", 0))
+            if not self._revision_current(db, run, revision):
+                return None
+            row = db.execute(
+                "SELECT completion FROM run_results WHERE owner_id=? AND run_id=? AND thread_id=? AND turn_id=? AND input_revision=? ORDER BY rowid DESC LIMIT 1",
+                (owner, run_id, run.thread_id, run.turn_id, revision),
+            ).fetchone()
+            return json.loads(row["completion"]) if row else None
+
+        return await self._read(operation)
 
     async def delete(self, owner: str, run_id: str) -> None:
         def operation(db):

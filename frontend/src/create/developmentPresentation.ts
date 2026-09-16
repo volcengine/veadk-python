@@ -1,5 +1,17 @@
 import type { Block } from "../blocks";
 import { activeLocale, adkT } from "../adk/i18n";
+import type { DevelopmentRun } from "../adk/developmentRuns";
+
+export function developmentRunStatus(run: DevelopmentRun | null | undefined): string {
+  if (!run) return "";
+  if (["stopping", "waiting_user", "failed", "cancelled"].includes(run.state)) return run.statusMessage;
+  if (run.phase === "reporting") return adkT("developmentRuns.reporting");
+  if (run.state === "recovering") return run.statusMessage;
+  if (["outcome_read", "delivery"].includes(run.phase)) return adkT("developmentRuns.packaging");
+  if (run.phase === "version") return adkT("developmentRuns.savingVersion");
+  if (run.phase === "cycle_complete") return adkT("developmentRuns.finishing");
+  return run.statusMessage;
+}
 
 export function formatDevelopmentDuration(value: number | undefined): string {
   if (value == null || !Number.isFinite(value) || value < 0) return adkT("developmentRuns.notReported");
@@ -24,6 +36,7 @@ const short = (value: unknown) => typeof value === "string" ? value.replace(/\s+
 
 export function developmentToolLabel(block: Extract<Block, { kind: "tool" }>): string {
   const args = record(block.args);
+  if (block.itemType === "dynamicToolCall" && block.name === "submit_build_result") return adkT("developmentRuns.submitResult");
   if (block.itemType === "commandExecution") {
     const actions = Array.isArray(args.commandActions) ? args.commandActions.map(record) : [];
     const types = new Set(actions.map(action => action.type));

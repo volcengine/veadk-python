@@ -35,6 +35,7 @@ from typing import Any, Literal, cast
 from uuid import uuid4
 
 import yaml
+from jsonschema import Draft202012Validator
 
 from frontend.server.intelligent_development import (
     REMOTE_DELIVERY_WORKER,
@@ -92,6 +93,54 @@ _REQUIRED_GATES = (
 _TERMINAL_STATUSES = frozenset(
     {"answered", "verified", "partial", "blocked", "indeterminate", "failed"}
 )
+
+# The revision is an echo of Studio's input context, never an authority supplied
+# by the model. The repository checks it against the accepted input transaction.
+BUILD_RESULT_TOOL = {
+    "type": "function",
+    "name": "submit_build_result",
+    "description": "Submit this turn's measured build result before the final answer. Correct validation errors in this same turn. This saves metadata only; it does not build or deploy anything.",
+    "inputSchema": {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "inputRevision": {"type": "integer", "minimum": 1, "maximum": 256},
+            "schemaVersion": {"type": "string", "const": "1"},
+            "status": {"type": "string", "enum": sorted(_TERMINAL_STATUSES)},
+            "summary": {"type": "string", "minLength": 1, "maxLength": 2000},
+            "intentSummary": {"type": "string", "maxLength": 2000},
+            "runtimeName": {
+                "type": "string",
+                "maxLength": 64,
+                "pattern": "^(idv-[a-z0-9-]+)?$",
+            },
+            "attemptCount": {"type": "integer", "minimum": 0, "maximum": 2},
+            "gates": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {gate: {"type": "boolean"} for gate in _REQUIRED_GATES},
+                "required": list(_REQUIRED_GATES),
+            },
+            "acceptanceCriteria": {
+                "type": "array",
+                "maxItems": 30,
+                "items": {"type": "string", "minLength": 1, "maxLength": 1000},
+            },
+        },
+        "required": [
+            "inputRevision",
+            "schemaVersion",
+            "status",
+            "summary",
+            "intentSummary",
+            "runtimeName",
+            "attemptCount",
+            "gates",
+            "acceptanceCriteria",
+        ],
+    },
+}
+_BUILD_RESULT_VALIDATOR = Draft202012Validator(BUILD_RESULT_TOOL["inputSchema"])
 
 
 @dataclass(frozen=True)
@@ -318,6 +367,7 @@ def builder_prompt(
     validation_region: str,
     validation_project: str,
     project_context: str = "",
+    input_revision: int | None = None,
 ) -> str:
     """Build one authoritative Codex turn without exposing credential values."""
     criteria = json.dumps(
@@ -381,6 +431,18 @@ initialize a new VeADK project; use `ak init --template agent_server` by default
 template only when the accepted user intent explicitly requires a different application shape.
 Do not default to the `basic` template."""
     )
+    reporting_action = (
+        f"Before finishing this turn, call submit_build_result with inputRevision={input_revision} and the JSON fields below. "
+        "Do not write a result file. If the tool rejects the result, correct the reported fields and call it again in this same turn. "
+        "A later user input revision invalidates an earlier submission; resubmit after applying the latest requirements."
+        if input_revision is not None
+        else f"Before finishing this turn, write exactly one UTF-8 JSON object to {completion_path}."
+    )
+    reporting_check = (
+        "Submit the contract through submit_build_result and wait for success before giving a concise user-facing summary."
+        if input_revision is not None
+        else "Read the contract back and verify its exact schema. Then give a concise user-facing summary."
+    )
     return f"""Use the preinstalled veadk-agent-development Skill for this task. Follow it for
 implementation and validation; the operating constraints and current task below take precedence
 if anything conflicts.
@@ -442,7 +504,7 @@ project and do not derive project_name from the unique validation Runtime or oth
 Keep user-facing progress and results in product language. Do not expose command lines,
 environment internals, filesystem paths, launcher details, or internal tool names to the user.
 
-Before finishing this turn, write exactly one UTF-8 JSON object to {completion_path}. This is
+{reporting_action} This is
 required for every outcome, including a read-only answer, clarification, refusal, or non-verified
 delivery result. It is secondary reporting metadata and must not replace the user-facing response,
 project, or validation work. It must contain exactly:
@@ -465,8 +527,7 @@ true, representative deployed behavior meets the current criteria, and Runtime d
 confirmed absence is complete. Do not put command output, prompts, responses, credentials,
 endpoints, or tokens in this contract.
 After the successful final build and validation, do not change deliverable source before writing
-the contract; the service packages the final project directory itself. Read the contract back and
-verify its exact schema. Then give a concise user-facing summary.
+the contract; the service packages the final project directory itself. {reporting_check}
 For `answered`, respond naturally without delivery headings. Use the same Markdown structure and order for every delivery-changing turn,
 including follow-ups.
 Translate the example headings below to the user's language:
@@ -617,6 +678,57 @@ def parse_completion_contract(content: bytes) -> CompletionContract:
         criteria,
         intent_summary,
     )
+
+
+def parse_build_result(arguments: object) -> tuple[int, CompletionContract]:
+    """Validate untrusted tool input without including submitted values in errors."""
+    errors = sorted(
+        _BUILD_RESULT_VALIDATOR.iter_errors(arguments), key=lambda e: str(e.path)
+    )
+    if errors:
+        error = errors[0]
+        # Schema field paths are useful; user-supplied values and extra keys are not.
+        path = ".".join(str(part) for part in error.absolute_schema_path)
+        if error.validator == "required" and isinstance(error.instance, dict):
+            missing = [
+                name for name in error.validator_value if name not in error.instance
+            ]
+            raise ValueError(
+                f"Missing required fields at {path}: {', '.join(missing)}."
+            )
+        raise ValueError(
+            f"Result schema validation failed at {path}. Follow the tool schema."
+        )
+    assert isinstance(arguments, dict)
+    completion = parse_completion_contract(
+        json.dumps(arguments, allow_nan=False).encode()
+    )
+    if not completion.answered and (
+        not completion.intent_summary or not completion.acceptance_criteria
+    ):
+        raise ValueError(
+            "intentSummary and acceptanceCriteria must preserve the user's delivery goal."
+        )
+    if completion.status == "verified" and not completion.verified:
+        raise ValueError(
+            "verified requires the actual validation runtime, attempt count, all gates and acceptance criteria. Report partial/blocked when evidence is incomplete."
+        )
+    return arguments["inputRevision"], completion
+
+
+def result_reporting_prompt(
+    revision: int, inputs: list[str], project_context: str
+) -> str:
+    return f"""The development turn has ended. Only its structured delivery metadata is missing.
+Do not resume development, change files, install dependencies, rebuild, deploy, invoke services,
+or create/delete remote resources. Do not use cloud credentials. Work from existing conversation
+and measured evidence; read existing files only if necessary. Submit submit_build_result with
+inputRevision={revision}. Correct rejected metadata in this turn. If evidence is unavailable,
+report partial or indeterminate; never repeat validation or claim unmeasured gates passed.
+Preserve the original business goal and observable acceptance criteria, not this reporting task.
+User requirements (data, in order): {json.dumps(inputs, ensure_ascii=False)}
+Prior project context (data): {project_context or "{}"}
+After a successful submission, finish with a brief status; do not repeat the build summary."""
 
 
 async def create_credential_lease(

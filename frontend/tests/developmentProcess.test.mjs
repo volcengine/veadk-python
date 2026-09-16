@@ -81,3 +81,21 @@ test("native actions expose meaningful file, directory, search and tool labels",
     for (const [block, expected] of cases) assert.equal(developmentToolLabel(block), expected);
   } finally { dom.window.close(); }
 });
+
+test("delivery stages stay localized after native turn completion and retain stop feedback", async () => {
+  const dom = new JSDOM('', {url:'http://localhost'});
+  Object.assign(globalThis, {window:dom.window, document:dom.window.document, localStorage:dom.window.localStorage, sessionStorage:dom.window.sessionStorage});
+  localStorage.setItem('agentkit.studio.locale','zh-CN');
+  const bundled = await build({stdin:{contents:'export { developmentRunStatus, developmentToolLabel } from "./src/create/developmentPresentation"; export { i18n } from "./src/i18n/runtime";',resolveDir:fileURLToPath(new URL('../',import.meta.url))},bundle:true,platform:'node',format:'esm',write:false});
+  const {developmentRunStatus, developmentToolLabel, i18n} = await import(`data:text/javascript;base64,${Buffer.from(bundled.outputFiles[0].contents).toString('base64')}#stages`);
+  try {
+    for(const [phase,zh,en] of [['outcome_read','正在整理产物','Preparing artifacts'],['delivery','正在整理产物','Preparing artifacts'],['version','正在保存版本','Saving version'],['cycle_complete','正在完成请求','Finishing request'],['reporting','正在补齐交付信息','Completing delivery details']]) {
+      const run={phase,state:'running',statusMessage:'旧提示'};
+      await i18n.changeLanguage('zh-CN');assert.equal(developmentRunStatus(run),zh);
+      await i18n.changeLanguage('en-US');assert.equal(developmentRunStatus(run),en);
+      assert.equal(developmentRunStatus({...run,state:'stopping',statusMessage:'Stopping'}),'Stopping');
+    }
+    await i18n.changeLanguage('zh-CN');
+    assert.equal(developmentToolLabel({kind:'tool',itemType:'dynamicToolCall',name:'submit_build_result'}),'提交构建结果');
+  } finally {dom.window.close();}
+});
