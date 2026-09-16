@@ -60,6 +60,10 @@ def test_sidecar_release_gate_runs_backend_and_frontend_in_parallel() -> None:
         "test_source_preserving_legacy_ops_update_migrates_output_repository_via_sdk"
         in backend_run
     )
+    assert (
+        "test_source_preserving_disabled_sidecar_contract_filters_harness_env"
+        in backend_run
+    )
     assert "tests/frontend/server/test_runtime_iam.py" in backend_run
     assert "test_new_deployment_only_updates_non_default_instance_range" in backend_run
     assert (

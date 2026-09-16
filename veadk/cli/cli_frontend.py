@@ -343,6 +343,45 @@ def _runtime_environment_from_runtime(runtime: Any) -> dict[str, str]:
     return _runtime_environment_from_tags(tags)
 
 
+def _filter_harness_runtime_environment(
+    runtime_envs: Mapping[str, str],
+    *,
+    preserve_disabled_contract: bool,
+) -> dict[str, str]:
+    """Clear platform-owned Harness state, retaining only a proven disable contract."""
+
+    filtered = {
+        key: value
+        for key, value in runtime_envs.items()
+        if not key.startswith("HARNESS_")
+    }
+    if not preserve_disabled_contract:
+        return filtered
+
+    disabled_flag = re.compile(r"^HARNESS_[A-Z0-9_]+_ENABLED$")
+    filtered.update(
+        {
+            key: value
+            for key, value in runtime_envs.items()
+            if disabled_flag.fullmatch(key) and value == "false"
+        }
+    )
+
+    raw_overrides = runtime_envs.get("HARNESS_SIDECAR_COMPONENT_OVERRIDES", "")
+    try:
+        overrides = json.loads(raw_overrides)
+    except (TypeError, json.JSONDecodeError):
+        overrides = None
+    if isinstance(overrides, dict):
+        from veadk.extensions.harness.sidecar import STUDIO_HARNESS_COMPONENT_IDS
+
+        if set(overrides) == set(STUDIO_HARNESS_COMPONENT_IDS) and all(
+            value is False for value in overrides.values()
+        ):
+            filtered["HARNESS_SIDECAR_COMPONENT_OVERRIDES"] = raw_overrides
+    return filtered
+
+
 def _sync_volcengine_runtime_tags(
     *,
     access_key: str,
@@ -7986,10 +8025,13 @@ def _run_frontend_server(
             )
         else:
             runtime_envs.pop(_RUNTIME_ENVIRONMENT_VERSION_ENV, None)
-        # Harness settings are platform-owned. Always remove a previous
-        # Sidecar deployment's values before either deployment path materializes
-        # the next Runtime environment. The CLI adds the authoritative resolved
-        # plan back only for Sidecar deployments.
+        # Harness settings are platform-owned. Clear the previous plan before
+        # either deployment path materializes the next Runtime environment. A
+        # source-preserving update that keeps Sidecar disabled retains only the
+        # published Runtime's strict disable contract; this avoids reactivating
+        # legacy application defaults while still dropping every binding, plan,
+        # catalog, hash, and enabled value. Sidecar deployments add their newly
+        # resolved authoritative plan below.
         existing_sidecar_binding = {
             key: runtime_envs[key]
             for key in (
@@ -7998,11 +8040,14 @@ def _run_frontend_server(
             )
             if runtime_envs.get(key)
         }
-        runtime_envs = {
-            key: value
-            for key, value in runtime_envs.items()
-            if not key.startswith("HARNESS_")
-        }
+        runtime_envs = _filter_harness_runtime_environment(
+            runtime_envs,
+            preserve_disabled_contract=(
+                existing_runtime is not None
+                and source_preserving_requested
+                and not sidecar_enabled
+            ),
+        )
         if sidecar_enabled and source_preserving_requested:
             if not isinstance(sidecar_plan, Mapping):
                 shutil.rmtree(temp_dir, ignore_errors=True)

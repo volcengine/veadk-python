@@ -168,6 +168,84 @@ def test_runtime_environment_metadata_prefers_update_safe_env_mirror() -> None:
     }
 
 
+def test_source_preserving_disabled_sidecar_contract_filters_harness_env() -> None:
+    from veadk.cli.cli_frontend import _filter_harness_runtime_environment
+
+    disabled_overrides = json.dumps(
+        {
+            "context_engine": False,
+            "compressor": False,
+            "verifier": False,
+            "long_run_control": False,
+            "mcp_resilience": False,
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    runtime_envs = {
+        "APPLICATION_SETTING": "preserved",
+        "HARNESS_SIDECAR_ENABLED": "false",
+        "HARNESS_MODEL_PROXY_ENABLED": "false",
+        "HARNESS_MCP_GATEWAY_ENABLED": "false",
+        "HARNESS_ENHANCE_ENABLED": "false",
+        "HARNESS_LEGACY_ROUTER_ENABLED": "false",
+        "HARNESS_UNSAFE_ENABLED": "true",
+        "HARNESS_ZERO_ENABLED": "0",
+        "HARNESS_PROFILE": "ops",
+        "HARNESS_SIDECAR_CATALOG_VERSION": "stale-catalog",
+        "HARNESS_SIDECAR_EXPECTED_PLAN_HASH": "sha256:stale",
+        "HARNESS_SIDECAR_APIG_ENDPOINT": "https://stale.example.com",
+        "HARNESS_SIDECAR_COMPONENT_OVERRIDES": disabled_overrides,
+    }
+
+    preserved = _filter_harness_runtime_environment(
+        runtime_envs,
+        preserve_disabled_contract=True,
+    )
+    cleared = _filter_harness_runtime_environment(
+        runtime_envs,
+        preserve_disabled_contract=False,
+    )
+
+    assert preserved == {
+        "APPLICATION_SETTING": "preserved",
+        "HARNESS_SIDECAR_ENABLED": "false",
+        "HARNESS_MODEL_PROXY_ENABLED": "false",
+        "HARNESS_MCP_GATEWAY_ENABLED": "false",
+        "HARNESS_ENHANCE_ENABLED": "false",
+        "HARNESS_LEGACY_ROUTER_ENABLED": "false",
+        "HARNESS_SIDECAR_COMPONENT_OVERRIDES": disabled_overrides,
+    }
+    assert cleared == {"APPLICATION_SETTING": "preserved"}
+
+    for unsafe_overrides in (
+        {"context_engine": False},
+        {
+            "context_engine": False,
+            "compressor": False,
+            "verifier": False,
+            "long_run_control": False,
+            "mcp_resilience": True,
+        },
+        {
+            "context_engine": False,
+            "compressor": False,
+            "verifier": False,
+            "long_run_control": False,
+            "mcp_resilience": False,
+            "unknown": False,
+        },
+    ):
+        filtered = _filter_harness_runtime_environment(
+            {
+                "HARNESS_SIDECAR_ENABLED": "false",
+                "HARNESS_SIDECAR_COMPONENT_OVERRIDES": json.dumps(unsafe_overrides),
+            },
+            preserve_disabled_contract=True,
+        )
+        assert filtered == {"HARNESS_SIDECAR_ENABLED": "false"}
+
+
 def test_environment_registry_overrides_legacy_runtime_build_registry() -> None:
     config = {
         "cr_instance_name": "legacy-registry",
@@ -5312,6 +5390,38 @@ def test_source_preserving_update_ignores_browser_source_and_keeps_secrets_out_o
             ),
         ),
         SimpleNamespace(key="MODEL_AGENT_NAME", value="published-model"),
+        SimpleNamespace(key="HARNESS_SIDECAR_ENABLED", value="false"),
+        SimpleNamespace(key="HARNESS_MODEL_PROXY_ENABLED", value="false"),
+        SimpleNamespace(key="HARNESS_MCP_GATEWAY_ENABLED", value="false"),
+        SimpleNamespace(key="HARNESS_ENHANCE_ENABLED", value="false"),
+        SimpleNamespace(key="HARNESS_LEGACY_ROUTER_ENABLED", value="false"),
+        SimpleNamespace(
+            key="HARNESS_SIDECAR_COMPONENT_OVERRIDES",
+            value=json.dumps(
+                {
+                    "context_engine": False,
+                    "compressor": False,
+                    "verifier": False,
+                    "long_run_control": False,
+                    "mcp_resilience": False,
+                },
+                separators=(",", ":"),
+                sort_keys=True,
+            ),
+        ),
+        SimpleNamespace(key="HARNESS_PROFILE", value="ops"),
+        SimpleNamespace(
+            key="HARNESS_SIDECAR_CATALOG_VERSION",
+            value="stale-catalog",
+        ),
+        SimpleNamespace(
+            key="HARNESS_SIDECAR_EXPECTED_PLAN_HASH",
+            value="sha256:stale-plan",
+        ),
+        SimpleNamespace(
+            key="HARNESS_SIDECAR_APIG_ENDPOINT",
+            value="https://stale.example.com",
+        ),
     ]
     launched = False
     captured: dict[str, Any] = {}
@@ -5512,6 +5622,23 @@ def test_source_preserving_update_ignores_browser_source_and_keeps_secrets_out_o
         "retained-secret"
         not in captured["config"]["launch_types"]["cloud"]["runtime_envs"].values()
     )
+    runtime_envs = captured["config"]["launch_types"]["cloud"]["runtime_envs"]
+    assert runtime_envs["HARNESS_SIDECAR_ENABLED"] == "false"
+    assert runtime_envs["HARNESS_MODEL_PROXY_ENABLED"] == "false"
+    assert runtime_envs["HARNESS_MCP_GATEWAY_ENABLED"] == "false"
+    assert runtime_envs["HARNESS_ENHANCE_ENABLED"] == "false"
+    assert runtime_envs["HARNESS_LEGACY_ROUTER_ENABLED"] == "false"
+    assert json.loads(runtime_envs["HARNESS_SIDECAR_COMPONENT_OVERRIDES"]) == {
+        "context_engine": False,
+        "compressor": False,
+        "verifier": False,
+        "long_run_control": False,
+        "mcp_resilience": False,
+    }
+    assert "HARNESS_PROFILE" not in runtime_envs
+    assert "HARNESS_SIDECAR_CATALOG_VERSION" not in runtime_envs
+    assert "HARNESS_SIDECAR_EXPECTED_PLAN_HASH" not in runtime_envs
+    assert "HARNESS_SIDECAR_APIG_ENDPOINT" not in runtime_envs
     assert captured["config"]["launch_types"]["cloud"]["cr_instance_name"] == (
         "example-registry"
     )
