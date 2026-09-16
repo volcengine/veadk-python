@@ -18,13 +18,23 @@ interface Props {
 function TaskMonitor({ ownerId, sessionId, onOpen }: Props) {
   const { t } = useTranslation("sandbox");
   const toast = useToast();
+  const known = useRef(new Map<string, DevelopmentRun>());
+  const shown = useRef(new Map<string, string>());
   const current = useRef({ sessionId, onOpen, toast, t });
   current.current = { sessionId, onOpen, toast, t };
   useEffect(() => {
+    for (const run of known.current.values()) {
+      if (run.sessionId === sessionId) {
+        current.current.toast.dismiss(run.runId);
+        shown.current.delete(run.runId);
+      }
+    }
+  }, [sessionId]);
+  useEffect(() => {
     if (!ownerId) return;
     const controller = new AbortController();
-    const known = new Map<string, DevelopmentRun>();
-    const shown = new Map<string, string>();
+    const knownRuns = known.current;
+    const shownStates = shown.current;
     const hidden = new Set<string>();
     let timer: ReturnType<typeof setTimeout>;
     const show = (run: DevelopmentRun) => {
@@ -32,11 +42,11 @@ function TaskMonitor({ ownerId, sessionId, onOpen }: Props) {
       if (controller.signal.aborted) return;
       if (run.sessionId === sessionId) {
         toast.dismiss(run.runId);
-        shown.delete(run.runId);
+        shownStates.delete(run.runId);
         return;
       }
-      if (hidden.has(run.runId) || shown.get(run.runId) === run.state) return;
-      shown.set(run.runId, run.state);
+      if (hidden.has(run.runId) || shownStates.get(run.runId) === run.state) return;
+      shownStates.set(run.runId, run.state);
       toast.add({
         id: run.runId,
         duration: 0,
@@ -75,7 +85,7 @@ function TaskMonitor({ ownerId, sessionId, onOpen }: Props) {
         const active = await developmentRuns.active(controller.signal);
         if (controller.signal.aborted) return;
         const ids = new Set(active.map((run) => run.runId));
-        for (const previous of known.values()) {
+        for (const previous of knownRuns.values()) {
           if (!ids.has(previous.runId) && !runEnded(previous)) {
             let ended: DevelopmentRun;
             try {
@@ -88,25 +98,25 @@ function TaskMonitor({ ownerId, sessionId, onOpen }: Props) {
                 error instanceof DevelopmentRequestError &&
                 error.status === 404
               ) {
-                known.delete(previous.runId);
-                shown.delete(previous.runId);
+                knownRuns.delete(previous.runId);
+                shownStates.delete(previous.runId);
                 current.current.toast.dismiss(previous.runId);
                 continue;
               }
               throw error;
             }
             if (controller.signal.aborted) return;
-            known.set(ended.runId, ended);
+            knownRuns.set(ended.runId, ended);
             show(ended);
           }
         }
         for (const run of active) {
-          known.set(run.runId, run);
+          knownRuns.set(run.runId, run);
           show(run);
         }
         current.current.toast.dismiss("task-connection");
       } catch (error) {
-        if (!controller.signal.aborted && known.size)
+        if (!controller.signal.aborted && knownRuns.size)
           current.current.toast.add({
             id: "task-connection",
             duration: 0,
@@ -130,7 +140,7 @@ export function DevelopmentTaskNotice(props: Props) {
   const { t } = useTranslation("sandbox");
   return (
     <ToastProvider position="bottom-right" label={t("taskNotice.label")}>
-      <TaskMonitor key={`${props.ownerId}:${props.sessionId}`} {...props} />
+      <TaskMonitor key={props.ownerId} {...props} />
     </ToastProvider>
   );
 }

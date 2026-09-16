@@ -640,7 +640,48 @@ class DevelopmentRunner:
                         turn_id=event.turn_id,
                         revision=revision,
                         status="inProgress",
+                        metrics={
+                            **(
+                                event.response
+                                if isinstance(event.response, dict)
+                                else {}
+                            ),
+                            "resumed": bool(resume_id),
+                        },
                     )
+                elif event.kind in {"turn_completed", "usage"}:
+                    metrics = event.response if isinstance(event.response, dict) else {}
+                    if event.usage is not None:
+                        metrics = {
+                            **metrics,
+                            "usage": event.usage.public_dict(),
+                            "threadTotal": event.thread_total.public_dict()
+                            if event.thread_total
+                            else None,
+                        }
+                    await self.repository.record_turn(
+                        owner,
+                        run_id,
+                        token,
+                        thread_id=codex.thread_id,
+                        turn_id=event.turn_id or codex.active_turn_id,
+                        revision=revision,
+                        status=event.status
+                        if event.kind == "turn_completed"
+                        else "inProgress",
+                        metrics=metrics,
+                    )
+                    if event.kind == "usage":
+                        projected = self.render_event(event, lease)
+                        if projected is not None:
+                            kind, payload = projected
+                            await self.repository.append_event(
+                                owner,
+                                run_id,
+                                token,
+                                kind,
+                                {**payload, "turnId": event.turn_id},
+                            )
                 elif event.kind == "user_input":
                     response = (
                         event.response if isinstance(event.response, dict) else {}
@@ -708,6 +749,16 @@ class DevelopmentRunner:
             if latest.turn_id:
                 turn = await codex.read_turn(latest.turn_id)
                 if turn and turn.get("status") in {"failed", "interrupted"}:
+                    await self.repository.record_turn(
+                        owner,
+                        run_id,
+                        token,
+                        thread_id=codex.thread_id,
+                        turn_id=latest.turn_id,
+                        revision=revision,
+                        status=str(turn["status"]),
+                        metrics=turn,
+                    )
                     failure = turn.get("error") or {}
                     info = (
                         failure.get("codexErrorInfo")
@@ -1066,5 +1117,26 @@ class DevelopmentRunner:
                         "failed",
                         "interrupted",
                     }:
+                        await self.repository.record_turn(
+                            run.owner_id,
+                            run.id,
+                            token,
+                            thread_id=codex.thread_id,
+                            turn_id=turn_id,
+                            revision=run.input_revision,
+                            status=str(turn["status"]),
+                            metrics=turn,
+                        )
                         return
                 raise RuntimeError("Remote interruption is not confirmed")
+            if turn.get("status") in {"completed", "failed", "interrupted"}:
+                await self.repository.record_turn(
+                    run.owner_id,
+                    run.id,
+                    token,
+                    thread_id=codex.thread_id,
+                    turn_id=turn_id,
+                    revision=run.input_revision,
+                    status=str(turn["status"]),
+                    metrics=turn,
+                )

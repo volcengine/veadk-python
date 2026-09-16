@@ -1,4 +1,4 @@
-import type { Turn } from "../blocks";
+import type { Turn, Block, DevelopmentTurnMetrics } from "../blocks";
 import { studioFetch } from "./client";
 import { createSandboxProjection, sandboxHeaders } from "./sandbox";
 import { adkT } from "./i18n";
@@ -161,6 +161,9 @@ export class DevelopmentRunProjection {
   cursor = 0;
   turns: Turn[] = [];
   private activeInput: string;
+  private itemTurns = new Map<string, string>();
+  private nativeInputs = new Map<string, string>();
+  private metrics = new Map<string, DevelopmentTurnMetrics>();
   private inputOrder: string[] = [];
   private projections = new Map<
     string,
@@ -188,7 +191,7 @@ export class DevelopmentRunProjection {
       );
       projection = createSandboxProjection({
         onBlocks: (blocks) => {
-          turn.blocks = blocks;
+          turn.blocks = blocks.map(block => ({...block, turnId: this.itemTurns.get(block.id || "")}));
         },
         onUsage: (usage) => {
           turn.meta = { ...turn.meta, sandboxUsage: usage.usage };
@@ -204,6 +207,8 @@ export class DevelopmentRunProjection {
     if (event.seq <= this.cursor) return;
     if (event.seq !== this.cursor + 1)
       throw new Error(adkT("developmentRuns.eventGap"));
+    for (const turn of this.turns) if (turn.blocks.some(block => block.kind === "turn-summary"))
+      turn.blocks = turn.blocks.filter(block => block.kind !== "turn-summary");
     const value = event.payload;
     if (
       event.type === "run.input" &&
@@ -220,6 +225,7 @@ export class DevelopmentRunProjection {
         },
       });
       this.inputOrder.push(value.clientId);
+      this.projection(value.clientId);
       if (
         value.status === "delivered" &&
         this.inputOrder.indexOf(value.clientId) >=
@@ -245,8 +251,32 @@ export class DevelopmentRunProjection {
           this.inputOrder.indexOf(this.activeInput)
       )
         this.activeInput = value.clientId;
+    } else if (event.type === "run.turn" && typeof value.turnId === "string") {
+      const previous = this.metrics.get(value.turnId);
+      const metric: DevelopmentTurnMetrics = {
+        ...previous, turnId: value.turnId, status: String(value.status || "inProgress"),
+        toolCalls: 0, toolDurationComplete: false,
+      };
+      for (const key of ["startedAt", "completedAt", "durationMs"] as const)
+        if (typeof value[key] === "number" && Number.isFinite(value[key]) && value[key] >= 0) metric[key] = value[key];
+      if (typeof value.model === "string") metric.model = value.model;
+      if (value.usage && typeof value.usage === "object" && !Array.isArray(value.usage)) {
+        const usage: NonNullable<DevelopmentTurnMetrics["usage"]> = {};
+        for (const key of ["totalTokens", "inputTokens", "outputTokens", "cachedInputTokens", "cacheWriteInputTokens", "reasoningOutputTokens"] as const) {
+          const count = (value.usage as Record<string, unknown>)[key];
+          if (typeof count === "number" && Number.isSafeInteger(count) && count >= 0) usage[key] = count;
+        }
+        metric.usage = usage;
+      }
+      if (value.usageIncomplete === true) metric.usageIncomplete = true;
+      this.metrics.set(value.turnId, metric);
+      this.nativeInputs.set(value.turnId, this.activeInput);
+      this.projection(this.activeInput);
     } else if (event.type === "run.status") {
       this.run = { ...this.run, ...value } as DevelopmentRun;
+      if (runEnded(this.run)) for (const [id, metric] of this.metrics) {
+        if (metric.status === "inProgress") this.metrics.set(id, {...metric, status: "unavailable", usageIncomplete: true});
+      }
       if (runEnded(this.run) || this.run.state === "waiting_user")
         for (const projection of this.projections.values())
           projection.consumeFrame("event: done\ndata: {}");
@@ -255,14 +285,47 @@ export class DevelopmentRunProjection {
         : ["plan", "diff"].includes(event.type) ? event.type : "";
       const itemId = nativeId ? `${String(value.turnId || "")}:${nativeId}` : "";
       const input = (itemId && this.itemInputs.get(itemId)) || this.activeInput;
-      if (itemId) this.itemInputs.set(itemId, input);
+      if (itemId) {
+        this.itemInputs.set(itemId, input);
+        if (typeof value.turnId === "string") this.itemTurns.set(itemId, value.turnId);
+      }
+      if (typeof value.turnId === "string") this.nativeInputs.set(value.turnId, this.activeInput);
       const commentary =
         event.type === "activity" && value.kind === "commentary";
       this.projection(input).consumeFrame(
         `event: ${commentary ? "delta" : event.type}\ndata: ${JSON.stringify({ ...value, ...(itemId ? { id: itemId } : {}), ...(commentary ? { snapshot: true } : {}) })}`,
       );
     }
+    if ((event.type === "run.input" || event.type === "run.input_status") &&
+        value.status === "delivered" && typeof value.turnId === "string" && typeof value.clientId === "string")
+      this.nativeInputs.set(value.turnId, value.clientId);
+    this.decorate();
     this.cursor = event.seq;
+  }
+  private decorate() {
+    const active = !runEnded(this.run) && this.run.state !== "waiting_user";
+    const last = [...this.turns].reverse().find(turn => turn.role === "assistant");
+    for (const turn of this.turns) {
+      if (turn.role === "assistant") turn.meta = {...turn.meta, streaming: active && turn === last};
+    }
+    for (const metric of this.metrics.values()) {
+      if (!["completed", "failed", "interrupted", "cancelled", "unavailable"].includes(metric.status)) continue;
+      const tools = new Map<string, Extract<Block, {kind: "tool"}>>();
+      for (const turn of this.turns) for (const block of turn.blocks) {
+        if (block.kind === "tool" && block.turnId === metric.turnId && block.id) tools.set(block.id, block);
+      }
+      const measured = [...tools.values()].filter(block => typeof block.durationMs === "number" && Number.isFinite(block.durationMs) && block.durationMs >= 0);
+      const value: DevelopmentTurnMetrics = {...metric, toolCalls: tools.size,
+        toolDurationComplete: measured.length === tools.size,
+        toolDurationMs: measured.length || !tools.size ? measured.reduce((sum, block) => sum + block.durationMs!, 0) : undefined};
+      const input = this.nativeInputs.get(metric.turnId);
+      const target = this.turns.find(turn => turn.meta?.localId === `${input}:assistant`);
+      if (target) {
+        const lastIndex = target.blocks.reduce((last, block, i) => block.turnId === metric.turnId ? i : last, -1);
+        target.blocks.splice(lastIndex < 0 ? target.blocks.length : lastIndex + 1, 0,
+          {kind: "turn-summary", id: `${metric.turnId}:summary`, turnId: metric.turnId, value});
+      }
+    }
   }
 }
 function delay(ms: number, signal: AbortSignal): Promise<void> {

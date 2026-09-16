@@ -224,3 +224,52 @@ test("accepted run wakes discovery immediately and replay batches frame updates"
     globalThis.fetch = previousFetch;
   }
 });
+
+test('steer keeps an active assistant before any new item, including replay', () => {
+  const view = new DevelopmentRunProjection(run);
+  view.apply(event(1, 'run.input', {clientId:'input-a',message:'Build',status:'delivered'}));
+  view.apply(event(2, 'delta', {id:'answer',turnId:'turn-1',text:'working'}));
+  view.apply(event(3, 'run.input', {clientId:'input-b',message:'Update',status:'delivered'}));
+  assert.equal(view.turns.at(-1).role, 'assistant');
+  assert.equal(view.turns.at(-1).meta.streaming, true);
+  assert.equal(view.turns[1].meta.streaming, false);
+  view.apply(event(4, 'delta', {id:'answer',turnId:'turn-1',text:' continues'}));
+  assert.equal(view.turns.at(-1).meta.streaming, true);
+});
+
+test('one native turn summary counts unique tools across steer and replay, including failures', () => {
+  const view = new DevelopmentRunProjection(run);
+  view.apply(event(1, 'run.input', {clientId:'input-a',message:'Build',status:'delivered'}));
+  const tool={id:'command',turnId:'turn-1',itemType:'commandExecution',kind:'tool',name:'command',status:'running'};
+  view.apply(event(2,'activity',tool));
+  view.apply(event(3,'run.input',{clientId:'input-b',message:'Update',status:'delivered'}));
+  view.apply(event(4,'activity',{...tool,status:'error',durationMs:321}));
+  view.apply(event(5,'activity',{...tool,id:'other',status:'done',durationMs:200}));
+  view.apply(event(6,'activity',{id:'reasoning',turnId:'turn-1',kind:'thinking',status:'done',text:'checked'}));
+  const end=event(7,'run.turn',{turnId:'turn-1',status:'interrupted',durationMs:4321,model:'test-model',usage:{totalTokens:120,inputTokens:100,cachedInputTokens:40,outputTokens:20,reasoningOutputTokens:5}});
+  view.apply(end); view.apply(end);
+  const summaries=view.turns.flatMap(t=>t.blocks).filter(b=>b.kind==='turn-summary');
+  assert.equal(summaries.length,1);
+  assert.equal(summaries[0].value.toolCalls,2);
+  assert.equal(summaries[0].value.toolDurationMs,521);
+  assert.equal(summaries[0].value.durationMs,4321);
+  assert.equal(summaries[0].value.usage.totalTokens,120);
+  assert.equal(view.turns[1].blocks.find(b=>b.kind==='tool').status,'failed');
+});
+
+test('native continuation summaries remain in order and missing terminal facts stay unknown', () => {
+  const view=new DevelopmentRunProjection(run);
+  view.apply(event(1,'run.input',{clientId:'input-a',message:'Build',status:'delivered'}));
+  view.apply(event(2,'delta',{id:'answer-a',turnId:'first',text:'first answer'}));
+  view.apply(event(3,'run.turn',{turnId:'first',status:'completed',durationMs:100}));
+  view.apply(event(4,'delta',{id:'answer-b',turnId:'second',text:'second answer'}));
+  view.apply(event(5,'run.turn',{turnId:'second',status:'inProgress',model:'model-b'}));
+  view.apply(event(6,'run.status',{...run,state:'failed'}));
+  const blocks=view.turns[1].blocks;
+  assert.deepEqual(blocks.map(b=>b.kind),['text','turn-summary','text','turn-summary']);
+  assert.equal(blocks[1].value.toolCalls,0);
+  assert.equal(blocks[3].value.status,'unavailable');
+  assert.equal(blocks[3].value.durationMs,undefined);
+  assert.equal(blocks[3].value.usage,undefined);
+  assert.equal(view.turns[1].meta.streaming,false);
+});

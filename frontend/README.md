@@ -1466,7 +1466,6 @@ DatePicker 在基础组件中展示日期与日期时间选择；IndexLayout 在
 `npm run dev:components` 启动独立组件库，在布局分组打开 App layout 可查看完整侧栏
 支持 240px / 56px 展开折叠、会话菜单、账号区域与默认深色的主题切换
 全屏入口为 `/components-preview/?fullscreen=app-layout#app-layout`，详见 [组件预览说明](src/components-preview/README.md)
-
 ### MPA 消息渠道
 
 在“自动化 → 消息渠道”打开“MPA智能体消息渠道”，与飞书机器人创建、网站集成并列。选择已有 MPA 智能体后配置飞书、企业微信、钉钉；原智能体详情不再显示消息渠道栏目。列表按当前账号授权范围加载，选项展示名称、描述、“创建者 | 相对创建时间”，以及地域和 Runtime ID，支持按名称、Runtime ID、地域搜索已加载结果，并可加载更多；切换智能体会清理临时二维码和凭据，已有绑定继续保留。三个渠道均提供“极速配置”和“手动配置”，默认极速配置，切换方式后仅显示对应内容。极速配置沿用飞书、钉钉扫码绑定和企业微信官方 SDK 弹窗授权；手动配置分别填写飞书 App ID / App Secret、钉钉 Client ID / Client Secret、企业微信 Bot ID / Secret；仅飞书提供允许群列表，并独立展示消息网关、入站路由和回复投递状态。钉钉与企业微信无需配置本地群白名单。所有渠道均可解绑，旧 Runtime 必须升级后才能使用新增绑定接口。需要 Studio 管理员身份、Runtime 的 `CHANNEL_ADMIN_AUTH_MODE=runtime_key`，以及通过部署配置注入并在更新时保留的 `CHANNEL_STATE_ENCRYPTION_KEY`（Fernet key）。渠道数据库必须独立于其他 MPA 实例。飞书和钉钉的扫码凭据由服务端获取；企微 SDK 授权结果仅在浏览器内存中短暂存在，立即提交 Runtime 保存并完成注册，取消、切页和五分钟超时会清理弹窗。配置完成不等于收发验证通过；部署后请单独验收私聊和授权群 @ 对话。详见 [接口契约](../specs/mpa-channels/README.zh.md)。
@@ -1539,3 +1538,21 @@ MPA grouped replies hide exact answer mirrors only in their derived view: an ext
 ### MPA A2A shared gateway compatibility
 
 MPA creation defaults to A2A discovery (`ENABLE_A2A=true`, `DISABLE_JWT_AUTH=false`). When a tagged MPA Runtime's agent card omits the shared gateway `/runtime/<ID>` prefix from its same-origin `/a2a/jsonrpc` URL, the Studio backend restores the prefix from the control-plane endpoint for chat and history requests. General-agent URLs are unchanged. Existing Runtimes need an explicit configuration release; reconnect to refresh discovery. Restart Studio after this backend update; no frontend rebuild is required.
+
+### 智能构建的过程与每轮统计
+
+智能构建按 Codex 原生 turn 统计；同一轮中的 steer 补充消息不重新计时。
+思考、工具、计划和文件变更使用带图标的可展开过程行，命令行标题显示短英文摘要，
+完整命令与输出保留在详情中。失败命令保留原位，item 耗时使用毫秒。
+
+每轮成功、失败或中断后显示工具调用次数、本轮耗时、工具累计耗时和 Tokens 按钮。
+次数按原生工具 item 去重，包含失败和中断调用；工具累计耗时是各调用耗时之和，
+并行调用可能使其超过本轮耗时。缺少部分工具耗时时，显示“已记录工具耗时”。
+Tokens 可通过悬浮、键盘聚焦或点击查看本轮模型、输入、输出、缓存命中与未命中、
+缓存写入及推理输出。缓存命中是输入的子集，推理输出是输出的子集，不重复累加；
+未命中输入为输入减缓存命中。缺失指标显示“未上报”，中断或统计断点显示记录可能不完整。
+
+统计沿用按用户隔离的 SQLite 短期保存和事件回放。`run.turn` 是新增事件，原有
+`usage` 事件仍保留兼容；已有数据库只增加 `run_turns.metrics` 列。回滚到旧代码时应
+使用新的短期数据库路径，因为旧版本按固定列数写入 `run_turns`。当前单实例云部署
+在实例替换后丢失短期记录的约定不变。

@@ -1,0 +1,13 @@
+.development-turn-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin: 8px 0; min-width: 0; font-size: 12px; color: hsl(var(--muted-foreground)); }
+.development-turn-summary > span { white-space: nowrap; }
+.development-token-trigger { min-height: 28px; padding: 2px 6px; border: 1px solid hsl(var(--border)); border-radius: 6px; background: transparent; color: inherit; font: inherit; cursor: pointer; }
+.development-token-trigger:hover, .development-token-trigger[data-popup-open] { color: hsl(var(--foreground)); background: hsl(var(--muted)); }
+.development-token-trigger:focus-visible { outline: 2px solid hsl(var(--primary)); outline-offset: 2px; }
+.development-token-positioner { z-index: 100; }
+.development-token-popup { width: min(320px, calc(100vw - 32px)); max-height: var(--available-height); overflow: auto; padding: 16px; background: hsl(var(--panel)); color: hsl(var(--foreground)); border: 1px solid hsl(var(--border)); border-radius: 8px; box-shadow: 0 6px 24px hsl(0 0% 0% / 0.16); font-size: 12px; }
+.development-token-title { margin: 0 0 12px; font-size: 13px; font-weight: 500; }
+.development-token-popup dl { display: grid; gap: 8px; margin: 0; }
+.development-token-popup dl > div { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 12px; }
+.development-token-popup dt { color: hsl(var(--muted-foreground)); }
+.development-token-popup dd { margin: 0; text-align: right; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.development-token-note { margin: 12px 0 0; color: hsl(var(--muted-foreground)); font-size: 12px; line-height: 1.5; }

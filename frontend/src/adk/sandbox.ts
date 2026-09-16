@@ -148,6 +148,7 @@ export interface SandboxUploadedFile {
 }
 
 export interface SandboxTokenUsage {
+  cacheWriteInputTokens?: number;
   totalTokens: number;
   inputTokens: number;
   cachedInputTokens: number;

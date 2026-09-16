@@ -27,16 +27,16 @@ test("process disclosure keeps its state through streaming, completion and repla
     await render([{ ...thinking, done: true }, tool], true);
     assert.equal(document.querySelector("button"), toggle, "stable item ID retains the disclosure node");
     assert.equal(toggle.getAttribute("aria-expanded"), "true");
-    assert.match(toggle.textContent, /读取文件.*agent.py/);
+    assert.match(toggle.textContent, /读取文件.*Read project files/);
     await render([{ ...thinking, done: true }, tool], true, "正在恢复连接");
     assert.match(toggle.textContent, /正在恢复连接/);
     await render([{ ...thinking, done: true }, { ...tool, done: true, status: "failed", durationMs: 1400 }, { id: "t:answer", kind: "text", text: "已保留结果" }, { id: "t:r2", kind: "thinking", text: "", done: false }], true);
     assert.equal(toggle.getAttribute("aria-expanded"), "true");
     assert.equal(document.querySelectorAll(".development-process").length, 2, "assistant message splits groups");
-    assert.match(document.querySelector(".development-process__failure").textContent, /执行失败/);
+    assert.equal(document.querySelector(".development-process__failure"), null, "failed items are not repeated above their original position");
     await act(async () => toggle.click());
     assert.equal(document.querySelector(".development-process__items").hidden, true);
-    assert.match(document.querySelector(".development-process__failure").textContent, /agent.py/);
+    assert.match(toggle.textContent, /1 次工具调用.*1,400 ms/);
   } finally { await act(async () => root.unmount()); dom.window.close(); }
 });
 
@@ -49,10 +49,10 @@ test("native actions expose meaningful file, directory, search and tool labels",
   try {
     const command = { kind: 'tool', itemType: 'commandExecution', name: '运行命令', done: false };
     const cases = [
-      [{ ...command, args: { commandActions: [{ type: 'read', name: 'agent.py' }] } }, '读取文件 · agent.py'],
-      [{ ...command, args: { commandActions: [{ type: 'listFiles', path: '/workspace' }] } }, '查看目录 · /workspace'],
-      [{ ...command, args: { commandActions: [{ type: 'search', query: 'root_agent', path: '/workspace' }] } }, '搜索 · root_agent'],
-      [{ ...command, args: { command: 'pytest -q', commandActions: [{ type: 'unknown', command: 'pytest -q' }] } }, '执行命令 · pytest -q'],
+      [{ ...command, args: { commandActions: [{ type: 'read', name: 'agent.py' }] } }, '读取文件 · Read project files'],
+      [{ ...command, args: { commandActions: [{ type: 'listFiles', path: '/workspace' }] } }, '查看目录 · List directory'],
+      [{ ...command, args: { commandActions: [{ type: 'search', query: 'root_agent', path: '/workspace' }] } }, '搜索 · Search project files'],
+      [{ ...command, args: { command: 'pytest -q', commandActions: [{ type: 'unknown', command: 'pytest -q' }] } }, '执行命令 · Run tests'],
       [{ ...command, itemType: 'fileChange', args: { changes: [{ path: 'agent.py' }, { path: 'test_agent.py' }] } }, '修改文件 · agent.py, test_agent.py'],
       [{ ...command, itemType: 'mcpToolCall', name: 'MCP · docs/search' }, 'MCP · docs/search'],
     ];

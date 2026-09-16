@@ -33,7 +33,7 @@ import re
 import secrets
 import time
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import Mapping, AsyncIterator, Awaitable, Callable
 from dataclasses import asdict, dataclass, replace
 from typing import Any, Literal, cast
 from urllib.parse import urlsplit, urlunsplit
@@ -181,6 +181,7 @@ class CodexTokenUsage:
     cached_input_tokens: int = 0
     output_tokens: int = 0
     reasoning_output_tokens: int = 0
+    cache_write_input_tokens: int | None = None
 
     def public_dict(self) -> dict[str, int]:
         """Return the browser-facing camelCase representation."""
@@ -190,6 +191,11 @@ class CodexTokenUsage:
             "cachedInputTokens": self.cached_input_tokens,
             "outputTokens": self.output_tokens,
             "reasoningOutputTokens": self.reasoning_output_tokens,
+            **(
+                {"cacheWriteInputTokens": self.cache_write_input_tokens}
+                if self.cache_write_input_tokens is not None
+                else {}
+            ),
         }
 
 
@@ -852,11 +858,13 @@ class CodexAppServerSession:
                 return events
 
             if task_observer:
-                yield CodexAppServerEvent(kind="turn_started", turn_id=turn["id"])
+                yield self.turn_lifecycle_event("turn_started", turn)
             if resume_turn_id:
                 stored = await self.read_turn(resume_turn_id)
                 if stored is None:
                     raise CodexAppServerError("原执行轮次暂时无法确认，请稍后恢复。")
+                if task_observer:
+                    yield self.turn_lifecycle_event("turn_started", stored)
                 for event in hydrate(stored):
                     yield event
                 if _turn_is_terminal(stored) and not completion.done():
@@ -984,6 +992,11 @@ class CodexAppServerSession:
             if isinstance(raw_status, dict):
                 raw_status = raw_status.get("type")
             status = str(raw_status or "completed")
+            if task_observer:
+                yield self.turn_lifecycle_event(
+                    "turn_completed",
+                    {**turn_result, "id": turn["id"], "status": status},
+                )
             if status.lower() == "interrupted":
                 raise CodexAppServerTurnInterruptedError("Codex 本轮任务已中断。")
             if status.lower() in {"failed", "cancelled"}:
@@ -1006,10 +1019,6 @@ class CodexAppServerSession:
                 if fallback is not None:
                     for event in self._authoritative_agent_events(fallback):
                         yield event
-            if task_observer:
-                yield CodexAppServerEvent(
-                    kind="turn_completed", turn_id=turn["id"], status=status
-                )
         except CodexAppServerTransportError as error:
             logger.warning(
                 "Codex turn reason=transport_failed thread_id=%s turn_id=%s elapsed_seconds=%.3f recoveries=%s error_type=%s",
@@ -1147,6 +1156,25 @@ class CodexAppServerSession:
                 if isinstance(turn_id, str):
                     return await self.read_turn(turn_id)
         return None
+
+    def turn_lifecycle_event(
+        self, kind: str, turn: Mapping[str, object]
+    ) -> CodexAppServerEvent:
+        """Keep authoritative native timing on success, failure and interruption."""
+        timing = {
+            key: value
+            for key in ("startedAt", "completedAt", "durationMs")
+            if isinstance((value := turn.get(key)), (int, float))
+            and not isinstance(value, bool)
+            and math.isfinite(value)
+            and value >= 0
+        }
+        return CodexAppServerEvent(
+            kind=kind,
+            turn_id=str(turn.get("id") or ""),
+            status=str(turn.get("status") or "inProgress"),
+            response={**timing, "model": self.model},
+        )
 
     @staticmethod
     def turn_snapshot_events(turn: dict[str, object]) -> list[CodexAppServerEvent]:
@@ -2330,7 +2358,8 @@ class CodexAppServerSession:
         if snapshot.model:
             self.model = snapshot.model
         self._skills_loaded = False
-        self._usage_by_turn_id.clear()
+        if method != "thread/resume":
+            self._usage_by_turn_id.clear()
         self._thread_token_total = None
         self._model_context_window = None
         return CodexThreadSnapshot(
@@ -3106,6 +3135,9 @@ def _usage_breakdown(value: dict[str, object] | None) -> CodexTokenUsage | None:
             value, "reasoningOutputTokens", "reasoning_output_tokens"
         )
         or 0,
+        cache_write_input_tokens=_field_nonnegative_int(
+            value, "cacheWriteInputTokens", "cache_write_input_tokens"
+        ),
     )
 
 
@@ -3142,15 +3174,23 @@ def _add_usage(left: CodexTokenUsage, right: CodexTokenUsage) -> CodexTokenUsage
         reasoning_output_tokens=(
             left.reasoning_output_tokens + right.reasoning_output_tokens
         ),
+        cache_write_input_tokens=(left.cache_write_input_tokens or 0)
+        + right.cache_write_input_tokens
+        if right.cache_write_input_tokens is not None
+        else None,
     )
 
 
 def _subtract_usage(
     current: CodexTokenUsage, previous: CodexTokenUsage
 ) -> CodexTokenUsage | None:
-    current_values = current.public_dict().values()
-    previous_values = previous.public_dict().values()
-    if any(now < before for now, before in zip(current_values, previous_values)):
+    current_values = current.public_dict()
+    previous_values = previous.public_dict()
+    if any(
+        current_values[key] < before
+        for key, before in previous_values.items()
+        if key in current_values
+    ):
         return None
     return CodexTokenUsage(
         total_tokens=current.total_tokens - previous.total_tokens,
@@ -3162,6 +3202,10 @@ def _subtract_usage(
         reasoning_output_tokens=(
             current.reasoning_output_tokens - previous.reasoning_output_tokens
         ),
+        cache_write_input_tokens=current.cache_write_input_tokens
+        - (previous.cache_write_input_tokens or 0)
+        if current.cache_write_input_tokens is not None
+        else None,
     )
 
 

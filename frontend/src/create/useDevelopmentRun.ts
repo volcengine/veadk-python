@@ -106,7 +106,7 @@ export function useDevelopmentRun({
     if (!optimisticTurns.current.some((turn) => turn.meta?.localId === `${input.id}:user`)) {
       optimisticTurns.current.push(
         { role: "user", blocks: [{ kind: "text", text }], meta: { localId: `${input.id}:user` } },
-        { role: "assistant", blocks: [{ kind: "progress", text: adkT("developmentRuns.preparing") }], meta: { localId: `${input.id}:assistant` } },
+        { role: "assistant", blocks: [{ kind: "progress", text: adkT(run && !runEnded(run) ? "developmentRuns.processing" : "developmentRuns.preparing") }], meta: { localId: `${input.id}:assistant` } },
       );
     }
     return [...optimisticTurns.current];

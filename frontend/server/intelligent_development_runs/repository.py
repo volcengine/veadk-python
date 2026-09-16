@@ -164,6 +164,13 @@ class RunRepository:
                         f"ALTER TABLE {table} ADD COLUMN message_digest TEXT NOT NULL DEFAULT ''"
                     )
 
+            if "metrics" not in {
+                row["name"] for row in db.execute("PRAGMA table_info(run_turns)")
+            }:
+                db.execute(
+                    "ALTER TABLE run_turns ADD COLUMN metrics TEXT NOT NULL DEFAULT '{}'"
+                )
+
     @contextmanager
     def _connection(self):
         db = sqlite3.connect(self.path, timeout=5, isolation_level=None)
@@ -716,14 +723,117 @@ class RunRepository:
         turn_id: str,
         revision: int,
         status: str,
+        metrics: dict[str, Any] | None = None,
     ) -> None:
+        """Persist one native turn and its usage atomically with replayable events."""
+        if not turn_id:
+            return
+
         def operation(db):
-            self._leased(db, owner, run_id, token)
+            run = self._leased(db, owner, run_id, token)
+            row = db.execute(
+                "SELECT status,metrics FROM run_turns WHERE owner_id=? AND run_id=? AND turn_id=?",
+                (owner, run_id, turn_id),
+            ).fetchone()
+            previous = json.loads(row["metrics"]) if row else {}
+            value = dict(previous)
+            update = metrics or {}
+            for key in ("startedAt", "completedAt", "durationMs"):
+                number = update.get(key)
+                if (
+                    isinstance(number, (int, float))
+                    and not isinstance(number, bool)
+                    and 0 <= number < 2**53
+                ):
+                    value[key] = number
+            if isinstance(update.get("model"), str) and update["model"]:
+                value["model"] = update["model"][:200]
+            if update.get("resumed") and not row:
+                value["usageIncomplete"] = True
+            usage = update.get("usage")
+            total = update.get("threadTotal")
+            if isinstance(usage, dict):
+                keys = (
+                    "totalTokens",
+                    "inputTokens",
+                    "outputTokens",
+                    "cachedInputTokens",
+                    "cacheWriteInputTokens",
+                    "reasoningOutputTokens",
+                )
+                usage = {
+                    k: v
+                    for k, v in usage.items()
+                    if k in keys and type(v) is int and 0 <= v < 2**53
+                }
+                total = (
+                    {
+                        k: v
+                        for k, v in total.items()
+                        if k in keys and type(v) is int and 0 <= v < 2**53
+                    }
+                    if isinstance(total, dict)
+                    else {}
+                )
+                baseline = run.checkpoint.get("token_total", {})
+                if baseline.get("threadId") == thread_id and total:
+                    before = baseline.get("usage", {})
+                    if all(total.get(k, v) >= v for k, v in before.items()):
+                        delta = {k: v - before.get(k, 0) for k, v in total.items()}
+                        value["usage"] = {
+                            k: value.get("usage", {}).get(k, 0) + v
+                            for k, v in delta.items()
+                        }
+                    else:
+                        # A reset/compaction is not a negative usage measurement.
+                        value["usageIncomplete"] = True
+                elif "usage" not in value:
+                    value["usage"] = usage
+                else:
+                    # A cumulative per-connection snapshot is not an increment.
+                    value["usage"] = {
+                        k: max(value["usage"].get(k, 0), v) for k, v in usage.items()
+                    }
+                    value["usageIncomplete"] = True
+                if total:
+                    db.execute(
+                        "UPDATE runs SET checkpoint=? WHERE owner_id=? AND id=?",
+                        (
+                            json.dumps(
+                                {
+                                    **run.checkpoint,
+                                    "token_total": {
+                                        "threadId": thread_id,
+                                        "usage": total,
+                                    },
+                                }
+                            ),
+                            owner,
+                            run_id,
+                        ),
+                    )
+            if row and row["status"] in {"completed", "failed", "interrupted"}:
+                final_status = row["status"]
+            else:
+                final_status = status
+            value.update(turnId=turn_id, status=final_status)
+            if final_status in {"failed", "interrupted"}:
+                value["usageIncomplete"] = True
             db.execute(
-                "INSERT INTO run_turns VALUES(?,?,?,?,?,?) ON CONFLICT(owner_id,run_id,turn_id) "
-                "DO UPDATE SET input_revision=excluded.input_revision,status=excluded.status",
-                (owner, run_id, turn_id, thread_id, revision, status),
+                "INSERT INTO run_turns(owner_id,run_id,turn_id,thread_id,input_revision,status,metrics) VALUES(?,?,?,?,?,?,?) "
+                "ON CONFLICT(owner_id,run_id,turn_id) DO UPDATE SET input_revision=excluded.input_revision,status=excluded.status,metrics=excluded.metrics",
+                (
+                    owner,
+                    run_id,
+                    turn_id,
+                    thread_id,
+                    revision,
+                    final_status,
+                    json.dumps(value),
+                ),
             )
+            if value != previous:
+                self._event(db, owner, run_id, "run.turn", value)
 
         await self._write(operation)
 

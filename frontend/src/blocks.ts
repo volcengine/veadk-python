@@ -93,12 +93,28 @@ export interface CodexSandboxActivity {
   items: Array<{ id: string; block: Block }>;
 }
 
+export interface DevelopmentTurnMetrics {
+  turnId: string;
+  status: string;
+  model?: string;
+  durationMs?: number;
+  startedAt?: number;
+  completedAt?: number;
+  usage?: Partial<SandboxTokenUsage>;
+  usageIncomplete?: boolean;
+  toolCalls: number;
+  toolDurationMs?: number;
+  toolDurationComplete: boolean;
+}
+
 export type Block = {
   id?: string;
   itemType?: string;
+  turnId?: string;
   phase?: string;
   durationMs?: number;
 } & (
+  | { kind: "turn-summary"; value: DevelopmentTurnMetrics }
   | { kind: "diff"; text: string; done: boolean }
   | { kind: "progress"; text: string }
   | { kind: "activity-source"; label: string }

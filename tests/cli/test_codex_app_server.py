@@ -2656,3 +2656,27 @@ def test_running_turn_with_completed_commentary_is_not_terminal():
             ],
         }
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["completed", "failed", "interrupted"])
+async def test_task_observer_emits_terminal_metrics_even_before_raising(status):
+    socket = _TerminalTurnWebSocket(status, has_final=True)
+    session = CodexAppServerSession(
+        "https://sandbox.example", websocket_factory=lambda _: _ready(socket)
+    )
+    events = []
+    try:
+        try:
+            async for event in session.stream_turn(
+                "long-running", client_user_message_id="metrics-test"
+            ):
+                events.append(event)
+        except CodexAppServerError:
+            assert status != "completed"
+        ended = [event for event in events if event.kind == "turn_completed"]
+        assert len(ended) == 1
+        assert ended[0].status == status
+        assert ended[0].turn_id
+    finally:
+        await session.close()
