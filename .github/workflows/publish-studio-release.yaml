@@ -248,18 +248,28 @@ jobs:
           while [ ! -f "$PERMISSION_PROBE_STATE/companion-started" ]; do sleep 0.01; done
           SH
           chmod 755 "$permission_probe_bin/python3"
-          sudo -u nobody -H env \
+          direct_stderr="$permission_probe_root/direct.stderr"
+          if sudo -u nobody -H env \
             PATH="$permission_probe_bin:/usr/bin:/bin" \
             PERMISSION_PROBE_STATE="$permission_probe_state" \
-            "$permission_probe/run.sh"
+            "$permission_probe/run.sh" 2>"$direct_stderr"; then
+            echo "entrypoint accepted an unexpected Studio exit" >&2
+            exit 1
+          fi
+          grep -qx "studio_process_exited_unexpectedly" "$direct_stderr"
           sudo -u nobody -H rm \
             "$permission_probe_state/companion-started" \
             "$permission_probe_state/studio-started"
           chmod 644 "$permission_probe/run.sh"
-          sudo -u nobody -H env \
+          normalized_stderr="$permission_probe_root/normalized.stderr"
+          if sudo -u nobody -H env \
             PATH="$permission_probe_bin:/usr/bin:/bin" \
             PERMISSION_PROBE_STATE="$permission_probe_state" \
-            bash "$permission_probe/run.sh"
+            bash "$permission_probe/run.sh" 2>"$normalized_stderr"; then
+            echo "normalized entrypoint accepted an unexpected Studio exit" >&2
+            exit 1
+          fi
+          grep -qx "studio_process_exited_unexpectedly" "$normalized_stderr"
 
           smoke_studio() {
             provider="$1"

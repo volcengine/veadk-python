@@ -70,6 +70,9 @@ def test_sidecar_release_gate_runs_backend_and_frontend_in_parallel() -> None:
     assert "test_smoke_gate_survives_platform_entrypoint_mode_normalization" in (
         backend_run
     )
+    assert "test_smoke_gate_requires_unexpected_studio_exit_to_fail_closed" in (
+        backend_run
+    )
     assert "test_smoke_gate_is_fresh_amd64_and_runs_before_import_validation" in (
         backend_run
     )

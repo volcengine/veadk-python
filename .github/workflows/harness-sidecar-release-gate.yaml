@@ -155,6 +155,7 @@ jobs:
               tests/test_studio_release_workflow.py::test_smoke_gate_is_fresh_amd64_and_runs_before_import_validation \
               tests/test_studio_release_workflow.py::test_smoke_gate_executes_bundle_as_low_privilege_user \
               tests/test_studio_release_workflow.py::test_smoke_gate_survives_platform_entrypoint_mode_normalization \
+              tests/test_studio_release_workflow.py::test_smoke_gate_requires_unexpected_studio_exit_to_fail_closed \
               tests/cli/test_studio_update.py::test_update_application_code_bundle_merges_only_explicit_environment \
               tests/cli/test_studio_update.py::test_studio_update_preserves_custom_function_command \
               tests/cli/test_studio_update.py::test_native_python_function_uses_mode_independent_bundle_entrypoint \

@@ -124,6 +124,21 @@ def test_smoke_gate_survives_platform_entrypoint_mode_normalization() -> None:
     assert 'bash "$permission_probe/run.sh"' in script
 
 
+def test_smoke_gate_requires_unexpected_studio_exit_to_fail_closed() -> None:
+    script = _smoke_script()
+
+    assert "if sudo -u nobody -H env \\\n" in script
+    assert 'direct_stderr="$permission_probe_root/direct.stderr"' in script
+    assert 'normalized_stderr="$permission_probe_root/normalized.stderr"' in script
+    assert "permission_probe_state/direct.stderr" not in script
+    assert "permission_probe_state/normalized.stderr" not in script
+    assert script.count('grep -qx "studio_process_exited_unexpectedly"') == 2
+    assert 'echo "entrypoint accepted an unexpected Studio exit" >&2' in script
+    assert (
+        'echo "normalized entrypoint accepted an unexpected Studio exit" >&2' in script
+    )
+
+
 def test_verification_reuses_checked_inputs_and_rebuilds_current_source(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
