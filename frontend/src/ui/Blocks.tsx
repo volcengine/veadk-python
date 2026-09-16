@@ -12,6 +12,8 @@ import { motion } from "motion/react";
 import { Trans, useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import type { Block } from "../blocks";
+import { DevelopmentTurnSummary } from "../create/DevelopmentTurnSummary";
+import { DevelopmentItemIcon } from "../create/DevelopmentItemIcon";
 import { DevelopmentProcess } from "../create/DevelopmentProcess";
 import { developmentToolLabel } from "../create/developmentPresentation";
 import { buildSurfaces, SurfaceView } from "../a2ui/Surface";
@@ -826,7 +828,7 @@ function ToolBlock({
           aria-expanded={open}
         >
           <span className="tool-icon tool-icon--generic" aria-hidden="true">
-            <GenericToolIcon />
+            {native ? <DevelopmentItemIcon kind="tool" /> : <GenericToolIcon />}
           </span>
           {done ? (
             <span className="tool-name">{label}</span>
@@ -836,7 +838,7 @@ function ToolBlock({
             </TextShimmer>
           )}
           {native && toolStatus === "failed" && <span className="development-tool-failure"><Trans ns="adk" i18nKey="developmentRuns.toolFailed" /></span>}
-          {native && durationMs != null && <span className="development-tool-meta">{(durationMs / 1000).toFixed(1)}s</span>}
+          {native && durationMs != null && <span className="development-tool-meta">{Math.round(durationMs).toLocaleString()} ms</span>}
           <ToolDisclosureIcon
             className={`tool-chevron${open ? " is-open" : ""}`}
           />
@@ -1245,8 +1247,9 @@ export function Blocks({
     <>
       {blocks.map((b, i) => {
         switch (b.kind) {
+          case "turn-summary": return <DevelopmentTurnSummary key={b.id || i} value={b.value} />;
           case "diff":
-            return <details className="development-diff" key={b.id ?? i}><summary><Trans ns="adk" i18nKey="developmentRuns.diff" /></summary><pre>{b.text}</pre></details>;
+            return <details className="development-diff" key={b.id ?? i}><summary><span className="tool-icon"><DevelopmentItemIcon kind="diff" /></span><span><Trans ns="adk" i18nKey="developmentRuns.diff" /></span><ToolDisclosureIcon className="tool-chevron" /></summary><pre>{b.text}</pre></details>;
           case "progress":
             return <BuildProgressBlock key="build-progress" text={b.text} />;
           case "thinking": {

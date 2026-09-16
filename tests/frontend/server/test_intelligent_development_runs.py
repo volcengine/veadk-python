@@ -206,3 +206,101 @@ async def test_stop_withdrawal_and_completion_race_are_replayable(repository):
         == {"clientId": "steer", "status": "withdrawn", "turnId": ""}
         for event in events
     )
+
+
+@pytest.mark.asyncio
+async def test_turn_metrics_survive_reopen_deduplicate_usage_and_enforce_owner(
+    repository,
+):
+    run = await repository.create("alice", "session-a", "request-a", "build")
+    token = await repository.claim("alice", run.id)
+    options = dict(thread_id="thread", turn_id="turn", revision=1)
+    await repository.record_turn(
+        "alice",
+        run.id,
+        token,
+        **options,
+        status="inProgress",
+        metrics={"startedAt": 100, "model": "test-model"},
+    )
+    usage = {
+        "totalTokens": 100,
+        "inputTokens": 80,
+        "outputTokens": 20,
+        "cachedInputTokens": 40,
+        "reasoningOutputTokens": 5,
+    }
+    await repository.record_turn(
+        "alice",
+        run.id,
+        token,
+        **options,
+        status="inProgress",
+        metrics={"usage": usage, "threadTotal": usage},
+    )
+    reopened = RunRepository(repository.path, clock=repository.clock)
+    await reopened.record_turn(
+        "alice",
+        run.id,
+        token,
+        **options,
+        status="inProgress",
+        metrics={"usage": usage, "threadTotal": usage},
+    )
+    await reopened.record_turn(
+        "alice",
+        run.id,
+        token,
+        **options,
+        status="interrupted",
+        metrics={"durationMs": 4321, "completedAt": 104},
+    )
+    events = await reopened.events("alice", run.id)
+    final = [e["payload"] for e in events if e["type"] == "run.turn"][-1]
+    assert final["usage"] == usage
+    assert final["durationMs"] == 4321
+    assert final["model"] == "test-model"
+    assert final["status"] == "interrupted"
+    with pytest.raises(RunNotFound):
+        await reopened.record_turn(
+            "bob", run.id, token, **options, status="completed", metrics={}
+        )
+
+
+@pytest.mark.asyncio
+async def test_usage_increments_are_durable_across_reconnect_and_native_turns(
+    repository,
+):
+    run = await repository.create("alice", "session-a", "request-a", "build")
+    token = await repository.claim("alice", run.id)
+
+    async def record(turn, total, usage, status="inProgress"):
+        await repository.record_turn(
+            "alice",
+            run.id,
+            token,
+            thread_id="thread",
+            turn_id=turn,
+            revision=1,
+            status=status,
+            metrics={
+                "usage": {"totalTokens": usage},
+                "threadTotal": {"totalTokens": total},
+            },
+        )
+
+    await record("first", 100, 20)
+    await record("first", 150, 50)  # new connection's usage counter reset
+    await record("first", 150, 50, "completed")
+    await record("second", 180, 30)
+    await record("second", 10, 10)  # compaction/reset: no negative or invented tokens
+    metrics = [
+        e["payload"]
+        for e in await repository.events("alice", run.id)
+        if e["type"] == "run.turn"
+    ]
+    first = [m for m in metrics if m["turnId"] == "first"][-1]
+    second = [m for m in metrics if m["turnId"] == "second"][-1]
+    assert first["usage"]["totalTokens"] == 70
+    assert second["usage"]["totalTokens"] == 30
+    assert second["usageIncomplete"] is True

@@ -7,7 +7,6 @@
 .development-process__duration { flex-shrink: 0; font-size: 12px; }
 .development-process__items { padding: 4px 0 4px 20px; min-width: 0; }
 .development-process__items[hidden] { display: none; }
-.development-process__failure { color: hsl(var(--destructive)); font-size: 12px; overflow-wrap: anywhere; margin: 4px 0 4px 22px; }
 .development-process__status { min-height: 32px; display: flex; align-items: center; font-size: 13px; color: hsl(var(--muted-foreground)); }
 .development-process__items pre, .development-diff pre { max-height: 320px; overflow: auto; white-space: pre; }
 .development-diff { min-width: 0; font-size: 13px; margin: 8px 0; }
@@ -19,3 +18,19 @@
 .development-preparation__footer { width: min(100%, 768px); margin: 0 auto; padding: 16px 0; }
 
 .development-tool-failure { color: hsl(var(--destructive)); font-size: 12px; flex-shrink: 0; }
+
+.development-process__items .think-head, .development-process__items .tool-head { display: flex; max-width: 100%; text-align: left; }
+.development-process__items .think-label, .development-process__items .tool-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.development-tool-meta { flex-shrink: 0; white-space: nowrap; }
+.development-process__toggle { flex-wrap: wrap; }
+.development-process__title { flex: 1; text-align: left; }
+.development-diff summary { display: flex; align-items: center; gap: 8px; padding: 3px 7px 3px 3px; list-style: none; }
+.development-diff summary::-webkit-details-marker { display: none; }
+.development-diff[open] > summary .tool-chevron { transform: rotate(90deg); }
+
+.development-process__status { gap: 8px; }
+.development-process__items .plan-head { display: flex; width: 100%; min-height: 32px; gap: 8px; padding: 3px 7px 3px 3px; text-align: left; }
+.development-process__items .plan-icon { width: 20px; height: 26px; flex: 0 0 20px; display: grid; place-items: center; }
+.development-process__items .plan-icon > svg { width: 18px; height: 18px; }
+.development-process__items .plan-title { font-size: 13px; font-weight: 400; }
+.development-process__items .plan-summary { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

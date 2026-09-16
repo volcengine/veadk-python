@@ -9,15 +9,25 @@ export function developmentToolLabel(block: Extract<Block, { kind: "tool" }>): s
   const args = record(block.args);
   if (block.itemType === "commandExecution") {
     const actions = Array.isArray(args.commandActions) ? args.commandActions.map(record) : [];
-    const labels = actions.map((action) => {
-      const target = short(action.name || action.path);
-      if (action.type === "read") return adkT("developmentRuns.read", { target });
-      if (action.type === "listFiles") return adkT("developmentRuns.listFiles", { target });
-      if (action.type === "search") return adkT("developmentRuns.search", { target: short(action.query || action.path) });
-      return "";
-    }).filter(Boolean);
-    if (labels.length && labels.length === actions.length) return [...new Set(labels)].join(" · ");
-    return adkT("developmentRuns.command", { target: short(args.command) });
+    const types = new Set(actions.map(action => action.type));
+    if (actions.length && types.size === 1) {
+      if (types.has("read")) return adkT("developmentRuns.read", { target: "Read project files" });
+      if (types.has("listFiles")) return adkT("developmentRuns.listFiles", { target: "List directory" });
+      if (types.has("search")) return adkT("developmentRuns.search", { target: "Search project files" });
+    }
+    const command = typeof args.command === "string" ? args.command : "";
+    const rules: [RegExp, string][] = [
+      [/\b(?:pytest|vitest|jest)\b|\b(?:npm|pnpm|yarn) (?:run )?test\b/, "Run tests"],
+      [/\b(?:npm|pnpm|yarn) (?:ci|install|add)\b|\b(?:pip|pip3|uv pip) install\b|\buv sync\b/, "Install dependencies"],
+      [/\b(?:ruff|eslint|prettier|pyright|tsc)\b/, "Check code quality"],
+      [/\b(?:npm|pnpm|yarn) (?:run )?build\b|\bpython[^;]* -m build\b/, "Build project"],
+      [/\bgit (?:status|diff|log|show)\b/, "Inspect Git changes"],
+      [/\bgit (?:add|commit)\b/, "Save Git changes"],
+      [/\b(?:curl|wget)\b/, "Send HTTP request"],
+      [/\bcompileall\b/, "Check Python syntax"],
+    ];
+    const summary = rules.find(([pattern]) => pattern.test(command))?.[1] || "Run shell command";
+    return adkT("developmentRuns.command", { target: summary });
   }
   if (block.itemType === "fileChange") {
     const paths = Array.isArray(args.changes) ? args.changes.map((change) => short(record(change).path)).filter(Boolean) : [];

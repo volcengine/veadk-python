@@ -1,3 +1,4 @@
+import { DevelopmentTurnSummary } from "../../../create/DevelopmentTurnSummary";
 import type { ReactNode } from "react";
 import type { AttachmentView, Block, Turn } from "../../../blocks";
 import type { A2uiAction, A2uiComponent, A2uiMessage } from "../../../a2ui/types";
@@ -193,6 +194,7 @@ export function fromStudioTurns(turns: readonly Turn[], options: StudioConversat
     const custom = options.renderBlock?.(block, turn);
     if (custom !== undefined) return { id, type: "custom", content: custom };
     switch (block.kind) {
+      case "turn-summary": return {id, type: "custom", content: <DevelopmentTurnSummary value={block.value} />};
       case "diff": return { id, type: "custom", content: <CodeBlock title="文件变更" language="diff" lines={[block.text]} scrollAreaProps={{ maxHeight: 320 }} /> };
       case "text": return { id, type: "markdown", text: block.text };
       case "thinking": return { id, type: "reasoning", title: "思考过程", status: block.done ? "complete" : "running", content: block.text };

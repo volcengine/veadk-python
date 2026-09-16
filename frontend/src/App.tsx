@@ -809,7 +809,7 @@ function turnHasVisibleContent(turn: Turn): boolean {
     if (b.kind === "text") return b.text.trim().length > 0;
     if (b.kind === "attachment") return b.files.length > 0;
     if (b.kind === "artifact") return b.files.length > 0;
-    if (b.kind === "delivery") return true;
+    if (b.kind === "delivery" || b.kind === "turn-summary") return true;
     if (b.kind === "tool") return !(b.name === A2UI_TOOL_NAME && b.done);
     if (b.kind === "agent-transfer") return false;
     if (b.kind === "a2ui") return buildSurfaces(b.messages).some((s) => s.components[s.rootId]);
@@ -7844,7 +7844,7 @@ export default function App() {
                       blocks={turn.blocks}
                       groupProcess={Boolean(sandboxSession?.intelligentDevelopment)}
                       liveStatus={sandboxSession?.intelligentDevelopment && isLast
-                        ? (development.connection || (development.run?.phase !== "coding" ? development.run?.statusMessage : "")) : undefined}
+                        ? (development.connection || (development.run?.phase !== "coding" || development.run?.state !== "running" ? development.run?.statusMessage : "")) : undefined}
                       streaming={turnIsStreaming}
                       onStreamFrame={turnIsStreaming ? followConversationStreamFrame : undefined}
                       onStreamComplete={
@@ -7878,7 +7878,7 @@ export default function App() {
                         only once the reply is done. */}
                     {!turnIsStreaming && !turnAwaitingAuth(turn) && (
                       <div className="turn-meta" data-share-image-exclude="true">
-                        {sandboxSession && turn.meta?.sandboxUsage ? (
+                        {sandboxSession && !sandboxSession.intelligentDevelopment && turn.meta?.sandboxUsage ? (
                           <SandboxTokenUsageRow usage={turn.meta.sandboxUsage} />
                         ) : null}
                         <div className="turn-actions">

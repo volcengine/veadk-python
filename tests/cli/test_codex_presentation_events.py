@@ -116,3 +116,28 @@ def test_reasoning_summary_parts_do_not_duplicate_raw_content():
     while not session._turn_events.empty():
         events.append(session._turn_events.get_nowait())
     assert events[-1].text == "First summary\n\nSecond summary"
+
+
+def test_native_turn_timing_uses_reported_values_and_never_fabricates_missing_time():
+    session = CodexAppServerSession("https://sandbox.invalid")
+    session.model = "test-model"
+    event = session.turn_lifecycle_event(
+        "turn_completed",
+        {
+            "id": "t",
+            "status": "interrupted",
+            "startedAt": 100,
+            "completedAt": 102,
+            "durationMs": 2123,
+        },
+    )
+    assert event.response == {
+        "startedAt": 100,
+        "completedAt": 102,
+        "durationMs": 2123,
+        "model": "test-model",
+    }
+    event = session.turn_lifecycle_event(
+        "turn_completed", {"id": "t", "durationMs": -1}
+    )
+    assert event.response == {"model": "test-model"}
