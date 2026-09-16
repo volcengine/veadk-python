@@ -148,6 +148,7 @@ export interface SandboxUploadedFile {
 }
 
 export interface SandboxTokenUsage {
+  cacheWriteInputTokens?: number;
   totalTokens: number;
   inputTokens: number;
   cachedInputTokens: number;
@@ -529,6 +530,12 @@ interface SandboxErrorPayload {
 }
 
 interface SandboxStreamPayload {
+  itemType?: unknown;
+  phase?: unknown;
+  durationMs?: unknown;
+  snapshot?: unknown;
+  plan?: unknown;
+  items?: unknown;
   id?: unknown;
   kind?: unknown;
   status?: unknown;
@@ -556,7 +563,7 @@ interface SandboxStreamPayload {
   retryable?: unknown;
 }
 
-function sandboxHeaders(headers?: HeadersInit): Headers {
+export function sandboxHeaders(headers?: HeadersInit): Headers {
   const next = withLocaleHeaders(headers);
   if (!next.has("Accept")) next.set("Accept", "application/json");
   return next;
@@ -954,24 +961,17 @@ function parseApproval(payload: SandboxStreamPayload): SandboxApproval | null {
   };
 }
 
-async function parseSandboxStream(
-  response: Response,
-  options: SandboxRequestOptions = {},
-): Promise<SandboxReply> {
-  if (!response.body) throw new Error(adkT("sandbox.emptyConversationResponse"));
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
+export function createSandboxProjection(options: SandboxRequestOptions = {}) {
   let reply = "";
   const blocks: Block[] = [];
   const activityIndexes = new Map<string, number>();
+  const textIndexes = new Map<string, number>();
   let progressBlock: Extract<Block, { kind: "progress" }> | undefined;
   let latestUsage: SandboxTokenUsageUpdate | undefined;
 
   function emitBlocks(): void {
     const visible = progressBlock ? [...blocks, progressBlock] : blocks;
-    options.onBlocks?.(visible.map((block) => ({ ...block })));
+    options.onBlocks?.([...visible]);
   }
 
   function appendReply(text: string): void {
@@ -979,7 +979,7 @@ async function parseSandboxStream(
     const last = blocks[blocks.length - 1];
     const lastIndex = blocks.length - 1;
     const activityBacked = [...activityIndexes.values()].includes(lastIndex);
-    if (last?.kind === "text" && !activityBacked) last.text += text;
+    if (last?.kind === "text" && !activityBacked) blocks[lastIndex] = { ...last, text: last.text + text };
     else blocks.push({ kind: "text", text });
     emitBlocks();
   }
@@ -990,13 +990,12 @@ async function parseSandboxStream(
       (payload.kind !== "thinking"
         && payload.kind !== "commentary"
         && payload.kind !== "tool") ||
-      (payload.status !== "running" && payload.status !== "done")
+      (payload.status !== "running" && payload.status !== "done" && payload.status !== "error")
     ) return;
-    const done = payload.status === "done";
+    const done = payload.status !== "running";
     let block: Block;
     if (payload.kind === "thinking") {
-      if (typeof payload.text !== "string" || !payload.text) return;
-      block = { kind: "thinking", text: payload.text, done };
+      block = { kind: "thinking", text: typeof payload.text === "string" ? payload.text : "", done };
     } else if (payload.kind === "commentary") {
       if (typeof payload.text !== "string" || !payload.text) return;
       block = { kind: "text", text: payload.text };
@@ -1007,9 +1006,14 @@ async function parseSandboxStream(
         name: payload.name,
         args: payload.args,
         response: payload.response,
+        status: payload.status === "error" ? "failed" : done ? "completed" : "running",
         done,
       };
     }
+    block = { ...block, id: payload.id,
+      ...(typeof payload.itemType === "string" ? { itemType: payload.itemType } : {}),
+      ...(typeof payload.phase === "string" ? { phase: payload.phase } : {}),
+      ...(typeof payload.durationMs === "number" ? { durationMs: payload.durationMs } : {}) };
     const existing = activityIndexes.get(payload.id);
     if (existing === undefined) {
       activityIndexes.set(payload.id, blocks.length);
@@ -1045,14 +1049,41 @@ async function parseSandboxStream(
         publicMessage: message,
       });
     }
-    if (event === "progress" && typeof payload.text === "string" && payload.text) {
-      progressBlock = {
-        kind: "progress",
-        text: payload.text,
-      };
+    if (event === "progress" && typeof payload.text === "string") {
+      progressBlock = payload.text ? { kind: "progress", text: payload.text } : undefined;
       emitBlocks();
     }
+    if (["activity", "delta", "tool_output", "tool_progress", "plan", "diff"].includes(event)) progressBlock = undefined;
     if (event === "activity") applyActivity(payload);
+    if ((event === "tool_output" || event === "tool_progress") && typeof payload.id === "string") {
+      const index = activityIndexes.get(payload.id);
+      const block = index === undefined ? undefined : blocks[index];
+      if (block?.kind === "tool" && index !== undefined && typeof payload.text === "string") {
+        const response = recordOf(block.response) || {};
+        blocks[index] = event === "tool_progress"
+          ? { ...block, progressText: payload.text }
+          : { ...block, response: { ...response, output: (payload.snapshot ? "" : String(response.output || "")) + payload.text } };
+        emitBlocks();
+      }
+    }
+    if ((event === "plan" || event === "diff") && typeof payload.id === "string") {
+      const text = typeof payload.text === "string" ? payload.text : "";
+      const items = Array.isArray(payload.items) ? payload.items : Array.isArray(payload.plan) ? payload.plan : [];
+      const block: Block = event === "diff"
+        ? { kind: "diff", id: payload.id, text, done: payload.status === "done" }
+        : { kind: "plan", id: payload.id, title: adkT("developmentRuns.plan"), summary: text,
+            done: payload.status === "done", items: items.flatMap((value) => {
+              const item = recordOf(value);
+              if (!item || typeof (item.text ?? item.step) !== "string") return [];
+              const status = item.status === "inProgress" ? "in_progress" : item.status;
+              return [{ text: String(item.text ?? item.step), status: status === "completed" || status === "failed" || status === "in_progress" ? status : "pending" }];
+            }) };
+      const index = activityIndexes.get(payload.id);
+      if (index === undefined) { activityIndexes.set(payload.id, blocks.length); blocks.push(block); }
+      else blocks[index] = block;
+      emitBlocks();
+    }
+
     if (event === "development.source_ready" || event === "development.succeeded") {
       const eventPayload = recordOf(payload.payload);
       const eventData = recordOf(eventPayload?.delivery);
@@ -1130,36 +1161,66 @@ async function parseSandboxStream(
       options.onApprovalResolved?.(payload.approvalId);
     }
     if (event === "delta" && typeof payload.text === "string") {
-      appendReply(payload.text);
+      if (typeof payload.id === "string" && payload.id) {
+        const existing = textIndexes.get(payload.id);
+        const previous = existing === undefined ? undefined : blocks[existing];
+        const snapshot = recordOf(payload)?.snapshot === true;
+        if (previous?.kind === "text") {
+          blocks[existing!] = { ...previous,
+            phase: typeof payload.phase === "string" && payload.phase ? payload.phase : previous.phase,
+            text: snapshot ? (previous.text.startsWith(payload.text) ? previous.text : payload.text) : previous.text + payload.text };
+        } else {
+          textIndexes.set(payload.id, blocks.length);
+          blocks.push({ kind: "text", text: payload.text, id: payload.id,
+            itemType: typeof payload.itemType === "string" ? payload.itemType : undefined,
+            phase: typeof payload.phase === "string" ? payload.phase : undefined });
+        }
+        reply = blocks.filter((block) => block.kind === "text").map((block) => block.text).join("");
+        emitBlocks();
+      } else appendReply(payload.text);
     }
     if (event === "done" && !reply && typeof payload.text === "string") {
       appendReply(payload.text);
     }
-    if (event === "done" && progressBlock) {
+    if (event === "done") {
+      for (let i = 0; i < blocks.length; i++) {
+        const block = blocks[i];
+        if (block.kind === "thinking" || block.kind === "plan" || block.kind === "diff") blocks[i] = { ...block, done: true };
+        if (block.kind === "tool" && !block.done) blocks[i] = { ...block, done: true, status: block.status === "failed" ? "failed" : "completed" };
+      }
       progressBlock = undefined;
       emitBlocks();
     }
   }
 
+  return {
+    consumeFrame,
+    result: (): SandboxReply => ({ text: reply, blocks: blocks.map((block) => ({ ...block })), ...(latestUsage ? { usage: latestUsage } : {}) }),
+  };
+}
+
+async function parseSandboxStream(
+  response: Response,
+  options: SandboxRequestOptions = {},
+): Promise<SandboxReply> {
+  if (!response.body) throw new Error(adkT("sandbox.emptyConversationResponse"));
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  const projection = createSandboxProjection(options);
   while (true) {
     const { done, value } = await reader.read();
     buffer += decoder.decode(value, { stream: !done });
     const frames = buffer.split(/\r?\n\r?\n/);
     buffer = frames.pop() ?? "";
-    frames.forEach(consumeFrame);
+    frames.forEach(projection.consumeFrame);
     if (done) break;
   }
-  if (buffer.trim()) consumeFrame(buffer);
-  if (progressBlock) {
-    progressBlock = undefined;
-    emitBlocks();
-  }
-  if (blocks.length === 0) throw new Error(adkT("sandbox.emptyReply"));
-  return {
-    text: reply,
-    blocks,
-    ...(latestUsage ? { usage: latestUsage } : {}),
-  };
+  if (buffer.trim()) projection.consumeFrame(buffer);
+  projection.consumeFrame("event: done\ndata: {}");
+  const reply = projection.result();
+  if (reply.blocks.length === 0) throw new Error(adkT("sandbox.emptyReply"));
+  return reply;
 }
 
 async function sandboxJson(

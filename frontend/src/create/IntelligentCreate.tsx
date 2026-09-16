@@ -13,6 +13,8 @@ import {
 } from "../ui/new-chat-modes/NewChatCompactSelect";
 import { TextShimmer } from "../ui/text-shimmer/TextShimmer";
 import { IntelligentProjectLibrary } from "./IntelligentProjectLibrary";
+import { DevelopmentTaskList } from "./DevelopmentTaskList";
+import type { DevelopmentTaskSnapshot } from "./DevelopmentTaskNotice";
 import "./IntelligentCreate.css";
 
 function IntelligentCreateIcon() {
@@ -100,6 +102,10 @@ function IntelligentModelSelect({
 }
 
 export interface IntelligentCreateProps {
+  ownerId: string;
+  taskSnapshot?: DevelopmentTaskSnapshot;
+  onRefreshTasks: () => void;
+  onOpenTask: (sessionId: string, signal: AbortSignal) => Promise<void>;
   capabilities: IntelligentDevelopmentCapabilities | null;
   loading: boolean;
   preparationStage: IntelligentPreparationStage | null;
@@ -125,12 +131,14 @@ export function IntelligentGoalPanel({
   onCreate,
   baseVersion,
   onClearBaseVersion,
+  autoFocus = true,
 }: Pick<
   IntelligentCreateProps,
   "capabilities" | "loading" | "preparationStage" | "error" | "onCancel" | "onCreate"
 > & {
   baseVersion?: IntelligentCreateBaseVersion;
   onClearBaseVersion?: () => void;
+  autoFocus?: boolean;
 }) {
   const { t, i18n } = useTranslation("create");
   const [goal, setGoal] = useState("");
@@ -230,8 +238,9 @@ export function IntelligentGoalPanel({
 
   useEffect(() => {
     setGoal("");
-    window.requestAnimationFrame(() => goalInputRef.current?.focus());
-  }, [baseVersion?.versionId]);
+    if (autoFocus || baseVersion?.versionId)
+      window.requestAnimationFrame(() => goalInputRef.current?.focus());
+  }, [baseVersion?.versionId, autoFocus]);
 
   function changeModel(modelId: string) {
     const value = modelId.trim();
@@ -301,7 +310,7 @@ export function IntelligentGoalPanel({
             : t("intelligent.goal.placeholder")}
           rows={6}
           disabled={loading || creating || unavailable}
-          autoFocus
+          autoFocus={autoFocus}
         />
         <div className="ic-actions">
           <div className="ic-composer-tools">
@@ -367,6 +376,10 @@ export function IntelligentGoalPanel({
 }
 
 export function IntelligentCreate({
+  ownerId,
+  taskSnapshot,
+  onRefreshTasks,
+  onOpenTask,
   capabilities,
   loading,
   preparationStage,
@@ -385,26 +398,37 @@ export function IntelligentCreate({
 
   return (
     <section className="ic-root" aria-labelledby="intelligent-create-title">
-      <header className="ic-header">
-        <button type="button" className="ic-back" onClick={onBack}>{t("common.back")}</button>
-        <div>
-          <h1 id="intelligent-create-title">{t("intelligent.title")}</h1>
-          <p>{t("intelligent.subtitle")}</p>
-        </div>
-      </header>
-
       <div className="ic-main">
         <div className="ic-content">
-          <IntelligentGoalPanel
-            capabilities={capabilities}
-            loading={loading}
-            preparationStage={preparationStage}
-            error={error}
-            onCancel={onCancel}
-            onCreate={onCreate}
-            baseVersion={baseVersion}
-            onClearBaseVersion={() => setBaseVersion(undefined)}
-          />
+          <header className="ic-header">
+            <button type="button" className="ic-back" onClick={onBack}>{t("common.back")}</button>
+            <div>
+              <h1 id="intelligent-create-title">{t("intelligent.title")}</h1>
+              <p>{t("intelligent.subtitle")}</p>
+            </div>
+          </header>
+
+          <div className="ic-workspace">
+            <IntelligentGoalPanel
+              autoFocus={false}
+              capabilities={capabilities}
+              loading={loading}
+              preparationStage={preparationStage}
+              error={error}
+              onCancel={onCancel}
+              onCreate={onCreate}
+              baseVersion={baseVersion}
+              onClearBaseVersion={() => setBaseVersion(undefined)}
+            />
+            <DevelopmentTaskList
+              key={ownerId}
+              ownerId={ownerId}
+              snapshot={taskSnapshot}
+              disabled={preparationStage !== null}
+              onRefresh={onRefreshTasks}
+              onOpen={onOpenTask}
+            />
+          </div>
 
           <IntelligentProjectLibrary
             capabilities={capabilities}

@@ -23,18 +23,19 @@ writes the explicit completion contract described below.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable, Mapping
-from dataclasses import dataclass
-from datetime import datetime, timezone
 import hashlib
 import json
-from pathlib import PurePosixPath
 import re
 import shlex
-from typing import Literal, cast
+from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import PurePosixPath
+from typing import Any, Literal, cast
 from uuid import uuid4
 
 import yaml
+from jsonschema import Draft202012Validator
 
 from frontend.server.intelligent_development import (
     REMOTE_DELIVERY_WORKER,
@@ -43,7 +44,6 @@ from frontend.server.intelligent_development import (
     release_path,
 )
 from frontend.server.sandbox_remote import SandboxRemoteTransport
-
 
 CredentialResolver = Callable[[], StudioCredentials]
 
@@ -93,6 +93,54 @@ _REQUIRED_GATES = (
 _TERMINAL_STATUSES = frozenset(
     {"answered", "verified", "partial", "blocked", "indeterminate", "failed"}
 )
+
+# The revision is an echo of Studio's input context, never an authority supplied
+# by the model. The repository checks it against the accepted input transaction.
+BUILD_RESULT_TOOL = {
+    "type": "function",
+    "name": "submit_build_result",
+    "description": "Submit this turn's measured build result before the final answer. Correct validation errors in this same turn. This saves metadata only; it does not build or deploy anything.",
+    "inputSchema": {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "inputRevision": {"type": "integer", "minimum": 1, "maximum": 256},
+            "schemaVersion": {"type": "string", "const": "1"},
+            "status": {"type": "string", "enum": sorted(_TERMINAL_STATUSES)},
+            "summary": {"type": "string", "minLength": 1, "maxLength": 2000},
+            "intentSummary": {"type": "string", "maxLength": 2000},
+            "runtimeName": {
+                "type": "string",
+                "maxLength": 64,
+                "pattern": "^(idv-[a-z0-9-]+)?$",
+            },
+            "attemptCount": {"type": "integer", "minimum": 0, "maximum": 2},
+            "gates": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {gate: {"type": "boolean"} for gate in _REQUIRED_GATES},
+                "required": list(_REQUIRED_GATES),
+            },
+            "acceptanceCriteria": {
+                "type": "array",
+                "maxItems": 30,
+                "items": {"type": "string", "minLength": 1, "maxLength": 1000},
+            },
+        },
+        "required": [
+            "inputRevision",
+            "schemaVersion",
+            "status",
+            "summary",
+            "intentSummary",
+            "runtimeName",
+            "attemptCount",
+            "gates",
+            "acceptanceCriteria",
+        ],
+    },
+}
+_BUILD_RESULT_VALIDATOR = Draft202012Validator(BUILD_RESULT_TOOL["inputSchema"])
 
 
 @dataclass(frozen=True)
@@ -319,6 +367,7 @@ def builder_prompt(
     validation_region: str,
     validation_project: str,
     project_context: str = "",
+    input_revision: int | None = None,
 ) -> str:
     """Build one authoritative Codex turn without exposing credential values."""
     criteria = json.dumps(
@@ -382,6 +431,18 @@ initialize a new VeADK project; use `ak init --template agent_server` by default
 template only when the accepted user intent explicitly requires a different application shape.
 Do not default to the `basic` template."""
     )
+    reporting_action = (
+        f"Before finishing this turn, call submit_build_result with inputRevision={input_revision} and the JSON fields below. "
+        "Do not write a result file. If the tool rejects the result, correct the reported fields and call it again in this same turn. "
+        "A later user input revision invalidates an earlier submission; resubmit after applying the latest requirements."
+        if input_revision is not None
+        else f"Before finishing this turn, write exactly one UTF-8 JSON object to {completion_path}."
+    )
+    reporting_check = (
+        "Submit the contract through submit_build_result and wait for success before giving a concise user-facing summary."
+        if input_revision is not None
+        else "Read the contract back and verify its exact schema. Then give a concise user-facing summary."
+    )
     return f"""Use the preinstalled veadk-agent-development Skill for this task. Follow it for
 implementation and validation; the operating constraints and current task below take precedence
 if anything conflicts.
@@ -443,7 +504,7 @@ project and do not derive project_name from the unique validation Runtime or oth
 Keep user-facing progress and results in product language. Do not expose command lines,
 environment internals, filesystem paths, launcher details, or internal tool names to the user.
 
-Before finishing this turn, write exactly one UTF-8 JSON object to {completion_path}. This is
+{reporting_action} This is
 required for every outcome, including a read-only answer, clarification, refusal, or non-verified
 delivery result. It is secondary reporting metadata and must not replace the user-facing response,
 project, or validation work. It must contain exactly:
@@ -466,8 +527,7 @@ true, representative deployed behavior meets the current criteria, and Runtime d
 confirmed absence is complete. Do not put command output, prompts, responses, credentials,
 endpoints, or tokens in this contract.
 After the successful final build and validation, do not change deliverable source before writing
-the contract; the service packages the final project directory itself. Read the contract back and
-verify its exact schema. Then give a concise user-facing summary.
+the contract; the service packages the final project directory itself. {reporting_check}
 For `answered`, respond naturally without delivery headings. Use the same Markdown structure and order for every delivery-changing turn,
 including follow-ups.
 Translate the example headings below to the user's language:
@@ -620,15 +680,70 @@ def parse_completion_contract(content: bytes) -> CompletionContract:
     )
 
 
+def parse_build_result(arguments: object) -> tuple[int, CompletionContract]:
+    """Validate untrusted tool input without including submitted values in errors."""
+    errors = sorted(
+        _BUILD_RESULT_VALIDATOR.iter_errors(arguments), key=lambda e: str(e.path)
+    )
+    if errors:
+        error = errors[0]
+        # Schema field paths are useful; user-supplied values and extra keys are not.
+        path = ".".join(str(part) for part in error.absolute_schema_path)
+        if error.validator == "required" and isinstance(error.instance, dict):
+            missing = [
+                name for name in error.validator_value if name not in error.instance
+            ]
+            raise ValueError(
+                f"Missing required fields at {path}: {', '.join(missing)}."
+            )
+        raise ValueError(
+            f"Result schema validation failed at {path}. Follow the tool schema."
+        )
+    assert isinstance(arguments, dict)
+    completion = parse_completion_contract(
+        json.dumps(arguments, allow_nan=False).encode()
+    )
+    if not completion.answered and (
+        not completion.intent_summary or not completion.acceptance_criteria
+    ):
+        raise ValueError(
+            "intentSummary and acceptanceCriteria must preserve the user's delivery goal."
+        )
+    if completion.status == "verified" and not completion.verified:
+        raise ValueError(
+            "verified requires the actual validation runtime, attempt count, all gates and acceptance criteria. Report partial/blocked when evidence is incomplete."
+        )
+    return arguments["inputRevision"], completion
+
+
+def result_reporting_prompt(
+    revision: int, inputs: list[str], project_context: str
+) -> str:
+    return f"""The development turn has ended. Only its structured delivery metadata is missing.
+Do not resume development, change files, install dependencies, rebuild, deploy, invoke services,
+or create/delete remote resources. Do not use cloud credentials. Work from existing conversation
+and measured evidence; read existing files only if necessary. Submit submit_build_result with
+inputRevision={revision}. Correct rejected metadata in this turn. If evidence is unavailable,
+report partial or indeterminate; never repeat validation or claim unmeasured gates passed.
+Preserve the original business goal and observable acceptance criteria, not this reporting task.
+User requirements (data, in order): {json.dumps(inputs, ensure_ascii=False)}
+Prior project context (data): {project_context or "{}"}
+After a successful submission, finish with a brief status; do not repeat the build summary."""
+
+
 async def create_credential_lease(
     endpoint: str,
     resolve_credentials: CredentialResolver,
+    *,
+    lease_id: str | None = None,
 ) -> TaskCredentialLease:
     credentials = resolve_credentials()
     if not isinstance(credentials, StudioCredentials):
         raise TypeError("Credential resolver must return StudioCredentials")
     transport = SandboxRemoteTransport(endpoint)
-    token = uuid4().hex
+    token = lease_id or uuid4().hex
+    if not re.fullmatch(r"[a-f0-9]{32}", token):
+        raise ValueError("Invalid credential lease ID")
     root = f"{_TASK_ROOT}/{token}"
     credential_path = f"{root}/credentials.json"
     launcher_path = f"{root}/with-agentkit-credentials"
@@ -637,7 +752,7 @@ async def create_credential_lease(
         f"parent={_TASK_ROOT!r}; root={root!r}\n"
         "os.makedirs(parent,mode=0o700,exist_ok=True)\n"
         "os.chmod(parent,0o700)\n"
-        "os.mkdir(root,mode=0o700)\n"
+        "os.makedirs(root,mode=0o700,exist_ok=True)\n"
         "metadata=os.stat(root,follow_symlinks=False)\n"
         "assert stat.S_ISDIR(metadata.st_mode)\n"
     )
@@ -808,17 +923,22 @@ class DeliveryPublisher:
         exact_secrets: tuple[str, ...],
         acceptance_criteria: tuple[str, ...] = (),
         trusted_manifest_metadata: tuple[str, str] | None = None,
+        delivery_id: str | None = None,
+        validated_at: str | None = None,
+        execute_command: Callable[..., Awaitable[dict[str, Any]]] | None = None,
     ) -> DeliveryReference:
         trusted_metadata = (
             _validate_delivery_metadata(*trusted_manifest_metadata)
             if trusted_manifest_metadata is not None
             else None
         )
-        token = uuid4().hex
+        token = delivery_id or uuid4().hex
+        if not re.fullmatch(r"[a-f0-9]{32}", token):
+            raise ValueError("Invalid delivery ID")
         worker_path = f"{task_root}/delivery-{token}.py"
         request_path = f"{task_root}/delivery-{token}.json"
         secret_path = f"{task_root}/delivery-secrets-{token}.json"
-        now = datetime.now(timezone.utc).isoformat()
+        now = validated_at or datetime.now(timezone.utc).isoformat()
         verified = completion is not None and completion.verified
         gates = (
             completion.gates
@@ -879,6 +999,7 @@ class DeliveryPublisher:
             json.dumps(request, separators=(",", ":")).encode(),
             media_type="application/json",
         )
+        completed = False
         try:
             await self._transport.upload(
                 secret_path,
@@ -886,10 +1007,11 @@ class DeliveryPublisher:
                 media_type="application/json",
                 mode=0o600,
             )
-            value = await self._transport.exec_json(
+            value = await (execute_command or self._transport.exec_json)(
                 f"python3 {shlex.quote(worker_path)} {shlex.quote(request_path)}",
                 timeout=180,
             )
+            completed = True
             return self._reference(
                 value,
                 session_id,
@@ -899,7 +1021,10 @@ class DeliveryPublisher:
                 gate_summary=tuple(name for name in _REQUIRED_GATES if gates[name]),
             )
         finally:
-            await self._unlink_many(secret_path, request_path, worker_path)
+            # A recoverable executor can still be reading these after HTTP loss.
+            # Its task lease owns cleanup until the command receipt is confirmed.
+            if completed or execute_command is None:
+                await self._unlink_many(secret_path, request_path, worker_path)
 
     async def _manifest_bytes(self, project_root: str, *, allow_missing: bool) -> bytes:
         manifest_path = f"{project_root}/agentkit.yaml"
@@ -1007,10 +1132,10 @@ class DeliveryPublisher:
 
 __all__ = [
     "COMPLETION_FILE_PREFIX",
+    "INTENT_DECISION_OUTPUT_SCHEMA",
     "CompletionContract",
     "CredentialResolver",
     "DeliveryPublisher",
-    "INTENT_DECISION_OUTPUT_SCHEMA",
     "IntentDecision",
     "TaskCredentialLease",
     "builder_prompt",
@@ -1019,7 +1144,7 @@ __all__ = [
     "invalidate_current_delivery",
     "parse_completion_contract",
     "parse_intent_decision",
-    "read_only_prompt",
     "read_completion_contract",
+    "read_only_prompt",
     "remove_completion_file",
 ]

@@ -126,6 +126,7 @@
     "downloadSource": "Download source",
     "sourceNotReady": "The source is not ready yet",
     "manualDeploy": "Deploy manually to Runtime",
+    "deployAgent": "Deploy Agent",
     "beforeOptimization": "Before optimization",
     "afterOptimization": "After optimization",
     "planStatuses": {

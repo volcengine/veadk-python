@@ -126,6 +126,7 @@
     "downloadSource": "下载源码",
     "sourceNotReady": "源码尚未准备好",
     "manualDeploy": "手动部署到 Runtime",
+    "deployAgent": "部署 Agent",
     "beforeOptimization": "优化前",
     "afterOptimization": "优化后",
     "planStatuses": {

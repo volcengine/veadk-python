@@ -2837,10 +2837,13 @@ def test_runtime_proxy_retry_policy(
     app = _create_frontend_app(monkeypatch, tmp_path, provider=provider)
     runtime_client_regions: list[str] = []
 
-    async def _noop_sleep(delay: float) -> None:
-        pass
+    real_sleep = cli_frontend.asyncio.sleep
 
-    monkeypatch.setattr("veadk.cli.cli_frontend.asyncio.sleep", _noop_sleep)
+    async def _yield_sleep(delay: float) -> None:
+        # Background Studio tasks share asyncio.sleep and must still yield.
+        await real_sleep(0)
+
+    monkeypatch.setattr("veadk.cli.cli_frontend.asyncio.sleep", _yield_sleep)
 
     class _FakeRuntimeClient:
         def __init__(self, **kwargs: Any) -> None:

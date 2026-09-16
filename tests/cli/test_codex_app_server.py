@@ -25,7 +25,7 @@ from pathlib import Path
 import pytest
 from websockets.asyncio.server import ServerConnection, serve
 
-import veadk.cli.codex_app_server as codex_app_server
+from veadk.cli import codex_app_server
 from veadk.cli.codex_app_server import (
     CodexAppServerError,
     CodexAppServerSession,
@@ -933,7 +933,8 @@ async def test_reasoning_deltas_stream_as_accumulated_thinking() -> None:
     events = [event async for event in session.stream_turn("reasoning-delta")]
     thinking = [event for event in events if event.kind == "thinking"]
 
-    assert [event.text for event in thinking] == ["分", "分析", "分析"]
+    # Raw reasoning content must not be appended to the public summary.
+    assert [event.text for event in thinking] == ["分", "分", "分析"]
     assert [event.status for event in thinking] == ["running", "running", "done"]
     await session.close()
 
@@ -1915,7 +1916,7 @@ async def test_turn_completion_without_events_cancels_the_pending_queue_read() -
                     }
                 ],
             },
-            True,
+            False,
         ),
         ({"status": "inProgress", "items": []}, False),
     ],
@@ -2476,3 +2477,308 @@ def test_app_server_client_stays_compatible_with_python_310() -> None:
     )
 
     assert "asyncio.timeout(" not in source
+
+
+class _TaskProtocolSocket(_FakeWebSocket):
+    async def send(self, raw: str) -> None:
+        message = json.loads(raw)
+        method = message.get("method")
+        if method in {"turn/steer", "thread/turns/list", "thread/items/list"}:
+            self.messages.append(message)
+            if method == "turn/steer":
+                result = {"turnId": message["params"]["expectedTurnId"]}
+            elif method == "thread/turns/list":
+                result = {
+                    "data": [
+                        {
+                            "id": "turn-existing",
+                            "status": "completed",
+                            "itemsView": "notLoaded",
+                            "items": [],
+                        }
+                    ],
+                    "nextCursor": None,
+                }
+            else:
+                result = {
+                    "data": [
+                        {
+                            "turnId": "turn-existing",
+                            "item": {
+                                "id": "message-final",
+                                "type": "agentMessage",
+                                "phase": "final_answer",
+                                "text": "preserved answer",
+                            },
+                        }
+                    ],
+                    "nextCursor": None,
+                }
+            await self.queue.put(json.dumps({"id": message["id"], "result": result}))
+            return
+        await super().send(raw)
+
+
+@pytest.mark.asyncio
+async def test_task_steer_uses_expected_turn_and_client_message_id() -> None:
+    socket = _TaskProtocolSocket()
+
+    async def factory(_url):
+        return socket
+
+    session = CodexAppServerSession(
+        "https://sandbox.example", websocket_factory=factory
+    )
+    try:
+        await session.connect()
+        assert (
+            await session.steer_turn("add tests", "turn-existing", "message-2")
+            == "turn-existing"
+        )
+        request = next(
+            item for item in socket.messages if item.get("method") == "turn/steer"
+        )
+        assert request["params"] == {
+            "threadId": "thread-1",
+            "expectedTurnId": "turn-existing",
+            "clientUserMessageId": "message-2",
+            "input": [{"type": "text", "text": "add tests"}],
+        }
+    finally:
+        await session.close()
+
+
+@pytest.mark.asyncio
+async def test_task_observer_hydrates_completed_turn_without_starting_work() -> None:
+    socket = _TaskProtocolSocket()
+
+    async def factory(_url):
+        return socket
+
+    session = CodexAppServerSession(
+        "https://sandbox.example", websocket_factory=factory
+    )
+    try:
+        await session.connect()
+        events = [
+            event
+            async for event in session.stream_turn(
+                "",
+                resume_turn_id="turn-existing",
+                interrupt_on_cancel=False,
+            )
+        ]
+        assert any(event.text == "preserved answer" for event in events)
+        assert not any(item.get("method") == "turn/start" for item in socket.messages)
+        assert any(
+            item.get("method") == "thread/items/list" for item in socket.messages
+        )
+    finally:
+        await session.close()
+
+
+@pytest.mark.asyncio
+async def test_native_retry_notification_is_visible_without_failing_turn() -> None:
+    session = CodexAppServerSession("https://sandbox.example")
+    session.thread_id = "thread-1"
+    session._active_turn_id = "turn-1"
+    session._turn_events = asyncio.Queue()
+    session._turn_completion = asyncio.get_running_loop().create_future()
+    session._handle_notification(
+        "error",
+        {
+            "threadId": "thread-1",
+            "turnId": "turn-1",
+            "error": {"message": "upstream disconnected"},
+            "willRetry": True,
+        },
+    )
+    assert not session._turn_completion.done()
+    event = session._turn_events.get_nowait()
+    assert event.kind == "recovery"
+    assert event.status == "retrying"
+
+
+@pytest.mark.asyncio
+async def test_native_notification_does_not_cross_thread_boundary() -> None:
+    session = CodexAppServerSession("https://sandbox.example")
+    session.thread_id = "thread-1"
+    session._active_turn_id = "turn-1"
+    session._turn_events = asyncio.Queue()
+    session._handle_notification(
+        "item/agentMessage/delta",
+        {
+            "threadId": "another-thread",
+            "turnId": "turn-1",
+            "itemId": "foreign",
+            "delta": "private",
+        },
+    )
+    assert session._turn_events.empty()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("unused", [False, True])
+async def test_only_proven_unused_thread_can_replace_missing_rollout(unused):
+    socket = _MissingRolloutWebSocket()
+    session = CodexAppServerSession(
+        "https://sandbox.example", websocket_factory=lambda _: _ready(socket)
+    )
+    try:
+        if unused:
+            await session.attach_thread("thread-empty", allow_empty_restart=True)
+            assert session.thread_id == "thread-1"
+        else:
+            with pytest.raises(CodexAppServerError, match="no rollout found"):
+                await session.attach_thread("thread-empty")
+        assert (
+            any(item.get("method") == "thread/start" for item in socket.messages)
+            == unused
+        )
+    finally:
+        await session.close()
+
+
+def test_running_turn_with_completed_commentary_is_not_terminal():
+    from veadk.cli.codex_app_server import _turn_is_terminal
+
+    assert not _turn_is_terminal(
+        {
+            "id": "turn",
+            "status": "inProgress",
+            "items": [
+                {
+                    "type": "agentMessage",
+                    "id": "plan",
+                    "phase": "commentary",
+                    "text": "I will implement this now.",
+                },
+            ],
+        }
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["completed", "failed", "interrupted"])
+async def test_task_observer_emits_terminal_metrics_even_before_raising(status):
+    socket = _TerminalTurnWebSocket(status, has_final=True)
+    session = CodexAppServerSession(
+        "https://sandbox.example", websocket_factory=lambda _: _ready(socket)
+    )
+    events = []
+    try:
+        try:
+            async for event in session.stream_turn(
+                "long-running", client_user_message_id="metrics-test"
+            ):
+                events.append(event)
+        except CodexAppServerError:
+            assert status != "completed"
+        ended = [event for event in events if event.kind == "turn_completed"]
+        assert len(ended) == 1
+        assert ended[0].status == status
+        assert ended[0].turn_id
+    finally:
+        await session.close()
+
+
+@pytest.mark.asyncio
+async def test_dynamic_result_call_returns_validation_feedback_in_same_turn():
+    from unittest.mock import AsyncMock
+
+    session = CodexAppServerSession("https://sandbox")
+    session.thread_id = "thread-1"
+    session.dynamic_tools = (
+        {
+            "type": "function",
+            "name": "submit_build_result",
+            "description": "Submit",
+            "inputSchema": {"type": "object"},
+        },
+    )
+    session.dynamic_tool_handler = AsyncMock(
+        return_value={
+            "success": False,
+            "contentItems": [
+                {"type": "inputText", "text": "Missing acceptanceCriteria"}
+            ],
+        }
+    )
+    session._send = AsyncMock()
+    params = {
+        "threadId": "thread-1",
+        "turnId": "turn-1",
+        "callId": "call-1",
+        "namespace": None,
+        "tool": "submit_build_result",
+        "arguments": {},
+    }
+    await session._handle_server_request("request-1", "item/tool/call", params)
+    session.dynamic_tool_handler.assert_awaited_once_with(params)
+    assert session._send.call_args.args[0]["result"]["success"] is False
+    assert (
+        "Missing acceptanceCriteria"
+        in session._send.call_args.args[0]["result"]["contentItems"][0]["text"]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        {"threadId": "another-thread"},
+        {"namespace": "another-namespace"},
+        {"tool": "unknown"},
+        {"callId": ""},
+    ],
+)
+async def test_dynamic_tool_requests_cannot_escape_registered_thread(invalid):
+    from unittest.mock import AsyncMock
+
+    session = CodexAppServerSession("https://sandbox")
+    session.thread_id = "thread-1"
+    session.dynamic_tools = ({"name": "submit_build_result"},)
+    session.dynamic_tool_handler = AsyncMock()
+    session._send = AsyncMock()
+    params = {
+        "threadId": "thread-1",
+        "turnId": "turn-1",
+        "callId": "call-1",
+        "namespace": None,
+        "tool": "submit_build_result",
+        "arguments": {},
+        **invalid,
+    }
+    await session._handle_server_request("request-1", "item/tool/call", params)
+    session.dynamic_tool_handler.assert_not_called()
+    assert session._send.call_args.args[0]["result"]["success"] is False
+
+
+@pytest.mark.asyncio
+async def test_dynamic_tools_register_only_on_start_and_survive_resume():
+    from unittest.mock import AsyncMock
+
+    socket = _FakeWebSocket()
+    session = CodexAppServerSession(
+        "https://sandbox", websocket_factory=AsyncMock(return_value=socket)
+    )
+    tool = {
+        "type": "function",
+        "name": "submit_build_result",
+        "description": "Submit",
+        "inputSchema": {"type": "object"},
+    }
+    session.dynamic_tools = (tool,)
+    await session.connect()
+    try:
+        start = next(m for m in socket.messages if m.get("method") == "thread/start")
+        assert start["params"]["dynamicTools"] == [tool]
+        assert "sandbox" in start["params"] and "sandboxPolicy" not in start["params"]
+        await session._resume_or_start_thread(
+            session.thread_id, previous_workspace_locked=True
+        )
+        resume = next(m for m in socket.messages if m.get("method") == "thread/resume")
+        assert "dynamicTools" not in resume["params"]
+        assert session.dynamic_tools == (tool,)
+    finally:
+        await session.close()

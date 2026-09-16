@@ -21,23 +21,24 @@ import os
 import subprocess
 import sys
 from collections.abc import AsyncIterator, Mapping
-from datetime import datetime, timezone
 from dataclasses import dataclass
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from threading import Event, Thread
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from typing import Any
 
-import pytest
 import httpx
+import pytest
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
 from httpx import Response
 
 from frontend.server import intelligent_development_routes as routes
 from frontend.server import intelligent_development_source as source_module
-from frontend.server.intelligent_development_projects import routes as project_routes
 from frontend.server.deployment_source import DeploymentSourceError
-from frontend.server.intelligent_development import StudioCredentials
+from frontend.server.intelligent_development import DeliveryReference, StudioCredentials
 from frontend.server.intelligent_development_projects import (
     IntelligentDevelopmentProject,
     IntelligentDevelopmentProjectStorageUnavailable,
@@ -45,9 +46,11 @@ from frontend.server.intelligent_development_projects import (
     IntelligentDevelopmentVersion,
     IntelligentDevelopmentVersionIntegrityError,
 )
+from frontend.server.intelligent_development_projects import routes as project_routes
+from frontend.server.intelligent_development_runs import runner as run_module
 from frontend.server.intelligent_development_source import (
-    TrustedDevelopmentArtifact,
     TrustedDeploymentSource,
+    TrustedDevelopmentArtifact,
     TrustedSourceFile,
 )
 from frontend.server.intelligent_development_task import (
@@ -315,14 +318,94 @@ class _Remote:
         del command, timeout
         return ""
 
+    async def download(self, path: str, *, max_bytes: int) -> bytes:
+        return json.dumps(
+            {
+                "accessKeyId": "access",
+                "secretAccessKey": "secret",
+                "sessionToken": "token",
+            }
+        ).encode()
+
+
+class _TaskCodex:
+    """Native task protocol boundary around the existing controlled Codex fake."""
+
+    def __init__(self, codex):
+        self.codex = codex
+        self.active_turn_id = ""
+        if not hasattr(codex, "run_history"):
+            codex.run_history = {}
+
+    def __getattr__(self, key):
+        return getattr(self.codex, key)
+
+    async def attach_thread(self, thread_id, **options):
+        self.codex.thread_id = thread_id
+        self.thread_id = thread_id
+
+    def refresh_endpoint(self, _endpoint):
+        pass
+
+    async def stream_turn(self, prompt, **options):
+        resumed = options.get("resume_turn_id")
+        turn_id = resumed or f"turn-{len(self.codex.run_history) + 1}"
+        if not resumed:
+            self.codex.run_history[turn_id] = {
+                "id": turn_id,
+                "status": "inProgress",
+                "client": options.get("client_user_message_id"),
+                "items": [],
+            }
+        self.active_turn_id = turn_id
+        self.codex.active = True
+        yield CodexAppServerEvent(kind="turn_started", turn_id=turn_id)
+        try:
+            if not resumed:
+                async for event in self.codex.stream_turn(prompt, **options):
+                    yield event
+                self.codex.run_history[turn_id]["status"] = "completed"
+        except BaseException as error:
+            self.codex.run_history[turn_id]["status"] = (
+                "interrupted"
+                if isinstance(error, CodexAppServerTurnInterruptedError)
+                or not self.codex.active
+                else "failed"
+            )
+            raise
+        finally:
+            self.codex.active = False
+            self.active_turn_id = ""
+
+    async def read_turn(self, turn_id):
+        return self.codex.run_history.get(turn_id)
+
+    async def find_input_turn(self, client_id):
+        return next(
+            (
+                turn
+                for turn in self.codex.run_history.values()
+                if turn["client"] == client_id
+            ),
+            None,
+        )
+
+    async def interrupt_turn(self, turn_id):
+        await self.codex.interrupt()
+        self.codex.run_history[turn_id]["status"] = "interrupted"
+
+    async def close(self):
+        pass
+
 
 def _app(
     gateway: _FakeGateway,
     *,
     configured: bool = True,
     project_service=None,
+    lifespan=None,
 ) -> FastAPI:
-    app = FastAPI()
+    app = FastAPI(lifespan=lifespan)
     service = SandboxConversationService(
         routes.IntelligentDevelopmentGateway(gateway),
         tool_id="tool-dev",
@@ -344,14 +427,22 @@ def _app(
         project_service=project_service,
         configured=configured,
     )
+    runner = app.state.intelligent_development_runs.execute
+    runner.codex_factory = lambda _endpoint: _TaskCodex(gateway.codex)
+    runner.renew_session = None
+    runner.retry_delays = (0,)
+    app.state.intelligent_development_runs.poll_interval = 0.005
+    app.state.intelligent_development_runs.heartbeat_seconds = 0.01
     return app
 
 
 @pytest.fixture(autouse=True)
-def _remote(monkeypatch: pytest.MonkeyPatch) -> None:
+def _remote(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     monkeypatch.setenv("CLOUD_PROVIDER", "volcengine")
     monkeypatch.setenv("AGENTKIT_CLOUD_PROVIDER", "volcengine")
+    monkeypatch.setenv("VEADK_STUDIO_TASK_DB", str(tmp_path / "runs.sqlite3"))
     monkeypatch.setattr(routes, "SandboxRemoteTransport", _Remote)
+    monkeypatch.setattr(run_module, "SandboxRemoteTransport", _Remote)
 
 
 @pytest.fixture(autouse=True)
@@ -492,15 +583,16 @@ async def test_heartbeat_route_preserves_delivery_and_disconnect_cleanup(
     caplog: pytest.LogCaptureFixture,
     disconnect: bool,
 ) -> None:
-    monkeypatch.setattr(routes, "_SSE_HEARTBEAT_SECONDS", 0.001, raising=False)
     caplog.set_level("INFO", logger=routes.__name__)
     finish = asyncio.Event()
+    codex_started = asyncio.Event()
     codex_finished = asyncio.Event()
 
     class DelayedCodex(_FakeCodex):
         async def stream_turn(self, prompt, skill_ids=(), **options):
             self.calls.append({"prompt": prompt, **options})
             try:
+                codex_started.set()
                 yield CodexAppServerEvent(kind="text", text="working")
                 await finish.wait()
             finally:
@@ -519,15 +611,15 @@ async def test_heartbeat_route_preserves_delivery_and_disconnect_cleanup(
     cleanup = AsyncMock(side_effect=cleanup_after_yield)
     monkeypatch.setattr(lease, "cleanup", cleanup)
     monkeypatch.setattr(
-        routes, "create_credential_lease", AsyncMock(return_value=lease)
+        run_module, "create_credential_lease", AsyncMock(return_value=lease)
     )
-    monkeypatch.setattr(routes, "invalidate_current_delivery", AsyncMock())
+    monkeypatch.setattr(run_module, "invalidate_current_delivery", AsyncMock())
     read_contract = AsyncMock(return_value=_verified())
-    monkeypatch.setattr(routes, "read_completion_contract", read_contract)
+    monkeypatch.setattr(run_module, "read_completion_contract", read_contract)
     remove = AsyncMock()
-    monkeypatch.setattr(routes, "remove_completion_file", remove)
+    monkeypatch.setattr(run_module, "remove_completion_file", remove)
     publisher = _publisher_mock(verified=True)
-    monkeypatch.setattr(routes, "DeliveryPublisher", lambda _transport: publisher)
+    monkeypatch.setattr(run_module, "DeliveryPublisher", lambda _transport: publisher)
     projects = _project_service_for_delivery()
     app = _app(gateway, project_service=projects)
     incoming = asyncio.Queue()
@@ -539,20 +631,18 @@ async def test_heartbeat_route_preserves_delivery_and_disconnect_cleanup(
         }
     )
     bodies = []
-    heartbeat_seen = False
+    response_started = asyncio.Event()
+    heartbeat_seen = asyncio.Event()
 
     async def send(message):
-        nonlocal heartbeat_seen
+        if message["type"] == "http.response.start":
+            response_started.set()
         if message["type"] != "http.response.body":
             return
         body = message.get("body", b"")
         bodies.append(body)
-        if b": heartbeat" in body and not heartbeat_seen:
-            heartbeat_seen = True
-            if disconnect:
-                incoming.put_nowait({"type": "http.disconnect"})
-            else:
-                finish.set()
+        if b": heartbeat" in body and codex_started.is_set():
+            heartbeat_seen.set()
 
     scope = {
         "type": "http",
@@ -567,45 +657,74 @@ async def test_heartbeat_route_preserves_delivery_and_disconnect_cleanup(
         "client": ("test", 1),
         "root_path": "",
     }
-    async with app.router.lifespan_context(app):
-        async with httpx.AsyncClient(
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(
             transport=httpx.ASGITransport(app), base_url="http://test"
-        ) as client:
-            response = await client.post(
-                "/web/intelligent-development/sessions/dev-session/connect",
-                headers={"X-Test-User": "alice"},
-            )
-            assert response.status_code == 200
-            try:
-                await asyncio.wait_for(app(scope, incoming.get, send), 2)
-            finally:
+        ) as client,
+    ):
+        response = await client.post(
+            "/web/intelligent-development/sessions/dev-session/connect",
+            headers={"X-Test-User": "alice"},
+        )
+        assert response.status_code == 200
+        response_task = asyncio.create_task(app(scope, incoming.get, send))
+        try:
+            # Bound each protocol stage, rather than the total SQLite/worker
+            # lifecycle time when CI runs sixteen test processes concurrently.
+            await asyncio.wait_for(response_started.wait(), 2)
+            await asyncio.wait_for(codex_started.wait(), 2)
+            await asyncio.wait_for(heartbeat_seen.wait(), 2)
+            assert not codex_finished.is_set()
+            if disconnect:
+                incoming.put_nowait({"type": "http.disconnect"})
+            else:
                 finish.set()
-                await asyncio.wait_for(codex_finished.wait(), 1)
-            status = await client.get(
-                "/web/intelligent-development/sessions/dev-session/status",
-                headers={"X-Test-User": "alice"},
-            )
-            assert status.json()["busy"] is False
-    assert heartbeat_seen
+            await asyncio.wait_for(response_task, 2)
+        finally:
+            finish.set()
+            response_task.cancel()
+            await asyncio.gather(response_task, return_exceptions=True)
+            await asyncio.wait_for(codex_finished.wait(), 1)
+        task_service = app.state.intelligent_development_runs
+
+        async def await_finished():
+            while not (
+                await task_service.repository.session_runs("alice", "dev-session")
+            )[-1].terminal:
+                await asyncio.sleep(0.005)
+
+        await asyncio.wait_for(await_finished(), 2)
+        replay = await client.get(
+            "/web/intelligent-development/runs/"
+            + (await task_service.repository.session_runs("alice", "dev-session"))[
+                -1
+            ].id
+            + "/events",
+            headers={"X-Test-User": "alice"},
+        )
+        assert "event: development.succeeded" in replay.text
+        status = await client.get(
+            "/web/intelligent-development/sessions/dev-session/status",
+            headers={"X-Test-User": "alice"},
+        )
+        assert status.json()["busy"] is False
+    assert heartbeat_seen.is_set()
     assert len(gateway.codex.calls) == 1
     cleanup.assert_awaited_once()
     remove.assert_awaited_once()
     assert lease.cleaned
     output = b"".join(bodies)
-    if disconnect:
-        read_contract.assert_not_awaited()
-        publisher.publish.assert_not_awaited()
-        assert "reason=task_cancelled" in caplog.text
-        assert "stage=codex_turn" in caplog.text
-    else:
-        read_contract.assert_awaited_once()
-        publisher.publish.assert_awaited_once()
-        projects.persist_delivery.assert_awaited_once()
+    read_contract.assert_awaited_once()
+    publisher.publish.assert_awaited_once()
+    projects.persist_delivery.assert_awaited_once()
+    assert "reason=task_cancelled" not in caplog.text
+    if not disconnect:
         assert b"event: development.succeeded" in output
         assert b"event: done" in output
     assert "session_id=dev-session" in caplog.text
     assert "thread_id=thread-1" in caplog.text
-    assert "elapsed_seconds=" in caplog.text
+    assert "run_id=" in caplog.text
     assert "private goal" not in caplog.text
     assert "Authorization=secret" not in caplog.text
 
@@ -1713,11 +1832,11 @@ def test_missing_turn_outcome_has_specific_recoverable_error(
     read_completion = AsyncMock(side_effect=FileNotFoundError("missing outcome"))
     remove = AsyncMock()
     publisher = _publisher_mock()
-    monkeypatch.setattr(routes, "create_credential_lease", create_lease)
-    monkeypatch.setattr(routes, "invalidate_current_delivery", invalidate)
-    monkeypatch.setattr(routes, "read_completion_contract", read_completion)
-    monkeypatch.setattr(routes, "remove_completion_file", remove)
-    monkeypatch.setattr(routes, "DeliveryPublisher", lambda _transport: publisher)
+    monkeypatch.setattr(run_module, "create_credential_lease", create_lease)
+    monkeypatch.setattr(run_module, "invalidate_current_delivery", invalidate)
+    monkeypatch.setattr(run_module, "read_completion_contract", read_completion)
+    monkeypatch.setattr(run_module, "remove_completion_file", remove)
+    monkeypatch.setattr(run_module, "DeliveryPublisher", lambda _transport: publisher)
 
     with TestClient(_app(gateway)) as client:
         _connect(client)
@@ -1730,14 +1849,16 @@ def test_missing_turn_outcome_has_specific_recoverable_error(
     assert response.status_code == 200
     assert '"code": "INTELLIGENT_DEVELOPMENT_OUTCOME_INVALID"' in response.text
     assert "未发布新版本" in response.text
-    assert len(gateway.codex.calls) == 1
+    assert len(gateway.codex.calls) == 3
     assert gateway.codex.calls[0]["output_schema"] is None
     create_lease.assert_awaited_once()
-    read_completion.assert_awaited_once()
+    assert read_completion.await_count == 4
     invalidate.assert_not_awaited()
     publisher.publish.assert_not_awaited()
-    remove.assert_awaited_once()
-    assert lease.cleaned is True
+    remove.assert_not_awaited()
+    assert lease.cleaned is False
+    assert '"state": "waiting_user"' in response.text
+    assert "event: error" not in response.text
 
 
 def test_delivery_outcome_requires_goal_and_acceptance_criteria(
@@ -1762,14 +1883,14 @@ def test_delivery_outcome_requires_goal_and_acceptance_criteria(
     remove = AsyncMock()
     publisher = _publisher_mock()
     monkeypatch.setattr(
-        routes, "create_credential_lease", AsyncMock(return_value=lease)
+        run_module, "create_credential_lease", AsyncMock(return_value=lease)
     )
     monkeypatch.setattr(
-        routes, "read_completion_contract", AsyncMock(return_value=completion)
+        run_module, "read_completion_contract", AsyncMock(return_value=completion)
     )
-    monkeypatch.setattr(routes, "invalidate_current_delivery", invalidate)
-    monkeypatch.setattr(routes, "remove_completion_file", remove)
-    monkeypatch.setattr(routes, "DeliveryPublisher", lambda _transport: publisher)
+    monkeypatch.setattr(run_module, "invalidate_current_delivery", invalidate)
+    monkeypatch.setattr(run_module, "remove_completion_file", remove)
+    monkeypatch.setattr(run_module, "DeliveryPublisher", lambda _transport: publisher)
 
     with TestClient(_app(gateway)) as client:
         _connect(client)
@@ -1783,8 +1904,10 @@ def test_delivery_outcome_requires_goal_and_acceptance_criteria(
     assert '"code": "INTELLIGENT_DEVELOPMENT_OUTCOME_INVALID"' in response.text
     invalidate.assert_not_awaited()
     publisher.publish.assert_not_awaited()
-    remove.assert_awaited_once()
-    assert lease.cleaned is True
+    remove.assert_not_awaited()
+    assert lease.cleaned is False
+    assert '"state": "waiting_user"' in response.text
+    assert len(gateway.codex.calls) == 3
 
 
 def test_restored_project_context_is_passed_to_the_direct_turn(
@@ -1828,12 +1951,12 @@ def test_restored_project_context_is_passed_to_the_direct_turn(
     )
     lease = _Lease(_Remote(gateway.sessions["dev-session"].endpoint))
     monkeypatch.setattr(
-        routes, "create_credential_lease", AsyncMock(return_value=lease)
+        run_module, "create_credential_lease", AsyncMock(return_value=lease)
     )
     monkeypatch.setattr(
-        routes, "read_completion_contract", AsyncMock(return_value=_answered())
+        run_module, "read_completion_contract", AsyncMock(return_value=_answered())
     )
-    monkeypatch.setattr(routes, "remove_completion_file", AsyncMock())
+    monkeypatch.setattr(run_module, "remove_completion_file", AsyncMock())
 
     with TestClient(_app(gateway, project_service=project_service)) as client:
         _connect(client)
@@ -1895,15 +2018,15 @@ def test_restored_project_context_selects_incremental_builder_mode(
     )
     lease = _Lease(_Remote(gateway.sessions["dev-session"].endpoint))
     monkeypatch.setattr(
-        routes, "create_credential_lease", AsyncMock(return_value=lease)
+        run_module, "create_credential_lease", AsyncMock(return_value=lease)
     )
-    monkeypatch.setattr(routes, "invalidate_current_delivery", AsyncMock())
+    monkeypatch.setattr(run_module, "invalidate_current_delivery", AsyncMock())
     monkeypatch.setattr(
-        routes, "read_completion_contract", AsyncMock(return_value=_partial())
+        run_module, "read_completion_contract", AsyncMock(return_value=_partial())
     )
-    monkeypatch.setattr(routes, "remove_completion_file", AsyncMock())
+    monkeypatch.setattr(run_module, "remove_completion_file", AsyncMock())
     publisher = _publisher_mock()
-    monkeypatch.setattr(routes, "DeliveryPublisher", lambda _transport: publisher)
+    monkeypatch.setattr(run_module, "DeliveryPublisher", lambda _transport: publisher)
 
     with TestClient(_app(gateway, project_service=project_service)) as client:
         _connect(client)
@@ -1938,15 +2061,15 @@ def test_builder_uses_preinstalled_skill_without_discovery_or_injection(
     ]
     lease = _Lease(_Remote(gateway.sessions["dev-session"].endpoint))
     monkeypatch.setattr(
-        routes, "create_credential_lease", AsyncMock(return_value=lease)
+        run_module, "create_credential_lease", AsyncMock(return_value=lease)
     )
-    monkeypatch.setattr(routes, "invalidate_current_delivery", AsyncMock())
+    monkeypatch.setattr(run_module, "invalidate_current_delivery", AsyncMock())
     monkeypatch.setattr(
-        routes, "read_completion_contract", AsyncMock(return_value=_partial())
+        run_module, "read_completion_contract", AsyncMock(return_value=_partial())
     )
-    monkeypatch.setattr(routes, "remove_completion_file", AsyncMock())
+    monkeypatch.setattr(run_module, "remove_completion_file", AsyncMock())
     monkeypatch.setattr(
-        routes, "DeliveryPublisher", lambda _transport: _publisher_mock()
+        run_module, "DeliveryPublisher", lambda _transport: _publisher_mock()
     )
 
     with TestClient(_app(gateway)) as client:
@@ -2061,7 +2184,7 @@ def _answered() -> CompletionContract:
     )
 
 
-def _delivery_dict(*, verified: bool = False) -> dict[str, object]:
+def _delivery_dict(*, verified: bool = False) -> dict[str, Any]:
     return {
         "sessionId": "dev-session",
         "artifactSha256": "a" * 64,
@@ -2079,7 +2202,21 @@ def _delivery_dict(*, verified: bool = False) -> dict[str, object]:
 
 
 def _publisher_mock(*, verified: bool = False) -> SimpleNamespace:
-    delivery = SimpleNamespace(as_dict=lambda: _delivery_dict(verified=verified))
+    value = _delivery_dict(verified=verified)
+    delivery = DeliveryReference(
+        value["artifactSha256"],
+        value["artifactSize"],
+        value["validationReportSha256"],
+        value["sessionId"],
+        value["agentName"],
+        value["entryPoint"],
+        value["fileCount"],
+        value["validatedAt"],
+        tuple(value["gateSummary"]),
+        value["deployable"],
+        value["verified"],
+        value["validationSummary"],
+    )
     return SimpleNamespace(publish=AsyncMock(return_value=delivery))
 
 
@@ -2229,17 +2366,17 @@ def test_direct_turn_streams_builder_and_cleans_task_files(
     ]
     lease = _Lease(_Remote(gateway.sessions["dev-session"].endpoint))
     monkeypatch.setattr(
-        routes, "create_credential_lease", AsyncMock(return_value=lease)
+        run_module, "create_credential_lease", AsyncMock(return_value=lease)
     )
     invalidate = AsyncMock()
-    monkeypatch.setattr(routes, "invalidate_current_delivery", invalidate)
+    monkeypatch.setattr(run_module, "invalidate_current_delivery", invalidate)
     monkeypatch.setattr(
-        routes, "read_completion_contract", AsyncMock(return_value=_partial())
+        run_module, "read_completion_contract", AsyncMock(return_value=_partial())
     )
     remove = AsyncMock()
-    monkeypatch.setattr(routes, "remove_completion_file", remove)
+    monkeypatch.setattr(run_module, "remove_completion_file", remove)
     publisher = _publisher_mock()
-    monkeypatch.setattr(routes, "DeliveryPublisher", lambda _transport: publisher)
+    monkeypatch.setattr(run_module, "DeliveryPublisher", lambda _transport: publisher)
     with TestClient(_app(gateway)) as client:
         _connect(client)
         response = client.post(
@@ -2256,8 +2393,9 @@ def test_direct_turn_streams_builder_and_cleans_task_files(
     assert "正在构建临时验证版本" in response.text
     assert "已完成本地实现" in response.text
     assert "event: usage" in response.text
-    assert response.text.count("event: activity") == 5
-    assert response.text.count('"kind": "commentary"') == 1
+    # Commentary shares the text item so replay cannot render it twice.
+    assert response.text.count("event: activity") == 4
+    assert '"kind": "commentary"' not in response.text
     assert response.text.count('"kind": "thinking"') == 2
     assert response.text.count('"kind": "tool"') == 2
     assert '"command": "ak build --config-file agentkit.yaml"' in response.text
@@ -2306,11 +2444,11 @@ def test_answer_runs_one_direct_codex_turn_without_publishing_delivery(
     read_completion = AsyncMock(return_value=_answered())
     remove = AsyncMock()
     publisher = _publisher_mock()
-    monkeypatch.setattr(routes, "create_credential_lease", create_lease)
-    monkeypatch.setattr(routes, "invalidate_current_delivery", invalidate)
-    monkeypatch.setattr(routes, "read_completion_contract", read_completion)
-    monkeypatch.setattr(routes, "remove_completion_file", remove)
-    monkeypatch.setattr(routes, "DeliveryPublisher", lambda _transport: publisher)
+    monkeypatch.setattr(run_module, "create_credential_lease", create_lease)
+    monkeypatch.setattr(run_module, "invalidate_current_delivery", invalidate)
+    monkeypatch.setattr(run_module, "read_completion_contract", read_completion)
+    monkeypatch.setattr(run_module, "remove_completion_file", remove)
+    monkeypatch.setattr(run_module, "DeliveryPublisher", lambda _transport: publisher)
 
     with TestClient(_app(gateway)) as client:
         _connect(client)
@@ -2345,24 +2483,26 @@ def test_direct_turn_emits_progress_before_credential_provisioning(
     ]
     lease = _Lease(_Remote(gateway.sessions["dev-session"].endpoint))
     order: list[str] = []
-    original_progress_sse = routes._progress_sse
-
-    def progress_sse(text: str) -> str:
-        order.append("progress")
-        return original_progress_sse(text)
 
     async def create_lease(*_args: object, **_kwargs: object) -> _Lease:
+        events = await app.state.intelligent_development_runs.repository.session_runs(
+            "alice", "dev-session"
+        )
+        recorded = await app.state.intelligent_development_runs.repository.events(
+            "alice", events[-1].id
+        )
+        assert any(event["type"] == "progress" for event in recorded)
         order.append("credential-provisioning")
         return lease
 
-    monkeypatch.setattr(routes, "_progress_sse", progress_sse)
-    monkeypatch.setattr(routes, "create_credential_lease", create_lease)
+    monkeypatch.setattr(run_module, "create_credential_lease", create_lease)
     monkeypatch.setattr(
-        routes, "read_completion_contract", AsyncMock(return_value=_answered())
+        run_module, "read_completion_contract", AsyncMock(return_value=_answered())
     )
-    monkeypatch.setattr(routes, "remove_completion_file", AsyncMock())
+    monkeypatch.setattr(run_module, "remove_completion_file", AsyncMock())
 
-    with TestClient(_app(gateway)) as client:
+    app = _app(gateway)
+    with TestClient(app) as client:
         _connect(client)
         response = client.post(
             "/web/intelligent-development/sessions/dev-session/messages",
@@ -2371,7 +2511,7 @@ def test_direct_turn_emits_progress_before_credential_provisioning(
         )
 
     assert response.status_code == 200
-    assert order[:2] == ["progress", "credential-provisioning"]
+    assert order == ["credential-provisioning"]
 
 
 def test_follow_up_runs_a_new_direct_turn_in_the_same_thread(
@@ -2388,18 +2528,18 @@ def test_follow_up_runs_a_new_direct_turn_in_the_same_thread(
         _Lease(_Remote(gateway.sessions["dev-session"].endpoint)),
     ]
     monkeypatch.setattr(
-        routes,
+        run_module,
         "create_credential_lease",
         AsyncMock(side_effect=leases),
     )
     invalidate = AsyncMock()
-    monkeypatch.setattr(routes, "invalidate_current_delivery", invalidate)
+    monkeypatch.setattr(run_module, "invalidate_current_delivery", invalidate)
     monkeypatch.setattr(
-        routes, "read_completion_contract", AsyncMock(return_value=_partial())
+        run_module, "read_completion_contract", AsyncMock(return_value=_partial())
     )
-    monkeypatch.setattr(routes, "remove_completion_file", AsyncMock())
+    monkeypatch.setattr(run_module, "remove_completion_file", AsyncMock())
     monkeypatch.setattr(
-        routes, "DeliveryPublisher", lambda _transport: _publisher_mock()
+        run_module, "DeliveryPublisher", lambda _transport: _publisher_mock()
     )
 
     with TestClient(_app(gateway)) as client:
@@ -2480,15 +2620,15 @@ def test_interrupt_waits_for_task_cleanup_before_allowing_the_next_turn(
         cleanup_allowed=cleanup_allowed,
     )
     monkeypatch.setattr(
-        routes, "create_credential_lease", AsyncMock(return_value=lease)
+        run_module, "create_credential_lease", AsyncMock(return_value=lease)
     )
-    monkeypatch.setattr(routes, "invalidate_current_delivery", AsyncMock())
+    monkeypatch.setattr(run_module, "invalidate_current_delivery", AsyncMock())
     monkeypatch.setattr(
-        routes, "read_completion_contract", AsyncMock(return_value=_partial())
+        run_module, "read_completion_contract", AsyncMock(return_value=_partial())
     )
-    monkeypatch.setattr(routes, "remove_completion_file", AsyncMock())
+    monkeypatch.setattr(run_module, "remove_completion_file", AsyncMock())
     monkeypatch.setattr(
-        routes, "DeliveryPublisher", lambda _transport: _publisher_mock()
+        run_module, "DeliveryPublisher", lambda _transport: _publisher_mock()
     )
 
     with TestClient(_app(gateway)) as client:
@@ -2530,7 +2670,10 @@ def test_interrupt_waits_for_task_cleanup_before_allowing_the_next_turn(
         interrupt_thread.join(timeout=2)
         message_thread.join(timeout=2)
 
-    assert waited_for_cleanup, "interrupt returned before cleanup finished"
+    assert not waited_for_cleanup, "stop acceptance must not wait for remote cleanup"
+    assert interrupt_result["response"].json()["interrupted"] is False
+    assert interrupt_result["response"].json()["stopRequested"] is True
+    assert '"state": "cancelled"' in message_result["response"].text
     assert not interrupt_thread.is_alive()
     assert not message_thread.is_alive()
     assert interrupt_result["response"].status_code == 200
@@ -2556,15 +2699,15 @@ def test_verified_contract_emits_typed_delivery_only_after_cleanup(
     ]
     lease = _Lease(_Remote(gateway.sessions["dev-session"].endpoint))
     monkeypatch.setattr(
-        routes, "create_credential_lease", AsyncMock(return_value=lease)
+        run_module, "create_credential_lease", AsyncMock(return_value=lease)
     )
-    monkeypatch.setattr(routes, "invalidate_current_delivery", AsyncMock())
+    monkeypatch.setattr(run_module, "invalidate_current_delivery", AsyncMock())
     monkeypatch.setattr(
-        routes, "read_completion_contract", AsyncMock(return_value=_verified())
+        run_module, "read_completion_contract", AsyncMock(return_value=_verified())
     )
-    monkeypatch.setattr(routes, "remove_completion_file", AsyncMock())
+    monkeypatch.setattr(run_module, "remove_completion_file", AsyncMock())
     publisher = _publisher_mock(verified=True)
-    monkeypatch.setattr(routes, "DeliveryPublisher", lambda _transport: publisher)
+    monkeypatch.setattr(run_module, "DeliveryPublisher", lambda _transport: publisher)
     with TestClient(_app(gateway)) as client:
         _connect(client)
         response = client.post(
@@ -2582,7 +2725,7 @@ def test_verified_contract_emits_typed_delivery_only_after_cleanup(
     publisher.publish.assert_awaited_once()
 
 
-def test_persisted_delivery_ids_are_emitted_in_source_and_success_events(
+def test_only_persisted_final_delivery_contains_version_ids(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     gateway = _FakeGateway()
@@ -2592,17 +2735,17 @@ def test_persisted_delivery_ids_are_emitted_in_source_and_success_events(
     ]
     lease = _Lease(_Remote(gateway.sessions["dev-session"].endpoint))
     monkeypatch.setattr(
-        routes, "create_credential_lease", AsyncMock(return_value=lease)
+        run_module, "create_credential_lease", AsyncMock(return_value=lease)
     )
-    monkeypatch.setattr(routes, "invalidate_current_delivery", AsyncMock())
+    monkeypatch.setattr(run_module, "invalidate_current_delivery", AsyncMock())
     monkeypatch.setattr(
-        routes,
+        run_module,
         "read_completion_contract",
         AsyncMock(return_value=_verified()),
     )
-    monkeypatch.setattr(routes, "remove_completion_file", AsyncMock())
+    monkeypatch.setattr(run_module, "remove_completion_file", AsyncMock())
     monkeypatch.setattr(
-        routes,
+        run_module,
         "DeliveryPublisher",
         lambda _transport: _publisher_mock(verified=True),
     )
@@ -2617,9 +2760,9 @@ def test_persisted_delivery_ids_are_emitted_in_source_and_success_events(
         )
 
     assert response.status_code == 200
-    assert response.text.count(f'"projectId": "{"a" * 32}"') == 2
-    assert response.text.count(f'"versionId": "{"b" * 32}"') == 2
-    assert response.text.count(f'"parentVersionId": "{"c" * 32}"') == 2
+    assert response.text.count(f'"projectId": "{"a" * 32}"') == 1
+    assert response.text.count(f'"versionId": "{"b" * 32}"') == 1
+    assert response.text.count(f'"parentVersionId": "{"c" * 32}"') == 1
     assert "event: development.source_ready" in response.text
     assert "event: development.succeeded" in response.text
     project_service.persist_delivery.assert_awaited_once()
@@ -2658,15 +2801,15 @@ def test_delivery_persistence_failures_keep_distinct_sse_semantics(
     ]
     lease = _Lease(_Remote(gateway.sessions["dev-session"].endpoint))
     monkeypatch.setattr(
-        routes, "create_credential_lease", AsyncMock(return_value=lease)
+        run_module, "create_credential_lease", AsyncMock(return_value=lease)
     )
-    monkeypatch.setattr(routes, "invalidate_current_delivery", AsyncMock())
+    monkeypatch.setattr(run_module, "invalidate_current_delivery", AsyncMock())
     monkeypatch.setattr(
-        routes, "read_completion_contract", AsyncMock(return_value=_partial())
+        run_module, "read_completion_contract", AsyncMock(return_value=_partial())
     )
-    monkeypatch.setattr(routes, "remove_completion_file", AsyncMock())
+    monkeypatch.setattr(run_module, "remove_completion_file", AsyncMock())
     monkeypatch.setattr(
-        routes, "DeliveryPublisher", lambda _transport: _publisher_mock()
+        run_module, "DeliveryPublisher", lambda _transport: _publisher_mock()
     )
     project_service = _project_service_for_delivery(persist_error=persist_error)
 
@@ -2680,11 +2823,13 @@ def test_delivery_persistence_failures_keep_distinct_sse_semantics(
 
     assert response.status_code == 200
     assert "event: development.source_ready" in response.text
-    assert "event: error" in response.text
+    assert "event: error" not in response.text
     assert f'"code": "{error_code}"' in response.text
     assert f'"retryable": {str(retryable).lower()}' in response.text
     assert message in response.text
-    assert 'event: done\ndata: {"reason":"failed"}' in response.text
+    assert "event: done\ndata: {}" in response.text
+    assert f'"state": "{"waiting_user" if retryable else "failed"}"' in response.text
+    assert "源码已生成" in response.text
     assert "event: development.succeeded" not in response.text
 
 
@@ -2699,18 +2844,18 @@ def test_unexpected_snapshot_failure_logs_stage_and_type_without_error_detail(
     ]
     lease = _Lease(_Remote(gateway.sessions["dev-session"].endpoint))
     monkeypatch.setattr(
-        routes, "create_credential_lease", AsyncMock(return_value=lease)
+        run_module, "create_credential_lease", AsyncMock(return_value=lease)
     )
-    monkeypatch.setattr(routes, "invalidate_current_delivery", AsyncMock())
+    monkeypatch.setattr(run_module, "invalidate_current_delivery", AsyncMock())
     monkeypatch.setattr(
-        routes, "read_completion_contract", AsyncMock(return_value=_partial())
+        run_module, "read_completion_contract", AsyncMock(return_value=_partial())
     )
-    monkeypatch.setattr(routes, "remove_completion_file", AsyncMock())
+    monkeypatch.setattr(run_module, "remove_completion_file", AsyncMock())
     publisher = _publisher_mock()
     publisher.publish.side_effect = RuntimeError("private upstream detail")
-    monkeypatch.setattr(routes, "DeliveryPublisher", lambda _transport: publisher)
+    monkeypatch.setattr(run_module, "DeliveryPublisher", lambda _transport: publisher)
 
-    with caplog.at_level("ERROR", logger=routes.logger.name):
+    with caplog.at_level("WARNING", logger=run_module.logger.name):
         with TestClient(_app(gateway)) as client:
             _connect(client)
             response = client.post(
@@ -2720,7 +2865,7 @@ def test_unexpected_snapshot_failure_logs_stage_and_type_without_error_detail(
             )
 
     assert '"code": "INTELLIGENT_DEVELOPMENT_FAILED"' in response.text
-    assert "stage=delivery_publish" in caplog.text
+    assert "phase=delivery" in caplog.text
     assert "error_type=RuntimeError" in caplog.text
     assert "private upstream detail" not in caplog.text
 
@@ -2735,14 +2880,14 @@ def test_builder_response_cannot_replace_a_missing_completion_file(
     ]
     lease = _Lease(_Remote(gateway.sessions["dev-session"].endpoint))
     monkeypatch.setattr(
-        routes, "create_credential_lease", AsyncMock(return_value=lease)
+        run_module, "create_credential_lease", AsyncMock(return_value=lease)
     )
-    monkeypatch.setattr(routes, "invalidate_current_delivery", AsyncMock())
+    monkeypatch.setattr(run_module, "invalidate_current_delivery", AsyncMock())
     read_completion = AsyncMock(side_effect=FileNotFoundError("missing completion"))
-    monkeypatch.setattr(routes, "read_completion_contract", read_completion)
-    monkeypatch.setattr(routes, "remove_completion_file", AsyncMock())
+    monkeypatch.setattr(run_module, "read_completion_contract", read_completion)
+    monkeypatch.setattr(run_module, "remove_completion_file", AsyncMock())
     publisher = _publisher_mock()
-    monkeypatch.setattr(routes, "DeliveryPublisher", lambda _transport: publisher)
+    monkeypatch.setattr(run_module, "DeliveryPublisher", lambda _transport: publisher)
 
     with TestClient(_app(gateway)) as client:
         _connect(client)
@@ -2757,13 +2902,15 @@ def test_builder_response_cannot_replace_a_missing_completion_file(
     assert '"code": "INTELLIGENT_DEVELOPMENT_OUTCOME_INVALID"' in response.text
     assert "event: development.source_ready" not in response.text
     assert "event: development.succeeded" not in response.text
-    assert len(gateway.codex.calls) == 1
-    assert read_completion.await_count == 1
+    assert len(gateway.codex.calls) == 3
+    assert read_completion.await_count == 4
     publisher.publish.assert_not_awaited()
-    assert lease.cleaned is True
+    assert lease.cleaned is False
+    assert '"state": "waiting_user"' in response.text
+    assert "event: error" not in response.text
 
 
-def test_builder_failure_still_cleans_credentials(
+def test_builder_failure_preserves_credentials_and_output_for_resume(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -2773,10 +2920,10 @@ def test_builder_failure_still_cleans_credentials(
     gateway.codex.turns = [CodexAppServerError(internal_error)]
     lease = _Lease(_Remote(gateway.sessions["dev-session"].endpoint))
     monkeypatch.setattr(
-        routes, "create_credential_lease", AsyncMock(return_value=lease)
+        run_module, "create_credential_lease", AsyncMock(return_value=lease)
     )
-    monkeypatch.setattr(routes, "invalidate_current_delivery", AsyncMock())
-    monkeypatch.setattr(routes, "remove_completion_file", AsyncMock())
+    monkeypatch.setattr(run_module, "invalidate_current_delivery", AsyncMock())
+    monkeypatch.setattr(run_module, "remove_completion_file", AsyncMock())
     with TestClient(_app(gateway)) as client:
         _connect(client)
         response = client.post(
@@ -2784,13 +2931,14 @@ def test_builder_failure_still_cleans_credentials(
             headers={"X-Test-User": "alice"},
             json={"message": "做一个天气 Agent"},
         )
-    assert "event: error" in response.text
+    assert "event: error" not in response.text
+    assert '"state": "waiting_user"' in response.text
     assert '"code": "SANDBOX_INVOCATION_FAILED"' in response.text
-    assert "Codex 执行本轮任务失败。开发环境已保留，请在当前会话重试。" in response.text
+    assert "Codex 本轮未完成，请检查模型配置或补充要求后继续。" in response.text
     assert internal_error not in response.text
     assert "upstream-secret" not in response.text
-    assert lease.cleaned is True
-    assert "reason=task_cleanup_completed" in caplog.text
+    assert lease.cleaned is False
+    assert "error_type=NativeTurnFailed" in caplog.text
     assert "reason=session_delete_requested" not in caplog.text
     assert "dev-session" in gateway.sessions
 
@@ -2801,13 +2949,16 @@ def test_completion_cleanup_failure_keeps_session_and_logs_only_error_type(
 ) -> None:
     gateway = _FakeGateway()
     gateway.sessions["dev-session"] = _cloud()
-    gateway.codex.turns = [CodexAppServerError("builder failed")]
+    gateway.codex.turns = [[CodexAppServerEvent(kind="text", text="回答已完成")]]
+    monkeypatch.setattr(
+        run_module, "read_completion_contract", AsyncMock(return_value=_answered())
+    )
     lease = _Lease(_Remote(gateway.sessions["dev-session"].endpoint))
     monkeypatch.setattr(
-        routes, "create_credential_lease", AsyncMock(return_value=lease)
+        run_module, "create_credential_lease", AsyncMock(return_value=lease)
     )
     monkeypatch.setattr(
-        routes,
+        run_module,
         "remove_completion_file",
         AsyncMock(side_effect=OSError("private file path")),
     )
@@ -2819,10 +2970,10 @@ def test_completion_cleanup_failure_keeps_session_and_logs_only_error_type(
             json={"message": "做一个天气 Agent"},
         )
     assert '"code": "INTELLIGENT_DEVELOPMENT_CLEANUP_INCOMPLETE"' in response.text
-    assert lease.cleaned
+    assert not lease.cleaned
     assert "dev-session" in gateway.sessions
-    assert "reason=completion_cleanup_failed" in caplog.text
-    assert "error_types=OSError" in caplog.text
+    assert "phase=cycle_complete" in caplog.text
+    assert "error_type=OSError" in caplog.text
     assert "reason=session_delete_requested" not in caplog.text
     assert "private file path" not in caplog.text
     assert "private file path" not in response.text
@@ -2861,12 +3012,18 @@ def test_stream_error_payload_distinguishes_codex_failures(
 
 
 @pytest.mark.parametrize("cleanup_fails", [False, True])
-def test_interrupted_turn_reports_reason_after_credential_cleanup(
+def test_native_interruption_continues_in_same_thread_then_cleans(
     monkeypatch: pytest.MonkeyPatch, cleanup_fails: bool
 ) -> None:
     gateway = _FakeGateway()
     gateway.sessions["dev-session"] = _cloud()
-    gateway.codex.turns = [CodexAppServerTurnInterruptedError("private-error-detail")]
+    gateway.codex.turns = [
+        CodexAppServerTurnInterruptedError("private-error-detail"),
+        [CodexAppServerEvent(kind="text", text="恢复后的回答")],
+    ]
+    monkeypatch.setattr(
+        run_module, "read_completion_contract", AsyncMock(return_value=_answered())
+    )
     lease = _Lease(
         _Remote(gateway.sessions["dev-session"].endpoint),
         cleanup_error=RuntimeError("cannot remove credentials")
@@ -2874,10 +3031,11 @@ def test_interrupted_turn_reports_reason_after_credential_cleanup(
         else None,
     )
     monkeypatch.setattr(
-        routes, "create_credential_lease", AsyncMock(return_value=lease)
+        run_module, "create_credential_lease", AsyncMock(return_value=lease)
     )
-    monkeypatch.setattr(routes, "invalidate_current_delivery", AsyncMock())
-    monkeypatch.setattr(routes, "remove_completion_file", AsyncMock())
+    monkeypatch.setattr(run_module, "TaskCredentialLease", lambda *args: lease)
+    monkeypatch.setattr(run_module, "invalidate_current_delivery", AsyncMock())
+    monkeypatch.setattr(run_module, "remove_completion_file", AsyncMock())
     with TestClient(_app(gateway)) as client:
         _connect(client)
         response = client.post(
@@ -2887,33 +3045,38 @@ def test_interrupted_turn_reports_reason_after_credential_cleanup(
         )
         if not cleanup_fails:
             assert gateway.codex.closed is False
-    assert "event: error" in response.text
-    assert 'event: done\ndata: {"reason":"failed"}' in response.text
+    assert "event: error" not in response.text
+    assert "event: done\ndata: {}" in response.text
     assert "development.source_ready" not in response.text
     assert "development.succeeded" not in response.text
     assert "private-error-detail" not in response.text
-    assert lease.cleanup_attempts == 1
-    assert len(gateway.codex.calls) == 1
+    assert lease.cleanup_attempts == (2 if cleanup_fails else 1)
+    assert len(gateway.codex.calls) == 2
+    assert "恢复后的回答" in response.text
     if cleanup_fails:
         assert "SANDBOX_TURN_INTERRUPTED" not in response.text
-        assert "当前开发环境已结束或不可用" in response.text
-        assert "dev-session" not in gateway.sessions
+        assert '"state": "waiting_user"' in response.text
+        assert "INTELLIGENT_DEVELOPMENT_CLEANUP_INCOMPLETE" in response.text
+        assert "dev-session" in gateway.sessions
     else:
-        assert '"code": "SANDBOX_TURN_INTERRUPTED"' in response.text
-        assert "本轮任务已中断" in response.text
+        assert '"state": "succeeded"' in response.text
+        assert "正在继续未完成的工作" in response.text
         assert lease.cleaned is True
         assert "dev-session" in gateway.sessions
 
 
 @pytest.mark.parametrize("delete_fails", [False, True])
-def test_cleanup_failure_logs_termination_outcome_without_secrets(
+def test_cleanup_failure_never_deletes_recoverable_environment(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
     delete_fails: bool,
 ) -> None:
     gateway = _FakeGateway()
     gateway.sessions["dev-session"] = _cloud()
-    gateway.codex.turns = [CodexAppServerError("builder failed")]
+    gateway.codex.turns = [[CodexAppServerEvent(kind="text", text="回答已完成")]]
+    monkeypatch.setattr(
+        run_module, "read_completion_contract", AsyncMock(return_value=_answered())
+    )
     cleanup_error = RuntimeError("private cleanup detail Authorization=private-token")
     cleanup_error.__cause__ = TimeoutError("private timeout detail")
     lease = _Lease(
@@ -2925,10 +3088,11 @@ def test_cleanup_failure_logs_termination_outcome_without_secrets(
         delete.side_effect = routes.SandboxProvisioningError("private deletion detail")
     monkeypatch.setattr(gateway, "delete_session", delete)
     monkeypatch.setattr(
-        routes, "create_credential_lease", AsyncMock(return_value=lease)
+        run_module, "create_credential_lease", AsyncMock(return_value=lease)
     )
-    monkeypatch.setattr(routes, "invalidate_current_delivery", AsyncMock())
-    monkeypatch.setattr(routes, "remove_completion_file", AsyncMock())
+    monkeypatch.setattr(run_module, "TaskCredentialLease", lambda *args: lease)
+    monkeypatch.setattr(run_module, "invalidate_current_delivery", AsyncMock())
+    monkeypatch.setattr(run_module, "remove_completion_file", AsyncMock())
     with TestClient(_app(gateway)) as client:
         _connect(client)
         response = client.post(
@@ -2936,35 +3100,12 @@ def test_cleanup_failure_logs_termination_outcome_without_secrets(
             headers={"X-Test-User": "alice"},
             json={"message": "做一个天气 Agent"},
         )
-    if delete_fails:
-        assert "reason=session_delete_failed" in caplog.text
-        assert "reason=session_delete_completed" not in caplog.text
-        assert "dev-session" in gateway.sessions
-    else:
-        assert "当前开发环境已结束或不可用" in response.text
-        assert "dev-session" not in gateway.sessions
-        assert lease.cleanup_attempts == 1
-        assert "reason=session_delete_completed" in caplog.text
-        assert "reason=session_delete_failed" not in caplog.text
-    assert gateway.codex.closed is True
-    messages = [record.getMessage() for record in caplog.records]
-    failed_cleanup = next(
-        i
-        for i, text in enumerate(messages)
-        if "reason=credential_cleanup_failed" in text
-    )
-    requested_delete = next(
-        i
-        for i, text in enumerate(messages)
-        if "reason=session_delete_requested" in text
-    )
-    assert failed_cleanup < requested_delete
-    assert (
-        sum("reason=session_delete_requested" in text for text in messages)
-        == delete.await_count
-    )
-    assert "trigger=credential_cleanup_failure" in caplog.text
-    assert "error_types=RuntimeError>TimeoutError" in caplog.text
+    delete.assert_not_awaited()
+    assert "dev-session" in gateway.sessions
+    assert lease.cleanup_attempts == 2
+    assert '"state": "waiting_user"' in response.text
+    assert "phase=cycle_complete" in caplog.text
+    assert "error_type=RuntimeError" in caplog.text
     assert "session_id=dev-session" in caplog.text
     assert "thread_id=thread-1" in caplog.text
     assert "reason=task_cleanup_completed" not in caplog.text
@@ -3014,3 +3155,24 @@ def test_owner_scope_and_expiry_are_enforced() -> None:
         )
     assert expired.status_code == 404
     assert foreign.status_code == 404
+
+
+def test_custom_studio_lifespan_recovers_accepted_tasks_without_an_http_request():
+    @asynccontextmanager
+    async def lifespan(app):
+        yield
+
+    app = _app(_FakeGateway(), lifespan=lifespan)
+    service = app.state.intelligent_development_runs
+    recovered = Event()
+
+    async def execute(run, token):
+        await service.repository.finish(run.owner_id, run.id, token, 1)
+        recovered.set()
+
+    service.execute = execute
+    asyncio.run(service.repository.create("alice", "environment", "request", "recover"))
+    with TestClient(app):
+        assert recovered.wait(timeout=2), (
+            "startup must schedule retained tasks even with Studio's custom lifespan"
+        )

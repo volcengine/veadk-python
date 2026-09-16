@@ -194,7 +194,7 @@ test("uses product-specific composer copy for Agent and sandbox sessions", () =>
   assert.doesNotMatch(composerSource, /给智能体发消息/);
   assert.match(
     sandboxComposerSource,
-    /textOnly\s*\?\s*t\("composer\.continuePlaceholder"\)\s*:\s*t\("composer\.messagePlaceholder"\)/,
+    /textOnly\s*\?\s*t\(busy && allowSteer \? "composer\.steerPlaceholder" : "composer\.continuePlaceholder"\)\s*:\s*t\("composer\.messagePlaceholder"\)/,
   );
 });
 

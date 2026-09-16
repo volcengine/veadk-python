@@ -76,7 +76,7 @@ test("aborts only an active Sandbox agent response", () => {
   );
   assert.match(
     appSource,
-    /<SandboxComposer[\s\S]*?onStop=\{sandboxBusy \? stopSandboxGeneration : undefined\}/,
+    /<SandboxComposer[\s\S]*?onStop=\{sandboxBusy \|\| development.submitting \? stopSandboxGeneration : undefined\}/,
   );
   assert.match(
     appSource,
@@ -111,46 +111,12 @@ test("aborts only an active Sandbox agent response", () => {
   );
 });
 
-test("intelligent stop waits for backend cleanup, preserves output, and remains resumable", () => {
-  const stopSource = between(
-    appSource,
-    "  function stopSandboxGeneration()",
-    "  async function sendSandboxMessage(",
-  );
-  const sendSource = between(
-    appSource,
-    "  async function sendSandboxMessage(",
-    "  async function submitSandboxInput(",
-  );
-  assert.match(appSource, /const sandboxStopWaitRef = useRef/);
-  assert.match(
-    stopSource,
-    /interruptSession\(activeSession\.id\)[\s\S]*?\.then\(\(\) => \{[\s\S]*?controller\.abort\(\)[\s\S]*?return true[\s\S]*?\.catch\([\s\S]*?return false[\s\S]*?sandboxStopWaitRef\.current = \{ controller, promise \}/,
-  );
-  assert.match(
-    stopSource,
-    /if \(sandboxStopWaitRef\.current\?\.controller === controller\) return/,
-  );
-  assert.doesNotMatch(
-    stopSource,
-    /sandboxStopWaitRef\.current = \{ controller, promise \};\s*controller\.abort\(\)/,
-  );
-  assert.match(
-    sendSource,
-    /activeSessionOverride\?: SandboxSessionInfo[\s\S]*?const activeSession = activeSessionOverride \?\? sandboxSession/,
-  );
-  assert.match(
-    sendSource,
-    /const stopWait = sandboxStopWaitRef\.current[\s\S]*?const cleanupConfirmed = await stopWait\.promise[\s\S]*?if \(cleanupConfirmed\)[\s\S]*?appendSandboxActivity\([\s\S]*?appText\("sandbox\.stoppedReady"\)/,
-  );
-  assert.doesNotMatch(
-    sendSource,
-    /current\.filter\([\s\S]*?turn\.meta\?\.localId !== assistantTurnId[\s\S]*?AbortError/,
-  );
-  assert.match(
-    appSource,
-    /await sendSandboxMessage\(goal, \[\], \[\], connected\)/,
-  );
+test("intelligent stop is independent of the SSE subscriber and keeps transcript", () => {
+  const stopSource = between(appSource, "  function stopSandboxGeneration()", "  async function sendSandboxMessage(");
+  assert.match(stopSource, /if \(activeSession\?\.intelligentDevelopment\) \{\s*void development\.stop\(\);\s*return;/);
+  assert.doesNotMatch(stopSource, /setSandboxTurns|setInput|filter\(/);
+  assert.match(appSource, /await development\.submit\(text\.trim\(\), activeSession\.id\)/);
+  assert.match(appSource, /await sendSandboxMessage\(goal, \[\], \[\], connected\)/);
 });
 
 test("standard Composer turns its enabled send control into an accessible stop control", () => {
@@ -170,7 +136,7 @@ test("standard Composer turns its enabled send control into an accessible stop c
 
 test("Sandbox Composer exposes the same stop state without stopping unrelated commands", () => {
   assert.match(sandboxComposerSource, /onStop\?: \(\) => void/);
-  assert.match(sandboxComposerSource, /const canStop = busy && Boolean\(onStop\)/);
+  assert.match(sandboxComposerSource, /const canStop = \(busy \|\| sending\) && Boolean\(onStop\)/);
   assert.match(sandboxComposerSource, /disabled=\{canStop \? false : !canSend\}/);
   assert.match(sandboxComposerSource, /onClick=\{canStop \? onStop/);
   assert.match(
