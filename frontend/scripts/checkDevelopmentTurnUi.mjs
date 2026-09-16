@@ -96,6 +96,8 @@ try{
  emit('tool_progress',{id:'m1',turnId:'turn-ux',text:'已检索到 3 条参考资料'});
  await page.getByText('已保留已有输出，正在继续验证。',{exact:true}).waitFor();
  assert.equal(await page.locator('.development-process').count(),2);
+ assert.equal(await page.locator('.development-tool-meta').first().innerText(),'432 毫秒');
+ assert.match(await page.locator('.development-process__duration').first().innerText(),/432 毫秒/);
  assert.ok(await page.locator('.development-diff summary svg').count()>0);
  assert.ok(await page.locator('.plan-icon svg').count()>0);
  await page.locator('.development-diff summary').click();
@@ -127,7 +129,7 @@ try{
  assert.match(await summary.innerText(),/2 次工具调用/);
  assert.equal(await page.locator('.turn-empty').count(),0);
  assert.match(await summary.innerText(),/25 分 42\.3 秒/);
- assert.match(await summary.innerText(),/432 ms/);
+ assert.match(await summary.innerText(),/432 毫秒/);
  const tokens=summary.getByRole('button');
  assert.equal(await tokens.evaluate(el=>getComputedStyle(el).borderTopWidth),'0px');
  await tokens.hover();

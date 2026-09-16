@@ -579,6 +579,7 @@
     "processSummary": "已处理 {{count}} 项",
     "duration": "{{seconds}} 秒",
     "durationUnits": {
+      "milliseconds": "{{value}} 毫秒",
       "hours": "{{value}} 小时",
       "minutes": "{{value}} 分",
       "seconds": "{{value}} 秒"
