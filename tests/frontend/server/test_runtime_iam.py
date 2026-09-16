@@ -136,6 +136,84 @@ def test_prefers_well_known_role_with_default_policy_without_scanning_account(
     iam.attach_role_policy.assert_not_called()
 
 
+def test_policy_entity_access_denied_falls_back_to_exact_role_policy_scan(
+    iam: MagicMock,
+) -> None:
+    iam.list_entities_for_policy.return_value = {
+        "ResponseMetadata": {
+            "Error": {
+                "Code": "AccessDenied",
+                "Message": "not authorized for ListEntitiesForPolicy",
+            }
+        }
+    }
+    iam.list_roles.side_effect = [
+        {
+            "Result": {
+                "RoleMetadata": [{"RoleName": "unrelated-role"}],
+                "Total": 2,
+            }
+        },
+        {
+            "Result": {
+                "RoleMetadata": [{"RoleName": "runtime-role"}],
+                "Total": 2,
+            }
+        },
+    ]
+    iam.list_attached_role_policies.side_effect = [
+        {
+            "Result": {
+                "AttachedPolicyMetadata": [
+                    {"PolicyName": "OtherAccess", "PolicyType": "System"}
+                ]
+            }
+        },
+        {
+            "Result": {
+                "AttachedPolicyMetadata": [
+                    {
+                        "PolicyName": DEFAULT_RUNTIME_POLICY,
+                        "PolicyType": "System",
+                    }
+                ]
+            }
+        },
+    ]
+
+    assert ensure_runtime_role(access_key="ak", secret_key="sk") == "runtime-role"
+    assert iam.list_roles.call_args_list == [
+        call({"Limit": 100, "Offset": 0}),
+        call({"Limit": 100, "Offset": 1}),
+    ]
+    assert iam.list_attached_role_policies.call_args_list == [
+        call({"RoleName": "unrelated-role"}),
+        call({"RoleName": "runtime-role"}),
+    ]
+    iam.get_role.assert_not_called()
+    iam.create_role.assert_not_called()
+    iam.attach_role_policy.assert_not_called()
+
+
+def test_policy_entity_access_denied_fallback_stays_fail_closed(
+    iam: MagicMock,
+) -> None:
+    iam.list_entities_for_policy.return_value = {
+        "ResponseMetadata": {
+            "Error": {
+                "Code": "AccessDenied",
+                "Message": "not authorized for ListEntitiesForPolicy",
+            }
+        }
+    }
+    iam.list_roles.return_value = {"Result": {"RoleMetadata": [], "Total": 1}}
+
+    with pytest.raises(RuntimeError, match="incomplete role list"):
+        ensure_runtime_role(access_key="ak", secret_key="sk")
+    iam.create_role.assert_not_called()
+    iam.attach_role_policy.assert_not_called()
+
+
 def test_well_known_legacy_role_is_not_reused_or_mutated(
     iam: MagicMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -277,15 +355,17 @@ def test_keeps_staging_trust_service(iam: MagicMock, monkeypatch) -> None:
     assert document["Statement"][0]["Principal"]["Service"] == ["vefaas_dev"]
 
 
-@pytest.mark.parametrize("operation", ["list_entities_for_policy"])
-def test_lookup_errors_never_create_a_fallback_role(
-    iam: MagicMock, operation: str
+def test_unexpected_policy_lookup_errors_never_create_a_fallback_role(
+    iam: MagicMock,
 ) -> None:
-    getattr(iam, operation).return_value = {
-        "ResponseMetadata": {"Error": {"Code": "AccessDenied", "Message": "denied"}}
+    iam.list_entities_for_policy.return_value = {
+        "ResponseMetadata": {
+            "Error": {"Code": "InternalError", "Message": "lookup failed"}
+        }
     }
-    with pytest.raises(RuntimeError, match="denied"):
+    with pytest.raises(RuntimeError, match="lookup failed"):
         ensure_runtime_role(access_key="ak", secret_key="sk")
+    iam.list_roles.assert_not_called()
     iam.create_role.assert_not_called()
     iam.attach_role_policy.assert_not_called()
 

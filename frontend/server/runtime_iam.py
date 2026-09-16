@@ -37,6 +37,13 @@ _ROLE_NAME_ATTEMPTS = 10
 _ROLE_SUFFIX_LENGTH = 7
 _ROLE_SUFFIX_CHARS = string.ascii_lowercase + string.digits
 _ROLE_LOCK = threading.Lock()
+_ACCESS_DENIED_CODES = frozenset(
+    {"AccessDenied", "AccessDeniedException", "UnauthorizedOperation"}
+)
+
+
+class _PolicyEntityLookupDenied(RuntimeError):
+    """The caller cannot use IAM's reverse policy-to-role lookup."""
 
 
 def _result(response: dict[str, Any]) -> dict[str, Any]:
@@ -83,11 +90,55 @@ def _get_role(iam: Any, name: str) -> dict[str, Any] | None:
     return role
 
 
-def _find_reusable_role(iam: Any) -> str | None:
+def _role_has_default_runtime_policy(iam: Any, name: str) -> bool:
+    policies = _result(iam.list_attached_role_policies({"RoleName": name})).get(
+        "AttachedPolicyMetadata"
+    )
+    if not isinstance(policies, list):
+        raise RuntimeError("IAM returned an invalid role policy list")
+    for policy in policies:
+        if not isinstance(policy, dict):
+            raise RuntimeError("IAM returned an invalid role policy")
+        policy_name = policy.get("PolicyName")
+        policy_type = policy.get("PolicyType")
+        if not isinstance(policy_name, str) or not policy_name.strip():
+            raise RuntimeError("IAM role policy is missing PolicyName")
+        if not isinstance(policy_type, str) or not policy_type.strip():
+            raise RuntimeError("IAM role policy is missing PolicyType")
+        if (
+            policy_type.casefold() == "system"
+            and policy_name.casefold() == DEFAULT_RUNTIME_POLICY.casefold()
+        ):
+            return True
+    return False
+
+
+def _find_reusable_role_by_listing(iam: Any) -> str | None:
     offset = 0
     while True:
-        page = _result(
-            iam.list_entities_for_policy(
+        page = _result(iam.list_roles({"Limit": _ROLE_PAGE_SIZE, "Offset": offset}))
+        roles = page.get("RoleMetadata")
+        total = page.get("Total")
+        if not isinstance(roles, list) or not isinstance(total, int) or total < 0:
+            raise RuntimeError("IAM returned an invalid role list")
+        if not roles and offset < total:
+            raise RuntimeError("IAM returned an incomplete role list")
+        for role in roles:
+            name = role.get("RoleName") if isinstance(role, dict) else None
+            if not isinstance(name, str) or not name.strip():
+                raise RuntimeError("IAM role is missing RoleName")
+            if _role_has_default_runtime_policy(iam, name):
+                return name
+        offset += len(roles)
+        if offset >= total:
+            return None
+
+
+def _find_reusable_role_by_policy(iam: Any) -> str | None:
+    offset = 0
+    while True:
+        try:
+            response = iam.list_entities_for_policy(
                 {
                     "PolicyName": DEFAULT_RUNTIME_POLICY,
                     "PolicyType": "System",
@@ -95,7 +146,13 @@ def _find_reusable_role(iam: Any) -> str | None:
                     "Offset": offset,
                 }
             )
-        )
+        except Exception as error:
+            if _error_code(error) in _ACCESS_DENIED_CODES:
+                raise _PolicyEntityLookupDenied from error
+            raise
+        if _error_code(response) in _ACCESS_DENIED_CODES:
+            raise _PolicyEntityLookupDenied
+        page = _result(response)
         roles = page.get("PolicyRoles")
         total = page.get("Total")
         if not isinstance(roles, list) or not isinstance(total, int) or total < 0:
@@ -108,6 +165,13 @@ def _find_reusable_role(iam: Any) -> str | None:
         offset += _ROLE_PAGE_SIZE
         if offset >= total:
             return None
+
+
+def _find_reusable_role(iam: Any) -> str | None:
+    try:
+        return _find_reusable_role_by_policy(iam)
+    except _PolicyEntityLookupDenied:
+        return _find_reusable_role_by_listing(iam)
 
 
 def ensure_runtime_role(
