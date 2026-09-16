@@ -1,5 +1,4 @@
-import { Button } from "./components/primitives/Button";
-import { TextShimmer } from "./ui/text-shimmer/TextShimmer";
+import { SandboxSpinnerIcon } from "./ui/icons/SandboxControlIcons";
 import { useDevelopmentRun } from "./create/useDevelopmentRun";
 import { developmentRunStatus } from "./create/developmentPresentation";
 import { DevelopmentTaskNotice } from "./create/DevelopmentTaskNotice";
@@ -1176,6 +1175,7 @@ export default function App() {
   const sandboxLaunchAbortRef = useRef<AbortController | null>(null);
   const sandboxLaunchCapabilityAbortRef = useRef<AbortController | null>(null);
   const intelligentCreateAbortRef = useRef<AbortController | null>(null);
+  const intelligentCreateFocusRef = useRef<HTMLElement | null>(null);
   const sandboxMessageAbortRef = useRef<AbortController | null>(null);
   const sandboxSessionIdRef = useRef(sandboxSession?.id ?? "");
   const sandboxActiveAssistantTurnIdRef = useRef("");
@@ -4738,6 +4738,11 @@ export default function App() {
     intelligentCreateAbortRef.current?.abort();
     intelligentCreateAbortRef.current = null;
     setIntelligentPreparationStage(null);
+    const trigger = intelligentCreateFocusRef.current;
+    intelligentCreateFocusRef.current = null;
+    requestAnimationFrame(() => {
+      if (trigger?.isConnected && trigger.getClientRects().length) trigger.focus();
+    });
   }
 
   async function startIntelligentDevelopment(
@@ -4750,6 +4755,8 @@ export default function App() {
     intelligentCreateAbortRef.current?.abort();
     const controller = new AbortController();
     intelligentCreateAbortRef.current = controller;
+    intelligentCreateFocusRef.current = document.activeElement instanceof HTMLElement
+      ? document.activeElement : null;
     setIntelligentPreparationMessage(goal);
     setIntelligentPreparationStage("preparing");
     setIntelligentCapabilitiesError("");
@@ -4781,10 +4788,15 @@ export default function App() {
       if (returnTarget) setMigrationProjectReturn(returnTarget);
       activateIntelligentDevelopmentSession(connected, development.prepare(goal, connected.id));
       intelligentCreateAbortRef.current = null;
+      intelligentCreateFocusRef.current = null;
       setIntelligentPreparationStage(null);
       await sendSandboxMessage(goal, [], [], connected);
     } catch (cause) {
-      if ((cause as Error)?.name !== "AbortError") {
+      if (
+        !controller.signal.aborted
+        && intelligentCreateAbortRef.current === controller
+        && (cause as Error)?.name !== "AbortError"
+      ) {
         setIntelligentCapabilitiesError(
           cause instanceof Error
             ? cause.message
@@ -6962,6 +6974,23 @@ export default function App() {
             )}
           </div>
         );
+        const preparation = intelligentPreparationStage ? (
+          <div className="development-preparation">
+            <div className="transcript">
+              <div className="turn turn--user"><div className="bubble"><Markdown text={intelligentPreparationMessage} /></div></div>
+              <div className="turn turn--assistant">
+                <div className="development-preparation__status">
+                  <SandboxSpinnerIcon className="icon spin development-preparation__spinner" />
+                  <div className="development-preparation__message" role="status" aria-live="polite" aria-atomic="true">
+                    <span aria-hidden={intelligentPreparationStage !== "preparing"}>{t("adk:developmentRuns.preparingEnvironment")}</span>
+                    <span aria-hidden={intelligentPreparationStage !== "starting"}>{t("adk:developmentRuns.connectingEnvironment")}</span>
+                  </div>
+                  <button type="button" className="development-preparation__cancel" onClick={cancelIntelligentPreparation}>{t("sandbox:common.cancel")}</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : null;
         return (
           <section className="main-shell">
             <main
@@ -7513,14 +7542,6 @@ export default function App() {
                   {" "}{t("credentials.suffix")}
                 </div>
               </div>
-            ) : intelligentPreparationStage ? (
-              <div className="development-preparation">
-                <div className="transcript">
-                  <div className="turn turn--user"><div className="bubble"><Markdown text={intelligentPreparationMessage} /></div></div>
-                  <div className="turn turn--assistant"><div className="development-process__status" role="status"><TextShimmer>{t("adk:developmentRuns.preparing")}</TextShimmer></div></div>
-                </div>
-                <div className="development-preparation__footer"><Button variant="secondary" onClick={cancelIntelligentPreparation}>{t("sandbox:composer.stop")}</Button></div>
-              </div>
             ) : intelligentDeployment ? (
               <IntelligentDeployment
                 delivery={intelligentDeployment}
@@ -7533,6 +7554,8 @@ export default function App() {
                 onDeploymentComplete={finishDeployment}
               />
             ) : visibleCreateView === "intelligent" ? (
+              <>
+              <div className="development-preparation-source" hidden={Boolean(intelligentPreparationStage)}>
               <IntelligentCreate
                 capabilities={intelligentCapabilities}
                 loading={intelligentCapabilitiesLoading}
@@ -7549,6 +7572,9 @@ export default function App() {
                 }}
                 onCreate={startIntelligentDevelopment}
               />
+              </div>
+              {preparation}
+              </>
             ) : visibleCreateView === "deepseek" ? (
               <NativeConfigPage
                 draft={deepseekDraft}
@@ -7638,6 +7664,8 @@ export default function App() {
                 initialDeployRegion={newRuntimeRegion}
               />
             ) : visibleCreateView === "migration" ? (
+              <>
+              <div className="development-preparation-source" hidden={Boolean(intelligentPreparationStage)}>
               <MigrationWorkspace
                 cloudProvider={cloudProvider}
                 onBack={() => {
@@ -7673,6 +7701,9 @@ export default function App() {
                   setIntelligentDeployment(delivery);
                 }}
               />
+              </div>
+              {preparation}
+              </>
             ) : turns.length === 0 && !newChatCapabilitiesReady ? (
               <div className="session-loading">
                 <Loader2 className="icon spin" /> {t("loading.agentCapabilities")}

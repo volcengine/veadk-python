@@ -7,21 +7,43 @@ await mkdir(out,{recursive:true});
 const browser=await chromium.launch({executablePath:process.env.CHROMIUM_EXECUTABLE,headless:true,args:['--no-sandbox','--no-proxy-server']});
 const page=await browser.newPage({viewport:{width:1440,height:960},colorScheme:'dark'});
 const errors=[], requests=[], events=[];
+const checkPreparation=Boolean(process.env.CHECK_PREPARATION);
+const checkMigration=checkPreparation&&Boolean(process.env.CHECK_MIGRATION);
+const english=checkPreparation&&process.env.CHECK_LOCALE==='en-US';
+const label=(zh,en)=>english?en:zh;
+let holdPreparation='create', heldPreparation=null;
 let run=null, nextSeq=1, startedAt=0, firstSubscription=0, breakConnection=0, sourceAttempts=0;
 const session={sessionId:'ux-session',status:'Ready',toolName:'intelligent-development',displayName:'构建体验验收',isMine:true,region:'cn-beijing',workspaceLocked:true,busy:false,model:'doubao-seed-2-1-pro-260628'};
 const delivery={sessionId:session.sessionId,agentName:'customer_analysis_assistant_with_a_long_project_name',entryPoint:'src/customer_analysis/agents/project_with_very_long_nested_directory_names/assistant_with_a_long_filename_for_preview_verification.py',fileCount:2,artifactSize:20480,artifactSha256:'a'.repeat(64),validationReportSha256:'b'.repeat(64),validatedAt:'2026-09-16T04:00:00Z',gateSummary:['ruff','pytest'],verified:true,deployable:true,validationSummary:'检查通过'};
+const project={schemaVersion:'1',origin:'migration',projectId:'ux-project',name:'Preserved project',createdAt:delivery.validatedAt,updatedAt:delivery.validatedAt,latestVersionId:'ux-version',latestVersionCreatedAt:delivery.validatedAt,latestVersionVerified:true,latestAgentName:delivery.agentName,versionCount:1};
+const version={...delivery,schemaVersion:'1',producer:'migration',migrationFramework:'any',projectId:project.projectId,versionId:'ux-version',parentVersionId:null,sourceSessionId:session.sessionId,createdAt:delivery.validatedAt,intentSummary:'Preserve the selected base',acceptanceCriteria:['Preserve the selected base']};
 function emit(type,payload){events.push({type,payload:{...payload,seq:nextSeq++,runId:'ux-run'}});if(run)run.lastSeq=nextSeq-1;}
 page.on('pageerror',e=>errors.push(e.message));
-await page.addInitScript(()=>{localStorage.setItem('veadk_local_user','studio-ux-verification');sessionStorage.setItem('veadk_local_user_tab','studio-ux-verification');localStorage.setItem('agentkit.studio.locale','zh-CN');});
-await page.route('**/web/model-options?*',r=>r.fulfill({json:{models:[{id:session.model,name:session.model,available:true,lifecycleStatus:'Active'}]}}));
+await page.addInitScript(locale=>{localStorage.setItem('veadk_local_user','studio-ux-verification');sessionStorage.setItem('veadk_local_user_tab','studio-ux-verification');localStorage.setItem('agentkit.studio.locale',locale);},english?'en-US':'zh-CN');
+if(checkPreparation) await page.addInitScript(()=>{
+ const originalFetch=window.fetch.bind(window);
+ window.fetch=(input,init)=>{
+  const path=new URL(typeof input==='string'?input:input.url,location.origin).pathname;
+  // Exercise late responses even when the transport cannot cancel an in-flight request.
+  return originalFetch(input,path.startsWith('/web/intelligent-development/')&&init?.method==='POST'?{...init,signal:undefined}:init);
+ };
+});
+await page.route('**/web/model-options?*',r=>r.fulfill({json:{models:[session.model,...(checkPreparation?['alternate-development-model']:[])].map(id=>({id,displayName:id,available:true,lifecycleStatus:'Active'}))}}));
 await page.route('**/web/intelligent-development/**',async route=>{
- const req=route.request(),u=new URL(req.url()),path=u.pathname,method=req.method();requests.push({path,method});
+ const req=route.request(),u=new URL(req.url()),path=u.pathname,method=req.method();requests.push({path,method,...(checkPreparation&&method==='POST'?{body:req.postDataJSON()}: {})});
  const json=v=>route.fulfill({json:v});
  if(path.endsWith('/capabilities'))return json({enabled:true,reason:'',model:{configured:true,id:session.model},projectStorageEnabled:true});
- if(path.endsWith('/projects'))return json({projects:[]});
+ if(path.endsWith('/projects'))return json({projects:checkMigration?[project]:[]});
+ if(checkMigration&&path.endsWith('/versions'))return json({versions:[version]});
  if(path.endsWith('/releases/summary')){sourceAttempts++;await new Promise(r=>setTimeout(r,400));if(sourceAttempts===1)return route.fulfill({status:503,json:{detail:'预览暂时不可用，请重试'}});return json({...delivery,files:[{path:delivery.entryPoint,content:'print("preview verified")'},{path:'README.md',content:'# Preview project'}]});}
- if(path.endsWith('/sessions')&&method==='POST'){await new Promise(r=>setTimeout(r,900));return json(session);}
- if(path.endsWith('/connect')){await new Promise(r=>setTimeout(r,700));return json(session);}
+ if(path.endsWith('/sessions')&&method==='POST'){
+  if(checkPreparation&&holdPreparation==='create')return new Promise(resolve=>{heldPreparation=async fail=>{await route.fulfill(fail?{status:503,json:{detail:'Late preparation failure'}}:{json:session});resolve();};});
+  await new Promise(r=>setTimeout(r,900));return json(session);
+ }
+ if(path.endsWith('/connect')){
+  if(checkPreparation&&holdPreparation==='connect')return new Promise(resolve=>{heldPreparation=async fail=>{await route.fulfill(fail?{status:503,json:{detail:'Late connection failure'}}:{json:session});resolve();};});
+  await new Promise(r=>setTimeout(r,700));return json(session);
+ }
  if(path.endsWith('/sessions'))return json({sessions:run?[session]:[]});
  if(path.endsWith('/sessions/ux-session/runs')&&method==='POST'){
   const body=req.postDataJSON();await new Promise(r=>setTimeout(r,500));
@@ -45,11 +67,77 @@ await page.route('**/web/intelligent-development/**',async route=>{
 });
 try{
  await page.goto(process.env.STUDIO_TEST_URL || 'http://127.0.0.1:18080',{waitUntil:'networkidle'});
- await page.getByRole('button',{name:'智能体',exact:true}).click();
- await page.getByText('创建智能体',{exact:true}).click();
- await page.getByRole('button',{name:/传统模式/}).click();
- await page.getByText('智能模式',{exact:true}).click();
+ await page.getByRole('button',{name:label('智能体','Agents'),exact:true}).click();
+ await page.getByText(label('创建智能体','Create Agent'),{exact:true}).click();
+ await page.getByRole('button',{name:english?/Advanced mode/:/传统模式/}).click();
+ if(checkMigration){
+  await page.getByText(label('从存量迁移','Migrate an existing project'),{exact:true}).click();
+  await page.getByRole('button',{name:label('已迁移项目','Migrated projects'),exact:true}).click();
+  await page.locator('.ic-project-disclosure').click();
+  await page.getByRole('button',{name:label('去优化','Optimize'),exact:true}).click();
+ }else await page.getByText(label('智能模式','Intelligent mode'),{exact:true}).click();
  await page.locator('textarea').fill('构建体验验收：保留输出并展示工具过程');
+ if(checkPreparation){
+  const goal='构建体验验收：保留输出并展示工具过程';
+  const evidence=[];
+  const buildLabel=checkMigration?label('开始优化','Start optimizing'):label('开始构建','Start building');
+  await page.locator('.ic-model-select button').click();
+  await page.getByRole('option',{name:/alternate-development-model/}).click();
+  for(const [stage,fail,width] of [['create',false,1440],['connect',false,600],['connect',true,1440]]){
+   holdPreparation=stage;heldPreparation=null;
+   await page.setViewportSize({width,height:960});
+   await page.getByRole('button',{name:buildLabel,exact:true}).click();
+   await page.waitForFunction(()=>Boolean(document.querySelector('.development-preparation')));
+   const deadline=Date.now()+5000;
+   while(!heldPreparation&&Date.now()<deadline) await page.waitForTimeout(30);
+   assert.ok(heldPreparation,'Expected preparation request within 5 seconds');
+   const cancel=page.locator('.development-preparation').getByRole('button',{name:label('取消','Cancel'),exact:true});
+   assert.equal(await page.locator('textarea:visible').count(),0,'No input is shown before the task starts');
+   const message=page.locator('.development-preparation [role="status"] [aria-hidden="false"]');
+   assert.equal(await message.textContent(),stage==='create'?label('正在准备开发环境…','Preparing development environment…'):label('正在连接开发环境…','Connecting to development environment…'));
+   const statusBox=await message.boundingBox(),cancelBox=await cancel.boundingBox();
+   assert.ok(Math.abs(statusBox.y+statusBox.height/2-cancelBox.y-cancelBox.height/2)<2,'Cancel aligns with preparation status');
+   assert.ok(cancelBox.x-statusBox.x-statusBox.width<=24,'Cancel stays next to the status');
+   assert.ok(cancelBox.x+cancelBox.width<=width,'Cancel stays inside the viewport');
+   await page.screenshot({path:`${out}/preparation-${stage}-${width}-${fail}.png`});
+   await cancel.focus();
+   await page.keyboard.press('Enter');
+   await page.locator('#intelligent-goal').waitFor({state:'visible'});
+   assert.equal(await page.locator('#intelligent-goal').inputValue(),goal,'Cancelling preparation must preserve the requirement');
+   assert.match(await page.locator('.ic-model-select').innerText(),/alternate-development-model/);
+   assert.equal(await page.locator(checkMigration?'#intelligent-goal':'.ic-primary').evaluate(el=>el===document.activeElement),true,'Return keyboard focus to the form');
+   if(checkMigration) assert.match(await page.locator('.ic-selected-base').innerText(),/Preserved project/);
+   const release=heldPreparation;await release(fail);
+   await page.waitForTimeout(250);
+   assert.equal(await page.locator('#intelligent-goal').inputValue(),goal);
+   assert.equal(await page.locator('.sandbox-codex-composer').count(),0);
+   assert.equal(await page.getByText(/Late (preparation|connection) failure/).count(),0);
+   assert.equal(requests.filter(r=>r.path.endsWith('/runs')&&r.method==='POST').length,0);
+   evidence.push({stage,lateFailure:fail,width,draftPreserved:true,modelPreserved:true,noRunStarted:true,cancelBox});
+  }
+  assert.equal(evidence[0].cancelBox.x,evidence[2].cancelBox.x,'Stage changes preserve the cancel position');
+  // A current failure remains visible and retry uses the retained draft/model.
+  holdPreparation='create';heldPreparation=null;
+  await page.getByRole('button',{name:buildLabel,exact:true}).click();
+  const deadline=Date.now()+5000;
+  while(!heldPreparation&&Date.now()<deadline) await page.waitForTimeout(30);
+  assert.ok(heldPreparation);await heldPreparation(true);
+  await page.getByRole('alert').filter({hasText:'Late preparation failure'}).waitFor();
+  assert.equal(await page.locator('#intelligent-goal').inputValue(),goal);
+  holdPreparation='none';
+  await page.getByRole('button',{name:buildLabel,exact:true}).click();
+  await page.locator('.sandbox-codex-composer').waitFor();
+  assert.equal(requests.filter(r=>r.path.endsWith('/runs')&&r.method==='POST').length,1);
+  const creations=requests.filter(r=>r.path.endsWith('/sessions')&&r.method==='POST');
+  assert.ok(creations.every(r=>r.body.modelId==='alternate-development-model'));
+  if(checkMigration) assert.ok(creations.every(r=>r.body.projectId===project.projectId&&r.body.baseVersionId===version.versionId));
+  await page.getByRole('button',{name:label('停止生成','Stop generating'),exact:true}).waitFor();
+  await page.screenshot({path:out+'/after-retry.png'});
+  await writeFile(out+'/preparation-cancel.json',JSON.stringify({locale:english?'en-US':'zh-CN',migration:checkMigration,evidence,errors},null,2));
+  assert.deepEqual(errors,[]);
+  console.log('Preparation cancellation journey passed');
+  await browser.close();process.exit(0);
+ }
 
  await page.screenshot({path:out+'/before-start.png'});
  await page.locator('textarea').press('Control+Enter');

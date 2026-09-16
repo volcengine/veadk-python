@@ -573,6 +573,8 @@
     "plan": "执行计划",
     "diff": "文件变更",
     "preparing": "正在准备任务",
+    "preparingEnvironment": "正在准备开发环境…",
+    "connectingEnvironment": "正在连接开发环境…",
     "processing": "正在处理请求",
     "thinking": "正在思考",
     "read": "读取文件 · {{target}}",

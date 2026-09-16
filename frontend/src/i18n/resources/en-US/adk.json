@@ -573,6 +573,8 @@
     "plan": "Execution plan",
     "diff": "File changes",
     "preparing": "Preparing task",
+    "preparingEnvironment": "Preparing development environment…",
+    "connectingEnvironment": "Connecting to development environment…",
     "processing": "Processing request",
     "thinking": "Thinking",
     "read": "Read file · {{target}}",
