@@ -583,15 +583,16 @@ async def test_heartbeat_route_preserves_delivery_and_disconnect_cleanup(
     caplog: pytest.LogCaptureFixture,
     disconnect: bool,
 ) -> None:
-    monkeypatch.setattr(routes, "_SSE_HEARTBEAT_SECONDS", 0.001, raising=False)
     caplog.set_level("INFO", logger=routes.__name__)
     finish = asyncio.Event()
+    codex_started = asyncio.Event()
     codex_finished = asyncio.Event()
 
     class DelayedCodex(_FakeCodex):
         async def stream_turn(self, prompt, skill_ids=(), **options):
             self.calls.append({"prompt": prompt, **options})
             try:
+                codex_started.set()
                 yield CodexAppServerEvent(kind="text", text="working")
                 await finish.wait()
             finally:
@@ -630,20 +631,18 @@ async def test_heartbeat_route_preserves_delivery_and_disconnect_cleanup(
         }
     )
     bodies = []
-    heartbeat_seen = False
+    response_started = asyncio.Event()
+    heartbeat_seen = asyncio.Event()
 
     async def send(message):
-        nonlocal heartbeat_seen
+        if message["type"] == "http.response.start":
+            response_started.set()
         if message["type"] != "http.response.body":
             return
         body = message.get("body", b"")
         bodies.append(body)
-        if b": heartbeat" in body and not heartbeat_seen:
-            heartbeat_seen = True
-            if disconnect:
-                incoming.put_nowait({"type": "http.disconnect"})
-            else:
-                finish.set()
+        if b": heartbeat" in body and codex_started.is_set():
+            heartbeat_seen.set()
 
     scope = {
         "type": "http",
@@ -669,10 +668,23 @@ async def test_heartbeat_route_preserves_delivery_and_disconnect_cleanup(
             headers={"X-Test-User": "alice"},
         )
         assert response.status_code == 200
+        response_task = asyncio.create_task(app(scope, incoming.get, send))
         try:
-            await asyncio.wait_for(app(scope, incoming.get, send), 2)
+            # Bound each protocol stage, rather than the total SQLite/worker
+            # lifecycle time when CI runs sixteen test processes concurrently.
+            await asyncio.wait_for(response_started.wait(), 2)
+            await asyncio.wait_for(codex_started.wait(), 2)
+            await asyncio.wait_for(heartbeat_seen.wait(), 2)
+            assert not codex_finished.is_set()
+            if disconnect:
+                incoming.put_nowait({"type": "http.disconnect"})
+            else:
+                finish.set()
+            await asyncio.wait_for(response_task, 2)
         finally:
             finish.set()
+            response_task.cancel()
+            await asyncio.gather(response_task, return_exceptions=True)
             await asyncio.wait_for(codex_finished.wait(), 1)
         task_service = app.state.intelligent_development_runs
 
@@ -697,7 +709,7 @@ async def test_heartbeat_route_preserves_delivery_and_disconnect_cleanup(
             headers={"X-Test-User": "alice"},
         )
         assert status.json()["busy"] is False
-    assert heartbeat_seen
+    assert heartbeat_seen.is_set()
     assert len(gateway.codex.calls) == 1
     cleanup.assert_awaited_once()
     remove.assert_awaited_once()
