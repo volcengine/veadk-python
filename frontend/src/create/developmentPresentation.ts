@@ -4,6 +4,7 @@ import { activeLocale, adkT } from "../adk/i18n";
 export function formatDevelopmentDuration(value: number | undefined): string {
   if (value == null || !Number.isFinite(value) || value < 0) return adkT("developmentRuns.notReported");
   const ms = Math.round(value);
+  if (ms === 0) return `<${adkT("developmentRuns.durationUnits.milliseconds", { value: "1" })}`;
   if (ms < 1000) return adkT("developmentRuns.durationUnits.milliseconds", { value: ms.toLocaleString(activeLocale()) });
   // Round before splitting units so 59.95 seconds becomes one minute.
   const tenths = Math.round(ms / 100);

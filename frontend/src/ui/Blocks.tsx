@@ -15,7 +15,7 @@ import { flattenCodexActivityBlocks, type Block } from "../blocks";
 import { DevelopmentTurnSummary } from "../create/DevelopmentTurnSummary";
 import { DevelopmentItemIcon } from "../create/DevelopmentItemIcon";
 import { DevelopmentProcess } from "../create/DevelopmentProcess";
-import { developmentToolLabel, formatDevelopmentDuration } from "../create/developmentPresentation";
+import { developmentToolLabel } from "../create/developmentPresentation";
 import { buildSurfaces, SurfaceView } from "../a2ui/Surface";
 import { useStickToBottom } from "./useStickToBottom";
 import { Markdown } from "./Markdown";
@@ -773,7 +773,6 @@ function ToolBlock({
   codexActivity,
   source,
   native = false,
-  durationMs,
   progressText,
   onBranchSelect,
   onAction,
@@ -781,7 +780,6 @@ function ToolBlock({
   name: string;
   callId?: string;
   native?: boolean;
-  durationMs?: number;
   progressText?: string;
   args?: unknown;
   response?: unknown;
@@ -920,7 +918,6 @@ function ToolBlock({
             </TextShimmer>
           )}
           {native && toolStatus === "failed" && <span className="development-tool-failure"><Trans ns="adk" i18nKey="developmentRuns.toolFailed" /></span>}
-          {native && durationMs != null && <span className="development-tool-meta">{formatDevelopmentDuration(durationMs)}</span>}
           <ToolDisclosureIcon
             className={`tool-chevron${open ? " is-open" : ""}`}
           />
@@ -1549,7 +1546,6 @@ export function Blocks({
                 name={b.itemType ? developmentToolLabel(b) : b.name}
                 callId={b.callId}
                 native={Boolean(b.itemType)}
-                durationMs={b.durationMs}
                 progressText={b.progressText}
                 args={b.args}
                 response={b.response}

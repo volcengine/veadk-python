@@ -96,7 +96,7 @@ try{
  emit('tool_progress',{id:'m1',turnId:'turn-ux',text:'已检索到 3 条参考资料'});
  await page.getByText('已保留已有输出，正在继续验证。',{exact:true}).waitFor();
  assert.equal(await page.locator('.development-process').count(),2);
- assert.equal(await page.locator('.development-tool-meta').first().innerText(),'432 毫秒');
+ assert.doesNotMatch((await page.locator('.tool-head').allInnerTexts()).join('\n'),/毫秒|\bms\b/);
  assert.match(await page.locator('.development-process__duration').first().innerText(),/432 毫秒/);
  assert.ok(await page.locator('.development-diff summary svg').count()>0);
  assert.ok(await page.locator('.plan-icon svg').count()>0);
@@ -121,6 +121,7 @@ try{
  await page.getByRole('button',{name:'返回任务',exact:true}).click();
  await page.getByText('正在处理请求',{exact:true}).last().waitFor();
  await page.getByRole('button',{name:'返回任务',exact:true}).waitFor({state:'hidden'});
+ emit('activity',{id:'m1',turnId:'turn-ux',itemType:'mcpToolCall',kind:'tool',name:'MCP · docs/search',status:'done',durationMs:0});
  await page.getByRole('button',{name:'停止生成',exact:true}).click();
  await page.waitForFunction(()=>!document.querySelector('.sandbox-codex-composer button[aria-label="停止生成"]'));
  assert.ok(await page.getByText('已保留已有输出，正在继续验证。',{exact:true}).isVisible());
@@ -130,6 +131,7 @@ try{
  assert.equal(await page.locator('.turn-empty').count(),0);
  assert.match(await summary.innerText(),/25 分 42\.3 秒/);
  assert.match(await summary.innerText(),/432 毫秒/);
+ assert.match(await page.locator('.development-process__duration').last().innerText(),/<1 毫秒/);
  const tokens=summary.getByRole('button');
  assert.equal(await tokens.evaluate(el=>getComputedStyle(el).borderTopWidth),'0px');
  await tokens.hover();
