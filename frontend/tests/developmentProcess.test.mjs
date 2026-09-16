@@ -44,15 +44,21 @@ test("development durations use readable units and carry rounded seconds across 
   const dom = new JSDOM('', { url: 'http://localhost' });
   Object.assign(globalThis, { window: dom.window, document: dom.window.document, localStorage: dom.window.localStorage, sessionStorage: dom.window.sessionStorage });
   localStorage.setItem('agentkit.studio.locale', 'zh-CN');
-  const bundled = await build({ entryPoints: [fileURLToPath(new URL('../src/create/developmentPresentation.ts', import.meta.url))], bundle: true, platform: 'node', format: 'esm', write: false });
-  const { formatDevelopmentDuration } = await import(`data:text/javascript;base64,${Buffer.from(bundled.outputFiles[0].contents).toString('base64')}#durations`);
+  const bundled = await build({ stdin: { contents: 'export { formatDevelopmentDuration } from "./src/create/developmentPresentation"; export { i18n } from "./src/i18n/runtime";', resolveDir: fileURLToPath(new URL('../', import.meta.url)) }, bundle: true, platform: 'node', format: 'esm', write: false });
+  const { formatDevelopmentDuration, i18n } = await import(`data:text/javascript;base64,${Buffer.from(bundled.outputFiles[0].contents).toString('base64')}#durations`);
   try {
     for (const [input, expected] of [
-      [0, '0 ms'], [432, '432 ms'], [1000, '1 秒'], [1400, '1.4 秒'],
+      [0, '0 毫秒'], [432, '432 毫秒'], [1000, '1 秒'], [1400, '1.4 秒'],
       [59949, '59.9 秒'], [59950, '1 分'], [60000, '1 分'],
       [1542277, '25 分 42.3 秒'], [3599999, '1 小时'], [3723456, '1 小时 2 分 3.5 秒'],
       [undefined, '未上报'], [NaN, '未上报'], [-1, '未上报'],
     ]) assert.equal(formatDevelopmentDuration(input), expected, String(input));
+    await i18n.changeLanguage('en-US');
+    for (const [input, expected] of [
+      [432, '432 ms'], [1400, '1.4 s'], [1542277, '25 min 42.3 s'], [3723456, '1 h 2 min 3.5 s'],
+    ]) assert.equal(formatDevelopmentDuration(input), expected, String(input));
+    await i18n.changeLanguage('zh-CN');
+    assert.equal(formatDevelopmentDuration(432), '432 毫秒');
   } finally { dom.window.close(); }
 });
 
