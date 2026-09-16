@@ -206,8 +206,8 @@
     }
   },
   "intelligent": {
-    "title": "智能模式",
-    "subtitle": "描述目标后，沙箱中的 Codex 会判断你的意图，完成构建、调试和临时云端验证。",
+    "title": "智能构建",
+    "subtitle": "描述需求，完成 Agent 的构建、调试与验证。",
     "model": {
       "label": "模型",
       "placeholder": "选择模型",
@@ -241,6 +241,29 @@
       "preparing": "正在创建任务环境…",
       "starting": "环境已就绪，正在启动 Codex…",
       "next": "接下来会先梳理目标和实现方式，再编写、运行和验证 Agent。"
+    },
+    "tasks": {
+      "title": "进行中的任务",
+      "hint": "离开页面后仍会继续，可随时回来查看和补充要求。",
+      "refresh": "刷新任务列表",
+      "loading": "正在读取任务…",
+      "empty": "暂无进行中的任务",
+      "emptyHint": "开始构建后，可以从这里回到任务。",
+      "loadError": "暂时无法读取任务，请重试。",
+      "openError": "暂时无法打开任务，请重试。",
+      "startedAt": "开始于 {{time}}",
+      "open": "查看任务",
+      "opening": "正在连接…",
+      "states": {
+        "queued": "等待开始",
+        "running": "构建中",
+        "recovering": "正在重连",
+        "waiting_user": "等待你的回复",
+        "stopping": "正在停止",
+        "succeeded": "已完成",
+        "failed": "未完成",
+        "cancelled": "已停止"
+      }
     }
   },
   "projectLibrary": {

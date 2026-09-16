@@ -1,7 +1,7 @@
 import { SandboxSpinnerIcon } from "./ui/icons/SandboxControlIcons";
 import { useDevelopmentRun } from "./create/useDevelopmentRun";
 import { developmentRunStatus } from "./create/developmentPresentation";
-import { DevelopmentTaskNotice } from "./create/DevelopmentTaskNotice";
+import { DevelopmentTaskNotice, type DevelopmentTaskSnapshot } from "./create/DevelopmentTaskNotice";
 import { UserManagement } from "./users/UserManagement";
 import { SandboxFileContext } from "./ui/SandboxFileLink";
 import {
@@ -1394,6 +1394,8 @@ export default function App() {
     useState(true);
   const [intelligentCapabilitiesError, setIntelligentCapabilitiesError] =
     useState("");
+  const [developmentTaskSnapshot, setDevelopmentTaskSnapshot] = useState<DevelopmentTaskSnapshot>();
+  const [developmentTaskRefreshKey, setDevelopmentTaskRefreshKey] = useState(0);
   const [intelligentPreparationMessage, setIntelligentPreparationMessage] = useState("");
   const [intelligentPreparationStage, setIntelligentPreparationStage] =
     useState<IntelligentPreparationStage | null>(null);
@@ -4070,6 +4072,14 @@ export default function App() {
     setCronJobsView(false);
     setSandboxAgentDetailTarget(null);
     setSandboxAgentWorkspace(null);
+  }
+
+  async function openIntelligentDevelopmentTask(id: string, signal: AbortSignal) {
+    const connected = await intelligentDevelopmentClient.connectSession(id, { signal });
+    if (signal.aborted) return;
+    setError("");
+    setMigrationProjectReturn(undefined);
+    activateIntelligentDevelopmentSession(connected, []);
   }
 
   async function openSandboxAgent(
@@ -6966,11 +6976,10 @@ export default function App() {
   return (
     <div className="layout">
       <DevelopmentTaskNotice key={userId} ownerId={userId} sessionId={sandboxSession?.id ?? ""}
-        onOpen={async (id, signal) => {
-          const connected = await intelligentDevelopmentClient.connectSession(id, { signal });
-          if (signal.aborted) return;
-          activateIntelligentDevelopmentSession(connected, []);
-        }} />
+        hideNotices={visibleCreateView === "intelligent"}
+        refreshKey={developmentTaskRefreshKey}
+        onUpdate={setDevelopmentTaskSnapshot}
+        onOpen={openIntelligentDevelopmentTask} />
       <Sidebar
         branding={siteBranding}
         cloudProvider={cloudProvider}
@@ -8088,6 +8097,10 @@ export default function App() {
               <>
               <div className="development-preparation-source" hidden={Boolean(intelligentPreparationStage)}>
               <IntelligentCreate
+                ownerId={userId}
+                taskSnapshot={developmentTaskSnapshot}
+                onRefreshTasks={() => setDevelopmentTaskRefreshKey(key => key + 1)}
+                onOpenTask={openIntelligentDevelopmentTask}
                 capabilities={intelligentCapabilities}
                 loading={intelligentCapabilitiesLoading}
                 preparationStage={intelligentPreparationStage}

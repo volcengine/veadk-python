@@ -1614,3 +1614,24 @@ test("client exports remain separately configured", () => {
     /!sandboxSession\?\.intelligentDevelopment\s*&&\s*await sandboxCommands\.executeSlash\(value\)/,
   );
 });
+
+
+test("intelligent home exposes server-discovered tasks without browser history", async () => {
+  const React = require("react");
+  const { renderToStaticMarkup } = require("react-dom/server");
+  const { IntelligentCreate } = await importTsxBundle("../src/create/IntelligentCreate.tsx");
+  const html = renderToStaticMarkup(React.createElement(IntelligentCreate, {
+    capabilities: { enabled: true, reason: "" }, loading: false,
+    preparationStage: null, error: "", ownerId: "alice",
+    taskSnapshot: { ownerId: "alice", loading: false, error: "", runs: [{
+      runId: "home-run", sessionId: "home-session", message: "Recover my mathematics tutor",
+      state: "recovering", phase: "coding", createdAt: 1789551000,
+    }] },
+    onRefreshTasks() {}, async onOpenTask() {},
+    onBack() {}, onCancel() {}, async onCreate() {}, async onDownload() {}, onDeploy() {},
+  }));
+  assert.match(html, /Tasks in progress/);
+  assert.match(html, /Recover my mathematics tutor/);
+  assert.match(html, /Reconnecting/);
+  assert.match(html, /Open task/);
+});
