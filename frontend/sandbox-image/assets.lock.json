@@ -60,13 +60,8 @@
     "sha256": "c8612ee612bc6b10dbfd6e85c6cbdfd7caf152a12d1f9de22ea0a9d735b3080c"
   },
   {
-    "file": "codex-0.154.0-linux-x64.tgz",
-    "url": "https://registry.npmjs.org/@openai/codex/-/codex-0.154.0-linux-x64.tgz",
-    "sha256": "e27c83a49e6031685ee7f956c12aad5f16484d3a80181dd3fea930fb96b3832b"
-  },
-  {
-    "file": "codex-0.154.0-linux-arm64.tgz",
-    "url": "https://registry.npmjs.org/@openai/codex/-/codex-0.154.0-linux-arm64.tgz",
-    "sha256": "a2315b5f64bfeaff79b71e0d35505ba8c22cc1e96cab9dc950b614c804105b24"
+    "file": "codex-0.139.0-linux-arm64.tgz",
+    "url": "https://registry.npmjs.org/@openai/codex/-/codex-0.139.0-linux-arm64.tgz",
+    "sha256": "6195677e4ba51f22a9a1b5f0e2a01a255a42a5755b740123ce68f530ed2dd3ca"
   }
 ]

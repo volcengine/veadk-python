@@ -8,7 +8,6 @@ ARG NPM_REGISTRY_URL=https://registry.npmmirror.com
 # Keep the base runtime's root entrypoint; it starts the editor and terminals as gem
 USER root
 ENV WORKSPACE=/home/gem/Projects \
-    CODEX_REAL_BIN=/usr/local/libexec/studio-codex \
     DISABLE_CODE_SERVER=false \
     DISABLE_JUPYTER=false \
     PIP_INDEX_URL=${PIP_INDEX_URL} \
