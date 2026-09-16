@@ -16,8 +16,8 @@
 
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -82,8 +82,19 @@ def mount_run_routes(
         # Ownership is checked against the environment before accepting remote work.
         thread_id = await prepare(session_id, identity)
         previous = await repository.session_runs(identity, session_id)
+        # 0.154.0 restores dynamic tools on resume but cannot add them to an
+        # existing thread. Keep legacy threads on their persisted protocol.
+        result_protocol = (
+            previous[-1].checkpoint.get("result_protocol", "file-v1")
+            if previous
+            else "tool-v1"
+        )
         if previous and previous[-1].thread_id:
             thread_id = previous[-1].thread_id
+        elif result_protocol == "tool-v1":
+            # /connect prepared an empty UI thread. The worker starts the build
+            # thread with its tools before accepting the first user turn.
+            thread_id = ""
         try:
             run = await repository.create(
                 identity,
@@ -91,6 +102,7 @@ def mount_run_routes(
                 value["requestId"],
                 redact_message(value["message"].strip()),
                 thread_id=thread_id,
+                result_protocol=result_protocol,
                 message_digest=hashlib.sha256(
                     value["message"].strip().encode()
                 ).hexdigest(),

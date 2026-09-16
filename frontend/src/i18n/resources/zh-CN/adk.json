@@ -555,6 +555,11 @@
     "connectionState": "暂时无法连接工作区，请重试"
   },
   "developmentRuns": {
+    "reporting": "正在补齐交付信息",
+    "packaging": "正在整理产物",
+    "savingVersion": "正在保存版本",
+    "finishing": "正在完成请求",
+    "submitResult": "提交构建结果",
     "requestFailed": "任务请求失败，请重试。",
     "invalidResponse": "任务状态响应无效。",
     "eventGap": "正在补齐任务输出。",

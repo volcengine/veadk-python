@@ -32,6 +32,7 @@ from frontend.server.intelligent_development_projects import (
     IntelligentDevelopmentVersionIntegrityError,
 )
 from frontend.server.intelligent_development_task import (
+    BUILD_RESULT_TOOL,
     COMPLETION_FILE_PREFIX,
     CompletionContract,
     CredentialResolver,
@@ -41,8 +42,10 @@ from frontend.server.intelligent_development_task import (
     builder_prompt,
     create_credential_lease,
     invalidate_current_delivery,
+    parse_build_result,
     read_completion_contract,
     remove_completion_file,
+    result_reporting_prompt,
 )
 from frontend.server.sandbox_remote import SandboxRemoteTransport
 from veadk.cli.codex_app_server import (
@@ -60,7 +63,7 @@ from veadk.utils.logger import get_logger
 
 from .models import Run
 from .output import TaskTextProjection
-from .repository import RunCapacity, RunLeaseLost, RunRepository
+from .repository import RunCapacity, RunConflict, RunLeaseLost, RunRepository
 from .shell import RunShell
 
 logger = get_logger(__name__)
@@ -69,6 +72,12 @@ _PERMISSIONS = CodexPermissionSettings(
     approvals_reviewer="auto_review",
     sandbox_mode="danger-full-access",
     network_access=True,
+)
+_REPORT_PERMISSIONS = CodexPermissionSettings(
+    approval_policy="never",
+    approvals_reviewer="auto_review",
+    sandbox_mode="read-only",
+    network_access=False,
 )
 
 
@@ -266,6 +275,7 @@ class DevelopmentRunner:
         )
         if run.checkpoint.get("lease_ready") and run.phase in {
             "coding",
+            "reporting",
             "outcome_read",
             "delivery",
             "version",
@@ -286,6 +296,13 @@ class DevelopmentRunner:
         codex = self.codex_factory(cloud.endpoint)
         codex.cwd = root
         codex.permissions = _PERMISSIONS
+        if run.checkpoint.get("result_protocol") == "tool-v1":
+            codex.dynamic_tools = (BUILD_RESULT_TOOL,)
+
+            async def submit_result(params):
+                return await self._submit_result(owner, run_id, token, params, lease)
+
+            codex.dynamic_tool_handler = submit_result
         # Bind before connect, so restart cannot select an unrelated "latest" thread.
         controller: asyncio.Task[None] | None = None
         work: asyncio.Task[None] | None = None
@@ -332,22 +349,51 @@ class DevelopmentRunner:
                         run = await self.repository.checkpoint(
                             owner, run_id, token, lease_ready=True
                         )
-                    if run.phase in {"prepare", "coding"}:
+                    if run.phase in {"prepare", "coding", "reporting"}:
                         await self._coding(run, token, codex, lease, cloud, root)
                     run = await self.repository.get(owner, run_id)
                     await self._check_stop(run)
                     if run.phase == "outcome_read":
-                        try:
-                            completion = await read_completion_contract(
-                                transport, str(run.checkpoint["completion_path"])
+                        tool_protocol = (
+                            run.checkpoint.get("result_protocol") == "tool-v1"
+                        )
+                        if tool_protocol:
+                            sending = await self.repository.inputs(
+                                owner, run_id, statuses=("sending",)
                             )
+                            await self._reconcile_inputs(run, token, codex, sending)
+                            run = await self.repository.get(owner, run_id)
+                            if await self.repository.inputs(
+                                owner, run_id, statuses=("pending",)
+                            ):
+                                await self._next_input(run, token)
+                                continue
+                        try:
+                            if tool_protocol:
+                                result = await self.repository.result_for_turn(
+                                    owner, run_id, token
+                                )
+                                if result is None:
+                                    raise ValueError(
+                                        "No current build result submitted"
+                                    )
+                                completion = CompletionContract(**result)
+                            else:
+                                completion = await read_completion_contract(
+                                    transport, str(run.checkpoint["completion_path"])
+                                )
                             if not completion.answered and (
                                 not completion.intent_summary
                                 or not completion.acceptance_criteria
                             ):
                                 raise ValueError("Incomplete delivery context")
                         except (ValueError, FileNotFoundError):
-                            if await self._continue_turn(run, token):
+                            if await self._continue_turn(
+                                run,
+                                token,
+                                report_only=tool_protocol,
+                                force=bool(run.checkpoint.get("manual_resume")),
+                            ):
                                 continue
                             raise
 
@@ -366,7 +412,13 @@ class DevelopmentRunner:
                             ),
                         )
                         await self.repository.checkpoint(
-                            owner, run_id, token, completion=asdict(completion)
+                            owner,
+                            run_id,
+                            token,
+                            completion=asdict(completion),
+                            completion_revision=int(
+                                run.checkpoint.get("accepted_revision", 1)
+                            ),
                         )
                         await self.repository.update(
                             owner,
@@ -375,10 +427,23 @@ class DevelopmentRunner:
                             phase="delivery"
                             if not completion.answered
                             else "cycle_complete",
+                            state_message="正在整理产物"
+                            if not completion.answered
+                            else "正在完成请求",
                         )
                     run = await self.repository.get(owner, run_id)
                     await self._check_stop(run)
                     if run.phase in {"delivery", "version"}:
+                        if run.checkpoint.get(
+                            "result_protocol"
+                        ) == "tool-v1" and not await self.repository.revision_current(
+                            owner,
+                            run_id,
+                            token,
+                            int(run.checkpoint["completion_revision"]),
+                        ):
+                            await self._next_input(run, token)
+                            continue
                         await self._deliver(run, token, transport, lease, root)
                     run = await self.repository.get(owner, run_id)
                     await self._check_stop(run)
@@ -406,8 +471,10 @@ class DevelopmentRunner:
                         run = await self.repository.get(owner, run_id)
                         await self._check_stop(run)
                         revision = int(run.checkpoint.get("accepted_revision", 1))
-                        if run.checkpoint.get("version") and not run.checkpoint.get(
-                            "delivery_emitted"
+                        if (
+                            run.checkpoint.get("result_protocol") != "tool-v1"
+                            and run.checkpoint.get("version")
+                            and not run.checkpoint.get("delivery_emitted")
                         ):
                             delivery_view = run.checkpoint["version"]
                             await self.repository.append_event(
@@ -429,21 +496,7 @@ class DevelopmentRunner:
                             return
                         run = await self.repository.get(owner, run_id)
                         await self._check_stop(run)
-                        await self.repository.update(
-                            owner, run_id, token, phase="prepare", turn_id=""
-                        )
-                        await self.repository.checkpoint(
-                            owner,
-                            run_id,
-                            token,
-                            completion=None,
-                            delivery=None,
-                            version=None,
-                            completion_path="",
-                            publish_time="",
-                            shell_root="",
-                            delivery_emitted=False,
-                        )
+                        await self._next_input(run, token)
 
             work = asyncio.create_task(drive())
             done, _ = await asyncio.wait(
@@ -481,6 +534,95 @@ class DevelopmentRunner:
         if run.stop_requested:
             raise StopRequested
 
+    async def _submit_result(
+        self,
+        owner: str,
+        run_id: str,
+        token: str,
+        params: dict[str, Any],
+        lease: TaskCredentialLease,
+    ) -> dict[str, Any]:
+        try:
+            arguments = params.get("arguments")
+            encoded = json.dumps(arguments, sort_keys=True, allow_nan=False).encode()
+            if len(encoded) > 65_536:
+                raise ValueError("Result exceeds the size limit.")
+            revision, completion = parse_build_result(arguments)
+            # turn/start and replayed requests can arrive before the stream
+            # consumer commits its turn association. Never derive it from a tool.
+            for _ in range(40):
+                run = await self.repository.get(owner, run_id)
+                if run.turn_id or run.stop_requested or run.terminal:
+                    break
+                await asyncio.sleep(0.05)
+
+            def public(value: str) -> str:
+                for secret in lease.exact_secrets:
+                    if secret:
+                        value = value.replace(secret, "***")
+                return redact_sandbox_text(value)
+
+            completion = replace(
+                completion,
+                summary=public(completion.summary),
+                intent_summary=public(completion.intent_summary),
+                acceptance_criteria=tuple(
+                    public(item) for item in completion.acceptance_criteria
+                ),
+            )
+            response = {
+                "success": True,
+                "contentItems": [
+                    {
+                        "type": "inputText",
+                        "text": f"Result saved for input revision {revision}. Finish this turn with your user-facing summary. Do not modify deliverable files after submitting. If new requirements arrive, apply them and resubmit.",
+                    }
+                ],
+            }
+            return await self.repository.submit_result(
+                owner,
+                run_id,
+                token,
+                thread_id=params["threadId"],
+                turn_id=params["turnId"],
+                call_id=params["callId"],
+                revision=revision,
+                digest=hashlib.sha256(encoded).hexdigest(),
+                completion=asdict(completion),
+                response=response,
+            )
+        except (ValueError, RunConflict) as error:
+            return {
+                "success": False,
+                "contentItems": [{"type": "inputText", "text": str(error)}],
+            }
+
+    async def _next_input(self, run: Run, token: str) -> None:
+        await self.repository.update(
+            run.owner_id,
+            run.id,
+            token,
+            checkpoint_updates={
+                "completion": None,
+                "completion_revision": None,
+                "delivery": None,
+                "version": None,
+                "completion_path": "",
+                "publish_time": "",
+                "shell_root": "",
+                "delivery_emitted": False,
+                "continuation": None,
+                "continuation_sending": False,
+                "continuation_count": 0,
+                "report_only": False,
+                "report_count": 0,
+                "manual_resume": False,
+            },
+            phase="prepare",
+            turn_id="",
+            state_message="正在处理最新要求",
+        )
+
     async def _coding(
         self,
         run: Run,
@@ -492,7 +634,7 @@ class DevelopmentRunner:
     ) -> None:
         owner, run_id = run.owner_id, run.id
         inputs = await self.repository.inputs(owner, run_id)
-        resume_id = run.turn_id if run.phase == "coding" else ""
+        resume_id = run.turn_id if run.phase in {"coding", "reporting"} else ""
         if resume_id and run.checkpoint.get("manual_resume"):
             turn = await codex.read_turn(resume_id)
             if turn and turn.get("status") in {"failed", "interrupted"}:
@@ -503,13 +645,18 @@ class DevelopmentRunner:
                     owner, run_id, statuses=("pending",)
                 )
                 if pending:
-                    await self.repository.update(
-                        owner, run_id, token, phase="prepare", turn_id=""
-                    )
+                    await self._next_input(run, token)
                 else:
-                    await self._continue_turn(run, token, force=True)
+                    await self._continue_turn(
+                        run,
+                        token,
+                        force=True,
+                        report_only=bool(run.checkpoint.get("report_only")),
+                    )
                 return
         continuation = run.checkpoint.get("continuation")
+        report_only = bool(run.checkpoint.get("report_only"))
+        tool_protocol = run.checkpoint.get("result_protocol") == "tool-v1"
         current = (
             None
             if resume_id or continuation
@@ -537,9 +684,13 @@ class DevelopmentRunner:
             if current
             else int(run.checkpoint.get("accepted_revision", 1))
         )
-        completion_path = str(
-            run.checkpoint.get("completion_path")
-            or f"{root}/{COMPLETION_FILE_PREFIX}{run_id}-{revision}.json"
+        completion_path = (
+            ""
+            if tool_protocol
+            else str(
+                run.checkpoint.get("completion_path")
+                or f"{root}/{COMPLETION_FILE_PREFIX}{run_id}-{revision}.json"
+            )
         )
         await self.repository.checkpoint(
             owner, run_id, token, completion_path=completion_path
@@ -549,8 +700,8 @@ class DevelopmentRunner:
             run_id,
             token,
             state="running",
-            phase="coding",
-            state_message="正在处理请求",
+            phase="reporting" if report_only else "coding",
+            state_message="正在补齐交付信息" if report_only else "正在处理请求",
         )
         prompt = ""
         client_id = ""
@@ -574,34 +725,47 @@ class DevelopmentRunner:
                     owner, run_id, token, client_id, "sending"
                 )
                 message = current["message"]
-            prompt = builder_prompt(
-                message,
-                launcher_path=lease.launcher_path,
-                completion_path=completion_path,
-                expire_at=cloud.expire_at,
-                remaining_lifetime_minutes=max(
-                    1,
-                    int(
-                        (
-                            datetime.fromisoformat(
-                                cloud.expire_at.replace("Z", "+00:00")
-                            )
-                            - datetime.now(timezone.utc)
-                        ).total_seconds()
-                        / 60
-                    ),
+            prompt = (
+                result_reporting_prompt(
+                    revision,
+                    [
+                        item["message"]
+                        for item in inputs
+                        if item["status"] == "delivered"
+                    ],
+                    await self._project_context(run),
                 )
-                if cloud.expire_at
-                else 480,
-                validation_region=self.validation_region,
-                validation_project=self.validation_project,
-                project_context=await self._project_context(run),
+                if report_only
+                else builder_prompt(
+                    message,
+                    launcher_path=lease.launcher_path,
+                    completion_path=completion_path,
+                    expire_at=cloud.expire_at,
+                    remaining_lifetime_minutes=max(
+                        1,
+                        int(
+                            (
+                                datetime.fromisoformat(
+                                    cloud.expire_at.replace("Z", "+00:00")
+                                )
+                                - datetime.now(timezone.utc)
+                            ).total_seconds()
+                            / 60
+                        ),
+                    )
+                    if cloud.expire_at
+                    else 480,
+                    validation_region=self.validation_region,
+                    validation_project=self.validation_project,
+                    project_context=await self._project_context(run),
+                    input_revision=revision if tool_protocol else None,
+                )
             )
         try:
             async for event in codex.stream_turn(
                 prompt,
-                permissions=_PERMISSIONS,
-                timeout_seconds=3300,
+                permissions=_REPORT_PERMISSIONS if report_only else _PERMISSIONS,
+                timeout_seconds=120 if report_only else 3300,
                 client_user_message_id=client_id,
                 resume_turn_id=resume_id,
                 interrupt_on_cancel=False,
@@ -780,7 +944,9 @@ class DevelopmentRunner:
                             owner, run_id, statuses=("sending",)
                         )
                         await self._reconcile_inputs(latest, token, codex, sending)
-                        if await self._continue_turn(latest, token):
+                        if await self._continue_turn(
+                            latest, token, report_only=report_only
+                        ):
                             return
                     raise NativeTurnFailed from None
             raise
@@ -805,32 +971,39 @@ class DevelopmentRunner:
         await self.repository.checkpoint(
             owner, run_id, token, continuation=None, continuation_sending=False
         )
-        await self.repository.update(owner, run_id, token, phase="outcome_read")
+        await self.repository.update(
+            owner, run_id, token, phase="outcome_read", state_message="正在整理产物"
+        )
 
     async def _continue_turn(
-        self, run: Run, token: str, *, force: bool = False
+        self, run: Run, token: str, *, force: bool = False, report_only: bool = False
     ) -> bool:
-        count = int(run.checkpoint.get("continuation_count", 0))
-        if count >= 2 and not force:
+        counter = "report_count" if report_only else "continuation_count"
+        count = int(run.checkpoint.get(counter, 0))
+        if count >= (1 if report_only else 2) and not force:
             return False
         # Only called after an authoritative terminal turn, never after an
         # ambiguous start. Continuations inspect existing effects in the same thread.
-        await self.repository.checkpoint(
-            run.owner_id,
-            run.id,
-            token,
-            continuation=f"{run.id}-recover-{count + 1}",
-            continuation_count=count + 1,
-            continuation_sending=False,
-        )
         await self.repository.update(
             run.owner_id,
             run.id,
             token,
-            phase="prepare",
+            checkpoint_updates={
+                "continuation": f"{run.id}-{'report' if report_only else 'recover'}-{run.input_revision}-{count + 1}",
+                counter: count + 1,
+                "report_only": report_only,
+                "report_deadline": self.repository.clock() + 120
+                if report_only
+                else None,
+                "continuation_sending": False,
+                "manual_resume": False,
+            },
+            phase="reporting" if report_only else "prepare",
             turn_id="",
             state="recovering",
-            state_message="Codex 本轮执行已结束，正在继续未完成的工作。",
+            state_message="正在补齐交付信息"
+            if report_only
+            else "Codex 本轮执行已结束，正在继续未完成的工作。",
         )
         return True
 
@@ -903,27 +1076,37 @@ class DevelopmentRunner:
             await self.repository.checkpoint(
                 owner, run_id, token, delivery=asdict(delivery)
             )
-            await self.repository.append_event(
-                owner,
-                run_id,
-                token,
-                "development.source_ready",
-                {
-                    "payload": {"delivery": {**delivery.as_dict(), "verified": False}},
-                    "inputRevision": revision,
-                },
-            )
+            if run.checkpoint.get("result_protocol") != "tool-v1":
+                await self.repository.append_event(
+                    owner,
+                    run_id,
+                    token,
+                    "development.source_ready",
+                    {
+                        "payload": {
+                            "delivery": {**delivery.as_dict(), "verified": False}
+                        },
+                        "inputRevision": revision,
+                    },
+                )
             await self.repository.update(
                 owner,
                 run_id,
                 token,
                 phase="version",
-                state_message="正在保存项目版本。",
+                state_message="正在保存版本",
             )
         else:
             delivery = DeliveryReference(**run.checkpoint["delivery"])
         run = await self.repository.get(owner, run_id)
         await self._check_stop(run)
+        if run.checkpoint.get(
+            "result_protocol"
+        ) == "tool-v1" and not await self.repository.revision_current(
+            owner, run_id, token, revision
+        ):
+            await self._next_input(run, token)
+            return
         public = delivery.as_dict()
         if self.project_service is not None:
             decision = IntentDecision(
@@ -952,7 +1135,9 @@ class DevelopmentRunner:
             await self.repository.checkpoint(owner, run_id, token, version=public)
         await self._check_stop(await self.repository.get(owner, run_id))
         await self.repository.checkpoint(owner, run_id, token, version=public)
-        await self.repository.update(owner, run_id, token, phase="cycle_complete")
+        await self.repository.update(
+            owner, run_id, token, phase="cycle_complete", state_message="正在完成请求"
+        )
 
     async def _control(
         self, initial: Run, token: str, codex: CodexAppServerSession
@@ -975,6 +1160,15 @@ class DevelopmentRunner:
                     if run.turn_id and codex.active:
                         await codex.interrupt_turn(run.turn_id)
                     await asyncio.sleep(1)
+                    continue
+                if run.phase == "reporting":
+                    if (
+                        run.turn_id
+                        and codex.active
+                        and self.repository.clock()
+                        >= float(run.checkpoint.get("report_deadline") or 0)
+                    ):
+                        await codex.interrupt_turn(run.turn_id)
                     continue
                 if run.phase != "coding" or not run.turn_id:
                     continue
@@ -1006,7 +1200,13 @@ class DevelopmentRunner:
                 )
                 try:
                     await codex.steer_turn(
-                        item["message"], run.turn_id, item["client_id"]
+                        (
+                            f"[Studio inputRevision={item['revision']}; resubmit submit_build_result after applying these requirements]\n{item['message']}"
+                            if run.checkpoint.get("result_protocol") == "tool-v1"
+                            else item["message"]
+                        ),
+                        run.turn_id,
+                        item["client_id"],
                     )
                 except Exception as error:
                     # A definite precondition rejection can safely become the next turn.

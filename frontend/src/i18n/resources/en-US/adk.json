@@ -555,6 +555,11 @@
     "connectionState": "Could not connect to the workspace. Try again"
   },
   "developmentRuns": {
+    "reporting": "Completing delivery details",
+    "packaging": "Preparing artifacts",
+    "savingVersion": "Saving version",
+    "finishing": "Finishing request",
+    "submitResult": "Submit build result",
     "requestFailed": "Task request failed. Please retry.",
     "invalidResponse": "Invalid task state response.",
     "eventGap": "Restoring missing task output.",

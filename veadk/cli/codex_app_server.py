@@ -33,7 +33,7 @@ import re
 import secrets
 import time
 import uuid
-from collections.abc import Mapping, AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from dataclasses import asdict, dataclass, replace
 from typing import Any, Literal, cast
 from urllib.parse import urlsplit, urlunsplit
@@ -472,6 +472,12 @@ class CodexAppServerSession:
         self.cwd = ""
         self.model = ""
         self.permissions = CodexPermissionSettings()
+        # App Server 0.154.0 registers these only on thread/start. Resuming a
+        # durable thread restores its definitions and replays unanswered calls.
+        self.dynamic_tools: tuple[dict[str, object], ...] = ()
+        self.dynamic_tool_handler: (
+            Callable[[dict[str, object]], Awaitable[dict[str, object]]] | None
+        ) = None
 
     @property
     def active(self) -> bool:
@@ -551,7 +557,10 @@ class CodexAppServerSession:
                         self._thread_token_total = previous_thread_total
                         self._model_context_window = previous_context_window
                 else:
-                    snapshot = await self._request("thread/start", {})
+                    snapshot = await self._request(
+                        "thread/start",
+                        self._thread_start_options() if self.dynamic_tools else {},
+                    )
                     self._apply_thread_snapshot(snapshot)
             except Exception:
                 await self._close_transport()
@@ -663,7 +672,7 @@ class CodexAppServerSession:
                 or "no rollout found" not in str(error).lower()
             ):
                 raise
-            result = await self._request("thread/start", self._thread_options())
+            result = await self._request("thread/start", self._thread_start_options())
             return "thread/start", result
 
     async def _reconnect_transport(self) -> None:
@@ -1326,7 +1335,7 @@ class CodexAppServerSession:
     async def new_thread(self) -> CodexThreadSnapshot:
         """Start and activate a fresh thread with current runtime settings."""
         self._ensure_thread_idle("创建新对话")
-        result = await self.request("thread/start", self._thread_options())
+        result = await self.request("thread/start", self._thread_start_options())
         return self._activate_thread_snapshot("thread/start", result)
 
     async def list_threads(
@@ -1846,10 +1855,17 @@ class CodexAppServerSession:
                 await websocket.close()
         self._connected_at = 0.0
 
-    async def _send(self, message: dict[str, object]) -> None:
+    async def _send(
+        self, message: dict[str, object], *, expected_websocket: Any = None
+    ) -> None:
         if self._websocket is None or self._closed:
             raise CodexAppServerTransportError("Codex app-server 连接已关闭。")
         async with self._send_lock:
+            if (
+                expected_websocket is not None
+                and self._websocket is not expected_websocket
+            ):
+                return
             try:
                 await self._websocket.send(json.dumps(message, ensure_ascii=False))
             except Exception as error:
@@ -2163,6 +2179,9 @@ class CodexAppServerSession:
             )
             return
         params = raw_params
+        if method == "item/tool/call":
+            await self._handle_dynamic_tool(request_id, params)
+            return
         if method == "item/permissions/requestApproval":
             await self._send(
                 {
@@ -2260,6 +2279,58 @@ class CodexAppServerSession:
                 approval_resolved_id=approval_id,
             )
         )
+
+    async def _handle_dynamic_tool(
+        self, request_id: object, params: dict[str, object]
+    ) -> None:
+        websocket = self._websocket
+        valid = (
+            params.get("threadId") == self.thread_id
+            and all(
+                isinstance(params.get(key), str) and 0 < len(params[key]) <= 200
+                for key in ("threadId", "turnId", "callId", "tool")
+            )
+            and params.get("namespace") is None
+            and any(
+                tool.get("name") == params.get("tool") for tool in self.dynamic_tools
+            )
+            and self.dynamic_tool_handler is not None
+        )
+        result: dict[str, object]
+        if not valid:
+            result = self._tool_failure("Tool is unavailable for this thread.")
+        else:
+            try:
+                assert self.dynamic_tool_handler is not None
+                result = await asyncio.wait_for(self.dynamic_tool_handler(params), 15)
+            except Exception as error:
+                # Never expose callback exceptions (which may contain credentials).
+                logger.warning(
+                    "Codex dynamic tool failed error_type=%s", type(error).__name__
+                )
+                result = self._tool_failure(
+                    "Result could not be saved. Retry this tool call."
+                )
+        # A reply belongs to the transport that received the request. The server
+        # replays unresolved calls after resume; the durable handler deduplicates.
+        if self._websocket is websocket:
+            try:
+                await asyncio.wait_for(
+                    self._send(
+                        {"id": request_id, "result": result},
+                        expected_websocket=websocket,
+                    ),
+                    10,
+                )
+            except (CodexAppServerTransportError, TimeoutError):
+                logger.info("Codex dynamic tool reply pending reconnect")
+
+    @staticmethod
+    def _tool_failure(message: str) -> dict[str, object]:
+        return {
+            "success": False,
+            "contentItems": [{"type": "inputText", "text": message}],
+        }
 
     def _emit(self, event: CodexAppServerEvent) -> None:
         if self._turn_events is not None:
@@ -2412,6 +2483,19 @@ class CodexAppServerSession:
             **({"model": self.model} if self.model else {}),
             **_runtime_permission_params(self.permissions, self.cwd),
         }
+
+    def _thread_start_options(self) -> dict[str, object]:
+        if self.dynamic_tools:
+            # thread/start uses sandbox (a mode), turn/start uses sandboxPolicy.
+            return {
+                **({"cwd": self.cwd} if self.cwd else {}),
+                **({"model": self.model} if self.model else {}),
+                "approvalPolicy": self.permissions.approval_policy,
+                "approvalsReviewer": self.permissions.approvals_reviewer,
+                "sandbox": self.permissions.sandbox_mode,
+                "dynamicTools": list(self.dynamic_tools),
+            }
+        return self._thread_options()
 
     def _public_skills(self) -> tuple[CodexSkill, ...]:
         return tuple(
@@ -2756,6 +2840,24 @@ def _event_from_item(
             arguments={"changes": _bounded_value(item.get("changes"))},
             response=(
                 {"status": _string(item.get("status"), 100) or status}
+                if completed
+                else None
+            ),
+        )
+    if item_type == "dynamicToolCall":
+        return CodexAppServerEvent(
+            kind="tool",
+            item_id=item_id,
+            item_type=str(item_type),
+            duration_ms=duration_ms,
+            status=status,
+            name=_string(item.get("tool"), 100),
+            arguments=_bounded_value(item.get("arguments")),
+            response=(
+                {
+                    "success": item.get("success"),
+                    "contentItems": _bounded_value(item.get("contentItems")),
+                }
                 if completed
                 else None
             ),

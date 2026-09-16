@@ -26,6 +26,12 @@ def client(tmp_path):
     repository = RunRepository(tmp_path / "runs.db")
 
     async def execute(run, token):
+        await repository.input_status(
+            run.owner_id, run.id, token, run.request_id, "delivered", turn_id="turn-1"
+        )
+        await repository.checkpoint(
+            run.owner_id, run.id, token, accepted_revision=1, completion_revision=1
+        )
         await repository.append_event(
             run.owner_id, run.id, token, "delta", {"text": "private output"}
         )

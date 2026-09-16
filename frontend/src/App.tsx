@@ -1,6 +1,7 @@
 import { Button } from "./components/primitives/Button";
 import { TextShimmer } from "./ui/text-shimmer/TextShimmer";
 import { useDevelopmentRun } from "./create/useDevelopmentRun";
+import { developmentRunStatus } from "./create/developmentPresentation";
 import { DevelopmentTaskNotice } from "./create/DevelopmentTaskNotice";
 import { UserManagement } from "./users/UserManagement";
 import {
@@ -7835,7 +7836,7 @@ export default function App() {
                 )}
                 {pending ? (
                   turnIsStreaming ? (sandboxSession?.intelligentDevelopment
-                    ? <Blocks blocks={[]} groupProcess streaming liveStatus={development.connection || development.run?.statusMessage} onAction={onAction} />
+                    ? <Blocks blocks={[]} groupProcess streaming liveStatus={development.connection || developmentRunStatus(development.run)} onAction={onAction} />
                     : <ThinkingPlaceholder />) : null
                 ) : (
                   <>
@@ -7844,7 +7845,7 @@ export default function App() {
                       blocks={turn.blocks}
                       groupProcess={Boolean(sandboxSession?.intelligentDevelopment)}
                       liveStatus={sandboxSession?.intelligentDevelopment && isLast
-                        ? (development.connection || (development.run?.phase !== "coding" || development.run?.state !== "running" ? development.run?.statusMessage : "")) : undefined}
+                        ? (development.connection || (development.run?.phase !== "coding" || development.run?.state !== "running" ? developmentRunStatus(development.run) : "")) : undefined}
                       streaming={turnIsStreaming}
                       onStreamFrame={turnIsStreaming ? followConversationStreamFrame : undefined}
                       onStreamComplete={
