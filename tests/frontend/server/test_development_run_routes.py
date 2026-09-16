@@ -126,3 +126,38 @@ def test_unauthenticated_replay_is_rejected_before_sse_headers(client):
     response = client.get("/build/runs/unknown/events")
     assert response.status_code == 401
     assert not response.headers["content-type"].startswith("text/event-stream")
+
+
+@pytest.mark.asyncio
+async def test_home_discovery_survives_reopen_and_uses_authenticated_owner(tmp_path):
+    repository = RunRepository(tmp_path / "home-runs.db")
+    alice = await repository.create("alice", "alice-session", "a", "Alice private goal")
+    bob = await repository.create("bob", "bob-session", "b", "Bob private goal")
+
+    async def unused(*args):
+        raise AssertionError("Listing tasks must not start remote work")
+
+    reopened = RunRepository(repository.path)
+    app = FastAPI()
+    mount_run_routes(
+        app,
+        prefix="/build",
+        service=RunService(reopened, unused),
+        owner_resolver=lambda request: request.headers.get("x-user", ""),
+        prepare=unused,
+        redact_message=lambda message: message,
+    )
+    with TestClient(app) as browser:
+        assert browser.get("/build/runs").status_code == 401
+        found = browser.get("/build/runs", headers={"x-user": "alice"}).json()["runs"]
+        assert [run["runId"] for run in found] == [alice.id]
+        assert found[0]["message"] == "Alice private goal"
+        other = browser.get("/build/runs?ownerId=alice", headers={"x-user": "bob"})
+        assert [run["runId"] for run in other.json()["runs"]] == [bob.id]
+        assert "Alice private goal" not in other.text
+        assert (
+            browser.get(
+                f"/build/runs/{alice.id}", headers={"x-user": "bob"}
+            ).status_code
+            == 404
+        )

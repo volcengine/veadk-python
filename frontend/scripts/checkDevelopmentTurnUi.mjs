@@ -8,8 +8,9 @@ const browser=await chromium.launch({executablePath:process.env.CHROMIUM_EXECUTA
 const page=await browser.newPage({viewport:{width:1440,height:960},colorScheme:'dark'});
 const errors=[], requests=[], events=[];
 const checkPreparation=Boolean(process.env.CHECK_PREPARATION);
+const checkHome=Boolean(process.env.CHECK_HOME);
 const checkMigration=checkPreparation&&Boolean(process.env.CHECK_MIGRATION);
-const english=checkPreparation&&process.env.CHECK_LOCALE==='en-US';
+const english=(checkPreparation||checkHome)&&process.env.CHECK_LOCALE==='en-US';
 const label=(zh,en)=>english?en:zh;
 let holdPreparation='create', heldPreparation=null;
 let run=null, nextSeq=1, startedAt=0, firstSubscription=0, breakConnection=0, sourceAttempts=0;
@@ -18,9 +19,16 @@ const delivery={sessionId:session.sessionId,agentName:'customer_analysis_assista
 const project={schemaVersion:'1',origin:'migration',projectId:'ux-project',name:'Preserved project',createdAt:delivery.validatedAt,updatedAt:delivery.validatedAt,latestVersionId:'ux-version',latestVersionCreatedAt:delivery.validatedAt,latestVersionVerified:true,latestAgentName:delivery.agentName,versionCount:1};
 const version={...delivery,schemaVersion:'1',producer:'migration',migrationFramework:'any',projectId:project.projectId,versionId:'ux-version',parentVersionId:null,sourceSessionId:session.sessionId,createdAt:delivery.validatedAt,intentSummary:'Preserve the selected base',acceptanceCriteria:['Preserve the selected base']};
 function emit(type,payload){events.push({type,payload:{...payload,seq:nextSeq++,runId:'ux-run'}});if(run)run.lastSeq=nextSeq-1;}
+let homeTasks=[],homeError=false,homeConnectFailure=false,holdHomeConnect=false,releaseHomeConnect=null;
+if(checkHome){
+ run={runId:'ux-run',sessionId:session.sessionId,requestId:'saved-request',message:'帮我做一个小学生数学辅导 agent',state:'running',phase:'coding',threadId:'thread-ux',turnId:'turn-ux',lastSeq:0,inputRevision:1,createdAt:Date.now()/1000-1800,statusMessage:'正在处理请求',stopRequested:false};
+ emit('run.input',{clientId:run.requestId,message:run.message,status:'delivered'});
+ emit('delta',{id:'saved-output',turnId:'turn-ux',text:'Persisted output before the page closed',snapshot:true});
+ homeTasks=[run,{...run,runId:'ux-run-2',sessionId:'another-session',state:'waiting_user',createdAt:run.createdAt-60,message:'整理学习计划和练习题，并根据学生的答题情况提供反馈。'.repeat(8)},{...run,runId:'ux-run-3',sessionId:'recovering-session',state:'recovering',createdAt:run.createdAt-120,message:'客户服务知识库助手'}];
+}
 page.on('pageerror',e=>errors.push(e.message));
 await page.addInitScript(locale=>{localStorage.setItem('veadk_local_user','studio-ux-verification');sessionStorage.setItem('veadk_local_user_tab','studio-ux-verification');localStorage.setItem('agentkit.studio.locale',locale);},english?'en-US':'zh-CN');
-if(checkPreparation) await page.addInitScript(()=>{
+if(checkPreparation||checkHome) await page.addInitScript(()=>{
  const originalFetch=window.fetch.bind(window);
  window.fetch=(input,init)=>{
   const path=new URL(typeof input==='string'?input:input.url,location.origin).pathname;
@@ -41,6 +49,8 @@ await page.route('**/web/intelligent-development/**',async route=>{
   await new Promise(r=>setTimeout(r,900));return json(session);
  }
  if(path.endsWith('/connect')){
+  if(checkHome&&homeConnectFailure)return route.fulfill({status:503,json:{detail:'Connection unavailable, please retry'}});
+  if(checkHome&&holdHomeConnect)return new Promise(resolve=>{releaseHomeConnect=async()=>{await json(session);resolve();};});
   if(checkPreparation&&holdPreparation==='connect')return new Promise(resolve=>{heldPreparation=async fail=>{await route.fulfill(fail?{status:503,json:{detail:'Late connection failure'}}:{json:session});resolve();};});
   await new Promise(r=>setTimeout(r,700));return json(session);
  }
@@ -52,6 +62,7 @@ await page.route('**/web/intelligent-development/**',async route=>{
   emit('activity',{id:'r1',turnId:'turn-ux',itemType:'reasoning',kind:'thinking',status:'running',text:''});
   startedAt=Date.now();return json(run);
  }
+ if(checkHome&&path==='/web/intelligent-development/runs')return homeError?route.fulfill({status:503,json:{detail:'Tasks temporarily unavailable'}}):json({runs:homeTasks});
  if(path.endsWith('/runs'))return json({runs:run?[run]:[]});
  if(path.endsWith('/events')){
   if(breakConnection>0){breakConnection--;return route.abort('failed');}
@@ -62,6 +73,7 @@ await page.route('**/web/intelligent-development/**',async route=>{
  if(path.endsWith('/inputs')){const body=req.postDataJSON();emit('run.input',{clientId:body.clientId,message:body.message,status:'delivered'});return json({accepted:true});}
  if(path.endsWith('/stop')){emit('development.succeeded',{turnId:'turn-ux',payload:{delivery}});emit('run.turn',{turnId:'turn-ux',status:'interrupted',durationMs:1542277,model:session.model,usageIncomplete:true,usage:{totalTokens:8000,inputTokens:6000,cachedInputTokens:4000,cacheWriteInputTokens:100,outputTokens:2000,reasoningOutputTokens:500}});run={...run,state:'cancelled',phase:'cancelled',statusMessage:'任务已停止',stopRequested:true};emit('run.status',run);return json(run);}
  if(path.endsWith('/runs/ux-run'))return json(run);
+ if(checkHome&&/\/runs\/ux-run-[23]$/.test(path))return json({...run,runId:path.split('/').at(-1),state:'succeeded'});
  if(path.endsWith('/sessions/ux-session'))return json(session);
  return json({});
 });
@@ -76,6 +88,72 @@ try{
   await page.locator('.ic-project-disclosure').click();
   await page.getByRole('button',{name:label('去优化','Optimize'),exact:true}).click();
  }else await page.getByText(label('智能模式','Intelligent mode'),{exact:true}).click();
+ if(checkHome){
+  const tasks=page.locator('.ic-tasks-panel');
+  const refresh=tasks.getByRole('button',{name:label('刷新任务列表','Refresh tasks'),exact:true});
+  const enterHome=async()=>{
+   await page.getByRole('button',{name:label('智能体','Agents'),exact:true}).click();
+   await page.getByText(label('创建智能体','Create Agent'),{exact:true}).click();
+   await page.getByRole('button',{name:english?/Advanced mode/:/传统模式/}).click();
+   await page.getByText(label('智能模式','Intelligent mode'),{exact:true}).click();
+  };
+  await tasks.getByText(run.message,{exact:true}).waitFor();
+  assert.equal(await page.locator('.ic-task').count(),3);
+  const layouts=[];
+  for(const width of [1440,1100,600]){
+   await page.setViewportSize({width,height:960});
+   await page.locator('.ic-main').evaluate(el=>el.scrollTop=0);
+   const goalBox=await page.locator('.ic-goal-panel').boundingBox(),taskBox=await tasks.boundingBox();
+   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'No viewport overflow');
+   if(width===1440){assert.ok(taskBox.x>goalBox.x+goalBox.width,'Desktop shows two distinct columns');assert.ok(Math.abs(taskBox.y-goalBox.y)<1);assert.ok(Math.abs(taskBox.height-goalBox.height)<1);}
+   else assert.ok(taskBox.y<goalBox.y,'Tasks come first on narrow layouts');
+   await page.screenshot({path:`${out}/home-${width}.png`});
+   layouts.push({width,goalBox,taskBox});
+  }
+  await page.setViewportSize({width:1440,height:960});
+  await page.locator('.ic-main').evaluate(el=>el.scrollTop=0);
+  const newGoal='保留首页正在编辑的需求';
+  await page.locator('#intelligent-goal').fill(newGoal);
+  homeError=true;await refresh.click();
+  await tasks.getByRole('alert').waitFor();
+  assert.equal(await page.locator('.ic-task').count(),3,'Refresh failure preserves entries');
+  assert.equal(await page.locator('#intelligent-goal').inputValue(),newGoal,'Polling does not reset the form');
+  await page.screenshot({path:out+'/home-error.png'});
+  homeError=false;await tasks.getByRole('button',{name:label('重试','Retry'),exact:true}).click();
+  await tasks.getByRole('alert').waitFor({state:'hidden'});
+  const savedTasks=homeTasks;homeTasks=[];await refresh.click();
+  await tasks.getByText(label('暂无进行中的任务','No tasks in progress'),{exact:true}).waitFor();
+  await tasks.getByRole('alert').waitFor({state:'hidden'});
+  await page.screenshot({path:out+'/home-empty.png'});
+  homeTasks=savedTasks;await refresh.click();await tasks.getByText(run.message,{exact:true}).waitFor();
+  // Recreate the App with no task/session history in browser storage.
+  await page.evaluate(()=>{localStorage.clear();sessionStorage.clear();});
+  await page.setViewportSize({width:600,height:960});
+  await page.reload({waitUntil:'networkidle'});await enterHome();
+  await tasks.getByText(run.message,{exact:true}).waitFor();
+  assert.equal(await page.locator('.ic-main').evaluate(el=>el.scrollTop),0,'Autofocus must not scroll the recovery entry out of view');
+  await page.setViewportSize({width:1440,height:960});
+  homeConnectFailure=true;
+  await page.locator('.ic-task').filter({hasText:run.message}).click();
+  await tasks.getByRole('alert').waitFor();
+  assert.equal(await page.locator('.ic-task').count(),3,'Open error preserves the task entry');
+  homeConnectFailure=false;holdHomeConnect=true;
+  await page.locator('.ic-task').filter({hasText:run.message}).click();
+  await tasks.getByText(label('正在连接…','Connecting…'),{exact:true}).waitFor();
+  await page.locator('button.new-chat--conversation').click();
+  const deadline=Date.now()+5000;while(!releaseHomeConnect&&Date.now()<deadline)await page.waitForTimeout(30);
+  assert.ok(releaseHomeConnect);await releaseHomeConnect();await page.waitForTimeout(150);
+  assert.equal(await page.locator('.sandbox-codex-composer').count(),0,'Late connection cannot redirect after leaving');
+  holdHomeConnect=false;await enterHome();
+  const entry=page.locator('.ic-task').filter({hasText:run.message});await entry.focus();await page.keyboard.press('Enter');
+  await page.getByText('Persisted output before the page closed',{exact:true}).waitFor();
+  await page.getByRole('button',{name:label('停止生成','Stop generating'),exact:true}).waitFor();
+  assert.equal(requests.filter(r=>r.method==='POST'&&(r.path.endsWith('/runs')||r.path.endsWith('/sessions'))).length,0,'Recovery never starts another build');
+  await page.screenshot({path:out+'/home-restored.png'});
+  await writeFile(out+'/home.json',JSON.stringify({locale:english?'en-US':'zh-CN',layouts,restoredOriginalOutput:true,noNewTask:true,errors},null,2));
+  assert.deepEqual(errors,[]);console.log('Intelligent home recovery journey passed');
+  await browser.close();process.exit(0);
+ }
  await page.locator('textarea').fill('构建体验验收：保留输出并展示工具过程');
  if(checkPreparation){
   const goal='构建体验验收：保留输出并展示工具过程';

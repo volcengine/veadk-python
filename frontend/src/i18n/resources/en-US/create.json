@@ -206,8 +206,8 @@
     }
   },
   "intelligent": {
-    "title": "Intelligent mode",
-    "subtitle": "Describe your goal and Codex will plan, build, debug, and temporarily validate the agent in a sandbox.",
+    "title": "Intelligent build",
+    "subtitle": "Describe what you need. Build, debug, and validate your agent.",
     "model": {
       "label": "Model",
       "placeholder": "Select a model",
@@ -241,6 +241,29 @@
       "preparing": "Creating the task environment…",
       "starting": "Environment ready. Starting Codex…",
       "next": "Next, Codex will plan the approach, then build, run, and validate the agent."
+    },
+    "tasks": {
+      "title": "Tasks in progress",
+      "hint": "Work continues when you leave. Return to follow progress or add instructions.",
+      "refresh": "Refresh tasks",
+      "loading": "Loading tasks…",
+      "empty": "No tasks in progress",
+      "emptyHint": "Once a build starts, you can return to it here.",
+      "loadError": "Unable to load tasks. Please retry.",
+      "openError": "Unable to open this task. Please retry.",
+      "startedAt": "Started {{time}}",
+      "open": "Open task",
+      "opening": "Connecting…",
+      "states": {
+        "queued": "Queued",
+        "running": "Building",
+        "recovering": "Reconnecting",
+        "waiting_user": "Awaiting your reply",
+        "stopping": "Stopping",
+        "succeeded": "Completed",
+        "failed": "Incomplete",
+        "cancelled": "Stopped"
+      }
     }
   },
   "projectLibrary": {
