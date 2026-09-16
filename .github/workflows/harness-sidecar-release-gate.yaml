@@ -161,7 +161,12 @@ jobs:
               tests/test_cloud.py::test_vefaas_deploy_updates_existing_application_in_place \
               tests/frontend/server/test_user_management.py::test_initialized_runtime_identity_failure_blocks_studio_startup \
               tests/frontend/server/test_user_management.py::test_directory_normalizes_credential_resolver_failure \
-              tests/frontend/server/test_user_management.py::test_uninitialized_runtime_identity_failure_blocks_startup_without_writes \
+              tests/frontend/server/test_user_management.py::test_uninitialized_runtime_with_readable_identity_never_writes \
+              tests/frontend/server/test_user_management.py::test_missing_marker_blocks_runtime_even_after_identity_was_prepared \
+              tests/frontend/server/test_user_management.py::test_deployment_identity_migration_allows_read_only_runtime_start \
+              tests/frontend/server/test_user_management.py::test_uninitialized_runtime_blocks_before_identity_access_or_writes \
+              tests/cli/test_studio_self_update.py::test_submit_latest_uses_fixed_deployment_ids_and_sts \
+              tests/cli/test_studio_self_update.py::test_self_update_identity_migration_failure_blocks_function_submit \
               tests/test_studio_release_server.py::test_tos_dependency_store_accepts_manifest_pinned_agentkit_cli_version \
               tests/test_studio_release_server.py::test_tos_dependency_store_rejects_untrusted_agentkit_cli_url \
               tests/test_harness_sidecar_release_gate.py

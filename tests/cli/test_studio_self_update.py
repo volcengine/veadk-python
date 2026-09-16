@@ -216,6 +216,7 @@ def _bundle(
     unsafe_name: str | None = None,
     include_cli_archive: bool = True,
     cli_archive_content: bytes = b"pinned-cli",
+    identity_roles_support: bool = False,
 ) -> None:
     veadk_wheel = "veadk_python-1.2.3-py3-none-any.whl"
     wheel_path = path.parent / veadk_wheel
@@ -224,6 +225,11 @@ def _bundle(
             "veadk_python-1.2.3.dist-info/METADATA",
             "Metadata-Version: 2.1\nName: veadk-python\nVersion: 1.2.3\n",
         )
+        if identity_roles_support:
+            wheel.writestr(
+                "frontend/server/user_management/service.py",
+                '"""Identity-backed Studio role management."""\n',
+            )
     wheel_digest = hashlib.sha256(wheel_path.read_bytes()).hexdigest()
     with zipfile.ZipFile(path, "w") as archive:
         archive.writestr("run.sh", "#!/bin/bash\n")
@@ -575,7 +581,7 @@ def test_submit_latest_uses_fixed_deployment_ids_and_sts(
     tmp_path: Path,
 ) -> None:
     archive = tmp_path / "source.zip"
-    _bundle(archive)
+    _bundle(archive, identity_roles_support=True)
     content = archive.read_bytes()
     manifest = StudioReleaseManifest(
         version="20260724153045",
@@ -605,6 +611,7 @@ def test_submit_latest_uses_fixed_deployment_ids_and_sts(
             self.client = object()
 
         def submit_application_code_bundle_update(self, **kwargs: Any) -> None:
+            captured.setdefault("events", []).append("function_submit")
             package = Path(str(kwargs["path"]))
             assert "--provider byteplus" in (package / "run.sh").read_text(
                 encoding="utf-8"
@@ -613,6 +620,7 @@ def test_submit_latest_uses_fixed_deployment_ids_and_sts(
             captured["update"] = kwargs
 
     def _resources(**kwargs: Any) -> dict[str, str]:
+        captured.setdefault("events", []).append("identity_migration")
         captured["resource_request"] = kwargs
         return {
             "VEADK_STUDIO_TOS_BUCKET": "studio-bucket",
@@ -688,6 +696,8 @@ def test_submit_latest_uses_fixed_deployment_ids_and_sts(
     assert resource_request["application_id"] == "application-id"
     assert resource_request["function_id"] == "function-id"
     assert resource_request["function_client"] is not None
+    assert resource_request["migrate_identity_roles"] is True
+    assert captured["events"] == ["identity_migration", "function_submit"]
     scheduler_update = captured["scheduler_update"]
     assert scheduler_update["studio_function_id"] == "function-id"
     assert scheduler_update["package_root"].name == "package"
@@ -706,6 +716,68 @@ def test_submit_latest_uses_fixed_deployment_ids_and_sts(
     assert status["progressMessage"] == "已提交，正在等待新 Revision 发布"
     assert status["targetVersion"] == manifest.version
     assert status["startedAt"] > 0
+
+
+def test_self_update_identity_migration_failure_blocks_function_submit(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    archive = tmp_path / "source.zip"
+    _bundle(archive, identity_roles_support=True)
+    content = archive.read_bytes()
+    manifest = StudioReleaseManifest(
+        version="20260724153045",
+        git_sha="a" * 40,
+        sha256=hashlib.sha256(content).hexdigest(),
+        size=len(content),
+        created_at="2026-07-24T15:30:45+08:00",
+    )
+    submits = 0
+
+    class _Store:
+        def latest_manifest(self) -> StudioReleaseManifest:
+            return manifest
+
+        def release_catalog(self) -> list[StudioReleaseManifest]:
+            return [manifest]
+
+        def download_bundle(
+            self, release: StudioReleaseManifest, destination: Path
+        ) -> None:
+            assert release == manifest
+            destination.write_bytes(content)
+
+    class _VeFaaS:
+        def __init__(self, **_kwargs: str) -> None:
+            self.client = object()
+
+        def submit_application_code_bundle_update(self, **_kwargs: Any) -> None:
+            nonlocal submits
+            submits += 1
+
+    def _migration_failure(**kwargs: Any) -> dict[str, str]:
+        assert kwargs["migrate_identity_roles"] is True
+        raise StudioReleaseError("Identity deployment migration failed")
+
+    updater = StudioSelfUpdater(
+        settings=_settings(deployment_region="cn-shanghai"),
+        credential_resolver=lambda: ("sts-ak", "sts-sk", "sts-token"),
+        branding_logo=None,
+    )
+    monkeypatch.setattr(updater, "_store", lambda *_args: _Store())
+    monkeypatch.setattr("veadk.integrations.ve_faas.ve_faas.VeFaaS", _VeFaaS)
+    monkeypatch.setattr(
+        "frontend.server.studio_update_resources.reconcile_studio_update_resources",
+        _migration_failure,
+    )
+    monkeypatch.setenv("VEADK_STUDIO_RELEASE_VERSION", "bundled")
+
+    with pytest.raises(StudioReleaseError, match="Identity deployment migration"):
+        updater.submit_latest()
+    assert submits == 0
+    status = updater.status()
+    assert status["progressStage"] == "error"
+    assert status["errorStage"] == "provisioning"
 
 
 def test_submit_latest_continues_main_function_when_scheduler_update_fails(

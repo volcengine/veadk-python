@@ -81,8 +81,21 @@ def test_sidecar_release_gate_runs_backend_and_frontend_in_parallel() -> None:
         "test_initialized_runtime_identity_failure_blocks_studio_startup" in backend_run
     )
     assert "test_directory_normalizes_credential_resolver_failure" in backend_run
+    assert "test_uninitialized_runtime_with_readable_identity_never_writes" in (
+        backend_run
+    )
+    assert "test_missing_marker_blocks_runtime_even_after_identity_was_prepared" in (
+        backend_run
+    )
+    assert "test_deployment_identity_migration_allows_read_only_runtime_start" in (
+        backend_run
+    )
+    assert "test_uninitialized_runtime_blocks_before_identity_access_or_writes" in (
+        backend_run
+    )
+    assert "test_submit_latest_uses_fixed_deployment_ids_and_sts" in backend_run
     assert (
-        "test_uninitialized_runtime_identity_failure_blocks_startup_without_writes"
+        "test_self_update_identity_migration_failure_blocks_function_submit"
         in backend_run
     )
     assert "test_tos_dependency_store_accepts_manifest_pinned_agentkit_cli_version" in (

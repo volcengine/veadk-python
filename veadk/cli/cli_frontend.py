@@ -11647,9 +11647,6 @@ def _run_frontend_server(
             identity_region=_identity_region(),
             credentials=_resolve_ve_credentials,
             environment=os.environ,
-            super_admin=studio_super_admin or "",
-            admins=studio_admins or "",
-            developers=studio_developers or "",
         )
         os.environ["VEADK_STUDIO_IDENTITY_ROLES"] = "1"
         for legacy_key in (
