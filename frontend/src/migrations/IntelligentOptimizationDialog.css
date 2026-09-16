@@ -9,6 +9,8 @@
   backdrop-filter: blur(3px);
 }
 
+.migration-optimize-backdrop[hidden] { display: none; }
+
 .migration-optimize-dialog {
   width: min(720px, 94vw);
   max-height: min(820px, 90vh);

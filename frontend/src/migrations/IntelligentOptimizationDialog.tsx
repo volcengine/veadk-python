@@ -45,6 +45,7 @@ export function IntelligentOptimizationDialog({
   onCloseRef.current = onClose;
 
   useEffect(() => {
+    if (busy) return;
     const previousOverflow = document.body.style.overflow;
     const previousFocus =
       document.activeElement instanceof HTMLElement
@@ -84,11 +85,12 @@ export function IntelligentOptimizationDialog({
       window.removeEventListener("keydown", handleKeyDown);
       if (previousFocus?.isConnected) previousFocus.focus();
     };
-  }, []);
+  }, [busy]);
 
   return createPortal(
     <div
       className="migration-optimize-backdrop"
+      hidden={busy}
       onMouseDown={(event) => {
         if (event.target === event.currentTarget && !busy) onClose();
       }}
