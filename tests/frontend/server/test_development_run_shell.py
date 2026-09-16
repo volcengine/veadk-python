@@ -58,10 +58,13 @@ async def test_stop_running_command_terminates_group_and_records_receipt(tmp_pat
     process = await asyncio.create_subprocess_shell(
         command_wrapper(str(root), "sleep 30", 35)
     )
-    async with asyncio.timeout(3):
+
+    async def stop_running_command():
         while not (root / "output").exists():
             await asyncio.sleep(0.01)
         (root / "stop").touch()
-        assert await process.wait() == 0
+        return await process.wait()
+
+    assert await asyncio.wait_for(stop_running_command(), 3) == 0
     receipt = json.loads((root / "result.json").read_text())
     assert receipt["status"] == "cancelled" and receipt["exitCode"] != 0
