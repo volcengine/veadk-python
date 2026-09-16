@@ -158,6 +158,11 @@ jobs:
               tests/cli/test_studio_update.py::test_update_application_code_bundle_merges_only_explicit_environment \
               tests/cli/test_studio_update.py::test_studio_update_preserves_custom_function_command \
               tests/cli/test_studio_update.py::test_native_python_function_uses_mode_independent_bundle_entrypoint \
+              tests/cli/test_studio_release.py::test_release_entrypoint_parallel_startup_fails_closed \
+              tests/auth/test_oauth2_auth.py::test_from_veidentity_uses_existing_client_secret_without_client_lookup \
+              tests/cli/test_studio_rbac.py::test_runtime_veidentity_oauth_preflight_is_read_only_and_reuses_secret \
+              tests/cli/test_studio_rbac.py::test_local_veidentity_oauth_preserves_auto_provisioning \
+              tests/cli/test_studio_rbac.py::test_runtime_identity_and_oauth_preflights_run_in_parallel \
               tests/test_cloud.py::test_vefaas_deploy_updates_existing_application_in_place \
               tests/frontend/server/test_user_management.py::test_initialized_runtime_identity_failure_blocks_studio_startup \
               tests/frontend/server/test_user_management.py::test_directory_normalizes_credential_resolver_failure \

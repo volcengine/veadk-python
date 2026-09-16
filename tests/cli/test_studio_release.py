@@ -797,7 +797,7 @@ def test_release_entrypoint_does_not_load_generic_cli() -> None:
 
 @pytest.mark.parametrize(
     ("companion_exit", "expected_returncode", "studio_terminated"),
-    (("0", 0, False), ("7", 1, True)),
+    (("0", 1, False), ("7", 1, True)),
 )
 @pytest.mark.parametrize(
     "entrypoint_script",
@@ -854,12 +854,16 @@ def test_release_entrypoint_parallel_startup_fails_closed(
         env=environment,
         timeout=5,
         check=False,
+        capture_output=True,
+        text=True,
     )
 
     assert completed.returncode == expected_returncode
     assert (tmp_path / "companion-started").is_file()
     assert (tmp_path / "studio-started").is_file()
     assert (tmp_path / "studio-terminated").exists() is studio_terminated
+    if companion_exit == "0":
+        assert "studio_process_exited_unexpectedly" in completed.stderr
 
 
 def test_release_entrypoint_prefers_bundled_dependencies(

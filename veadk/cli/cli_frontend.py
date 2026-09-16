@@ -11629,6 +11629,30 @@ def _run_frontend_server(
             ),
         )
 
+    redirect_uri = oauth2_redirect_uri or f"http://{host}:{port}/oauth2/callback"
+    pool_ok = oauth2_user_pool or oauth2_user_pool_uid
+    client_ok = oauth2_user_pool_client or oauth2_user_pool_client_uid
+    oauth_provider_id = oauth2_provider or ""
+    oauth2_config = None
+    runtime_identity_read_only = identity_roles_initialized or is_vefaas_runtime()
+
+    def _initialize_runtime_veidentity_oauth():
+        from veadk.auth.middleware.oauth2_auth import OAuth2Config
+
+        return OAuth2Config.from_veidentity(
+            user_pool_name=oauth2_user_pool,
+            user_pool_uid=oauth2_user_pool_uid,
+            client_name=oauth2_user_pool_client,
+            client_uid=oauth2_user_pool_client_uid,
+            client_secret=os.getenv("OAUTH2_CLIENT_SECRET") or None,
+            redirect_uri=redirect_uri,
+            auto_create=not runtime_identity_read_only,
+            auto_register_callback=not runtime_identity_read_only,
+            identity_client=_identity_client(),
+        )
+
+    runtime_veidentity_oauth = auth_mode != "gateway" and bool(pool_ok and client_ok)
+
     if identity_roles:
         from frontend.server.user_management.deployment import initialize_runtime_roles
         from frontend.server.user_management.routes import mount_user_management
@@ -11640,14 +11664,24 @@ def _run_frontend_server(
             raise click.ClickException(
                 "Identity role management requires a user pool and client"
             )
-        user_management = initialize_runtime_roles(
-            pool_uid=pool_uid,
-            client_uid=client_uid,
-            provider=provider,
-            identity_region=_identity_region(),
-            credentials=_resolve_ve_credentials,
-            environment=os.environ,
-        )
+        role_arguments = {
+            "pool_uid": pool_uid,
+            "client_uid": client_uid,
+            "provider": provider,
+            "identity_region": _identity_region(),
+            "credentials": _resolve_ve_credentials,
+            "environment": os.environ,
+        }
+        if runtime_identity_read_only and runtime_veidentity_oauth:
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                role_future = executor.submit(
+                    initialize_runtime_roles, **role_arguments
+                )
+                oauth_future = executor.submit(_initialize_runtime_veidentity_oauth)
+                user_management = role_future.result()
+                oauth2_config = oauth_future.result()
+        else:
+            user_management = initialize_runtime_roles(**role_arguments)
         os.environ["VEADK_STUDIO_IDENTITY_ROLES"] = "1"
         for legacy_key in (
             "VEADK_STUDIO_SUPER_ADMIN",
@@ -11732,28 +11766,16 @@ def _run_frontend_server(
         logger.info("Auth mode: gateway (trusting upstream-forwarded JWT identity)")
     else:
         # ---- SSO (optional): VeIdentity user pool, or a generic provider via env ----
-        redirect_uri = oauth2_redirect_uri or f"http://{host}:{port}/oauth2/callback"
-        pool_ok = oauth2_user_pool or oauth2_user_pool_uid
-        client_ok = oauth2_user_pool_client or oauth2_user_pool_client_uid
-        provider_id = oauth2_provider or ""
-
-        oauth2_config = None
         if pool_ok and client_ok:
-            from veadk.auth.middleware.oauth2_auth import OAuth2Config
-
-            oauth2_config = OAuth2Config.from_veidentity(
-                user_pool_name=oauth2_user_pool,
-                user_pool_uid=oauth2_user_pool_uid,
-                client_name=oauth2_user_pool_client,
-                client_uid=oauth2_user_pool_client_uid,
-                redirect_uri=redirect_uri,
-                identity_client=_identity_client(),
-            )
-            provider_id = provider_id or "veidentity"
+            if oauth2_config is None:
+                oauth2_config = _initialize_runtime_veidentity_oauth()
+            oauth_provider_id = oauth_provider_id or "veidentity"
         else:
             # Generic provider (github / google / any OIDC / custom) from env vars.
-            oauth2_config = _build_generic_oauth2(provider_id or "custom", redirect_uri)
-            provider_id = provider_id or "custom"
+            oauth2_config = _build_generic_oauth2(
+                oauth_provider_id or "custom", redirect_uri
+            )
+            oauth_provider_id = oauth_provider_id or "custom"
 
         # The SPA fetches /web/auth-config and /oauth2/userinfo on every startup, so
         # both must always return JSON. With SSO off we answer with an empty provider
@@ -11781,13 +11803,17 @@ def _run_frontend_server(
                 oauth2_provider_label
                 or (
                     "BytePlus Identity"
-                    if provider == "byteplus" and provider_id == "veidentity"
-                    else _PROVIDER_LABELS.get(provider_id)
+                    if provider == "byteplus" and oauth_provider_id == "veidentity"
+                    else _PROVIDER_LABELS.get(oauth_provider_id)
                 )
-                or provider_id.replace("_", " ").title()
+                or oauth_provider_id.replace("_", " ").title()
             )
             providers = [
-                {"id": provider_id, "label": label, "loginUrl": "/oauth2/login"}
+                {
+                    "id": oauth_provider_id,
+                    "label": label,
+                    "loginUrl": "/oauth2/login",
+                }
             ]
 
             # Protect the API but exempt the SPA shell + this config endpoint so the
@@ -11817,7 +11843,8 @@ def _run_frontend_server(
                 },
             )
             logger.info(
-                f"OAuth2 SSO enabled (provider={provider_id}, redirect_uri={redirect_uri})"
+                "OAuth2 SSO enabled "
+                f"(provider={oauth_provider_id}, redirect_uri={redirect_uri})"
             )
         else:
             from fastapi.responses import JSONResponse

@@ -586,6 +586,40 @@ def test_from_veidentity_uses_refresh_token_absolute_lifetime(
     assert config.session_timeout_seconds == 30 * 24 * 60 * 60
 
 
+def test_from_veidentity_uses_existing_client_secret_without_client_lookup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    identity_client = Mock()
+    identity_client.get_user_pool.return_value = (
+        "pool-id",
+        "identity.example.com",
+    )
+    identity_client.get_user_pool_client_refresh_token_lifetime.return_value = 3600
+    monkeypatch.setattr(
+        "veadk.auth.middleware.oauth2_auth._fetch_oidc_discovery",
+        lambda _: OIDCDiscoveryConfig(
+            issuer="https://identity.example.com",
+            authorization_endpoint="https://identity.example.com/authorize",
+            token_endpoint="https://identity.example.com/token",
+        ),
+    )
+
+    config = OAuth2Config.from_veidentity(
+        user_pool_uid="pool-id",
+        client_uid="client-id",
+        client_secret="existing-secret",
+        redirect_uri="https://studio.example.com/oauth2/callback",
+        auto_create=False,
+        auto_register_callback=False,
+        identity_client=identity_client,
+    )
+
+    identity_client.get_user_pool_client.assert_not_called()
+    assert config.client_id == "client-id"
+    assert config.client_secret == "existing-secret"
+    assert config.cookie_signing_secret == "existing-secret"
+
+
 def test_from_veidentity_supports_vestack_oidc_base_url(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

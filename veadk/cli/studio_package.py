@@ -127,7 +127,10 @@ def studio_run_script(
         "  exit 1\n"
         "fi\n"
         "COMPANION_PID=\n"
-        'wait "$STUDIO_PID"\n'
+        'if wait "$STUDIO_PID"; then\n'
+        '  echo "studio_process_exited_unexpectedly" >&2\n'
+        "fi\n"
+        "exit 1\n"
     )
 
 

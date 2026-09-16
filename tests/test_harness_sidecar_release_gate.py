@@ -77,6 +77,17 @@ def test_sidecar_release_gate_runs_backend_and_frontend_in_parallel() -> None:
         backend_run
     )
     assert "test_vefaas_deploy_updates_existing_application_in_place" in backend_run
+    assert "test_release_entrypoint_parallel_startup_fails_closed" in backend_run
+    assert (
+        "test_from_veidentity_uses_existing_client_secret_without_client_lookup"
+        in backend_run
+    )
+    assert (
+        "test_runtime_veidentity_oauth_preflight_is_read_only_and_reuses_secret"
+        in backend_run
+    )
+    assert "test_local_veidentity_oauth_preserves_auto_provisioning" in backend_run
+    assert "test_runtime_identity_and_oauth_preflights_run_in_parallel" in backend_run
     assert (
         "test_initialized_runtime_identity_failure_blocks_studio_startup" in backend_run
     )

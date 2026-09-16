@@ -280,21 +280,30 @@ def _create_studio_app(
     oauth2_user_pool_client_uid: str | None = None,
     oauth2_provider_label: str | None = None,
     provider: str = "volcengine",
+    identity_initializer: Any | None = None,
+    runtime_identity_roles: bool = False,
 ) -> FastAPI:
     captured: dict[str, Any] = {}
-    monkeypatch.setenv("VEADK_STUDIO_IDENTITY_ROLES", "")
+    monkeypatch.setenv(
+        "VEADK_STUDIO_IDENTITY_ROLES", "1" if runtime_identity_roles else ""
+    )
     # These fixtures exercise resource/SSO routes; isolate the Identity control plane
     from dataclasses import replace
 
     policy = StudioAccessPolicy.from_csv(admins, developers)
+    if identity_initializer is None:
+
+        def identity_initializer(**_kwargs: Any) -> SimpleNamespace:
+            return SimpleNamespace(
+                directory=None,
+                principal_for=lambda principal: replace(
+                    principal, role=policy.role_for(principal)
+                ),
+            )
+
     monkeypatch.setattr(
         "frontend.server.user_management.deployment.initialize_runtime_roles",
-        lambda **kwargs: SimpleNamespace(
-            directory=None,
-            principal_for=lambda principal: replace(
-                principal, role=policy.role_for(principal)
-            ),
-        ),
+        identity_initializer,
     )
     monkeypatch.setattr("dotenv.find_dotenv", lambda *args, **kwargs: "")
     monkeypatch.setenv("VOLCENGINE_ACCESS_KEY", "test-ak")
@@ -328,6 +337,128 @@ def _create_studio_app(
         studio=True,
     )
     return captured["app"]
+
+
+def test_runtime_veidentity_oauth_preflight_is_read_only_and_reuses_secret(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from veadk.auth.middleware.oauth2_auth import OAuth2Config
+
+    captured: dict[str, Any] = {}
+    monkeypatch.setenv("OAUTH2_CLIENT_SECRET", "existing-secret")
+    monkeypatch.setattr(
+        OAuth2Config,
+        "from_veidentity",
+        lambda **kwargs: captured.update(kwargs)
+        or SimpleNamespace(
+            cookie_secure=True,
+            logout_redirect_url="/",
+            end_session_url="https://identity.example.com/logout",
+        ),
+    )
+    monkeypatch.setattr(
+        "veadk.auth.middleware.oauth2_auth.setup_oauth2",
+        lambda *_, **__: None,
+    )
+
+    _create_studio_app(
+        monkeypatch,
+        tmp_path,
+        oauth2_user_pool_uid="pool-current",
+        oauth2_user_pool_client_uid="studio-client",
+        runtime_identity_roles=True,
+    )
+
+    assert captured["auto_create"] is False
+    assert captured["auto_register_callback"] is False
+    assert captured["client_secret"] == "existing-secret"
+
+
+def test_local_veidentity_oauth_preserves_auto_provisioning(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from veadk.auth.middleware.oauth2_auth import OAuth2Config
+
+    captured: dict[str, Any] = {}
+    monkeypatch.setattr(
+        OAuth2Config,
+        "from_veidentity",
+        lambda **kwargs: captured.update(kwargs)
+        or SimpleNamespace(
+            cookie_secure=True,
+            logout_redirect_url="/",
+            end_session_url="https://identity.example.com/logout",
+        ),
+    )
+    monkeypatch.setattr(
+        "veadk.auth.middleware.oauth2_auth.setup_oauth2",
+        lambda *_, **__: None,
+    )
+
+    _create_studio_app(
+        monkeypatch,
+        tmp_path,
+        oauth2_user_pool_uid="pool-current",
+        oauth2_user_pool_client_uid="studio-client",
+    )
+
+    assert captured["auto_create"] is True
+    assert captured["auto_register_callback"] is True
+
+
+def test_runtime_identity_and_oauth_preflights_run_in_parallel(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from dataclasses import replace
+
+    from veadk.auth.middleware.oauth2_auth import OAuth2Config
+
+    role_started = Event()
+    oauth_started = Event()
+    policy = StudioAccessPolicy.from_csv(None, None)
+
+    def initialize_roles(**_kwargs: Any) -> SimpleNamespace:
+        role_started.set()
+        assert oauth_started.wait(timeout=1), (
+            "OAuth preflight did not start in parallel"
+        )
+        return SimpleNamespace(
+            directory=None,
+            principal_for=lambda principal: replace(
+                principal, role=policy.role_for(principal)
+            ),
+        )
+
+    def initialize_oauth(**_kwargs: Any) -> SimpleNamespace:
+        oauth_started.set()
+        assert role_started.wait(timeout=1), "Role preflight did not start in parallel"
+        return SimpleNamespace(
+            cookie_secure=True,
+            logout_redirect_url="/",
+            end_session_url="https://identity.example.com/logout",
+        )
+
+    monkeypatch.setenv("OAUTH2_CLIENT_SECRET", "existing-secret")
+    monkeypatch.setattr(OAuth2Config, "from_veidentity", initialize_oauth)
+    monkeypatch.setattr(
+        "veadk.auth.middleware.oauth2_auth.setup_oauth2",
+        lambda *_, **__: None,
+    )
+
+    _create_studio_app(
+        monkeypatch,
+        tmp_path,
+        oauth2_user_pool_uid="pool-current",
+        oauth2_user_pool_client_uid="studio-client",
+        identity_initializer=initialize_roles,
+        runtime_identity_roles=True,
+    )
+
+    assert role_started.is_set()
+    assert oauth_started.is_set()
 
 
 def test_vestack_server_builds_codex_and_hermes_managed_tool_specs(

@@ -339,6 +339,7 @@ class OAuth2Config(BaseModel):
         user_pool_uid: Optional[str] = None,
         client_name: Optional[str] = None,
         client_uid: Optional[str] = None,
+        client_secret: Optional[str] = None,
         redirect_uri: str,
         auto_create: bool = True,
         auto_register_callback: bool = True,
@@ -361,6 +362,8 @@ class OAuth2Config(BaseModel):
             user_pool_uid: UID of the VeIdentity user pool (takes precedence over name).
             client_name: Name of the user pool client (used if client_uid not set).
             client_uid: UID of the user pool client (takes precedence over name).
+            client_secret: Existing client secret. When paired with ``client_uid``,
+                avoids a redundant client lookup during Runtime startup.
             redirect_uri: OAuth2 callback URL (e.g., https://myapp.com/oauth2/callback).
             auto_create: Create user pool and client if not found (default: True).
             auto_register_callback: Register callback URL with client (default: True).
@@ -436,13 +439,19 @@ class OAuth2Config(BaseModel):
             )
 
         # Step 2: Get or create client
-        client = identity_client.get_user_pool_client(
-            user_pool_uid=user_pool_id,
-            name=client_name,
-            client_uid=client_uid,
-        )
+        resolved_client_secret = client_secret
+        client = None
+        if client_uid and resolved_client_secret:
+            resolved_client_id = client_uid
+            logger.info("Using configured existing client: %s", client_uid)
+        else:
+            client = identity_client.get_user_pool_client(
+                user_pool_uid=user_pool_id,
+                name=client_name,
+                client_uid=client_uid,
+            )
         if client:
-            resolved_client_id, client_secret = client
+            resolved_client_id, resolved_client_secret = client
             logger.info("Using existing client: %s", client_uid or client_name)
         elif auto_create and client_name:
             client_type_value = (
@@ -450,13 +459,15 @@ class OAuth2Config(BaseModel):
                 if isinstance(client_type, UserPoolClientType)
                 else client_type
             )
-            resolved_client_id, client_secret = identity_client.create_user_pool_client(
-                user_pool_uid=user_pool_id,
-                name=client_name,
-                client_type=client_type_value,
+            resolved_client_id, resolved_client_secret = (
+                identity_client.create_user_pool_client(
+                    user_pool_uid=user_pool_id,
+                    name=client_name,
+                    client_type=client_type_value,
+                )
             )
             logger.info("Created client: %s", client_name)
-        else:
+        elif not (client_uid and resolved_client_secret):
             identifier = client_uid or client_name
             raise ValueError(
                 f"Client '{identifier}' not found (auto_create=False or only UID provided)"
@@ -521,11 +532,11 @@ class OAuth2Config(BaseModel):
             jwks_uri=oidc_config.jwks_uri,
             introspection_url=oidc_config.introspection_endpoint,
             client_id=resolved_client_id,
-            client_secret=client_secret,
+            client_secret=resolved_client_secret,
             redirect_uri=redirect_uri,
             scope=scope,
             cookie_signing_secret=extra_config.pop(
-                "cookie_signing_secret", client_secret
+                "cookie_signing_secret", resolved_client_secret
             ),
             **extra_config,
         )
