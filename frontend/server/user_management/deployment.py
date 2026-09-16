@@ -190,34 +190,22 @@ def initialize_runtime_roles(
         client_uid,
         provider,
     )
-    deferred = False
     try:
         service.initialize(
             super_admin, admins, developers, allow_initialize=not initialized
         )
     except UserManagementError as error:
-        if error.code == "identity_unavailable":
-            service.defer_initialization(
-                super_admin,
-                admins,
-                developers,
-                allow_initialize=not initialized,
-            )
-            deferred = True
-        else:
-            raise click.ClickException(
-                f"Studio Identity role setup failed: {error.code}; check Identity "
-                "user/group permissions and the legacy role lists, then retry"
-            ) from error
+        raise click.ClickException(
+            f"Studio Identity role setup failed: {error.code}; check Identity user/group "
+            "permissions and the legacy role lists, then retry"
+        ) from error
     legacy_keys = (
         "VEADK_STUDIO_SUPER_ADMIN",
         "VEADK_STUDIO_ADMINS",
         "VEADK_STUDIO_DEVELOPERS",
     )
-    if (
-        not deferred
-        and (not initialized or any(environment.get(key) for key in legacy_keys))
-        and (function_id := environment.get("VEADK_STUDIO_FUNCTION_ID"))
+    if (not initialized or any(environment.get(key) for key in legacy_keys)) and (
+        function_id := environment.get("VEADK_STUDIO_FUNCTION_ID")
     ):
         from veadk.integrations.ve_faas.ve_faas import VeFaaS
 

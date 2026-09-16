@@ -665,128 +665,62 @@ def test_failed_runtime_migration_never_clears_old_environment(monkeypatch):
     assert not directory.group_records
 
 
-def test_initialized_runtime_defers_transient_identity_directory_failure(monkeypatch):
+def test_initialized_runtime_identity_failure_blocks_studio_startup(monkeypatch):
+    import click
     from frontend.server.user_management import deployment
 
     directory = Directory()
     seeded = UserManagementService(directory, "pool", "client", "volcengine")
     seeded.initialize("owner", allow_initialize=True)
-    original_groups = directory.groups
     attempts = 0
 
-    def transient_groups():
+    def unavailable_groups():
         nonlocal attempts
         attempts += 1
-        if attempts == 1:
-            raise UserManagementError(503, "identity_unavailable")
-        return original_groups()
-
-    directory.groups = transient_groups
-    monkeypatch.setattr(deployment, "IdentityDirectory", lambda *args: directory)
-
-    service = deployment.initialize_runtime_roles(
-        pool_uid="pool",
-        client_uid="client",
-        provider="volcengine",
-        identity_region="cn-shanghai",
-        credentials=lambda: ("ak", "sk", "token"),
-        environment={"VEADK_STUDIO_IDENTITY_ROLES": "1"},
-    )
-
-    principal = service.principal_for(
-        StudioPrincipal.from_claims({"sub": "oidc|owner"})
-    )
-    assert attempts == 2
-    assert principal.role == StudioRole.SUPER_ADMIN
-
-
-def test_initialized_runtime_deferred_identity_failure_remains_fail_closed(
-    monkeypatch,
-):
-    from frontend.server.user_management import deployment
-
-    directory = Directory()
-    seeded = UserManagementService(directory, "pool", "client", "volcengine")
-    seeded.initialize("owner", allow_initialize=True)
-
-    def unavailable_groups():
         raise UserManagementError(503, "identity_unavailable")
 
     directory.groups = unavailable_groups
     monkeypatch.setattr(deployment, "IdentityDirectory", lambda *args: directory)
 
-    service = deployment.initialize_runtime_roles(
-        pool_uid="pool",
-        client_uid="client",
-        provider="volcengine",
-        identity_region="cn-shanghai",
-        credentials=lambda: ("ak", "sk", "token"),
-        environment={"VEADK_STUDIO_IDENTITY_ROLES": "1"},
-    )
-
-    with pytest.raises(UserManagementError, match="identity_unavailable"):
-        service.principal_for(StudioPrincipal.from_claims({"sub": "oidc|owner"}))
-
-
-def test_uninitialized_runtime_identity_failure_remains_fail_closed(monkeypatch):
-    from frontend.server.user_management import deployment
-
-    directory = Directory()
-
-    def unavailable_groups():
-        raise UserManagementError(503, "identity_unavailable")
-
-    directory.groups = unavailable_groups
-    monkeypatch.setattr(deployment, "IdentityDirectory", lambda *args: directory)
-
-    service = deployment.initialize_runtime_roles(
-        pool_uid="pool",
-        client_uid="client",
-        provider="volcengine",
-        identity_region="cn-shanghai",
-        credentials=lambda: ("ak", "sk", "token"),
-        environment={},
-    )
-
-    assert not directory.group_records
-    with pytest.raises(UserManagementError, match="identity_unavailable"):
-        service.principal_for(StudioPrincipal.from_claims({"sub": "oidc|owner"}))
-    assert not directory.group_records
-
-
-def test_uninitialized_runtime_retries_original_initialization_after_recovery(
-    monkeypatch,
-):
-    from frontend.server.user_management import deployment
-
-    directory = Directory()
-    original_groups = directory.groups
-    attempts = 0
-
-    def transient_groups():
-        nonlocal attempts
-        attempts += 1
-        if attempts == 1:
-            raise UserManagementError(503, "identity_unavailable")
-        return original_groups()
-
-    directory.groups = transient_groups
-    monkeypatch.setattr(deployment, "IdentityDirectory", lambda *args: directory)
-
-    service = deployment.initialize_runtime_roles(
-        pool_uid="pool",
-        client_uid="client",
-        provider="volcengine",
-        identity_region="cn-shanghai",
-        credentials=lambda: ("ak", "sk", "token"),
-        environment={},
-    )
-
+    with pytest.raises(click.ClickException, match="identity_unavailable"):
+        deployment.initialize_runtime_roles(
+            pool_uid="pool",
+            client_uid="client",
+            provider="volcengine",
+            identity_region="cn-shanghai",
+            credentials=lambda: ("ak", "sk", "token"),
+            environment={"VEADK_STUDIO_IDENTITY_ROLES": "1"},
+        )
     assert attempts == 1
-    assert not directory.group_records
-    principal = service.principal_for(
-        StudioPrincipal.from_claims({"sub": "oidc|owner"})
+
+
+def test_uninitialized_runtime_identity_failure_blocks_startup_without_writes(
+    monkeypatch,
+):
+    import click
+    from frontend.server.user_management import deployment
+
+    directory = Directory()
+
+    def unavailable_groups():
+        raise UserManagementError(503, "identity_unavailable")
+
+    directory.groups = unavailable_groups
+    monkeypatch.setattr(deployment, "IdentityDirectory", lambda *args: directory)
+    monkeypatch.setattr(
+        deployment,
+        "clear_legacy_role_environment",
+        lambda **kwargs: pytest.fail("must not clear after failed Identity startup"),
     )
-    assert attempts == 2
-    assert principal.role == StudioRole.ADMIN
-    assert len(directory.group_records) == len(StudioRole)
+
+    with pytest.raises(click.ClickException, match="identity_unavailable"):
+        deployment.initialize_runtime_roles(
+            pool_uid="pool",
+            client_uid="client",
+            provider="volcengine",
+            identity_region="cn-shanghai",
+            credentials=lambda: ("ak", "sk", "token"),
+            environment={"VEADK_STUDIO_FUNCTION_ID": "function"},
+        )
+    assert directory.group_records == {}
+    assert all(not user.groups for user in directory.records.values())

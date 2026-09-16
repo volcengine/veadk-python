@@ -78,19 +78,11 @@ def test_sidecar_release_gate_runs_backend_and_frontend_in_parallel() -> None:
     )
     assert "test_vefaas_deploy_updates_existing_application_in_place" in backend_run
     assert (
-        "test_initialized_runtime_defers_transient_identity_directory_failure"
-        in backend_run
-    )
-    assert (
-        "test_initialized_runtime_deferred_identity_failure_remains_fail_closed"
-        in backend_run
+        "test_initialized_runtime_identity_failure_blocks_studio_startup" in backend_run
     )
     assert "test_directory_normalizes_credential_resolver_failure" in backend_run
     assert (
-        "test_uninitialized_runtime_identity_failure_remains_fail_closed" in backend_run
-    )
-    assert (
-        "test_uninitialized_runtime_retries_original_initialization_after_recovery"
+        "test_uninitialized_runtime_identity_failure_blocks_startup_without_writes"
         in backend_run
     )
     assert "test_tos_dependency_store_accepts_manifest_pinned_agentkit_cli_version" in (

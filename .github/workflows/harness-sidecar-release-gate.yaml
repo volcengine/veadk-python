@@ -159,11 +159,9 @@ jobs:
               tests/cli/test_studio_update.py::test_studio_update_preserves_custom_function_command \
               tests/cli/test_studio_update.py::test_native_python_function_uses_mode_independent_bundle_entrypoint \
               tests/test_cloud.py::test_vefaas_deploy_updates_existing_application_in_place \
-              tests/frontend/server/test_user_management.py::test_initialized_runtime_defers_transient_identity_directory_failure \
-              tests/frontend/server/test_user_management.py::test_initialized_runtime_deferred_identity_failure_remains_fail_closed \
+              tests/frontend/server/test_user_management.py::test_initialized_runtime_identity_failure_blocks_studio_startup \
               tests/frontend/server/test_user_management.py::test_directory_normalizes_credential_resolver_failure \
-              tests/frontend/server/test_user_management.py::test_uninitialized_runtime_identity_failure_remains_fail_closed \
-              tests/frontend/server/test_user_management.py::test_uninitialized_runtime_retries_original_initialization_after_recovery \
+              tests/frontend/server/test_user_management.py::test_uninitialized_runtime_identity_failure_blocks_startup_without_writes \
               tests/test_studio_release_server.py::test_tos_dependency_store_accepts_manifest_pinned_agentkit_cli_version \
               tests/test_studio_release_server.py::test_tos_dependency_store_rejects_untrusted_agentkit_cli_url \
               tests/test_harness_sidecar_release_gate.py
