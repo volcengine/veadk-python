@@ -4488,6 +4488,13 @@ def test_runtime_update_capability_distinguishes_incompatible_and_network_errors
     runtime = _runtime_with_public_endpoint(_runtime("runtime-1", "developer"))
     mode = "unsupported"
 
+    # Error classification must not depend on scheduling a background SDK lookup
+    # within two seconds on busy CI workers; separate tests cover pending latency
+    monkeypatch.setattr(
+        "veadk.cli.cli_frontend._RUNTIME_UPDATE_CAPABILITY_INITIAL_WAIT_SECONDS",
+        30.0,
+    )
+
     monkeypatch.setattr(
         AgentkitRuntimeClient,
         "get_runtime",
@@ -4562,19 +4569,11 @@ def test_runtime_update_capability_distinguishes_incompatible_and_network_errors
     with TestClient(app) as client:
 
         def capability(request_params: dict[str, Any]) -> Any:
-            deadline = time.monotonic() + 2.0
-            while True:
-                response = client.get(
-                    "/web/runtime-update-capability",
-                    params=request_params,
-                    headers=headers,
-                )
-                if response.status_code != 202:
-                    return response
-                assert response.json()["recoveryStatus"] == "preparing"
-                if time.monotonic() >= deadline:
-                    pytest.fail("Runtime update capability remained pending")
-                time.sleep(0.01)
+            return client.get(
+                "/web/runtime-update-capability",
+                params=request_params,
+                headers=headers,
+            )
 
         incompatible = capability(params)
         mode = "agent-unsupported"
