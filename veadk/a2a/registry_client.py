@@ -37,6 +37,7 @@ DEFAULT_ENDPOINT = "http://volcengineapi.byted.org/"
 DEFAULT_VERSION = "2025-10-30"
 IDENTITY_VERSION = "2025-10-30"
 DEFAULT_SERVICE_NAME = "agentkit"
+IDENTITY_SERVICE_NAME = "id"
 DEFAULT_REGION = "cn-beijing"
 DEFAULT_TOP_K = 3
 DEFAULT_TIMEOUT_MS = 60000
@@ -77,6 +78,12 @@ class _RegistryCredentials:
     access_key: str
     secret_key: str
     session_token: str = ""
+
+
+@dataclass(frozen=True)
+class _ApiKeyCredentialProviderRef:
+    name: str
+    pool_name: str
 
 
 def registry_config_from_env() -> AgentKitA2ARegistryConfig:
@@ -401,7 +408,7 @@ def _identity_post(
     return _signed_openapi_post(
         config=config,
         endpoint=_identity_endpoint(config),
-        service_name="id",
+        service_name=IDENTITY_SERVICE_NAME,
         action=action,
         version=IDENTITY_VERSION,
         body=body,
@@ -559,9 +566,10 @@ def _get_a2a_agent(
     card = _parse_json_object(
         result.get("AgentCard"), "AGENT_CARD_PARSE_FAILED", "Result.AgentCard"
     )
-    if "url" in card:
-        card["url"] = _clean_config_url(card.get("url", ""))
-    if not card.get("url"):
+    card_url = _agent_card_url(card)
+    if card_url:
+        card["url"] = card_url
+    else:
         raise RegistryError(
             "AGENT_URL_MISSING", f"Agent {agent_name} AgentCard missing url"
         )
@@ -885,6 +893,118 @@ def _sanitize_get_agent_result(
     }
 
 
+def _agent_card_url(card: dict[str, Any]) -> str:
+    url = _clean_config_url(card.get("url", ""))
+    if url:
+        return url
+
+    interfaces = card.get("supportedInterfaces") or []
+    if not isinstance(interfaces, list):
+        return ""
+
+    candidates: list[tuple[int, str]] = []
+    for interface in interfaces:
+        if not isinstance(interface, dict):
+            continue
+        interface_url = _clean_config_url(interface.get("url", ""))
+        if not interface_url:
+            continue
+
+        score = 0
+        protocol_binding = str(interface.get("protocolBinding") or "").lower()
+        if protocol_binding in {"jsonrpc", "json-rpc"}:
+            score += 2
+        protocol_version = str(interface.get("protocolVersion") or "").strip()
+        if protocol_version in {"1.0", "1.0.0"}:
+            score += 1
+        candidates.append((score, interface_url))
+
+    if not candidates:
+        return ""
+    return max(candidates, key=lambda candidate: candidate[0])[1]
+
+
+def _api_key_credential_provider_ref(
+    card: dict[str, Any],
+) -> _ApiKeyCredentialProviderRef | None:
+    capabilities = card.get("capabilities") or {}
+    if not isinstance(capabilities, dict):
+        return None
+
+    extensions = capabilities.get("extensions") or []
+    if not isinstance(extensions, list):
+        return None
+
+    for extension in extensions:
+        if not isinstance(extension, dict):
+            continue
+        params = extension.get("params") or {}
+        if not isinstance(params, dict):
+            continue
+
+        provider_name = _clean_config_url(
+            params.get("credentialProviderName")
+            or params.get("CredentialProviderName")
+            or ""
+        )
+        pool_name = _clean_config_url(params.get("poolName") or params.get("PoolName"))
+        if provider_name and pool_name:
+            return _ApiKeyCredentialProviderRef(
+                name=provider_name,
+                pool_name=pool_name,
+            )
+        if provider_name or pool_name:
+            raise RegistryError(
+                "AGENT_API_KEY_PROVIDER_INVALID",
+                "AgentCard credential provider extension requires credentialProviderName and poolName",
+            )
+
+    return None
+
+
+def _managed_api_key_headers(
+    provider_ref: _ApiKeyCredentialProviderRef,
+    config: AgentKitA2ARegistryConfig,
+) -> dict[str, str]:
+    response, _ = _identity_post(
+        config,
+        "GetApiKeyCredentialProvider",
+        {"Name": provider_ref.name, "PoolName": provider_ref.pool_name},
+    )
+    result = response.get("Result") or {}
+    api_key = str(result.get("ApiKey") or "").strip()
+    if not api_key:
+        raise RegistryError(
+            "AGENT_API_KEY_PROVIDER_INVALID",
+            "GetApiKeyCredentialProvider response missing ApiKey",
+        )
+
+    metadata = result.get("ApiKeyMetadata") or []
+    if not isinstance(metadata, list):
+        metadata = []
+
+    headers: dict[str, str] = {}
+    for item in metadata:
+        if not isinstance(item, dict):
+            continue
+        location = str(item.get("Location") or item.get("location") or "").lower()
+        parameter_name = str(
+            item.get("ParameterName") or item.get("parameterName") or ""
+        ).strip()
+        if location != "header" or not parameter_name:
+            continue
+
+        prefix = str(item.get("Prefix") or item.get("prefix") or "").strip()
+        headers[parameter_name] = f"{prefix} {api_key}" if prefix else api_key
+
+    if not headers:
+        raise RegistryError(
+            "AGENT_API_KEY_PROVIDER_INVALID",
+            "GetApiKeyCredentialProvider response missing header ApiKeyMetadata",
+        )
+    return headers
+
+
 def _agent_auth_headers(
     card: dict[str, Any],
     config: AgentKitA2ARegistryConfig | None = None,
@@ -922,6 +1042,11 @@ def _agent_auth_headers(
                         "Bearer "
                         + _oauth2_client_credentials_token(scheme, resolved_config)
                     )
+
+    if not headers:
+        provider_ref = _api_key_credential_provider_ref(card)
+        if provider_ref is not None:
+            headers.update(_managed_api_key_headers(provider_ref, resolved_config))
 
     tip_token = resolved_config.upstream_tip_token
     if tip_token:
