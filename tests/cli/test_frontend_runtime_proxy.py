@@ -2688,7 +2688,8 @@ def test_runtime_proxy_uses_authorizer_credential(
         response = client.get(
             "/web/runtime-proxy/runtime-1/dev/apps/demo_agent/debug/trace/"
             "session/session-1"
-            "?region=cn-beijing"
+            "?region=cn-beijing",
+            headers={"X-VeADK-Local-User": "studio-e2e-user", "x-user-id": "forged"},
         )
 
     assert response.status_code == 200
@@ -2697,6 +2698,7 @@ def test_runtime_proxy_uses_authorizer_credential(
         "https://runtime.example/dev/apps/demo_agent/debug/trace/session/session-1"
     )
     assert upstream_headers["Authorization"] == expected_authorization
+    assert upstream_headers["x-user-id"] == "studio-e2e-user"
 
 
 def test_runtime_proxy_exposes_safe_instance_context(
@@ -3626,10 +3628,11 @@ def test_runtime_proxy_bridges_a2a_only_runtime_for_studio_chat(
     assert get_session.status_code == 200
     assert get_session.json()["events"] == []
     assert run_response.status_code == 200
+    assert '"a2aStatus": "connecting"' in run_response.text.split("\n\n", 1)[0]
     assert "pong" in run_response.text
     assert "sandbox output" in run_response.text
     if streaming is True:
-        first_frame = run_response.text.split("\n\n", 1)[0]
+        first_frame = run_response.text.split("\n\n")[1]
         assert '"a2aStatus": "submitted"' in first_frame
         assert '"parts": []' in first_frame
     assert (

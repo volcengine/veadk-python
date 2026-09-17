@@ -244,3 +244,74 @@ test("closes unfinished reasoning when the transport stream ends", () => {
     thoughtKind: "reasoning",
   }]);
 });
+
+
+test("A2A progress is scoped to the pending turn and never completes an answer", () => {
+  const projector = createAssistantEventProjector("a2a");
+  let localId;
+  for (const status of ["connecting", "submitted", "working"]) {
+    const ev = { id: status, author: "agent", partial: true,
+      customMetadata: { a2aStatus: status }, content: { role: "model", parts: [] } };
+    const projection = projector.project(ev);
+    assert.equal(projection.ignored, undefined);
+    assert.equal(projection.completed, false);
+    assert.equal(projection.turn.meta.a2aStatus, status);
+    assert.deepEqual(projection.turn.blocks, []);
+    localId ??= projection.turn.meta.localId;
+    assert.equal(projection.turn.meta.localId, localId);
+    assert.equal(projector.project(ev).ignored, true);
+  }
+  const final = projector.project({author: "agent", partial: false,
+    content: {role: "model", parts: [{text: "done"}]}});
+  assert.equal(final.completed, true);
+  assert.equal(final.turn.meta.localId, localId);
+  assert.equal(final.turn.meta.a2aStatus, undefined);
+});
+
+test("A2A malformed metadata is ignored; snake case metadata is supported", () => {
+  const projector = createAssistantEventProjector("a2a");
+  assert.equal(projector.project({customMetadata: {a2aStatus: 123}}).ignored, true);
+  const projection = projector.project({author: "agent", partial: true,
+    custom_metadata: {a2aStatus: "working"}});
+  assert.equal(projection.turn.meta.a2aStatus, "working");
+  assert.equal(projector.finish()[0].meta.streaming, false);
+});
+
+test("ignores streamed user echoes without dropping agent tool responses", () => {
+  const projector = createAssistantEventProjector("echo", {
+    role: "assistant", blocks: [], meta: { localId: "pending", streaming: true },
+  });
+  assert.equal(projector.project({ ...event("user", "request"), id: "echo" }).ignored, true);
+  const call = projector.project({ ...event("default", ""), id: "call", content: {
+    role: "model", parts: [{ functionCall: { id: "t1", name: "list_esa_cron_tasks", args: {} } }],
+  } });
+  assert.equal(call.turn.meta.localId, "pending");
+  const response = projector.project({ ...event("default", ""), id: "response", content: {
+    role: "user", parts: [{ functionResponse: { id: "t1", name: "list_esa_cron_tasks", response: { items: [] } } }],
+  } });
+  assert.notEqual(response.ignored, true);
+  assert.equal(response.turn.meta.localId, call.turn.meta.localId);
+  assert.equal(projector.project({ ...event("user", "request"), id: "echo-replay" }).ignored, true);
+  const answer = projector.project(event("default", "done", { partial: false }));
+  assert.equal(blockText(answer.turn, "text"), "done");
+});
+
+for (const invocationIds of [true, false]) {
+  test(`history retains all replies across user turns (invocation IDs: ${invocationIds})`, () => {
+    const input = [
+      event("user", "question 1"),
+      event("alpha", "answer 1", {partial: false}),
+      event("beta", "answer 1b", {partial: false}),
+      event("user", "question 2"),
+      event("alpha", "answer 2", {partial: false}),
+      event("alpha", "answer 2b", {partial: false}),
+      event("user", "question 3"),
+      event("alpha", "answer 3", {partial: false}),
+    ].map((item, i) => ({...item, id: `history-${i}`, invocationId: invocationIds ? `inv-${i < 3 ? 1 : i < 6 ? 2 : 3}` : undefined}));
+    const result = eventsToTurns(input);
+    assert.deepEqual(result.map(t => blockText(t, "text")), input.map(e => e.content.parts[0].text));
+    assert.deepEqual(result.map(t => t.role), input.map(e => e.author === "user" ? "user" : "assistant"));
+    const ids = result.filter(t => t.role === "assistant").map(t => t.meta.localId);
+    assert.equal(new Set(ids).size, ids.length);
+  });
+}
