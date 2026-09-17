@@ -235,7 +235,7 @@ export function AgentInfoPanel({
     .map((tool) => ({
       id: `studio:tool:${tool.id}`,
       name: tool.id,
-      label: tool.name,
+      label: studioToolLabel(tool.id, t, tool.name),
       custom: true,
       removable: !managedIds.has(tool.id),
     }));

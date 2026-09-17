@@ -9879,6 +9879,113 @@ def _run_frontend_server(
         ),
     )
 
+    from frontend.server.runtime_artifacts import (
+        RuntimeArtifactAccess,
+        RuntimeArtifactService,
+        mount_routes as mount_runtime_artifact_routes,
+    )
+    from frontend.server.runtime_artifacts.runtime_detail import (
+        read_runtime_artifact_detail,
+    )
+
+    from functools import lru_cache
+
+    @lru_cache(maxsize=16)
+    def _runtime_artifact_clients(
+        artifact_provider: str, region: str, ak: str, sk: str, token: str
+    ) -> tuple[Any, Any]:
+        import tos
+        from agentkit.sdk.runtime.client import AgentkitRuntimeClient
+
+        if artifact_provider != provider:
+            raise ValueError("Runtime artifact provider does not match Studio")
+        if not re.fullmatch(r"[a-z]{2}(?:-[a-z0-9]+){1,3}", region):
+            raise ValueError("Runtime artifact region is invalid")
+        domain = "bytepluses.com" if provider == "byteplus" else "volces.com"
+        storage_client = tos.TosClientV2(
+            ak,
+            sk,
+            endpoint=f"https://tos-{region}.{domain}",
+            region=region,
+            security_token=token or None,
+        )
+        runtime_client = create_agentkit_client(
+            AgentkitRuntimeClient,
+            provider=provider,
+            access_key=ak,
+            secret_key=sk,
+            session_token=token,
+            region=region,
+        )
+        return storage_client, runtime_client
+
+    def _runtime_artifact_client(artifact_provider: str, region: str) -> Any:
+        ak, sk, token = _resolve_ve_credentials()
+        return _runtime_artifact_clients(
+            artifact_provider, region, ak, sk, token or ""
+        )[0]
+
+    async def _runtime_artifact_access(
+        request: Request,
+        runtime_id: str,
+        region: str,
+        app_name: str,
+        session_id: str,
+    ) -> RuntimeArtifactAccess:
+        principal = _current_principal(request)
+        if principal is None:
+            raise HTTPException(status_code=401, detail="Studio identity is required")
+        region = _coerce_cloud_region(region)
+        role = _request_role(request)
+
+        def _authorize_artifact_tags(tags: dict[str, str]) -> None:
+            if (
+                not role.is_admin
+                and not runtime_belongs_to(tags, principal)
+                and not enterprise_visible(tags)
+            ):
+                raise HTTPException(status_code=404, detail="Runtime not found")
+
+        def _resolve_artifacts() -> dict[str, Any]:
+            # One fresh response provides both ownership and mount metadata
+            ak, sk, token = _resolve_ve_credentials()
+            client = _runtime_artifact_clients(provider, region, ak, sk, token or "")[1]
+            return read_runtime_artifact_detail(
+                client, runtime_id, authorize_tags=_authorize_artifact_tags
+            )
+
+        try:
+            detail = await asyncio.to_thread(_resolve_artifacts)
+        except HTTPException:
+            raise
+        except Exception as error:
+            if is_agentkit_resource_not_found(error):
+                raise HTTPException(404, detail="Runtime not found") from error
+            raise HTTPException(
+                502,
+                detail=_safe_exception_detail(error, secrets=_resolve_ve_credentials()),
+            ) from error
+        return RuntimeArtifactAccess(principal.owner_id, provider, region, detail)
+
+    from frontend.server.storage.tos import create_cached_tos_client_factory
+
+    artifact_studio_storage = StudioStorageConfig.from_env(provider)
+    mount_runtime_artifact_routes(
+        app,
+        service=RuntimeArtifactService(
+            _runtime_artifact_client,
+            studio_storage=artifact_studio_storage,
+            studio_client_factory=(
+                create_cached_tos_client_factory(
+                    artifact_studio_storage, _resolve_ve_credentials
+                )
+                if artifact_studio_storage.configured
+                else None
+            ),
+        ),
+        access_resolver=_runtime_artifact_access,
+    )
+
     from frontend.server.cronjobs import (
         CronjobAccessDenied,
         CronjobIdentity,

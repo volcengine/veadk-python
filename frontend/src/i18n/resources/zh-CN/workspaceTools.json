@@ -374,7 +374,8 @@
       "coding": "智能编程",
       "get_city_weather": "城市天气查询",
       "get_location_weather": "位置天气查询",
-      "web_fetch": "网页内容获取"
+      "web_fetch": "网页内容获取",
+      "studio_write_artifact": "保存会话产物"
     },
     "closeDialog": "关闭弹窗",
     "title": "添加 Studio 工具",

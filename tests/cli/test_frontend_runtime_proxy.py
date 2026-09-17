@@ -706,6 +706,7 @@ def test_runtime_tool_capabilities_expose_safe_local_metadata(
         "execute_in_sandbox",
         "get_env_manifest",
         "list_envs",
+        "studio_write_artifact",
     }
     assert all("input_schema" not in item for item in body["tools"])
 
