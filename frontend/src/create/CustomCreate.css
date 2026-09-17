@@ -1209,6 +1209,14 @@
   overflow-x: hidden;
   overflow-y: auto;
 }
+.cw-ab-card-face[aria-hidden="true"] {
+  /* A rotated back face can still intercept wheel scrolling in Chromium */
+  visibility: hidden;
+  pointer-events: none;
+}
+.cw-ab-conversation .deploy-error-message-actions {
+  justify-content: flex-start;
+}
 .cw-ab-card-head {
   min-height: 54px;
   display: flex;
