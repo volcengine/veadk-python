@@ -1,0 +1,41 @@
+{
+  "timestamp": "2026-09-15T18:34:33.692Z",
+  "url": "http://127.0.0.1:18174",
+  "browser": "system Google Chrome via Playwright",
+  "bc04": {
+    "status": "pass",
+    "conflictObserved": true,
+    "modelAfterConflict": {
+      "id": "model-browser-a"
+    },
+    "calls": {
+      "runtime-list": 2,
+      "list-apps": 2,
+      "route-channel-connect": 2,
+      "session-create": 2,
+      "run-sse": 2,
+      "config-patch-a": 1,
+      "config-patch-b": 1,
+      "profile-upgrade": 1
+    }
+  },
+  "bc05": {
+    "status": "pass",
+    "profileRevision": 7,
+    "configRevision": 8,
+    "modelAfterUpgrade": {
+      "id": "model-browser-a"
+    },
+    "mcpAfterUpgrade": [
+      {
+        "id": "mcp-upgraded"
+      }
+    ]
+  },
+  "expectedNoise": [
+    "404 /oauth2/userinfo local username-mode probe",
+    "412 PATCH /web/mpa/sessions/session-s2/execution-config CAS conflict for BC-04"
+  ],
+  "unexpectedHttp": [],
+  "unexpectedConsole": []
+}

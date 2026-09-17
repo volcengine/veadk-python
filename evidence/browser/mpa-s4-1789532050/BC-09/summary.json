@@ -1,0 +1,33 @@
+{
+  "runId": "mpa-s4-1789532050",
+  "checkedAt": "2026-09-16T04:46:51.346Z",
+  "partialAckRemainedPausing": true,
+  "newTurnRequiredState": true,
+  "noAutoContinueBeforeClick": true,
+  "noAutoContinueAfterReload": true,
+  "continueReplayIdempotent": true,
+  "noUnexpectedHttpFailures": true,
+  "noUnexpectedConsoleErrors": true,
+  "expectedLocalMode404s": 4,
+  "calls": {
+    "runtime-control-status": 23,
+    "control-pause": 1,
+    "control-resume": 2,
+    "runtime-continue": 1,
+    "runtime-sse": 1,
+    "runtime-continue-replay": 1
+  },
+  "replay": {
+    "status": 200,
+    "body": {
+      "taskId": "turn_lifecycle-task",
+      "sessionId": "turn_lifecycle-session",
+      "invocationId": "turn_lifecycle-continued-invocation",
+      "turnId": "turn_lifecycle-continued-turn",
+      "operationId": "turn_lifecycle-continued-operation",
+      "executionConfigRevision": 6,
+      "continuationOf": "turn_lifecycle-turn",
+      "idempotentReplay": true
+    }
+  }
+}

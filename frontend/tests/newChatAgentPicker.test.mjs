@@ -65,6 +65,9 @@ test("renders a two-level Agent type and runtime menu", () => {
   assert.match(pickerSource, /setLoadedRuntimeType\(activeType === "mpa" \? "mpa" : "general"\)/);
   assert.match(pickerSource, /loadedRuntimeType === activeType/);
   assert.match(pickerSource, /onSelectRuntime\(runtime\)/);
+  assert.match(appSource, /onSelectRuntime=\{async \(runtime\) => \{[\s\S]*?agentCategory: runtime\.agentCategory/);
+  assert.match(appSource, /connectRuntime\([\s\S]*?agentCategory: agent\.agentCategory[\s\S]*?mpaInstanceId: agent\.mpaInstanceId/);
+  assert.match(appSource, /mpaInstanceId: runtime\.mpaInstanceId/);
   assert.doesNotMatch(pickerSource, /runtime\.agentCategory === "mpa"/);
   assert.doesNotMatch(pickerSource, /runtime\.agentCategory !== "mpa"/);
   assert.match(pickerSource, /sandboxClient\.listSessions/);

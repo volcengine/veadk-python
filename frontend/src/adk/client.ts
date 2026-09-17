@@ -16,7 +16,7 @@ import {
   runtimeContextFromResponse,
   type RuntimeLogTarget,
 } from "./runtimeLogs";
-import { parseSSE } from "./sse";
+import { parseSSE, SSE_EVENT_NAME } from "./sse";
 import { normalizeRuntimeDescription } from "./runtimeDescription";
 import {
   DeploymentStatusUnconfirmedError,
@@ -132,6 +132,8 @@ export interface TraceSpan {
 export interface AdkSession {
   id: string;
   lastUpdateTime?: number;
+  title?: string;
+  status?: string;
   events?: AdkEvent[];
   state?: Record<string, unknown>;
   [k: string]: unknown;
@@ -367,8 +369,10 @@ export interface AdkEndpoint {
   base?: string;
   apiKey?: string;
   runtimeId?: string;
+  mpaInstanceId?: string;
   region?: string;
   runtimeVersion?: number | null;
+  agentCategory?: "general" | "mpa";
   retryProbe?: boolean;
 }
 
@@ -387,7 +391,9 @@ interface RemoteApp {
   base?: string;
   apiKey?: string;
   runtimeId?: string;
+  mpaInstanceId?: string;
   region?: string;
+  agentCategory?: "general" | "mpa";
 }
 const remoteApps = new Map<string, RemoteApp>();
 
@@ -404,8 +410,19 @@ function resolve(appName: string): { app: string; ep: AdkEndpoint } {
   if (!r) return { app: appName, ep: {} };
   return {
     app: r.app,
-    ep: { base: r.base, apiKey: r.apiKey, runtimeId: r.runtimeId, region: r.region },
+    ep: {
+      base: r.base,
+      apiKey: r.apiKey,
+      runtimeId: r.runtimeId,
+      mpaInstanceId: r.mpaInstanceId,
+      region: r.region,
+      agentCategory: r.agentCategory,
+    },
   };
+}
+
+function isMpaEndpoint(ep: AdkEndpoint): boolean {
+  return Boolean(ep.runtimeId && (ep.agentCategory === "mpa" || ep.mpaInstanceId));
 }
 
 /** fetch wrapper. Routing, in priority order:
@@ -505,6 +522,22 @@ function formatErrorDetail(detail: unknown): string {
       .join("\n");
   }
   if (detail && typeof detail === "object") return JSON.stringify(detail);
+  return "";
+}
+
+async function httpErrorCode(res: Response): Promise<string> {
+  const text = await res.clone().text().catch(() => "");
+  if (!text) return "";
+  try {
+    const data = JSON.parse(text) as { detail?: unknown; error?: unknown };
+    const detail = data.detail ?? data.error;
+    if (typeof detail === "string") return detail;
+    if (detail && typeof detail === "object" && "code" in detail) {
+      return String((detail as { code?: unknown }).code ?? "");
+    }
+  } catch {
+    return "";
+  }
   return "";
 }
 
@@ -818,6 +851,59 @@ export async function createSession(
   userId: string,
 ): Promise<string> {
   const { app, ep } = resolve(appName);
+  if (isMpaEndpoint(ep)) {
+    const mpaInstanceId = await resolveMpaRuntimeInstanceId(ep);
+    const statusRes = await apiFetch(
+      `/api/v1/agents/${encodeURIComponent(mpaInstanceId)}/profile-status`,
+      { cache: "no-store" },
+      ep,
+    );
+    const profileNotFound =
+      !statusRes.ok && (await httpErrorCode(statusRes)) === "profile_not_found";
+    if (!statusRes.ok && !profileNotFound) {
+      const fallback = adkT("client.createSessionFailedWithStatus", {
+        status: statusRes.status,
+      });
+      const detail = await httpErrorMessage(
+        statusRes,
+        adkT("client.createSessionFailed"),
+      );
+      throw new Error(
+        detail === fallback
+          ? fallback
+          : adkT("common.fallbackWithDetail", { fallback, detail }),
+      );
+    }
+    const profile = profileNotFound
+      ? {}
+      : ((await statusRes.json()) as Partial<MpaProfileStatus>);
+    const profileRevision = Number(profile.profileRevision ?? 0);
+    const res = await apiFetch(
+      "/api/v1/sessions",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mpaInstanceId,
+          profileRevision,
+        }),
+      },
+      ep,
+    );
+    if (!res.ok) {
+      const fallback = adkT("client.createSessionFailedWithStatus", {
+        status: res.status,
+      });
+      const detail = await httpErrorMessage(res, adkT("client.createSessionFailed"));
+      throw new Error(
+        detail === fallback
+          ? fallback
+          : adkT("common.fallbackWithDetail", { fallback, detail }),
+      );
+    }
+    const session = await res.json();
+    return String(session.sessionId ?? session.id ?? "");
+  }
   const res = await apiFetch(
     `/apps/${app}/users/${encodeURIComponent(userId)}/sessions`,
     { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" },
@@ -832,11 +918,35 @@ export async function createSession(
   return session.id;
 }
 
+async function resolveMpaRuntimeInstanceId(ep: AdkEndpoint): Promise<string> {
+  const existing = ep.mpaInstanceId?.trim();
+  if (existing) return existing;
+  const runtimeId = ep.runtimeId?.trim() ?? "";
+  if (!runtimeId) return "";
+  try {
+    const detail = await getRuntimeDetail(runtimeId, ep.region ?? "cn-beijing");
+    const fromDetail = detail.mpaInstanceId?.trim();
+    if (fromDetail) return fromDetail;
+    const fromEnv = detail.envs.find((item) => item.key === "MPA_AGENT_ID")
+      ?.value.trim();
+    if (fromEnv) return fromEnv;
+  } catch {
+    /* Preserve the legacy fallback for runtimes without visible metadata. */
+  }
+  return runtimeId;
+}
+
 export async function listSessions(
   appName: string,
   userId: string,
 ): Promise<AdkSession[]> {
   const { app, ep } = resolve(appName);
+  if (isMpaEndpoint(ep)) {
+    const res = await apiFetch("/api/v1/sessions", { cache: "no-store" }, ep);
+    if (!res.ok) throw new Error(`list sessions failed: ${res.status}`);
+    const payload = (await res.json()) as { sessions?: AdkSession[] } | AdkSession[];
+    return Array.isArray(payload) ? payload : payload.sessions ?? [];
+  }
   const res = await apiFetch(`/apps/${app}/users/${encodeURIComponent(userId)}/sessions`, {}, ep);
   if (!res.ok) throw new Error(`list sessions failed: ${res.status}`);
   return res.json();
@@ -848,6 +958,33 @@ export async function getSession(
   sessionId: string,
 ): Promise<AdkSession> {
   const { app, ep } = resolve(appName);
+  if (isMpaEndpoint(ep)) {
+    const res = await apiFetch(
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}`,
+      { cache: "no-store" },
+      ep,
+    );
+    if (!res.ok) {
+      const detail = await httpErrorMessage(res, adkT("client.getSessionFailed"));
+      throw new Error(adkT("client.getSessionFailedWithDetail", { status: res.status, detail }));
+    }
+    const session = (await res.json()) as AdkSession;
+    const eventsRes = await apiFetch(
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}/events`,
+      { cache: "no-store" },
+      ep,
+    );
+    if (!eventsRes.ok) {
+      const detail = await httpErrorMessage(eventsRes, adkT("client.getSessionFailed"));
+      throw new Error(adkT("client.getSessionFailedWithDetail", {
+        status: eventsRes.status,
+        detail,
+      }));
+    }
+    const eventsPayload = (await eventsRes.json()) as { events?: AdkEvent[] };
+    session.events = Array.isArray(eventsPayload.events) ? eventsPayload.events : [];
+    return session;
+  }
   const res = await apiFetch(
     `/apps/${app}/users/${encodeURIComponent(userId)}/sessions/${encodeURIComponent(sessionId)}`,
     {},
@@ -1189,6 +1326,15 @@ export async function deleteSession(
   sessionId: string,
 ): Promise<void> {
   const { app, ep } = resolve(appName);
+  if (isMpaEndpoint(ep)) {
+    const res = await apiFetch(
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}`,
+      { method: "DELETE" },
+      ep,
+    );
+    if (!res.ok && res.status !== 404) throw new Error(`delete session failed: ${res.status}`);
+    return;
+  }
   const res = await apiFetch(
     `/apps/${app}/users/${encodeURIComponent(userId)}/sessions/${sessionId}`,
     { method: "DELETE" },
@@ -1600,6 +1746,28 @@ export interface TurnControlState {
   continuationPrompt?: string | null;
 }
 
+export interface TurnContinueResult {
+  taskId: string;
+  sessionId: string;
+  invocationId: string;
+  turnId: string;
+  operationId: string;
+  executionConfigRevision: number;
+  continuationOf: string;
+  idempotentReplay: boolean;
+}
+
+export interface ContinueTurnSseArgs {
+  appName: string;
+  sessionId: string;
+  taskId: string;
+  expectedGeneration: number;
+  idempotencyKey: string;
+  lastEventId?: string;
+  signal?: AbortSignal;
+  onRuntimeContext?: (context: RuntimeLogTarget) => void;
+}
+
 export class TurnControlConflictError extends Error {
   constructor(readonly authoritativeState: TurnControlState) {
     super("Turn state changed before the control request completed");
@@ -1646,6 +1814,158 @@ export async function controlTurn(
   }
   if (!res.ok) throw new Error(await httpErrorMessage(res, "turn control failed"));
   return res.json();
+}
+
+export async function continueTurn(
+  appName: string,
+  sessionId: string,
+  taskId: string,
+  expectedGeneration: number,
+  idempotencyKey: string,
+): Promise<TurnContinueResult> {
+  const { ep } = resolve(appName);
+  const res = await apiFetch(
+    `/api/v1/a2a/tasks/${encodeURIComponent(taskId)}/continue`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Idempotency-Key": idempotencyKey,
+      },
+      body: JSON.stringify({ expectedGeneration }),
+    },
+    ep,
+  );
+  if (res.status === 409) {
+    const body = await res.json().catch(() => null) as { detail?: TurnControlState } | null;
+    if (body?.detail?.taskId) throw new TurnControlConflictError(body.detail);
+  }
+  if (!res.ok) throw new Error(await httpErrorMessage(res, "turn continue failed"));
+  const result = await res.json() as TurnContinueResult;
+  if (result.sessionId !== sessionId) {
+    throw new Error("turn continue returned a different session");
+  }
+  return result;
+}
+
+export async function* continueTurnSSE({
+  appName,
+  sessionId,
+  taskId,
+  expectedGeneration,
+  idempotencyKey,
+  lastEventId,
+  signal,
+  onRuntimeContext,
+}: ContinueTurnSseArgs): AsyncGenerator<AdkEvent, void, unknown> {
+  const { ep } = resolve(appName);
+  const normalizedLastEventId = lastEventId?.trim() ?? "";
+  const firstEventDeadline = runSseFirstEventDeadline(signal);
+  let res: Response;
+  try {
+    const acceptedRes = await apiFetch(
+      `/api/v1/a2a/tasks/${encodeURIComponent(taskId)}/continue`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": idempotencyKey,
+        },
+        body: JSON.stringify({ expectedGeneration }),
+        signal: firstEventDeadline.signal,
+      },
+      ep,
+      0,
+    );
+    const runtimeContext = runtimeContextFromResponse(
+      acceptedRes,
+      ep.runtimeId ?? "",
+      ep.region ?? "",
+    );
+    if (runtimeContext) onRuntimeContext?.(runtimeContext);
+    if (!acceptedRes.ok) {
+      firstEventDeadline.cleanup();
+      const detail = await httpErrorMessage(acceptedRes, "turn continue failed");
+      throw new Error(
+        formatRunSseError(adkT("client.runSseFailedWithDetail", {
+          status: acceptedRes.status,
+          detail,
+        })),
+      );
+    }
+    const accepted = (await acceptedRes.json()) as TurnContinueResult;
+    if (accepted.sessionId !== sessionId) {
+      firstEventDeadline.cleanup();
+      throw new Error(formatRunSseError("turn continue returned a different session"));
+    }
+    res = await apiFetch(
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}/sse`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          invocationId: accepted.invocationId,
+          ...(normalizedLastEventId ? { lastEventId: normalizedLastEventId } : {}),
+        }),
+        signal: firstEventDeadline.signal,
+      },
+      ep,
+      0,
+    );
+  } catch (error) {
+    firstEventDeadline.cleanup();
+    if (firstEventDeadline.timedOut()) throw new Error(runSseFirstEventTimeoutError());
+    if (signal?.aborted || (error as Error)?.name === "AbortError") throw error;
+    throw new Error(formatRunSseError(error));
+  }
+  const runtimeContext = runtimeContextFromResponse(
+    res,
+    ep.runtimeId ?? "",
+    ep.region ?? "",
+  );
+  if (runtimeContext) onRuntimeContext?.(runtimeContext);
+  if (!res.ok) {
+    firstEventDeadline.cleanup();
+    const detail = await httpErrorMessage(res, adkT("client.runSessionFailed"));
+    throw new Error(
+      formatRunSseError(adkT("client.runSseFailedWithDetail", {
+        status: res.status,
+        detail,
+      })),
+    );
+  }
+  let receivedEvent = false;
+  try {
+    for await (const evt of parseSSE(res)) {
+      if (
+        evt &&
+        typeof evt === "object" &&
+        (evt as Record<string, unknown>)[SSE_EVENT_NAME] === "done"
+      ) {
+        firstEventDeadline.clearDeadline();
+        break;
+      }
+      receivedEvent = true;
+      firstEventDeadline.clearDeadline();
+      const event = { ...(evt as AdkEvent) };
+      delete (event as Record<string, unknown>)[SSE_EVENT_NAME];
+      if (typeof event.error === "string") event.error = formatRunSseError(event.error);
+      if (typeof event.errorMessage === "string") {
+        event.errorMessage = formatRunSseError(event.errorMessage);
+      }
+      if (typeof event.error_message === "string") {
+        event.error_message = formatRunSseError(event.error_message);
+      }
+      yield event;
+    }
+  } catch (error) {
+    if (firstEventDeadline.timedOut()) throw new Error(runSseFirstEventTimeoutError());
+    if (signal?.aborted || (error as Error)?.name === "AbortError") throw error;
+    throw new Error(formatRunSseError(error));
+  } finally {
+    firstEventDeadline.cleanup();
+  }
+  if (!receivedEvent) throw new Error(runSseEmptyResponseError());
 }
 
 export async function getAgentInfo(appName: string, signal?: AbortSignal): Promise<AgentInfo> {
@@ -1751,6 +2071,10 @@ export function prefetchRuntimeAgentInfo(
   void getRuntimeAgentInfo(runtimeId, region, knownApp).catch(() => {});
 }
 
+export function isMpaRuntimeApp(appName: string): boolean {
+  return isMpaEndpoint(resolve(appName).ep);
+}
+
 /** One web-search hit (Volcengine WebSearch WebItem, trimmed for the UI). */
 export interface WebHit {
   title: string;
@@ -1818,6 +2142,9 @@ export interface RunArgs {
   sessionId: string;
   text: string;
   modelId?: string;
+  idempotencyKey?: string;
+  executionConfigVersion?: number;
+  lastEventId?: string;
   attachments?: Attachment[];
   invocation?: FrontendInvocation;
   /** Complete set of local BFF tool IDs selected for this run. */
@@ -1905,6 +2232,9 @@ export async function* runSSE({
   sessionId,
   text,
   modelId,
+  idempotencyKey,
+  executionConfigVersion,
+  lastEventId,
   attachments = [],
   invocation,
   platformTools,
@@ -1957,38 +2287,118 @@ export async function* runSSE({
       },
     };
   }
+  const normalizedIdempotencyKey = idempotencyKey?.trim() ?? "";
+  const normalizedLastEventId = lastEventId?.trim() ?? "";
+  const hasExecutionConfigVersion = typeof executionConfigVersion === "number";
+  const executionMetadata = hasExecutionConfigVersion || normalizedIdempotencyKey
+    ? {
+        veadkExecution: {
+          ...(hasExecutionConfigVersion ? { executionConfigVersion } : {}),
+          ...(normalizedIdempotencyKey
+            ? { idempotencyKey: normalizedIdempotencyKey }
+            : {}),
+        },
+      }
+    : undefined;
+  const customMetadata =
+    invocationMetadata || executionMetadata
+      ? {
+          ...(invocationMetadata ? { veadkInvocation: invocationMetadata } : {}),
+          ...(executionMetadata ?? {}),
+        }
+      : undefined;
   let res: Response;
   const firstEventDeadline = runSseFirstEventDeadline(signal);
   try {
-    res = await apiFetch(
-      "/run_sse",
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          app_name: app,
-          user_id: userId,
-          session_id: sessionId,
-          new_message: { role: "user", parts },
-          streaming: true,
-          ...(modelId?.trim() ? { model_id: modelId.trim() } : {}),
-          ...(platformTools !== undefined
-            ? { platform_tools: [...platformTools] }
-            : {}),
-          ...(environmentMounts !== undefined
-            ? { environment_mounts: [...environmentMounts] }
-            : environmentMount
-              ? { environment_mount: environmentMount }
+    if (isMpaEndpoint(ep)) {
+      const runRes = await apiFetch(
+        `/api/v1/sessions/${encodeURIComponent(sessionId)}/run`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(normalizedIdempotencyKey
+              ? { "Idempotency-Key": normalizedIdempotencyKey }
               : {}),
-          custom_metadata: invocationMetadata
-            ? { veadkInvocation: invocationMetadata }
-            : undefined,
-        }),
-        signal: firstEventDeadline.signal,
-      },
-      ep,
-      0,
-    );
+          },
+          body: JSON.stringify({
+            content: text,
+            ...(hasExecutionConfigVersion ? { executionConfigVersion } : {}),
+          }),
+          signal: firstEventDeadline.signal,
+        },
+        ep,
+        0,
+      );
+      const runtimeContext = runtimeContextFromResponse(
+        runRes,
+        ep.runtimeId ?? "",
+        ep.region ?? "",
+      );
+      if (runtimeContext) onRuntimeContext?.(runtimeContext);
+      if (!runRes.ok) {
+        firstEventDeadline.cleanup();
+        const detail = await httpErrorMessage(runRes, adkT("client.runSessionFailed"));
+        throw new Error(
+          formatRunSseError(adkT("client.runSseFailedWithDetail", {
+            status: runRes.status,
+            detail,
+          })),
+        );
+      }
+      const accepted = (await runRes.json()) as {
+        invocationId?: string;
+      };
+      res = await apiFetch(
+        `/api/v1/sessions/${encodeURIComponent(sessionId)}/sse`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            invocationId: accepted.invocationId,
+            ...(normalizedLastEventId ? { lastEventId: normalizedLastEventId } : {}),
+          }),
+          signal: firstEventDeadline.signal,
+        },
+        ep,
+        0,
+      );
+    } else {
+      res = await apiFetch(
+        "/run_sse",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(normalizedIdempotencyKey
+              ? { "Idempotency-Key": normalizedIdempotencyKey }
+              : {}),
+          },
+          body: JSON.stringify({
+            app_name: app,
+            user_id: userId,
+            session_id: sessionId,
+            new_message: { role: "user", parts },
+            streaming: true,
+            ...(normalizedLastEventId ? { lastEventId: normalizedLastEventId } : {}),
+            ...(hasExecutionConfigVersion ? { executionConfigVersion } : {}),
+            ...(modelId?.trim() ? { model_id: modelId.trim() } : {}),
+            ...(platformTools !== undefined
+              ? { platform_tools: [...platformTools] }
+              : {}),
+            ...(environmentMounts !== undefined
+              ? { environment_mounts: [...environmentMounts] }
+              : environmentMount
+                ? { environment_mount: environmentMount }
+                : {}),
+            custom_metadata: customMetadata,
+          }),
+          signal: firstEventDeadline.signal,
+        },
+        ep,
+        0,
+      );
+    }
   } catch (error) {
     firstEventDeadline.cleanup();
     if (firstEventDeadline.timedOut()) throw new Error(runSseFirstEventTimeoutError());
@@ -2011,9 +2421,18 @@ export async function* runSSE({
   let receivedEvent = false;
   try {
     for await (const evt of parseSSE(res)) {
+      if (
+        evt &&
+        typeof evt === "object" &&
+        (evt as Record<string, unknown>)[SSE_EVENT_NAME] === "done"
+      ) {
+        firstEventDeadline.clearDeadline();
+        break;
+      }
       receivedEvent = true;
       firstEventDeadline.clearDeadline();
-      const event = evt as AdkEvent;
+      const event = { ...(evt as AdkEvent) };
+      delete (event as Record<string, unknown>)[SSE_EVENT_NAME];
       if (typeof event.error === "string") event.error = formatRunSseError(event.error);
       if (typeof event.errorMessage === "string") {
         event.errorMessage = formatRunSseError(event.errorMessage);
@@ -2039,6 +2458,7 @@ export interface DeployAgentkitResult {
   agentName: string;
   runtimeName: string;
   runtimeId?: string;
+  mpaInstanceId?: string;
   consoleUrl?: string;
   region?: string;
   version?: number | null;
@@ -2048,6 +2468,612 @@ export interface DeployAgentkitResult {
     transport: string;
     runtimeId?: string;
   };
+  mpaOperation?: MpaAgentOperation;
+}
+
+export interface MpaProfilePayload {
+  name: string;
+  description: string;
+  system: string;
+  model: Record<string, unknown>;
+  tools: Array<Record<string, unknown>>;
+  skills: Array<Record<string, unknown>>;
+  mcpServers: Array<Record<string, unknown>>;
+  multiagent?: Record<string, unknown>;
+  metadata: Record<string, unknown>;
+}
+
+export interface MpaAgentOperation {
+  operationId: string;
+  operationKind: "create" | "update";
+  ownerId: string;
+  targetKey: string;
+  stage: string;
+  status: "active" | "succeeded" | "failed_retryable" | "failed_terminal" | "cancelled";
+  mpaInstanceId?: string;
+  runtimeId?: string;
+  runtimeRegion?: string;
+  runtimeRevision?: string;
+  profileRevision?: number | null;
+  profileDigest?: string;
+  profileOperationId?: string;
+  safeErrorCode?: string;
+  retryCount?: number;
+}
+
+export interface MpaProfileStatus {
+  operationId: string;
+  status: string;
+  profileRevision: number;
+  runtimeRevision: string;
+  etag: string;
+}
+
+export type MpaAgentBindingStatus =
+  | "runtime_missing"
+  | "bound"
+  | "binding_ambiguous"
+  | "orphan_runtime";
+
+export interface MpaAgentView {
+  mpaInstanceId: string;
+  bindingStatus: MpaAgentBindingStatus;
+  runtime: (Partial<CloudRuntime> & {
+    runtimeId: string;
+    region: string;
+    readinessPhase?: string;
+  }) | null;
+  profile: MpaProfileStatus | null;
+  activeOperation: MpaAgentOperation | null;
+  bindings: Array<Partial<CloudRuntime> & { runtimeId: string; region: string }>;
+  capabilities: {
+    canRead: boolean;
+    canWrite: boolean;
+    canDebug: boolean;
+  };
+  safeError?: { code: string; message: string } | null;
+}
+
+export interface MpaAgentDeletePreview {
+  mpaInstanceId: string;
+  bindingStatus: MpaAgentBindingStatus;
+  runtime: (Partial<CloudRuntime> & { runtimeId: string; region: string }) | null;
+  profile: Partial<MpaProfileStatus> | null;
+  activeOperation: MpaAgentOperation | null;
+  bindings: Array<Partial<CloudRuntime> & { runtimeId: string; region: string }>;
+  canDelete: boolean;
+  blockers: string[];
+  sessionCounts: {
+    total: number;
+    active: number;
+    idle: number;
+    debug: number;
+  };
+  activeSessions: Array<{
+    sessionId: string;
+    status: string;
+    appName?: string;
+  }>;
+  cleanupPlan: Array<{
+    stage: string;
+    description: string;
+    count: number;
+  }>;
+}
+
+export interface MpaRuntimeConsoleRun {
+  invocationId: string;
+  userId: string;
+  status: string;
+  startedAt: string;
+  endedAt?: string | null;
+  durationMs?: number | null;
+  wallDurationMs?: number | null;
+  stepCount: number;
+  queueDurationMs?: number | null;
+  firstContentMs?: number | null;
+  firstModelContentMs?: number | null;
+  firstVisibleAnswerMs?: number | null;
+  modelRequestCount: number;
+  toolCount: number;
+  failedToolCount: number;
+  fileChangeCount: number;
+  fileChangeEventCount: number;
+  uniqueFileCount: number;
+  retryCount: number;
+  usage: Record<string, number>;
+  slowestStep?: Record<string, unknown> | null;
+  metricCoverage: Record<string, string>;
+}
+
+export interface MpaRuntimeConsoleRunsResponse {
+  sessionId: string;
+  runs: MpaRuntimeConsoleRun[];
+}
+
+export interface MpaRuntimeTraceStep {
+  stepId: string;
+  parentStepId?: string | null;
+  sequence: number;
+  kind: string;
+  title: string;
+  status: string;
+  startedAt: string;
+  endedAt?: string | null;
+  durationMs?: number | null;
+  sourceEventId?: string | null;
+  category: string;
+  timing: Record<string, unknown>;
+  correlation: Record<string, unknown>;
+  details: Record<string, unknown>;
+}
+
+export interface MpaRuntimeTraceResponse {
+  traceVersion: string;
+  sessionId: string;
+  invocationId: string;
+  correlation: Record<string, unknown>;
+  run: Record<string, unknown>;
+  coverage: Record<string, unknown>;
+  steps: MpaRuntimeTraceStep[];
+}
+
+export type MpaExecutionConfigMode = "replace" | "clear" | "inherit";
+
+export interface MpaExecutionConfigChange {
+  category: string;
+  mode: MpaExecutionConfigMode;
+  value?: unknown;
+}
+
+export interface MpaSessionExecutionConfig {
+  appName: string;
+  sessionId: string;
+  revision: number;
+  etag: string;
+  mpaInstanceId: string;
+  profileRevision: number;
+  profileDefaultRevision: number;
+  overrides: Record<string, unknown>;
+  effectiveRefs: Record<string, unknown>;
+  invalidRefs: Array<Record<string, unknown>>;
+  updatedBy?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export class MpaExecutionConfigRequestError extends Error {
+  readonly status: number;
+  readonly code: string;
+  readonly currentState?: MpaSessionExecutionConfig;
+
+  constructor(
+    message: string,
+    {
+      status,
+      code,
+      currentState,
+    }: {
+      status: number;
+      code: string;
+      currentState?: MpaSessionExecutionConfig;
+    },
+  ) {
+    super(message);
+    this.name = "MpaExecutionConfigRequestError";
+    this.status = status;
+    this.code = code;
+    this.currentState = currentState;
+  }
+}
+
+async function mpaExecutionConfigError(
+  res: Response,
+): Promise<MpaExecutionConfigRequestError> {
+  const fallback = adkT("client.mpaExecutionConfigFailed");
+  const text = await res.text().catch(() => "");
+  if (!text) {
+    return new MpaExecutionConfigRequestError(
+      adkT("common.fallbackWithHttpStatus", { fallback, status: res.status }),
+      { status: res.status, code: "" },
+    );
+  }
+  try {
+    const data = JSON.parse(text) as {
+      detail?: unknown;
+      error?: unknown;
+      currentState?: MpaSessionExecutionConfig;
+    };
+    const envelope = (
+      data.error && typeof data.error === "object"
+        ? data.error
+        : data.detail && typeof data.detail === "object"
+          ? data.detail
+          : null
+    ) as { code?: unknown; currentState?: MpaSessionExecutionConfig } | null;
+    const detail = formatErrorDetail(data.detail ?? data.error);
+    const message = detail
+      ? adkT("client.errorWithDetailAndRawResponse", {
+          context: adkT("common.fallbackWithHttpStatus", {
+            fallback,
+            status: res.status,
+          }),
+          detail,
+          response: text,
+        })
+      : adkT("client.errorWithRawResponse", {
+          context: adkT("common.fallbackWithHttpStatus", {
+            fallback,
+            status: res.status,
+          }),
+          response: text,
+        });
+    return new MpaExecutionConfigRequestError(message, {
+      status: res.status,
+      code: String(envelope?.code ?? ""),
+      currentState: envelope?.currentState ?? data.currentState,
+    });
+  } catch {
+    return new MpaExecutionConfigRequestError(
+      adkT("client.errorWithRawResponse", {
+        context: adkT("common.fallbackWithHttpStatus", {
+          fallback,
+          status: res.status,
+        }),
+        response: text,
+      }),
+      { status: res.status, code: "" },
+    );
+  }
+}
+
+export function mpaProfileFromAgentDraft(draft: AgentDraft): MpaProfilePayload {
+  const selectedSkillProfiles = (draft.selectedSkills ?? []).map((skill) => ({
+    source: skill.source,
+    folder: skill.folder,
+    name: skill.name,
+    skillSpaceId: skill.skillSpaceId,
+    skillSpaceName: skill.skillSpaceName,
+    skillSpaceRegion: skill.skillSpaceRegion,
+    skillId: skill.skillId,
+    version: skill.version,
+  }));
+  const legacySkills = (draft.skills ?? []).map((name) => ({ name }));
+  const mcpServers = (draft.mcpTools ?? []).map((tool) => ({
+    name: tool.name,
+    transport: tool.transport,
+    url: tool.url,
+  }));
+  return {
+    name: draft.name?.trim() || "mpa-agent",
+    description: draft.description ?? "",
+    system: draft.instruction?.trim() || "You are a helpful assistant.",
+    model: {
+      id: draft.modelName || draft.model || "",
+      source: draft.modelSource ?? "ark",
+      provider: draft.modelProvider ?? "",
+      apiBase: draft.modelApiBase ?? "",
+    },
+    tools: [
+      ...(draft.builtinTools ?? []).map((id) => ({ id, source: "builtin" })),
+      ...(draft.tools ?? []).map((name) => ({ name, source: "legacy" })),
+      ...(draft.customTools ?? []).map((tool) => ({
+        name: tool.name,
+        description: tool.description,
+        source: "custom",
+      })),
+    ],
+    skills: [...selectedSkillProfiles, ...legacySkills],
+    mcpServers,
+    ...(draft.subAgents?.length
+      ? { multiagent: { type: draft.agentType ?? "llm", subAgents: draft.subAgents.map(mpaProfileFromAgentDraft) } }
+      : {}),
+    metadata: {
+      "veadk:agent-type": "mpa",
+      "veadk:source": "studio-agent-draft",
+      agentType: draft.agentType ?? "llm",
+    },
+  };
+}
+
+export async function startMpaAgentOperation(params: {
+  operationKind: "create" | "update";
+  runtimeId: string;
+  region: string;
+  mpaInstanceId: string;
+  sourceProfileId: string;
+  draft: AgentDraft;
+  targetKey?: string;
+  runtimeRevision?: string;
+  idempotencyKey: string;
+}): Promise<MpaAgentOperation> {
+  const body = {
+    operationKind: params.operationKind,
+    runtimeId: params.runtimeId,
+    region: params.region,
+    mpaInstanceId: params.mpaInstanceId,
+    sourceProfileId: params.sourceProfileId,
+    targetKey: params.targetKey,
+    runtimeRevision: params.runtimeRevision,
+    profile: mpaProfileFromAgentDraft(params.draft),
+  };
+  const path =
+    params.operationKind === "update"
+      ? `/web/mpa/agents/${encodeURIComponent(params.mpaInstanceId)}`
+      : "/web/mpa/agents";
+  const res = await apiFetch(path, {
+    method: params.operationKind === "update" ? "PATCH" : "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Idempotency-Key": params.idempotencyKey,
+    },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    throw new Error(await httpErrorMessage(res, adkT("client.mpaOperationFailed")));
+  }
+  return (await res.json()) as MpaAgentOperation;
+}
+
+export async function applyMpaProfileAfterDeployment(params: {
+  draft: AgentDraft;
+  taskId: string;
+  agentName: string;
+  runtimeId: string;
+  region: string;
+  operationKind: "create" | "update";
+  mpaInstanceId?: string;
+  runtimeName?: string;
+  sourceDraftId?: string;
+  runtimeRevision?: string;
+}): Promise<MpaAgentOperation> {
+  const normalizedRuntimeId = params.runtimeId.trim();
+  const normalizedMpaInstanceId =
+    params.mpaInstanceId?.trim() || normalizedRuntimeId;
+  const sourceProfileId = params.sourceDraftId?.trim()
+    ? `studio-draft:${params.sourceDraftId.trim()}`
+    : `studio-agent:${params.agentName}:${params.taskId}`;
+  return startMpaAgentOperation({
+    operationKind: params.operationKind,
+    runtimeId: normalizedRuntimeId,
+    region: params.region,
+    mpaInstanceId: normalizedMpaInstanceId,
+    sourceProfileId,
+    draft: params.draft,
+    targetKey:
+      params.operationKind === "update"
+        ? normalizedMpaInstanceId
+        : `runtime:${params.region}:${params.runtimeName?.trim() || normalizedMpaInstanceId}`,
+    runtimeRevision: params.runtimeRevision?.trim() || undefined,
+    idempotencyKey: `${params.taskId}:mpa-profile`,
+  });
+}
+
+export async function listActiveMpaAgentOperations(): Promise<MpaAgentOperation[]> {
+  const res = await apiFetch("/web/mpa/agent-operations?status=active", {
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    throw new Error(await httpErrorMessage(res, adkT("client.mpaOperationLoadFailed")));
+  }
+  const payload = (await res.json()) as { operations?: MpaAgentOperation[] };
+  return payload.operations ?? [];
+}
+
+export async function getMpaProfileStatus(params: {
+  runtimeId: string;
+  region: string;
+  mpaInstanceId: string;
+  signal?: AbortSignal;
+}): Promise<MpaProfileStatus> {
+  const query = new URLSearchParams({
+    runtimeId: params.runtimeId,
+    region: params.region,
+  });
+  const res = await apiFetch(
+    `/web/mpa/agents/${encodeURIComponent(params.mpaInstanceId)}/profile-status?${query.toString()}`,
+    { cache: "no-store", signal: params.signal },
+  );
+  if (!res.ok) {
+    throw new Error(await httpErrorMessage(res, adkT("client.mpaOperationLoadFailed")));
+  }
+  const payload = (await res.json()) as Partial<MpaProfileStatus>;
+  return {
+    operationId: String(payload.operationId ?? ""),
+    status: String(payload.status ?? ""),
+    profileRevision: Number(payload.profileRevision ?? 0),
+    runtimeRevision: String(payload.runtimeRevision ?? ""),
+    etag: String(payload.etag ?? res.headers.get("ETag") ?? ""),
+  };
+}
+
+export async function getMpaAgentView(params: {
+  mpaInstanceId: string;
+  runtimeId?: string;
+  region?: string;
+  signal?: AbortSignal;
+}): Promise<MpaAgentView> {
+  const query = new URLSearchParams({ region: params.region ?? "all" });
+  if (params.runtimeId) query.set("runtimeId", params.runtimeId);
+  const res = await apiFetch(
+    `/web/mpa/agents/${encodeURIComponent(params.mpaInstanceId)}/view?${query.toString()}`,
+    { cache: "no-store", signal: params.signal },
+  );
+  if (!res.ok) {
+    throw new Error(await httpErrorMessage(res, adkT("client.mpaOperationLoadFailed")));
+  }
+  return (await res.json()) as MpaAgentView;
+}
+
+export async function getMpaAgentDeletePreview(params: {
+  mpaInstanceId: string;
+  runtimeId: string;
+  region: string;
+  signal?: AbortSignal;
+}): Promise<MpaAgentDeletePreview> {
+  const query = new URLSearchParams({
+    runtimeId: params.runtimeId,
+    region: params.region,
+  });
+  const res = await apiFetch(
+    `/web/mpa/agents/${encodeURIComponent(params.mpaInstanceId)}/delete-preview?${query.toString()}`,
+    { cache: "no-store", signal: params.signal },
+  );
+  if (!res.ok) {
+    throw new Error(await httpErrorMessage(res, adkT("client.mpaDeletePreviewFailed")));
+  }
+  return (await res.json()) as MpaAgentDeletePreview;
+}
+
+export async function getMpaRuntimeConsoleRuns(params: {
+  runtimeId: string;
+  region: string;
+  sessionId: string;
+  signal?: AbortSignal;
+}): Promise<MpaRuntimeConsoleRunsResponse> {
+  const ep: AdkEndpoint = {
+    runtimeId: params.runtimeId,
+    region: params.region,
+    agentCategory: "mpa",
+  };
+  const res = await apiFetch(
+    `/api/v1/runtime-console/admin/sessions/${encodeURIComponent(params.sessionId)}/runs`,
+    { cache: "no-store", signal: params.signal },
+    ep,
+  );
+  if (!res.ok) {
+    throw new Error(await httpErrorMessage(res, adkT("client.loadMpaDiagnosticsFailed")));
+  }
+  return (await res.json()) as MpaRuntimeConsoleRunsResponse;
+}
+
+export async function getMpaRuntimeConsoleTrace(params: {
+  runtimeId: string;
+  region: string;
+  sessionId: string;
+  invocationId: string;
+  signal?: AbortSignal;
+}): Promise<MpaRuntimeTraceResponse> {
+  const ep: AdkEndpoint = {
+    runtimeId: params.runtimeId,
+    region: params.region,
+    agentCategory: "mpa",
+  };
+  const query = new URLSearchParams({ sessionId: params.sessionId });
+  const res = await apiFetch(
+    `/api/v1/runtime-console/admin/runs/${encodeURIComponent(params.invocationId)}/trace?${query.toString()}`,
+    { cache: "no-store", signal: params.signal },
+    ep,
+  );
+  if (!res.ok) {
+    throw new Error(await httpErrorMessage(res, adkT("client.loadMpaDiagnosticsFailed")));
+  }
+  return (await res.json()) as MpaRuntimeTraceResponse;
+}
+
+export async function retryMpaAgentOperation(
+  operationId: string,
+  params: Omit<Parameters<typeof startMpaAgentOperation>[0], "idempotencyKey">,
+): Promise<MpaAgentOperation> {
+  const res = await apiFetch(
+    `/web/mpa/agent-operations/${encodeURIComponent(operationId)}/retry`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        operationKind: params.operationKind,
+        runtimeId: params.runtimeId,
+        region: params.region,
+        mpaInstanceId: params.mpaInstanceId,
+        sourceProfileId: params.sourceProfileId,
+        targetKey: params.targetKey,
+        runtimeRevision: params.runtimeRevision,
+        profile: mpaProfileFromAgentDraft(params.draft),
+      }),
+    },
+  );
+  if (!res.ok) {
+    throw new Error(await httpErrorMessage(res, adkT("client.mpaOperationFailed")));
+  }
+  return (await res.json()) as MpaAgentOperation;
+}
+
+export async function getMpaSessionExecutionConfig(params: {
+  runtimeId: string;
+  region: string;
+  sessionId: string;
+  signal?: AbortSignal;
+}): Promise<MpaSessionExecutionConfig> {
+  const query = new URLSearchParams({
+    runtimeId: params.runtimeId,
+    region: params.region,
+  });
+  const res = await apiFetch(
+    `/web/mpa/sessions/${encodeURIComponent(params.sessionId)}/execution-config?${query.toString()}`,
+    { cache: "no-store", signal: params.signal },
+  );
+  if (!res.ok) {
+    throw await mpaExecutionConfigError(res);
+  }
+  return (await res.json()) as MpaSessionExecutionConfig;
+}
+
+export async function patchMpaSessionExecutionConfig(params: {
+  runtimeId: string;
+  region: string;
+  sessionId: string;
+  etag: string;
+  changes: MpaExecutionConfigChange[];
+}): Promise<MpaSessionExecutionConfig> {
+  const res = await apiFetch(
+    `/web/mpa/sessions/${encodeURIComponent(params.sessionId)}/execution-config`,
+    {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        "If-Match": params.etag,
+      },
+      body: JSON.stringify({
+        runtimeId: params.runtimeId,
+        region: params.region,
+        changes: params.changes,
+      }),
+    },
+  );
+  if (!res.ok) {
+    throw await mpaExecutionConfigError(res);
+  }
+  return (await res.json()) as MpaSessionExecutionConfig;
+}
+
+export async function upgradeMpaSessionProfile(params: {
+  runtimeId: string;
+  region: string;
+  sessionId: string;
+  etag: string;
+  idempotencyKey: string;
+  targetProfileRevision: number;
+}): Promise<MpaSessionExecutionConfig> {
+  const res = await apiFetch(
+    `/web/mpa/sessions/${encodeURIComponent(params.sessionId)}/profile-upgrade`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "If-Match": params.etag,
+        "Idempotency-Key": params.idempotencyKey,
+      },
+      body: JSON.stringify({
+        runtimeId: params.runtimeId,
+        region: params.region,
+        targetProfileRevision: params.targetProfileRevision,
+      }),
+    },
+  );
+  if (!res.ok) {
+    throw await mpaExecutionConfigError(res);
+  }
+  return (await res.json()) as MpaSessionExecutionConfig;
 }
 
 export async function checkRuntimeNameAvailability(
@@ -3425,6 +4451,8 @@ export async function createGithubDeliveryCicdPipeline(params: {
   runtimeName: string;
   runtimeId: string;
   region: string;
+  agentCategory?: "general" | "mpa";
+  mpaCompatibilityManifest?: Record<string, unknown>;
   cloudProvider: CloudProvider;
   projectPath?: string;
   volcengineAccessKey: string;
@@ -3443,6 +4471,8 @@ export async function createGithubDeliveryCicdPipeline(params: {
         runtimeName: params.runtimeName,
         runtimeId: params.runtimeId,
         region: params.region,
+        agentCategory: params.agentCategory,
+        mpaCompatibilityManifest: params.mpaCompatibilityManifest,
         cloudProvider: params.cloudProvider,
         projectPath: params.projectPath ?? ".",
         volcengineAccessKey: params.volcengineAccessKey,
@@ -3465,6 +4495,8 @@ export async function initializeGithubDeliveryMain(params: {
   runtimeName: string;
   runtimeId: string;
   region: string;
+  agentCategory?: "general" | "mpa";
+  mpaCompatibilityManifest?: Record<string, unknown>;
   cloudProvider: CloudProvider;
   projectPath?: string;
   volcengineAccessKey: string;
@@ -3484,6 +4516,8 @@ export async function initializeGithubDeliveryMain(params: {
         runtimeName: params.runtimeName,
         runtimeId: params.runtimeId,
         region: params.region,
+        agentCategory: params.agentCategory,
+        mpaCompatibilityManifest: params.mpaCompatibilityManifest,
         cloudProvider: params.cloudProvider,
         projectPath: params.projectPath ?? ".",
         volcengineAccessKey: params.volcengineAccessKey,
@@ -3503,6 +4537,8 @@ export async function attachGithubDeliveryCicdToSourceSync(params: {
   runtimeName: string;
   runtimeId: string;
   region: string;
+  agentCategory?: "general" | "mpa";
+  mpaCompatibilityManifest?: Record<string, unknown>;
   cloudProvider: CloudProvider;
   projectPath?: string;
   volcengineAccessKey: string;
@@ -3519,6 +4555,8 @@ export async function attachGithubDeliveryCicdToSourceSync(params: {
         runtimeName: params.runtimeName,
         runtimeId: params.runtimeId,
         region: params.region,
+        agentCategory: params.agentCategory,
+        mpaCompatibilityManifest: params.mpaCompatibilityManifest,
         cloudProvider: params.cloudProvider,
         projectPath: params.projectPath ?? ".",
         volcengineAccessKey: params.volcengineAccessKey,
@@ -3557,6 +4595,9 @@ export async function getGithubDeliveryVersions(
 export async function createGithubDeliveryRollbackPr(params: {
   runtimeId: string;
   targetCommitSha: string;
+  region?: string;
+  agentCategory?: "general" | "mpa";
+  mpaCompatibilityManifest?: Record<string, unknown>;
 }): Promise<GithubDeliveryRollbackResult> {
   const res = await apiFetch("/web/github-delivery/rollback-pr", {
     method: "POST",
@@ -3585,6 +4626,8 @@ export async function bindGithubCicdRuntime(params: {
 export async function syncGithubCicdRuntime(params: {
   runtimeId: string;
   project: { name: string; files: { path: string; content: string }[] };
+  agentCategory?: "general" | "mpa";
+  mpaCompatibilityManifest?: Record<string, unknown>;
 }): Promise<GithubCicdPipelineResult> {
   const res = await apiFetch(
     "/web/github-cicd/runtime-sync",
@@ -3594,6 +4637,8 @@ export async function syncGithubCicdRuntime(params: {
       body: JSON.stringify({
         runtimeId: params.runtimeId,
         project: params.project,
+        agentCategory: params.agentCategory,
+        mpaCompatibilityManifest: params.mpaCompatibilityManifest,
       }),
     },
     {},
@@ -3625,6 +4670,8 @@ export async function deployAgentkitProject(
     runtimeId?: string;
     runtimeName?: string;
     appName?: string;
+    agentCategory?: "general" | "mpa";
+    mpaCompatibilityManifest?: Record<string, unknown>;
     editMode?: "source-preserving" | "regenerate";
     draft?: AgentDraft;
     updateEtag?: string;
@@ -3697,6 +4744,8 @@ export async function deployAgentkitProject(
           runtimeId: opts?.runtimeId,
           runtimeName: opts?.runtimeName,
           appName: opts?.appName,
+          agentCategory: opts?.agentCategory,
+          mpaCompatibilityManifest: opts?.mpaCompatibilityManifest,
           editMode: opts?.editMode,
           draft: opts?.draft,
           updateEtag: opts?.updateEtag,
@@ -3787,6 +4836,7 @@ export async function deployAgentkitProject(
     agentName: deployedAgentName,
     runtimeName: deployedRuntimeName,
     runtimeId: final.runtimeId,
+    mpaInstanceId: final.mpaInstanceId?.trim() || undefined,
     consoleUrl: final.consoleUrl,
     region: final.region,
     version: final.version,
@@ -4215,6 +5265,7 @@ export async function getAgentUsage({
 export interface CloudRuntime {
   name: string;
   runtimeId: string;
+  mpaInstanceId?: string;
   status: string;
   region: string;
   author: string;
@@ -4648,11 +5699,17 @@ export async function revealRuntimeApiKey(
 export async function deleteRuntime(
   runtimeId: string,
   region: string,
+  opts: { agentCategory?: "general" | "mpa"; mpaInstanceId?: string } = {},
 ): Promise<void> {
   const res = await apiFetch("/web/delete-runtime", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ runtimeId, region }),
+    body: JSON.stringify({
+      runtimeId,
+      region,
+      agentCategory: opts.agentCategory,
+      mpaInstanceId: opts.mpaInstanceId,
+    }),
   });
   if (!res.ok) {
     const t = await res.text().catch(() => "");
@@ -4686,6 +5743,7 @@ export interface RuntimeUpdateCapability {
   etag: string;
   runtime: {
     runtimeId: string;
+    mpaInstanceId?: string;
     name: string;
     region: string;
     currentVersion?: number | null;
@@ -4927,6 +5985,7 @@ async function runtimeUpdateCapabilityErrorMessage(res: Response): Promise<strin
 /** Control-plane detail for a runtime (GetRuntime), for the 管理 Agent view. */
 export interface RuntimeDetail {
   runtimeId: string;
+  mpaInstanceId?: string;
   name: string;
   description: string;
   status: string;
@@ -4951,6 +6010,7 @@ export interface RuntimeDetail {
   mcpToolsetId: string;
   artifactUrl: string;
   artifactType: string;
+  agentCategory?: "general" | "mpa";
   networkTypes: string[];
   endpoint: string;
   authType: "none" | "key_auth" | "custom_jwt" | "unknown";

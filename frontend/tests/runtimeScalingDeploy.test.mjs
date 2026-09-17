@@ -18,6 +18,14 @@ const clientSource = readFileSync(
   new URL("../src/adk/client.ts", import.meta.url),
   "utf8",
 );
+const customCreateSource = readFileSync(
+  new URL("../src/create/CustomCreate.tsx", import.meta.url),
+  "utf8",
+);
+const codePackageCreateSource = readFileSync(
+  new URL("../src/create/CodePackageCreate.tsx", import.meta.url),
+  "utf8",
+);
 
 test("deployment sends the selected Runtime instance range", () => {
   assert.match(
@@ -74,7 +82,7 @@ test("renders Runtime instance inputs with memory-aware and Sidecar-safe default
 test("renders the Runtime update progress step conditionally", () => {
   assert.match(
     projectPreviewSource,
-    /deploymentStepsWithInstanceUpdate = needsInstanceUpdate[\s\S]*?\[\.\.\.baseDeploymentSteps, \{ phase: "update", label: t\("projectPreview\.steps\.updateInstances"\) \}\][\s\S]*?: baseDeploymentSteps[\s\S]*?deploymentStepsBeforeGithub = effectiveCreateEvaluationSets[\s\S]*?projectPreview\.steps\.createEvaluationSets[\s\S]*?pendingGithubCicd[\s\S]*?projectPreview\.steps\.syncCode/,
+    /deploymentStepsWithInstanceUpdate = needsInstanceUpdate[\s\S]*?\[\.\.\.baseDeploymentSteps, \{ phase: "update", label: t\("projectPreview\.steps\.updateInstances"\) \}\][\s\S]*?: baseDeploymentSteps[\s\S]*?deploymentStepsBeforeGithub = effectiveCreateEvaluationSets[\s\S]*?projectPreview\.steps\.createEvaluationSets[\s\S]*?deploymentStepsWithGithub[\s\S]*?projectPreview\.steps\.syncCode/,
   );
   assert.match(
     workspaceSource,
@@ -82,12 +90,54 @@ test("renders the Runtime update progress step conditionally", () => {
   );
   assert.match(
     workspaceSource,
-    /if \(task\.instanceRange\)[\s\S]*?if \(task\.createEvaluationSets\)[\s\S]*?agentWorkspace\.deploymentSteps\.evaluation[\s\S]*?if \(task\.githubDelivery\)[\s\S]*?agentWorkspace\.deploymentSteps\.github[\s\S]*?steps\.push\(baseSteps\[baseSteps\.length - 1\]\)/,
+    /if \(task\.instanceRange\)[\s\S]*?if \(task\.createEvaluationSets\)[\s\S]*?agentWorkspace\.deploymentSteps\.evaluation[\s\S]*?if \(task\.mpaProfile\)[\s\S]*?if \(task\.githubDelivery\)[\s\S]*?agentWorkspace\.deploymentSteps\.github[\s\S]*?steps\.push\(baseSteps\[baseSteps\.length - 1\]\)/,
   );
   assert.match(
     workspaceSource,
     /phase: "update"[\s\S]*?label: t\("agentWorkspace\.deploymentSteps\.update\.label"\)[\s\S]*?description: t\("agentWorkspace\.deploymentSteps\.update\.description", range\)/,
   );
+});
+
+test("structured Agent deployments apply MPA Profile after Runtime publish", () => {
+  assert.match(clientSource, /export async function applyMpaProfileAfterDeployment/);
+  assert.match(clientSource, /sourceProfileId = params\.sourceDraftId\?\.trim\(\)/);
+  assert.match(clientSource, /`studio-draft:\$\{params\.sourceDraftId\.trim\(\)\}`/);
+  assert.doesNotMatch(clientSource, /sourceProfileRevision/);
+  assert.match(projectPreviewSource, /applyMpaProfileAfterDeployment\(/);
+  assert.match(
+    projectPreviewSource,
+    /const isMpaDeployment = Boolean\(agentDraft\);[\s\S]*?const shouldRunMpaLifecycle = isMpaDeployment && !githubUpdateOffloaded/,
+  );
+  assert.match(
+    projectPreviewSource,
+    /const deploymentSteps = shouldRunMpaLifecycle[\s\S]*?phase: "profile_applying"[\s\S]*?phase: "smoke_running"[\s\S]*?phase: "runnable"/,
+  );
+  assert.match(
+    projectPreviewSource,
+    /if \(shouldRunMpaLifecycle && agentDraft && \(completeResult\.runtimeId \|\| deploymentRuntimeId\)\)[\s\S]*?applyMpaProfileAfterDeployment/,
+  );
+  assert.match(
+    projectPreviewSource,
+    /agentCategory: isMpaDeployment \? "mpa" : "general"/,
+  );
+  assert.match(
+    projectPreviewSource,
+    /syncGithubCicdRuntime\(\{[\s\S]*?agentCategory: isMpaDeployment \? "mpa" : "general"/,
+  );
+  assert.match(customCreateSource, /agentCategory: "mpa"/);
+  assert.match(
+    projectPreviewSource,
+    /runtimeRevision: isRuntimeUpdate \? deploymentRuntimeRevision : undefined/,
+  );
+  assert.match(projectPreviewSource, /mpaProfile: shouldRunMpaLifecycle/);
+  assert.match(projectPreviewSource, /mpaSmoke: shouldRunMpaLifecycle && !isRuntimeUpdate/);
+  assert.match(workspaceSource, /if \(task\.mpaProfile\)/);
+  assert.match(workspaceSource, /if \(task\.mpaSmoke\)/);
+  assert.match(customCreateSource, /applyMpaProfileAfterDeployment/);
+  assert.match(customCreateSource, /runtimeRevision: deploymentTarget\?\.etag/);
+  assert.match(customCreateSource, /deploymentRuntimeRevision=\{deploymentTarget\?\.etag\}/);
+  assert.doesNotMatch(codePackageCreateSource, /agentDraft=\{/);
+  assert.doesNotMatch(codePackageCreateSource, /applyMpaProfileAfterDeployment/);
 });
 
 test("renders the evaluation-set progress step only when selected", () => {

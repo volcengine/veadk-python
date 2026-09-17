@@ -1,0 +1,8 @@
+{
+  "runtime-control-status": 23,
+  "control-pause": 1,
+  "control-resume": 2,
+  "runtime-continue": 1,
+  "runtime-sse": 1,
+  "runtime-continue-replay": 1
+}

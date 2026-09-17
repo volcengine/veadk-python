@@ -1,0 +1,10 @@
+{
+  "runtime-list": 2,
+  "list-apps": 2,
+  "route-channel-connect": 2,
+  "session-create": 2,
+  "run-sse": 2,
+  "config-patch-a": 1,
+  "config-patch-b": 1,
+  "profile-upgrade": 1
+}

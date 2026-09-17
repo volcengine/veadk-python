@@ -1,0 +1,352 @@
+[
+  {
+    "label": "A",
+    "method": "GET",
+    "url": "http://127.0.0.1:18174/",
+    "status": 200,
+    "body": ""
+  },
+  {
+    "label": "A",
+    "method": "GET",
+    "url": "http://127.0.0.1:18174/assets/styles/index-s7hHshax.css",
+    "status": 200,
+    "body": ""
+  },
+  {
+    "label": "A",
+    "method": "GET",
+    "url": "http://127.0.0.1:18174/assets/app/index-ktWrqxHD.js",
+    "status": 200,
+    "body": ""
+  },
+  {
+    "label": "A",
+    "method": "GET",
+    "url": "http://127.0.0.1:18174/web/ui-config",
+    "status": 200,
+    "body": ""
+  },
+  {
+    "label": "A",
+    "method": "GET",
+    "url": "http://127.0.0.1:18174/web/runtime-config",
+    "status": 200,
+    "body": ""
+  },
+  {
+    "label": "A",
+    "method": "GET",
+    "url": "http://127.0.0.1:18174/web/access",
+    "status": 200,
+    "body": ""
+  },
+  {
+    "label": "A",
+    "method": "GET",
+    "url": "http://127.0.0.1:18174/",
+    "status": 200,
+    "body": ""
+  },
+  {
+    "label": "A",
+    "method": "GET",
+    "url": "http://127.0.0.1:18174/assets/app/index-ktWrqxHD.js",
+    "status": 200,
+    "body": ""
+  },
+  {
+    "label": "A",
+    "method": "GET",
+    "url": "http://127.0.0.1:18174/assets/styles/index-s7hHshax.css",
+    "status": 200,
+    "body": ""
+  },
+  {
+    "label": "A",
+    "method": "GET",
+    "url": "http://127.0.0.1:18174/web/sandbox/capabilities",
+    "status": 200,
+    "body": ""
+  },
+  {
+    "label": "A",
+    "method": "GET",
+    "url": "http://127.0.0.1:18174/oauth2/userinfo",
+    "status": 404,
+    "body": ""
+  },
+  {
+    "label": "A",
+    "method": "GET",
+    "url": "http://127.0.0.1:18174/assets/media/logo-DCsNZy-k.svg",
+    "status": 200,
+    "body": ""
+  },
+  {
+    "label": "A",
+    "method": "GET",
+    "url": "http://127.0.0.1:18174/web/ui-config",
+    "status": 200,
+    "body": ""
+  },
+  {
+    "label": "A",
+    "method": "GET",
+    "url": "http://127.0.0.1:18174/web/runtime-config",
+    "status": 200,
+    "body": ""
+  },
+  {
+    "label": "A",
+    "method": "GET",
+    "url": "http://127.0.0.1:18174/web/access",
+    "status": 200,
+    "body": ""
+  },
+  {
+    "label": "A",
+    "method": "GET",
+    "url": "http://127.0.0.1:18174/web/sandbox/capabilities",
+    "status": 200,
+    "body": "{\"enabled\":false,\"reason\":\"管理员未配置\",\"persistentEnabled\":false,\"persistentReason\":\"管理员未配置快照版 Tool\",\"endpointExportEnabled\":true}"
+  },
+  {
+    "label": "A",
+    "method": "GET",
+    "url": "http://127.0.0.1:18174/web/deepseek-harness/capabilities",
+    "status": 200,
+    "body": "{\"enabled\":false,\"reason\":\"管理员未配置\",\"persistentEnabled\":false,\"persistentReason\":\"管理员未配置快照版 Tool\"}"
+  },
+  {
+    "label": "A",
+    "method": "GET",
+    "url": "http://127.0.0.1:18174/assets/media/logo-DCsNZy-k.svg",
+    "status": 200,
+    "body": ""
+  },
+  {
+    "label": "A",
+    "method": "GET",
+    "url": "http://127.0.0.1:18174/assets/media/ByteSans-Medium-Cx7JvTJU.ttf",
+    "status": 200,
+    "body": ""
+  },
+  {
+    "label": "A",
+    "method": "GET",
+    "url": "http://127.0.0.1:18174/web/skill-workbench/capabilities",
+    "status": 200,
+    "body": "{\"enabled\":false,\"reason\":\"管理员未配置\",\"operations\":[\"create\",\"optimize\"],\"models\":[],\"styles\":{\"concise\":\"Keep the Skill concise and practical. Prefer short, directly actionable instructions.\",\"strict\":\"Prioritize robust constraints, explicit validation, safe failure modes, and edge cases.\",\"tutorial\":\"Make the Skill tutorial-friendly with clear sequencing and small concrete examples.\",\"automation\":\"Optimize for repeatable automation, deterministic steps, and minimal manual intervention.\"}}"
+  },
+  {
+    "label": "A",
+    "method": "GET",
+    "url": "http://127.0.0.1:18174/web/studio-update",
+    "status": 200,
+    "body": ""
+  },
+  {
+    "label": "A",
+    "method": "GET",
+    "url": "http://127.0.0.1:18174/oauth2/userinfo",
+    "status": 404,
+    "body": "{\"status\":\"unauthenticated\"}"
+  },
+  {
+    "label": "A",
+    "method": "GET",
+    "url": "http://127.0.0.1:18174/web/runtimes?scope=all&page_size=24&region=cn-beijing&agentCategory=general",
+    "status": 200,
+    "body": "{\"runtimes\":[],\"nextToken\":\"\"}"
+  },
+  {
+    "label": "A",
+    "method": "GET",
+    "url": "http://127.0.0.1:18174/web/runtimes?scope=all&page_size=24&region=cn-beijing&agentCategory=mpa",
+    "status": 200,
+    "body": "{\"runtimes\":[{\"name\":\"MPA S2 Fixture\",\"runtimeId\":\"runtime-mpa-s2\",\"status\":\"Ready\",\"createdAt\":\"2026-09-15T00:00:00Z\",\"description\":\"Browser scenario MPA Runtime\",\"cpuMilli\":2000,\"memoryMb\":4096,\"currentVersion\":7,\"agentCategory\":\"mpa\",\"region\":\"cn-beijing\",\"author\":\"scenario-user\",\"isMine\":true,\"canDelete\":false,\"canManage\":true,\"canPublish\":false,\"visibility\":\"private\",\"reviewStatus\":\"\"}],\"nextToken\":\"\"}"
+  },
+  {
+    "label": "A",
+    "method": "GET",
+    "url": "http://127.0.0.1:18174/web/runtime-proxy/runtime-mpa-s2/list-apps?_runtime_region=cn-beijing",
+    "status": 200,
+    "body": "[\"a2a-default\"]"
+  },
+  {
+    "label": "A",
+    "method": "GET",
+    "url": "http://127.0.0.1:18174/web/runtime-update-capability?runtimeId=runtime-mpa-s2&region=cn-beijing&currentVersion=7",
+    "status": 200,
+    "body": ""
+  },
+  {
+    "label": "A",
+    "method": "POST",
+    "url": "http://127.0.0.1:18174/web/runtime-route-channel/runtime-mpa-s2/connect?region=cn-beijing",
+    "status": 200,
+    "body": ""
+  },
+  {
+    "label": "A",
+    "method": "GET",
+    "url": "http://127.0.0.1:18174/web/sandbox/capabilities",
+    "status": 200,
+    "body": "{\"enabled\":false,\"reason\":\"管理员未配置\",\"persistentEnabled\":false,\"persistentReason\":\"管理员未配置快照版 Tool\",\"endpointExportEnabled\":true}"
+  },
+  {
+    "label": "A",
+    "method": "GET",
+    "url": "http://127.0.0.1:18174/web/deepseek-harness/capabilities",
+    "status": 200,
+    "body": "{\"enabled\":false,\"reason\":\"管理员未配置\",\"persistentEnabled\":false,\"persistentReason\":\"管理员未配置快照版 Tool\"}"
+  },
+  {
+    "label": "A",
+    "method": "GET",
+    "url": "http://127.0.0.1:18174/web/runtime-proxy/runtime-mpa-s2/apps/a2a-default/users/scenario/sessions?_runtime_region=cn-beijing",
+    "status": 200,
+    "body": "[{\"id\":\"session-s2\",\"userId\":\"scenario\",\"lastUpdateTime\":1789490000,\"events\":[],\"state\":{}}]"
+  },
+  {
+    "label": "A",
+    "method": "GET",
+    "url": "http://127.0.0.1:18174/web/runtime-proxy/runtime-mpa-s2/web/agent-info/a2a-default?_runtime_region=cn-beijing",
+    "status": 200,
+    "body": "{\"appName\":\"a2a-default\",\"name\":\"MPA S2 Fixture\",\"description\":\"Browser scenario MPA Agent\",\"type\":\"llm\",\"model\":\"model-base\",\"selectableModels\":[\"model-base\",\"model-upgraded\",\"model-browser-a\"],\"turnLifecycleControl\":null,\"resourceTopology\":null,\"tools\":[],\"skills\":[],\"skillsPreviewSupported\":true,\"subAgents\":[],\"components\":[],\"searchSources\":[]}"
+  },
+  {
+    "label": "A",
+    "method": "GET",
+    "url": "http://127.0.0.1:18174/web/skill-workbench/capabilities",
+    "status": 200,
+    "body": "{\"enabled\":false,\"reason\":\"管理员未配置\",\"operations\":[\"create\",\"optimize\"],\"models\":[],\"styles\":{\"concise\":\"Keep the Skill concise and practical. Prefer short, directly actionable instructions.\",\"strict\":\"Prioritize robust constraints, explicit validation, safe failure modes, and edge cases.\",\"tutorial\":\"Make the Skill tutorial-friendly with clear sequencing and small concrete examples.\",\"automation\":\"Optimize for repeatable automation, deterministic steps, and minimal manual intervention.\"}}"
+  },
+  {
+    "label": "A",
+    "method": "GET",
+    "url": "http://127.0.0.1:18174/web/evaluation/statuses?runtimeId=runtime-mpa-s2&region=cn-beijing&appName=a2a-default&userId=scenario",
+    "status": 200,
+    "body": ""
+  },
+  {
+    "label": "A",
+    "method": "GET",
+    "url": "http://127.0.0.1:18174/web/runtime-proxy/runtime-mpa-s2/apps/a2a-default/users/scenario/sessions/session-s2?_runtime_region=cn-beijing",
+    "status": 200,
+    "body": "{\"id\":\"session-s2\",\"userId\":\"scenario\",\"lastUpdateTime\":1789490000,\"events\":[],\"state\":{}}"
+  },
+  {
+    "label": "A",
+    "method": "GET",
+    "url": "http://127.0.0.1:18174/web/studio-update",
+    "status": 200,
+    "body": ""
+  },
+  {
+    "label": "A",
+    "method": "GET",
+    "url": "http://127.0.0.1:18174/web/v3/environments",
+    "status": 200,
+    "body": ""
+  },
+  {
+    "label": "A",
+    "method": "GET",
+    "url": "http://127.0.0.1:18174/web/workspaces",
+    "status": 200,
+    "body": ""
+  },
+  {
+    "label": "A",
+    "method": "GET",
+    "url": "http://127.0.0.1:18174/web/runtime-tool-channel/runtime-mpa-s2/capabilities?region=cn-beijing",
+    "status": 200,
+    "body": "{\"enabled\":false,\"supported\":false,\"tools\":[]}"
+  },
+  {
+    "label": "A",
+    "method": "POST",
+    "url": "http://127.0.0.1:18174/web/runtime-proxy/runtime-mpa-s2/apps/a2a-default/users/scenario/sessions?_runtime_region=cn-beijing",
+    "status": 200,
+    "body": "{\"id\":\"session-s2\",\"userId\":\"scenario\",\"lastUpdateTime\":1789490000,\"events\":[],\"state\":{}}"
+  },
+  {
+    "label": "A",
+    "method": "POST",
+    "url": "http://127.0.0.1:18174/web/runtime-proxy/runtime-mpa-s2/run_sse?_runtime_region=cn-beijing",
+    "status": 200,
+    "body": "data: {\"id\": \"scenario-event-1\", \"author\": \"a2a-default\", \"partial\": false, \"content\": {\"role\": \"model\", \"parts\": [{\"text\": \"Scenario response\"}]}, \"turnComplete\": true}\\n\\n"
+  },
+  {
+    "label": "A",
+    "method": "GET",
+    "url": "http://127.0.0.1:18174/web/runtime-detail?runtimeId=runtime-mpa-s2&region=cn-beijing",
+    "status": 200,
+    "body": ""
+  },
+  {
+    "label": "A",
+    "method": "GET",
+    "url": "http://127.0.0.1:18174/web/runtime-detail?runtimeId=runtime-mpa-s2&region=cn-beijing",
+    "status": 200,
+    "body": ""
+  },
+  {
+    "label": "A",
+    "method": "GET",
+    "url": "http://127.0.0.1:18174/web/runtime-proxy/runtime-mpa-s2/web/agent-info/a2a-default?_runtime_region=cn-beijing",
+    "status": 200,
+    "body": "{\"appName\":\"a2a-default\",\"name\":\"MPA S2 Fixture\",\"description\":\"Browser scenario MPA Agent\",\"type\":\"llm\",\"model\":\"model-base\",\"selectableModels\":[\"model-base\",\"model-upgraded\",\"model-browser-a\"],\"turnLifecycleControl\":null,\"resourceTopology\":null,\"tools\":[],\"skills\":[],\"skillsPreviewSupported\":true,\"subAgents\":[],\"components\":[],\"searchSources\":[]}"
+  },
+  {
+    "label": "A",
+    "method": "GET",
+    "url": "http://127.0.0.1:18174/web/runtime-proxy/runtime-mpa-s2/web/agent-info/a2a-default?_runtime_region=cn-beijing",
+    "status": 200,
+    "body": "{\"appName\":\"a2a-default\",\"name\":\"MPA S2 Fixture\",\"description\":\"Browser scenario MPA Agent\",\"type\":\"llm\",\"model\":\"model-base\",\"selectableModels\":[\"model-base\",\"model-upgraded\",\"model-browser-a\"],\"turnLifecycleControl\":null,\"resourceTopology\":null,\"tools\":[],\"skills\":[],\"skillsPreviewSupported\":true,\"subAgents\":[],\"components\":[],\"searchSources\":[]}"
+  },
+  {
+    "label": "A",
+    "method": "GET",
+    "url": "http://127.0.0.1:18174/web/runtime-proxy/runtime-mpa-s2/web/agent-draft/a2a-default?_runtime_region=cn-beijing",
+    "status": 200,
+    "body": "{\"draft\":{\"name\":\"MPA S2 Fixture\",\"description\":\"Browser scenario MPA Agent\",\"instruction\":\"Use the scenario fixture.\",\"modelName\":\"model-base\",\"agentType\":\"llm\"}}"
+  },
+  {
+    "label": "A",
+    "method": "GET",
+    "url": "http://127.0.0.1:18174/web/runtime-proxy/runtime-mpa-s2/web/agent-draft/a2a-default?_runtime_region=cn-beijing",
+    "status": 200,
+    "body": "{\"draft\":{\"name\":\"MPA S2 Fixture\",\"description\":\"Browser scenario MPA Agent\",\"instruction\":\"Use the scenario fixture.\",\"modelName\":\"model-base\",\"agentType\":\"llm\"}}"
+  },
+  {
+    "label": "A",
+    "method": "GET",
+    "url": "http://127.0.0.1:18174/web/mpa/sessions/session-s2/execution-config?runtimeId=runtime-mpa-s2&region=cn-beijing",
+    "status": 200,
+    "body": "{\"appName\":\"a2a-default\",\"sessionId\":\"session-s2\",\"revision\":6,\"etag\":\"\\\"6\\\"\",\"mpaInstanceId\":\"runtime-mpa-s2\",\"profileRevision\":6,\"profileDefaultRevision\":6,\"overrides\":{},\"effectiveRefs\":{\"model\":{\"id\":\"model-base\"},\"mcpServers\":[{\"id\":\"mcp-default\"}]},\"invalidRefs\":[],\"updatedBy\":\"scenario-user\",\"createdAt\":\"2026-09-15T00:00:00Z\",\"updatedAt\":\"2026-09-15T00:00:00Z\"}"
+  },
+  {
+    "label": "A",
+    "method": "GET",
+    "url": "http://127.0.0.1:18174/web/mpa/agents/runtime-mpa-s2/profile-status?runtimeId=runtime-mpa-s2&region=cn-beijing",
+    "status": 200,
+    "body": "{\"operationId\":\"scenario-profile\",\"status\":\"applied\",\"profileRevision\":7,\"runtimeRevision\":\"7\",\"etag\":\"\\\"7\\\"\"}"
+  },
+  {
+    "label": "A",
+    "method": "PATCH",
+    "url": "http://127.0.0.1:18174/web/mpa/sessions/session-s2/execution-config",
+    "status": 200,
+    "body": "{\"appName\":\"a2a-default\",\"sessionId\":\"session-s2\",\"revision\":7,\"etag\":\"\\\"7\\\"\",\"mpaInstanceId\":\"runtime-mpa-s2\",\"profileRevision\":6,\"profileDefaultRevision\":6,\"overrides\":{\"model\":{\"mode\":\"replace\",\"value\":{\"id\":\"model-browser-a\"}}},\"effectiveRefs\":{\"model\":{\"id\":\"model-browser-a\"},\"mcpServers\":[{\"id\":\"mcp-default\"}]},\"invalidRefs\":[],\"updatedBy\":\"scenario-user\",\"createdAt\":\"2026-09-15T00:00:00Z\",\"updatedAt\":\"2026-09-15T01:00:00Z\"}"
+  },
+  {
+    "label": "A",
+    "method": "POST",
+    "url": "http://127.0.0.1:18174/web/mpa/sessions/session-s2/profile-upgrade",
+    "status": 200,
+    "body": "{\"appName\":\"a2a-default\",\"sessionId\":\"session-s2\",\"revision\":8,\"etag\":\"\\\"8\\\"\",\"mpaInstanceId\":\"runtime-mpa-s2\",\"profileRevision\":7,\"profileDefaultRevision\":7,\"overrides\":{\"model\":{\"mode\":\"replace\",\"value\":{\"id\":\"model-browser-a\"}}},\"effectiveRefs\":{\"model\":{\"id\":\"model-browser-a\"},\"mcpServers\":[{\"id\":\"mcp-upgraded\"}]},\"invalidRefs\":[],\"updatedBy\":\"scenario-user\",\"createdAt\":\"2026-09-15T00:00:00Z\",\"updatedAt\":\"2026-09-15T01:00:00Z\"}"
+  }
+]

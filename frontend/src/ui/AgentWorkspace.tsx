@@ -35,14 +35,24 @@ import {
   getAgentFeedbackCases,
   getAgentOptimizations,
   getGithubDeliveryVersions,
+  getMpaAgentDeletePreview,
+  getMpaAgentView,
+  getMpaProfileStatus,
+  getMpaRuntimeConsoleRuns,
+  getMpaRuntimeConsoleTrace,
+  getMpaSessionExecutionConfig,
   getRuntimeAgentInfo,
   getRuntimeDetail,
   getRuntimeUpdateCapability,
+  mpaProfileFromAgentDraft,
+  patchMpaSessionExecutionConfig,
   probeRuntimeA2a,
   probeRuntimeApps,
   prefetchRuntimeAgentInfo,
   prefetchRuntimeDetail,
   revealRuntimeApiKey,
+  startMpaAgentOperation,
+  upgradeMpaSessionProfile,
   type AgentFeedbackCasesResponse,
   type AgentFeedbackCase,
   type AgentFeedbackSource,
@@ -55,6 +65,15 @@ import {
   type AgentUsageResponse,
   type GithubDeliveryVersionsResult,
   type GithubDeliveryVersion,
+  MpaExecutionConfigRequestError,
+  type MpaAgentDeletePreview,
+  type MpaAgentView,
+  type MpaExecutionConfigMode,
+  type MpaProfilePayload,
+  type MpaProfileStatus,
+  type MpaRuntimeConsoleRun,
+  type MpaRuntimeTraceResponse,
+  type MpaSessionExecutionConfig,
   type RuntimeA2aIntegration,
   RuntimeProbeError,
   type RuntimeDetail,
@@ -85,7 +104,7 @@ import { TextShimmer } from "./text-shimmer/TextShimmer";
 import "./AgentWorkspace.css";
 
 type WorkspaceView = "library" | "evaluation";
-type AgentSection = "basic" | "usage" | "evaluations" | "optimizations" | "integrations" | "versions";
+type AgentSection = "basic" | "profileConfig" | "sessionConfig" | "usage" | "diagnostics" | "evaluations" | "optimizations" | "integrations" | "versions";
 type IntegrationProtocol = "api-server" | "a2a";
 type EvaluationSection = "config" | "history";
 type CaseKind = "good" | "bad";
@@ -94,27 +113,31 @@ type OptimizationModule = AgentOptimizationModule;
 
 type AgentCase = AgentFeedbackCase & { tag?: string };
 type OptimizationGroup = AgentOptimizationGroup;
+type AgentCategory = "general" | "mpa";
 type DeleteConfirmTarget =
   | {
       kind: "selection";
       title: string;
-      description: string;
+      description: ReactNode;
       confirmLabel: string;
+      canConfirm?: boolean;
       agents: AgentEntry[];
       drafts: WorkspaceAgentDraft[];
     }
   | {
       kind: "agent";
       title: string;
-      description: string;
+      description: ReactNode;
       confirmLabel: string;
+      canConfirm?: boolean;
       agent: AgentEntry;
     }
   | {
       kind: "draft";
       title: string;
-      description: string;
+      description: ReactNode;
       confirmLabel: string;
+      canConfirm?: boolean;
       draft: WorkspaceAgentDraft;
     };
 
@@ -283,7 +306,10 @@ function evaluationText(value: string, t: TFunction): string {
 
 const AGENT_SECTIONS: AgentSection[] = [
   "basic",
+  "profileConfig",
+  "sessionConfig",
   "usage",
+  "diagnostics",
   "evaluations",
   "optimizations",
   "integrations",
@@ -322,6 +348,170 @@ interface IntegrationProbeResult {
 interface RevealedApiKey {
   requestKey: string;
   value: string;
+}
+
+interface SessionExecutionConfigState {
+  requestKey: string;
+  value: MpaSessionExecutionConfig;
+}
+
+interface MpaProfileStatusState {
+  requestKey: string;
+  value: MpaProfileStatus;
+}
+
+interface MpaProfileApplyState {
+  saving: boolean;
+  error: string;
+  notice: string;
+}
+
+interface MpaAgentViewState {
+  requestKey: string;
+  value: MpaAgentView;
+}
+
+interface MpaDiagnosticsState {
+  requestKey: string;
+  runs: MpaRuntimeConsoleRun[];
+  trace: MpaRuntimeTraceResponse | null;
+}
+
+export interface MpaProfileEditTarget {
+  draft: AgentDraft;
+  runtimeId: string;
+  mpaInstanceId: string;
+  name: string;
+  region: string;
+  appName?: string;
+  currentVersion?: number | null;
+  runtimeRevision?: string;
+}
+
+function recordId(value: unknown): string {
+  if (!value || typeof value !== "object") return "";
+  const id = (value as { id?: unknown }).id;
+  return typeof id === "string" ? id : "";
+}
+
+function effectiveModelId(config: MpaSessionExecutionConfig | null): string {
+  return recordId(config?.effectiveRefs?.model);
+}
+
+function executionOverrideMode(
+  config: MpaSessionExecutionConfig | null,
+  category: string,
+): MpaExecutionConfigMode | "" {
+  const value = config?.overrides?.[category];
+  if (!value || typeof value !== "object") return "";
+  const mode = (value as { mode?: unknown }).mode;
+  return mode === "replace" || mode === "clear" || mode === "inherit" ? mode : "";
+}
+
+function executionMcpIds(config: MpaSessionExecutionConfig | null): string[] {
+  const values = config?.effectiveRefs?.mcpServers;
+  if (!Array.isArray(values)) return [];
+  return values.map(recordId).filter(Boolean);
+}
+
+function mpaDeleteBlockerLabel(code: string, t: TFunction<"ui">): string {
+  switch (code) {
+    case "active_operation":
+      return t("agentWorkspace.mpaDeleteBlockerActiveOperation");
+    case "active_sessions":
+      return t("agentWorkspace.mpaDeleteBlockerActiveSessions");
+    case "binding_ambiguous":
+      return t("agentWorkspace.mpaDeleteBlockerBindingAmbiguous");
+    case "runtime_missing":
+      return t("agentWorkspace.mpaDeleteBlockerRuntimeMissing");
+    case "orphan_runtime":
+      return t("agentWorkspace.mpaDeleteBlockerOrphanRuntime");
+    default:
+      return code;
+  }
+}
+
+function MpaDeletePreviewDetails({
+  preview,
+  t,
+}: {
+  preview: MpaAgentDeletePreview;
+  t: TFunction<"ui">;
+}) {
+  const blockers = preview.blockers.map((code) => mpaDeleteBlockerLabel(code, t));
+  return (
+    <div className="aw-mpa-delete-preview">
+      <p>{t("agentWorkspace.mpaDeletePreviewSummary")}</p>
+      <dl className="aw-mpa-delete-preview__stats">
+        <div>
+          <dt>{t("agentWorkspace.mpaDeletePreviewSessions")}</dt>
+          <dd>{preview.sessionCounts.total}</dd>
+        </div>
+        <div>
+          <dt>{t("agentWorkspace.mpaDeletePreviewActiveSessions")}</dt>
+          <dd>{preview.sessionCounts.active}</dd>
+        </div>
+        <div>
+          <dt>{t("agentWorkspace.mpaDeletePreviewIdleSessions")}</dt>
+          <dd>{preview.sessionCounts.idle}</dd>
+        </div>
+      </dl>
+      {blockers.length > 0 ? (
+        <div className="aw-mpa-delete-preview__blockers" role="status">
+          <strong>{t("agentWorkspace.mpaDeleteBlocked")}</strong>
+          <ul>
+            {blockers.map((item) => (
+              <li key={item}>{item}</li>
+            ))}
+          </ul>
+        </div>
+      ) : (
+        <ol className="aw-mpa-delete-preview__plan">
+          {preview.cleanupPlan.map((stage) => (
+            <li key={stage.stage}>
+              {t(`agentWorkspace.mpaDeleteStage.${stage.stage}`, {
+                count: stage.count,
+              })}
+            </li>
+          ))}
+        </ol>
+      )}
+    </div>
+  );
+}
+
+function executionConfigErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof MpaExecutionConfigRequestError && error.status === 412) {
+    return fallback;
+  }
+  return error instanceof Error ? error.message : String(error);
+}
+
+function mcpServerCount(config: MpaSessionExecutionConfig | null): number {
+  return executionMcpIds(config).length;
+}
+
+function formatMcpServerIds(
+  config: MpaSessionExecutionConfig | null,
+  t: TFunction,
+): string {
+  const ids = executionMcpIds(config);
+  return ids.length ? ids.join(", ") : t("agentWorkspace.none");
+}
+
+function isCategoryOverridden(
+  config: MpaSessionExecutionConfig | null,
+  category: string,
+): boolean {
+  return Boolean(config?.overrides?.[category]);
+}
+
+function profileUpgradeIdempotencyKey(
+  runtimeId: string,
+  sessionId: string,
+  targetProfileRevision: number,
+): string {
+  return `mpa-session-profile-upgrade:${runtimeId}:${sessionId}:${targetProfileRevision}`;
 }
 
 function endpointPath(endpoint: string, path: string): string {
@@ -578,6 +768,547 @@ function IntegrationPanel({
   );
 }
 
+function summarizeProfileList(
+  items: Array<Record<string, unknown>> | undefined,
+  fallback: string,
+): string {
+  const values = (items ?? []).flatMap((item) => {
+    const value = item.name ?? item.id ?? item.skillId ?? item.source;
+    return typeof value === "string" && value.trim() ? [value.trim()] : [];
+  });
+  return values.length ? values.join(", ") : fallback;
+}
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(canonicalJson).join(",")}]`;
+  }
+  if (value && typeof value === "object") {
+    const fields = Object.entries(value as Record<string, unknown>)
+      .filter(([, fieldValue]) => fieldValue !== undefined)
+      .sort(([left], [right]) => left.localeCompare(right));
+    return `{${fields.map(([key, fieldValue]) =>
+      `${JSON.stringify(key)}:${canonicalJson(fieldValue)}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+async function profileIdempotencyKey(
+  runtimeId: string,
+  operationKind: "create" | "update",
+  profile: MpaProfilePayload,
+): Promise<string> {
+  const bytes = new TextEncoder().encode(canonicalJson(profile));
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  const hex = Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, "0")).join("");
+  return `mpa-profile:${runtimeId}:${operationKind}:${hex}`;
+}
+
+function MpaProfileConfigPanel({
+  profile,
+  profileStatus,
+  runtimeReady,
+  disabledReason,
+  saving,
+  error,
+  notice,
+  onApply,
+  onEditProfile,
+  onRefresh,
+}: {
+  profile: MpaProfilePayload;
+  profileStatus: MpaProfileStatus | null;
+  runtimeReady: boolean;
+  disabledReason: string;
+  saving: boolean;
+  error: string;
+  notice: string;
+  onApply: () => void;
+  onEditProfile: () => void;
+  onRefresh: () => void;
+}) {
+  const { t } = useTranslation("ui");
+  const applied = profileStatus?.status === "applied";
+  const canApply = runtimeReady && !saving;
+  return (
+    <section className="aw-session-config aw-profile-config" aria-busy={saving}>
+      <div className="aw-integration-intro">
+        <h3>{t("agentWorkspace.profileConfigTitle")}</h3>
+        <p>{t("agentWorkspace.profileConfigDescription")}</p>
+      </div>
+
+      {disabledReason ? (
+        <div className="aw-session-config-state">{disabledReason}</div>
+      ) : (
+        <>
+          {error && (
+            <div className="aw-session-config-state is-error" role="alert">
+              <span>{error}</span>
+              <button type="button" onClick={onRefresh} disabled={saving}>
+                {t("common.retry")}
+              </button>
+            </div>
+          )}
+          {notice && !error && (
+            <div className="aw-session-config-notice" role="status">
+              {notice}
+            </div>
+          )}
+
+          <div className="aw-session-config-actions">
+            <button type="button" onClick={onEditProfile} disabled={saving}>
+              {t("agentWorkspace.editProfile")}
+            </button>
+            <button type="button" onClick={onRefresh} disabled={saving}>
+              {t("common.refresh")}
+            </button>
+          </div>
+
+          <dl className="aw-session-config-grid">
+            <div>
+              <dt>{t("agentWorkspace.profileStatus")}</dt>
+              <dd>{applied ? t("agentWorkspace.profileApplied") : t("agentWorkspace.profileNotApplied")}</dd>
+            </div>
+            <div>
+              <dt>{t("agentWorkspace.latestProfileRevision")}</dt>
+              <dd>{profileStatus?.profileRevision ?? t("agentWorkspace.notAvailable")}</dd>
+            </div>
+            <div>
+              <dt>{t("agentWorkspace.modelId")}</dt>
+              <dd>{String(profile.model?.id || t("agentWorkspace.notAvailable"))}</dd>
+            </div>
+            <div>
+              <dt>ETag</dt>
+              <dd>{profileStatus?.etag || t("agentWorkspace.notAvailable")}</dd>
+            </div>
+          </dl>
+
+          {!applied && (
+            <div className="aw-session-config-upgrade" role="status">
+              <span>{t("agentWorkspace.profileNotAppliedDescription")}</span>
+              <button type="button" onClick={onApply} disabled={!canApply}>
+                {saving
+                  ? t("agentWorkspace.profileApplying")
+                  : t("agentWorkspace.applyProfile")}
+              </button>
+            </div>
+          )}
+
+          {applied && (
+            <div className="aw-session-config-actions">
+              <button type="button" onClick={onApply} disabled={!canApply}>
+                {saving
+                  ? t("agentWorkspace.profileApplying")
+                  : t("agentWorkspace.reapplyProfile")}
+              </button>
+            </div>
+          )}
+
+          <div className="aw-session-config-card">
+            <div>
+              <h4>{t("agentWorkspace.profilePrompt")}</h4>
+              <p>{profile.system || t("agentWorkspace.notAvailable")}</p>
+            </div>
+          </div>
+
+          <div className="aw-session-config-card">
+            <div>
+              <h4>{t("agentWorkspace.profileResources")}</h4>
+              <p>
+                {t("agentWorkspace.profileResourceSummary", {
+                  tools: profile.tools.length,
+                  skills: profile.skills.length,
+                  mcp: profile.mcpServers.length,
+                })}
+              </p>
+            </div>
+            <div className="aw-profile-config-list">
+              <span title={summarizeProfileList(profile.tools, t("agentWorkspace.notAvailable"))}>
+                {t("agentSelector.tools")}: {summarizeProfileList(profile.tools, t("agentWorkspace.notAvailable"))}
+              </span>
+              <span title={summarizeProfileList(profile.skills, t("agentWorkspace.notAvailable"))}>
+                {t("agentSelector.skills")}: {summarizeProfileList(profile.skills, t("agentWorkspace.notAvailable"))}
+              </span>
+              <span title={summarizeProfileList(profile.mcpServers, t("agentWorkspace.notAvailable"))}>
+                MCP: {summarizeProfileList(profile.mcpServers, t("agentWorkspace.notAvailable"))}
+              </span>
+            </div>
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
+function SessionExecutionConfigPanel({
+  config,
+  profileStatus,
+  loadable,
+  disabledReason,
+  loading,
+  saving,
+  upgrading,
+  error,
+  notice,
+  modelValue,
+  modelDirty,
+  profileUpgradeAvailable,
+  onModelChange,
+  onSaveModel,
+  onInheritModel,
+  onClearMcp,
+  onInheritMcp,
+  onUpgradeProfile,
+  onRefresh,
+}: {
+  config: MpaSessionExecutionConfig | null;
+  profileStatus: MpaProfileStatus | null;
+  loadable: boolean;
+  disabledReason: string;
+  loading: boolean;
+  saving: boolean;
+  upgrading: boolean;
+  error: string;
+  notice: string;
+  modelValue: string;
+  modelDirty: boolean;
+  profileUpgradeAvailable: boolean;
+  onModelChange: (value: string) => void;
+  onSaveModel: () => void;
+  onInheritModel: () => void;
+  onClearMcp: () => void;
+  onInheritMcp: () => void;
+  onUpgradeProfile: () => void;
+  onRefresh: () => void;
+}) {
+  const { t } = useTranslation("ui");
+  const busy = loading || saving || upgrading;
+  const modelMode = executionOverrideMode(config, "model");
+  const mcpMode = executionOverrideMode(config, "mcpServers");
+  const currentModel = effectiveModelId(config);
+  const latestRevision = profileStatus?.status === "applied"
+    ? profileStatus.profileRevision
+    : null;
+  return (
+    <section className="aw-session-config" aria-busy={busy}>
+      <div className="aw-integration-intro">
+        <h3>{t("agentWorkspace.sessionConfigTitle")}</h3>
+        <p>{t("agentWorkspace.sessionConfigDescription")}</p>
+      </div>
+
+      {!loadable ? (
+        <div className="aw-session-config-state">{disabledReason}</div>
+      ) : loading && !config ? (
+        <div className="aw-session-config-state" role="status">
+          <span className="loading-gap-spinner" aria-hidden="true" />
+          <span>{t("agentWorkspace.loadingSessionConfig")}</span>
+        </div>
+      ) : (
+        <>
+          {error && (
+            <div className="aw-session-config-state is-error" role="alert">
+              <span>{error}</span>
+              <button type="button" onClick={onRefresh} disabled={busy}>
+                {t("common.retry")}
+              </button>
+            </div>
+          )}
+          {notice && !error && (
+            <div className="aw-session-config-notice" role="status">
+              {notice}
+            </div>
+          )}
+          {config && (
+            <>
+              <dl className="aw-session-config-grid">
+                <div>
+                  <dt>{t("agentWorkspace.sessionConfigRevision")}</dt>
+                  <dd>{config.revision}</dd>
+                </div>
+                <div>
+                  <dt>{t("agentWorkspace.sessionProfileRevision")}</dt>
+                  <dd>{config.profileRevision}</dd>
+                </div>
+                <div>
+                  <dt>{t("agentWorkspace.latestProfileRevision")}</dt>
+                  <dd>{latestRevision ?? t("agentWorkspace.notAvailable")}</dd>
+                </div>
+                <div>
+                  <dt>ETag</dt>
+                  <dd>{config.etag || t("agentWorkspace.notAvailable")}</dd>
+                </div>
+              </dl>
+
+              {profileUpgradeAvailable && latestRevision != null && (
+                <div className="aw-session-config-upgrade" role="status">
+                  <span>
+                    {t("agentWorkspace.sessionProfileUpgradeAvailable", {
+                      current: config.profileRevision,
+                      target: latestRevision,
+                    })}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={onUpgradeProfile}
+                    disabled={busy}
+                  >
+                    {upgrading
+                      ? t("agentWorkspace.sessionProfileUpgrading")
+                      : t("agentWorkspace.upgradeSessionProfile")}
+                  </button>
+                </div>
+              )}
+
+              <div className="aw-session-config-card">
+                <div>
+                  <h4>{t("agentWorkspace.sessionModelOverride")}</h4>
+                  <p>
+                    {modelMode
+                      ? t(`agentWorkspace.executionConfigMode.${modelMode}`)
+                      : t("agentWorkspace.executionConfigMode.inherit")}
+                  </p>
+                </div>
+                <label className="aw-session-config-field">
+                  <span>{t("agentWorkspace.modelId")}</span>
+                  <input
+                    type="text"
+                    value={modelValue}
+                    onChange={(event) => onModelChange(event.currentTarget.value)}
+                    placeholder={currentModel || t("agentWorkspace.inheritProfileDefault")}
+                    disabled={busy}
+                  />
+                </label>
+                <div className="aw-session-config-actions">
+                  <button
+                    type="button"
+                    onClick={onSaveModel}
+                    disabled={busy || !modelDirty}
+                  >
+                    {saving ? t("common.saving") : t("common.save")}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={onInheritModel}
+                    disabled={busy || !isCategoryOverridden(config, "model")}
+                  >
+                    {t("agentWorkspace.inheritProfileDefault")}
+                  </button>
+                </div>
+              </div>
+
+              <div className="aw-session-config-card">
+                <div>
+                  <h4>{t("agentWorkspace.sessionMcpServers")}</h4>
+                  <p>
+                    {mcpMode
+                      ? t(`agentWorkspace.executionConfigMode.${mcpMode}`)
+                      : t("agentWorkspace.executionConfigMode.inherit")}
+                  </p>
+                </div>
+                <div className="aw-session-config-value">
+                  <span>
+                    {t("agentWorkspace.mcpServerCount", {
+                      count: mcpServerCount(config),
+                    })}
+                  </span>
+                  <small title={formatMcpServerIds(config, t)}>
+                    {formatMcpServerIds(config, t)}
+                  </small>
+                </div>
+                <div className="aw-session-config-actions">
+                  <button
+                    type="button"
+                    onClick={onClearMcp}
+                    disabled={busy || mcpMode === "clear"}
+                  >
+                    {t("agentWorkspace.clearSessionMcp")}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={onInheritMcp}
+                    disabled={busy || !isCategoryOverridden(config, "mcpServers")}
+                  >
+                    {t("agentWorkspace.inheritProfileDefault")}
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
+
+function correlationValue(
+  correlation: Record<string, unknown> | undefined,
+  key: string,
+): string {
+  const value = correlation?.[key];
+  return value == null || value === "" ? "" : String(value);
+}
+
+function workerCorrelationValue(
+  correlation: Record<string, unknown> | undefined,
+  key: string,
+): string {
+  const worker = correlation?.worker;
+  if (!worker || typeof worker !== "object") return "";
+  const value = (worker as Record<string, unknown>)[key];
+  return value == null || value === "" ? "" : String(value);
+}
+
+function formatDurationMs(value: number | null | undefined, t: TFunction): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return t("agentWorkspace.notAvailable");
+  }
+  return `${Math.round(value)} ms`;
+}
+
+function MpaDiagnosticsPanel({
+  data,
+  loadable,
+  disabledReason,
+  loading,
+  error,
+  onRefresh,
+  locale,
+}: {
+  data: MpaDiagnosticsState | null;
+  loadable: boolean;
+  disabledReason: string;
+  loading: boolean;
+  error: string;
+  onRefresh: () => void;
+  locale: string;
+}) {
+  const { t } = useTranslation("ui");
+  const runs = data?.runs ?? [];
+  const trace = data?.trace ?? null;
+  const latestRun = runs[0];
+  const correlation = trace?.correlation ?? {};
+  const fields = [
+    ["mpaInstanceId", t("agentWorkspace.mpaInstanceId")],
+    ["profileRevision", t("agentWorkspace.sessionProfileRevision")],
+    ["executionConfigRevision", t("agentWorkspace.sessionConfigRevision")],
+    ["turnId", t("agentWorkspace.turnId")],
+    ["taskId", t("agentWorkspace.taskId")],
+    ["runtimeId", "Runtime ID"],
+    ["runtimeVersion", t("systemInfo.currentVersion")],
+  ] as const;
+  const workerFields = [
+    ["kind", t("agentWorkspace.workerKind")],
+    ["sessionId", t("agentWorkspace.workerSession")],
+    ["turnId", t("agentWorkspace.workerTurn")],
+    ["profileId", t("agentWorkspace.workerProfile")],
+    ["profileVersion", t("agentWorkspace.workerProfileVersion")],
+  ] as const;
+  return (
+    <section className="aw-mpa-diagnostics" aria-busy={loading}>
+      <div className="aw-integration-intro">
+        <h3>{t("agentWorkspace.mpaDiagnosticsTitle")}</h3>
+        <p>{t("agentWorkspace.mpaDiagnosticsDescription")}</p>
+      </div>
+      {!loadable ? (
+        <div className="aw-session-config-state">{disabledReason}</div>
+      ) : loading && !data ? (
+        <div className="aw-session-config-state" role="status">
+          <span className="loading-gap-spinner" aria-hidden="true" />
+          <span>{t("agentWorkspace.loadingMpaDiagnostics")}</span>
+        </div>
+      ) : error ? (
+        <div className="aw-session-config-state is-error" role="alert">
+          <span>{error}</span>
+          <button type="button" onClick={onRefresh} disabled={loading}>
+            {t("common.retry")}
+          </button>
+        </div>
+      ) : !latestRun ? (
+        <div className="aw-session-config-state">
+          {t("agentWorkspace.noMpaDiagnostics")}
+        </div>
+      ) : (
+        <>
+          <dl className="aw-session-config-grid">
+            <div>
+              <dt>{t("agentWorkspace.latestRun")}</dt>
+              <dd>{latestRun.invocationId}</dd>
+            </div>
+            <div>
+              <dt>{t("agentSelector.status")}</dt>
+              <dd>{latestRun.status}</dd>
+            </div>
+            <div>
+              <dt>{t("agentWorkspace.lastUsed")}</dt>
+              <dd>{formatAgentUsageTime(latestRun.startedAt, locale, t)}</dd>
+            </div>
+            <div>
+              <dt>{t("agentWorkspace.stepCount")}</dt>
+              <dd>{latestRun.stepCount}</dd>
+            </div>
+          </dl>
+          <section className="aw-session-config-card">
+            <div>
+              <h4>{t("agentWorkspace.traceCorrelation")}</h4>
+              <p>{t("agentWorkspace.traceCorrelationDescription")}</p>
+            </div>
+            <dl className="aw-mpa-correlation">
+              {fields.map(([key, label]) => (
+                <div key={key}>
+                  <dt>{label}</dt>
+                  <dd>{correlationValue(correlation, key) || t("agentWorkspace.notAvailable")}</dd>
+                </div>
+              ))}
+              {workerFields.map(([key, label]) => (
+                <div key={`worker-${key}`}>
+                  <dt>{label}</dt>
+                  <dd>{workerCorrelationValue(correlation, key) || t("agentWorkspace.notAvailable")}</dd>
+                </div>
+              ))}
+            </dl>
+          </section>
+          <section className="aw-session-config-card">
+            <div>
+              <h4>{t("agentWorkspace.traceSteps")}</h4>
+              <p>{t("agentWorkspace.traceStepsDescription")}</p>
+            </div>
+            {trace?.steps.length ? (
+              <div className="aw-usage-table-wrap">
+                <table className="aw-usage-table aw-mpa-trace-table">
+                  <caption>{t("agentWorkspace.traceSteps")}</caption>
+                  <thead>
+                    <tr>
+                      <th scope="col">{t("agentWorkspace.step")}</th>
+                      <th scope="col">{t("agentSelector.status")}</th>
+                      <th scope="col">{t("agentWorkspace.duration")}</th>
+                      <th scope="col">{t("agentWorkspace.turnId")}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {trace.steps.slice(0, 20).map((step) => (
+                      <tr key={step.stepId}>
+                        <td><strong>{step.title || step.kind}</strong><small>{step.kind}</small></td>
+                        <td>{step.status}</td>
+                        <td>{formatDurationMs(step.durationMs, t)}</td>
+                        <td>{correlationValue(step.correlation, "turnId") || t("agentWorkspace.notAvailable")}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="aw-session-config-value">
+                <span>{t("agentWorkspace.noTraceSteps")}</span>
+              </div>
+            )}
+          </section>
+        </>
+      )}
+    </section>
+  );
+}
+
 function infoToDraft(
   info: AgentInfo | null,
   fallbackName: string,
@@ -729,6 +1460,13 @@ function deploymentSteps(task: DeploymentTaskUpdate, t: TFunction): Array<{
   if (task.createEvaluationSets) {
     steps.push({ phase: "evaluation", label: t("agentWorkspace.deploymentSteps.evaluation.label"), description: t("agentWorkspace.deploymentSteps.evaluation.description") });
   }
+  if (task.mpaProfile) {
+    steps.push({ phase: "profile_applying", label: t("agentWorkspace.deploymentSteps.profileApplying.label"), description: t("agentWorkspace.deploymentSteps.profileApplying.description") });
+    if (task.mpaSmoke) {
+      steps.push({ phase: "smoke_running", label: t("agentWorkspace.deploymentSteps.smokeRunning.label"), description: t("agentWorkspace.deploymentSteps.smokeRunning.description") });
+      steps.push({ phase: "runnable", label: t("agentWorkspace.deploymentSteps.runnable.label"), description: t("agentWorkspace.deploymentSteps.runnable.description") });
+    }
+  }
   if (task.githubDelivery) {
     steps.push({ phase: "github", label: t("agentWorkspace.deploymentSteps.github.label"), description: t("agentWorkspace.deploymentSteps.github.description") });
   }
@@ -745,6 +1483,9 @@ function deploymentStepIndex(task: DeploymentTaskUpdate, t: TFunction): number {
     部署: "deploy",
     发布: "publish",
     创建评测集: "evaluation",
+    "应用 MPA Profile": "profile_applying",
+    "验证 MPA Runtime": "smoke_running",
+    "MPA Runtime 可运行": "runnable",
     "挂载 GitHub 持续交付": "github",
     部署完成: "complete",
   } as Record<string, string>)[task.label];
@@ -1054,6 +1795,8 @@ export interface AgentWorkspaceProps {
   focusedAgentSection?: AgentSection;
   focusedCaseKind?: CaseKind;
   feedbackCasePreview?: AgentFeedbackCase | null;
+  currentSessionId?: string;
+  currentRuntimeId?: string;
   detailOnly?: boolean;
   onBack?: () => void;
   onRetryAgents?: () => void;
@@ -1066,6 +1809,7 @@ export interface AgentWorkspaceProps {
   onFeedbackCasesDeleted?: (items: AgentFeedbackCase[]) => void;
   onCreateAgent: () => void;
   onUpdateAgent: (capability: RuntimeUpdateCapability) => void;
+  onEditMpaProfile?: (target: MpaProfileEditTarget) => void;
   onEditDraft?: (draft: WorkspaceAgentDraft) => void;
 }
 
@@ -1087,6 +1831,8 @@ export function AgentWorkspace({
   focusedAgentSection = "basic",
   focusedCaseKind = "good",
   feedbackCasePreview = null,
+  currentSessionId = "",
+  currentRuntimeId = "",
   detailOnly = false,
   onBack,
   onRetryAgents,
@@ -1099,6 +1845,7 @@ export function AgentWorkspace({
   onFeedbackCasesDeleted,
   onCreateAgent,
   onUpdateAgent,
+  onEditMpaProfile,
   onEditDraft,
 }: AgentWorkspaceProps) {
   const { t, i18n } = useTranslation("ui");
@@ -1169,6 +1916,30 @@ export function AgentWorkspace({
   const [agentUsageLoading, setAgentUsageLoading] = useState(false);
   const [agentUsageError, setAgentUsageError] = useState("");
   const [agentUsageReloadToken, setAgentUsageReloadToken] = useState(0);
+  const [sessionExecutionConfig, setSessionExecutionConfig] =
+    useState<SessionExecutionConfigState | null>(null);
+  const [mpaProfileStatus, setMpaProfileStatus] =
+    useState<MpaProfileStatusState | null>(null);
+  const [mpaAgentView, setMpaAgentView] = useState<MpaAgentViewState | null>(null);
+  const [mpaAgentViewLoading, setMpaAgentViewLoading] = useState(false);
+  const [mpaAgentViewError, setMpaAgentViewError] = useState("");
+  const [mpaDiagnostics, setMpaDiagnostics] =
+    useState<MpaDiagnosticsState | null>(null);
+  const [mpaDiagnosticsLoading, setMpaDiagnosticsLoading] = useState(false);
+  const [mpaDiagnosticsError, setMpaDiagnosticsError] = useState("");
+  const [mpaDiagnosticsReloadToken, setMpaDiagnosticsReloadToken] = useState(0);
+  const [sessionConfigModelInput, setSessionConfigModelInput] = useState("");
+  const [sessionConfigLoading, setSessionConfigLoading] = useState(false);
+  const [sessionConfigSaving, setSessionConfigSaving] = useState(false);
+  const [sessionConfigUpgradeRunning, setSessionConfigUpgradeRunning] = useState(false);
+  const [sessionConfigError, setSessionConfigError] = useState("");
+  const [sessionConfigNotice, setSessionConfigNotice] = useState("");
+  const [sessionConfigReloadToken, setSessionConfigReloadToken] = useState(0);
+  const [mpaProfileApply, setMpaProfileApply] = useState<MpaProfileApplyState>({
+    saving: false,
+    error: "",
+    notice: "",
+  });
   const [caseSelectionMode, setCaseSelectionMode] = useState(false);
   const [selectedCaseIds, setSelectedCaseIds] = useState<Set<string>>(() => new Set());
   const [deletingCases, setDeletingCases] = useState(false);
@@ -1181,6 +1952,7 @@ export function AgentWorkspace({
   const updateCapabilityRequestRef = useRef(0);
   const apiKeyRequestRef = useRef(0);
   const agentUsageRequestRef = useRef(0);
+  const sessionExecutionConfigRequestRef = useRef(0);
   const [evaluationGroups, setEvaluationGroups] = useState(DEFAULT_EVALUATION_GROUPS);
   const [activeEvaluationGroupId, setActiveEvaluationGroupId] = useState("");
 
@@ -1284,9 +2056,25 @@ export function AgentWorkspace({
       : null;
   const selectedAgentAppName =
     selectedAgentInfo?.appName || selectedAgent?.runtimeApp || selectedAgent?.app || "";
-  const visibleAgentSectionIds = canViewUsage && selectedAgent?.runtimeId
-    ? AGENT_SECTIONS
-    : AGENT_SECTIONS.filter((item) => item !== "usage");
+  const selectedAgentCategory: AgentCategory =
+    selectedAgent?.agentCategory ?? "general";
+  const runtimeDetailForSelectedAgent = runtimeDetail?.runtimeId === selectedAgent?.runtimeId
+    ? runtimeDetail
+    : null;
+  const runtimeDetailMpaInstanceId =
+    runtimeDetailForSelectedAgent?.mpaInstanceId;
+  const selectedMpaInstanceId =
+    selectedAgent?.mpaInstanceId ??
+    runtimeDetailMpaInstanceId ??
+    selectedAgent?.runtimeId ??
+    "";
+  const visibleAgentSectionIds = AGENT_SECTIONS.filter((item) => {
+    if (item === "profileConfig") return selectedAgentCategory === "mpa";
+    if (item === "usage") return canViewUsage && selectedAgent?.runtimeId;
+    if (item === "sessionConfig") return selectedAgentCategory === "mpa";
+    if (item === "diagnostics") return selectedAgentCategory === "mpa" && selectedAgent?.runtimeId;
+    return true;
+  });
   const visibleAgentSections = visibleAgentSectionIds.map((id) => ({
     id,
     label: t(`agentWorkspace.sections.${id}`),
@@ -1301,6 +2089,23 @@ export function AgentWorkspace({
     ? agentUsage.value
     : null;
   const integrationRequestKey = `${selectedAgent?.region ?? "cn-beijing"}:${selectedAgent?.runtimeId ?? ""}`;
+  const sessionConfigRequestKey = JSON.stringify([
+    selectedAgent?.runtimeId ?? "",
+    selectedMpaInstanceId,
+    selectedAgent?.region ?? "cn-beijing",
+    currentSessionId,
+  ]);
+  const mpaAgentViewRequestKey = JSON.stringify([
+    selectedAgent?.runtimeId ?? "",
+    selectedMpaInstanceId,
+    selectedAgent?.region ?? "cn-beijing",
+  ]);
+  const mpaProfileStatusRequestKey = mpaAgentViewRequestKey;
+  const mpaDiagnosticsRequestKey = JSON.stringify([
+    selectedAgent?.runtimeId ?? "",
+    selectedAgent?.region ?? "cn-beijing",
+    currentSessionId,
+  ]);
   const selectedRevealedApiKey =
     revealedApiKey?.requestKey === integrationRequestKey
       ? revealedApiKey.value
@@ -1309,6 +2114,50 @@ export function AgentWorkspace({
     integrationProbe?.requestKey === integrationRequestKey
       ? integrationProbe
       : null;
+  const selectedSessionExecutionConfig =
+    sessionExecutionConfig?.requestKey === sessionConfigRequestKey && currentSessionId
+      ? sessionExecutionConfig.value
+      : null;
+  const selectedMpaAgentView =
+    mpaAgentView?.requestKey === mpaAgentViewRequestKey
+      ? mpaAgentView.value
+      : null;
+  const selectedMpaProfileStatus =
+    mpaProfileStatus?.requestKey === mpaProfileStatusRequestKey
+      ? mpaProfileStatus.value
+      : selectedMpaAgentView?.profile ?? null;
+  const selectedMpaBindingStatus = selectedMpaAgentView?.bindingStatus ?? "";
+  const mpaProfileCanWrite = selectedMpaAgentView?.capabilities.canWrite === true;
+  const selectedMpaDiagnostics =
+    mpaDiagnostics?.requestKey === mpaDiagnosticsRequestKey
+      ? mpaDiagnostics
+      : null;
+  const mpaProfileRuntimeReady = Boolean(
+    selectedAgent?.runtimeId &&
+    selectedAgentCategory === "mpa" &&
+    selectedMpaBindingStatus !== "runtime_missing" &&
+    selectedMpaBindingStatus !== "binding_ambiguous",
+  );
+  const sessionExecutionConfigLoadable = Boolean(
+    selectedAgent?.agentCategory === "mpa" &&
+    selectedAgent?.runtimeId &&
+    selectedAgent?.runtimeId === currentRuntimeId &&
+    selectedMpaBindingStatus === "bound" &&
+    currentSessionId,
+  );
+  const latestProfileRevision =
+    selectedMpaProfileStatus?.status === "applied"
+      ? selectedMpaProfileStatus.profileRevision
+      : null;
+  const profileUpgradeAvailable = Boolean(
+    sessionExecutionConfigLoadable &&
+    selectedSessionExecutionConfig &&
+    latestProfileRevision != null &&
+    latestProfileRevision > selectedSessionExecutionConfig.profileRevision,
+  );
+  const currentModelId = effectiveModelId(selectedSessionExecutionConfig);
+  const modelInputDirty =
+    sessionConfigModelInput.trim() !== currentModelId;
   const apiIntegrationAvailable = Boolean(selectedIntegrationProbe?.apiApps?.length);
   const a2aIntegrationAvailable = Boolean(selectedIntegrationProbe?.a2a);
   const apiIntegrationAppName =
@@ -1352,6 +2201,7 @@ export function AgentWorkspace({
       i18n.resolvedLanguage || i18n.language,
     ),
   ) ?? [];
+  const shouldLoadUpdateCapability = selectedAgentCategory !== "mpa";
   useEffect(() => {
     const requestId = updateCapabilityRequestRef.current + 1;
     updateCapabilityRequestRef.current = requestId;
@@ -1360,7 +2210,7 @@ export function AgentWorkspace({
 
     const runtimeId = selectedAgent?.runtimeId ?? "";
     const region = selectedAgent?.region ?? "";
-    if (!canUpdate || !runtimeId || !region) {
+    if (!shouldLoadUpdateCapability || !canUpdate || !runtimeId || !region) {
       setUpdateCapabilityLoading(false);
       return;
     }
@@ -1443,6 +2293,7 @@ export function AgentWorkspace({
     selectedAgent?.currentVersion,
     selectedAgent?.region,
     selectedAgent?.runtimeId,
+    shouldLoadUpdateCapability,
     updateCapabilityRequestKey,
   ]);
   const listedAgents = useMemo(() => {
@@ -1527,8 +2378,11 @@ export function AgentWorkspace({
         (id) => publishedHarnessSidecar.componentOverrides[id],
       )
     : [];
+  const profileDraft = useMemo(() => mpaProfileFromAgentDraft(draft), [draft]);
   const updateBlockedReason = selectedDraft
     ? canCreate ? "" : t("agentWorkspace.errors.noCreatePermission")
+    : selectedAgentCategory === "mpa"
+      ? ""
     : !canUpdate
       ? t("agentWorkspace.errors.noManagePermission")
       : !selectedAgent?.runtimeId
@@ -1551,6 +2405,57 @@ export function AgentWorkspace({
                     ? ""
                     : t("agentWorkspace.errors.agentInfoMissing");
   const updateReasonId = "aw-update-disabled-reason";
+  const profileConfigDisabledReason = !selectedAgent
+    ? t("agentWorkspace.sessionConfigNoAgent")
+    : selectedAgentCategory !== "mpa"
+      ? t("agentWorkspace.sessionConfigNonMpa")
+      : mpaAgentViewLoading
+        ? t("agentWorkspace.loadingMpaAgentView")
+        : mpaAgentViewError
+          ? mpaAgentViewError
+          : selectedMpaBindingStatus === "runtime_missing"
+            ? t("agentWorkspace.mpaRuntimeMissing")
+            : selectedMpaBindingStatus === "binding_ambiguous"
+              ? t("agentWorkspace.mpaRuntimeBindingAmbiguous")
+              : selectedMpaBindingStatus && !mpaProfileRuntimeReady
+                ? t("agentWorkspace.mpaRuntimeMissing")
+                : !mpaProfileCanWrite
+                  ? t("agentWorkspace.errors.noManagePermission")
+              : "";
+  const sessionConfigDisabledReason = !selectedAgent
+    ? t("agentWorkspace.sessionConfigNoAgent")
+    : selectedAgentCategory !== "mpa"
+      ? t("agentWorkspace.sessionConfigNonMpa")
+      : mpaAgentViewLoading
+        ? t("agentWorkspace.loadingMpaAgentView")
+        : mpaAgentViewError
+          ? mpaAgentViewError
+          : selectedMpaBindingStatus === "runtime_missing"
+            ? t("agentWorkspace.mpaRuntimeMissing")
+            : selectedMpaBindingStatus === "binding_ambiguous"
+              ? t("agentWorkspace.mpaRuntimeBindingAmbiguous")
+              : selectedMpaBindingStatus === "orphan_runtime"
+                ? t("agentWorkspace.mpaRuntimeOrphan")
+                : !currentSessionId
+                  ? t("agentWorkspace.sessionConfigNoSession")
+                  : selectedAgent.runtimeId !== currentRuntimeId
+                    ? t("agentWorkspace.sessionConfigDifferentRuntime")
+                    : "";
+  const diagnosticsDisabledReason = !selectedAgent
+    ? t("agentWorkspace.sessionConfigNoAgent")
+    : selectedAgentCategory !== "mpa"
+      ? t("agentWorkspace.sessionConfigNonMpa")
+      : mpaAgentViewLoading
+        ? t("agentWorkspace.loadingMpaAgentView")
+        : mpaAgentViewError
+          ? mpaAgentViewError
+          : selectedMpaBindingStatus !== "bound"
+            ? sessionConfigDisabledReason
+            : !currentSessionId
+              ? t("agentWorkspace.sessionConfigNoSession")
+              : selectedAgent.runtimeId !== currentRuntimeId
+                ? t("agentWorkspace.sessionConfigDifferentRuntime")
+                : "";
   const toolNames = useMemo(() => {
     if (selectedAgentInfo) return selectedAgentInfo.tools;
     const builtinNames = (draft.builtinTools ?? []).map(
@@ -1631,8 +2536,80 @@ export function AgentWorkspace({
     ? `runtime:${selectedAgent?.runtimeId ?? selectedAgentInfo.name}:v${runtimeVersionKey}:${draftFlowKey}`
     : `draft:${selectedPendingTask?.id ?? selectedDraft?.id ?? selectedAgent?.id ?? selectedName}:${draftFlowKey}`;
   useEffect(() => {
+    let cancelled = false;
+    const runtimeId = selectedAgent?.runtimeId ?? "";
+    const mpaInstanceId = selectedMpaInstanceId || runtimeId;
+    const region = selectedAgent?.region ?? "cn-beijing";
+    const requestKey = mpaAgentViewRequestKey;
+    setMpaAgentViewError("");
+    if (selectedAgentCategory !== "mpa" || !runtimeId) {
+      setMpaAgentView(null);
+      setMpaAgentViewLoading(false);
+      return;
+    }
+    const controller = new AbortController();
+    setMpaAgentViewLoading(true);
+    void getMpaAgentView({
+      mpaInstanceId,
+      runtimeId,
+      region,
+      signal: controller.signal,
+    })
+      .then((value) => {
+        if (cancelled) return;
+        setMpaAgentView({ requestKey, value });
+        setMpaProfileStatus(
+          value.profile
+            ? { requestKey: mpaProfileStatusRequestKey, value: value.profile }
+            : null,
+        );
+      })
+      .catch((error: unknown) => {
+        if (cancelled || controller.signal.aborted) return;
+        setMpaAgentView(null);
+        setMpaAgentViewError(
+          error instanceof Error ? error.message : t("agentWorkspace.errors.loadMpaAgentView"),
+        );
+      })
+      .finally(() => {
+        if (!cancelled) setMpaAgentViewLoading(false);
+      });
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [
+    detailReloadToken,
+    mpaAgentViewRequestKey,
+    selectedMpaInstanceId,
+    selectedAgent?.region,
+    selectedAgent?.runtimeId,
+    selectedAgentCategory,
+    mpaProfileStatusRequestKey,
+    t,
+  ]);
+
+  useEffect(() => {
     if (section === "usage" && !canViewUsage) setSection("basic");
   }, [canViewUsage, section]);
+
+  useEffect(() => {
+    if (
+      section === "sessionConfig" &&
+      (!selectedAgent?.runtimeId || selectedAgentCategory !== "mpa")
+    ) {
+      setSection("basic");
+    }
+  }, [section, selectedAgent?.runtimeId, selectedAgentCategory]);
+
+  useEffect(() => {
+    if (
+      section === "diagnostics" &&
+      (!selectedAgent?.runtimeId || selectedAgentCategory !== "mpa")
+    ) {
+      setSection("basic");
+    }
+  }, [section, selectedAgent?.runtimeId, selectedAgentCategory]);
 
   useEffect(() => {
     if (!focusedDeploymentTaskId) return;
@@ -1848,6 +2825,77 @@ export function AgentWorkspace({
     setIntegrationProtocol("api-server");
   }, [integrationRequestKey, section]);
 
+  useEffect(() => {
+    const runtimeId = selectedAgent?.runtimeId ?? "";
+    const region = selectedAgent?.region ?? "cn-beijing";
+    const requestKey = mpaDiagnosticsRequestKey;
+    setMpaDiagnosticsError("");
+    if (
+      section !== "diagnostics" ||
+      selectedAgentCategory !== "mpa" ||
+      selectedMpaBindingStatus !== "bound" ||
+      !runtimeId ||
+      !currentSessionId ||
+      runtimeId !== currentRuntimeId
+    ) {
+      setMpaDiagnosticsLoading(false);
+      if (section !== "diagnostics") setMpaDiagnostics(null);
+      return;
+    }
+
+    const controller = new AbortController();
+    let cancelled = false;
+    setMpaDiagnosticsLoading(true);
+    void getMpaRuntimeConsoleRuns({
+      runtimeId,
+      region,
+      sessionId: currentSessionId,
+      signal: controller.signal,
+    })
+      .then(async (runsResult) => {
+        const firstRun = runsResult.runs[0];
+        const trace = firstRun
+          ? await getMpaRuntimeConsoleTrace({
+              runtimeId,
+              region,
+              sessionId: currentSessionId,
+              invocationId: firstRun.invocationId,
+              signal: controller.signal,
+            })
+          : null;
+        return { runs: runsResult.runs, trace };
+      })
+      .then((value) => {
+        if (cancelled) return;
+        setMpaDiagnostics({ requestKey, ...value });
+      })
+      .catch((error: unknown) => {
+        if (cancelled || controller.signal.aborted) return;
+        setMpaDiagnostics(null);
+        setMpaDiagnosticsError(
+          error instanceof Error ? error.message : t("agentWorkspace.errors.loadMpaDiagnostics"),
+        );
+      })
+      .finally(() => {
+        if (!cancelled) setMpaDiagnosticsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [
+    currentRuntimeId,
+    currentSessionId,
+    mpaDiagnosticsReloadToken,
+    mpaDiagnosticsRequestKey,
+    section,
+    selectedAgent?.region,
+    selectedAgent?.runtimeId,
+    selectedAgentCategory,
+    selectedMpaBindingStatus,
+    t,
+  ]);
+
   function clearRevealedApiKey() {
     apiKeyRequestRef.current += 1;
     setRevealedApiKey(null);
@@ -1923,6 +2971,92 @@ export function AgentWorkspace({
     selectedAgent?.currentVersion,
     selectedAgent?.region,
     selectedAgent?.runtimeId,
+  ]);
+
+  useEffect(() => {
+    const requestId = sessionExecutionConfigRequestRef.current + 1;
+    sessionExecutionConfigRequestRef.current = requestId;
+    setSessionConfigError("");
+    setSessionConfigNotice("");
+    setSessionConfigSaving(false);
+    setSessionConfigUpgradeRunning(false);
+    if (
+      section !== "sessionConfig" ||
+      !sessionExecutionConfigLoadable ||
+      !selectedAgent?.runtimeId
+    ) {
+      setSessionConfigLoading(false);
+      setSessionExecutionConfig(null);
+      setSessionConfigModelInput("");
+      return;
+    }
+
+    const runtimeId = selectedAgent.runtimeId;
+    const mpaInstanceId = selectedMpaInstanceId || runtimeId;
+    const region = selectedAgent.region ?? "cn-beijing";
+    const requestKey = sessionConfigRequestKey;
+    const controller = new AbortController();
+    setSessionConfigLoading(true);
+    void Promise.all([
+      getMpaSessionExecutionConfig({
+        runtimeId,
+        region,
+        sessionId: currentSessionId,
+        signal: controller.signal,
+      }),
+      getMpaProfileStatus({
+        runtimeId,
+        region,
+        mpaInstanceId,
+        signal: controller.signal,
+      }).catch(() => null),
+    ])
+      .then(([config, profileStatus]) => {
+        if (requestId !== sessionExecutionConfigRequestRef.current) return;
+        setSessionExecutionConfig({ requestKey, value: config });
+        setSessionConfigModelInput(effectiveModelId(config));
+        setMpaProfileStatus(
+          profileStatus
+            ? { requestKey: mpaProfileStatusRequestKey, value: profileStatus }
+            : null,
+        );
+      })
+      .catch((error: unknown) => {
+        if (
+          requestId !== sessionExecutionConfigRequestRef.current ||
+          controller.signal.aborted ||
+          (error as Error)?.name === "AbortError"
+        ) return;
+        setSessionExecutionConfig(null);
+        setSessionConfigModelInput("");
+        setSessionConfigError(
+          error instanceof Error
+            ? error.message
+            : t("agentWorkspace.errors.loadSessionConfig"),
+        );
+      })
+      .finally(() => {
+        if (
+          requestId === sessionExecutionConfigRequestRef.current &&
+          !controller.signal.aborted
+        ) {
+          setSessionConfigLoading(false);
+        }
+      });
+    return () => {
+      controller.abort();
+    };
+  }, [
+    currentSessionId,
+    sessionConfigReloadToken,
+    sessionConfigRequestKey,
+    sessionExecutionConfigLoadable,
+    section,
+    mpaProfileStatusRequestKey,
+    selectedMpaInstanceId,
+    selectedAgent?.region,
+    selectedAgent?.runtimeId,
+    t,
   ]);
 
   useEffect(() => {
@@ -2069,6 +3203,8 @@ export function AgentWorkspace({
       await createGithubDeliveryRollbackPr({
         runtimeId,
         targetCommitSha: commitSha,
+        region: selectedAgent?.region,
+        agentCategory: selectedAgentCategory,
       });
       const refreshed = await getGithubDeliveryVersions(runtimeId);
       setGithubVersions(refreshed);
@@ -2080,6 +3216,211 @@ export function AgentWorkspace({
       setRollbackCommit("");
     }
   }
+
+  function applySessionConfigConflict(error: unknown, fallback: string): boolean {
+    if (!(error instanceof MpaExecutionConfigRequestError)) return false;
+    if (error.status !== 412 || !error.currentState) return false;
+    setSessionExecutionConfig({
+      requestKey: sessionConfigRequestKey,
+      value: error.currentState,
+    });
+    setSessionConfigModelInput(effectiveModelId(error.currentState));
+    setSessionConfigError(fallback);
+    return true;
+  }
+
+  async function saveSessionModelOverride(mode: MpaExecutionConfigMode = "replace") {
+    if (!selectedAgent?.runtimeId || !selectedSessionExecutionConfig) return;
+    const runtimeId = selectedAgent.runtimeId;
+    const region = selectedAgent.region ?? "cn-beijing";
+    const modelId = sessionConfigModelInput.trim();
+    const change = mode === "inherit"
+      ? { category: "model", mode }
+      : modelId
+        ? { category: "model", mode, value: { id: modelId } }
+        : { category: "model", mode: "inherit" as const };
+    setSessionConfigSaving(true);
+    setSessionConfigError("");
+    setSessionConfigNotice("");
+    try {
+      const next = await patchMpaSessionExecutionConfig({
+        runtimeId,
+        region,
+        sessionId: currentSessionId,
+        etag: selectedSessionExecutionConfig.etag,
+        changes: [change],
+      });
+      setSessionExecutionConfig({ requestKey: sessionConfigRequestKey, value: next });
+      setSessionConfigModelInput(effectiveModelId(next));
+      setSessionConfigNotice(t("agentWorkspace.sessionConfigSaved"));
+    } catch (error) {
+      if (!applySessionConfigConflict(
+        error,
+        t("agentWorkspace.sessionConfigStale"),
+      )) {
+        setSessionConfigError(
+          executionConfigErrorMessage(
+            error,
+            t("agentWorkspace.sessionConfigStale"),
+          ),
+        );
+      }
+    } finally {
+      setSessionConfigSaving(false);
+    }
+  }
+
+  async function updateSessionMcpMode(mode: Extract<MpaExecutionConfigMode, "clear" | "inherit">) {
+    if (!selectedAgent?.runtimeId || !selectedSessionExecutionConfig) return;
+    const runtimeId = selectedAgent.runtimeId;
+    const region = selectedAgent.region ?? "cn-beijing";
+    setSessionConfigSaving(true);
+    setSessionConfigError("");
+    setSessionConfigNotice("");
+    try {
+      const next = await patchMpaSessionExecutionConfig({
+        runtimeId,
+        region,
+        sessionId: currentSessionId,
+        etag: selectedSessionExecutionConfig.etag,
+        changes: [{ category: "mcpServers", mode }],
+      });
+      setSessionExecutionConfig({ requestKey: sessionConfigRequestKey, value: next });
+      setSessionConfigNotice(t("agentWorkspace.sessionConfigSaved"));
+    } catch (error) {
+      if (!applySessionConfigConflict(
+        error,
+        t("agentWorkspace.sessionConfigStale"),
+      )) {
+        setSessionConfigError(
+          executionConfigErrorMessage(
+            error,
+            t("agentWorkspace.sessionConfigStale"),
+          ),
+        );
+      }
+    } finally {
+      setSessionConfigSaving(false);
+    }
+  }
+
+  async function upgradeSessionProfileRevision() {
+    if (!selectedAgent?.runtimeId || !selectedSessionExecutionConfig || !latestProfileRevision) {
+      return;
+    }
+    const runtimeId = selectedAgent.runtimeId;
+    const region = selectedAgent.region ?? "cn-beijing";
+    setSessionConfigUpgradeRunning(true);
+    setSessionConfigError("");
+    setSessionConfigNotice("");
+    try {
+      const next = await upgradeMpaSessionProfile({
+        runtimeId,
+        region,
+        sessionId: currentSessionId,
+        etag: selectedSessionExecutionConfig.etag,
+        idempotencyKey: profileUpgradeIdempotencyKey(
+          runtimeId,
+          currentSessionId,
+          latestProfileRevision,
+        ),
+        targetProfileRevision: latestProfileRevision,
+      });
+      setSessionExecutionConfig({ requestKey: sessionConfigRequestKey, value: next });
+      setSessionConfigModelInput(effectiveModelId(next));
+      setSessionConfigNotice(t("agentWorkspace.sessionProfileUpgraded"));
+    } catch (error) {
+      if (!applySessionConfigConflict(
+        error,
+        t("agentWorkspace.sessionConfigStale"),
+      )) {
+        setSessionConfigError(
+          executionConfigErrorMessage(
+            error,
+            t("agentWorkspace.sessionProfileUpgradeFailed"),
+          ),
+        );
+      }
+    } finally {
+      setSessionConfigUpgradeRunning(false);
+    }
+  }
+
+  async function applyMpaProfileFromStudio() {
+    if (!selectedAgent?.runtimeId) return;
+    const runtimeId = selectedAgent.runtimeId;
+    const region = selectedAgent.region ?? "cn-beijing";
+    const mpaInstanceId = selectedMpaInstanceId || runtimeId;
+    const operationKind = selectedMpaProfileStatus?.status === "applied"
+      ? "update"
+      : "create";
+    const runtimeRevision = selectedMpaProfileStatus?.runtimeRevision ||
+      selectedMpaProfileStatus?.etag ||
+      "";
+    const idempotencyKey = await profileIdempotencyKey(
+      runtimeId,
+      operationKind,
+      profileDraft,
+    );
+    setMpaProfileApply({ saving: true, error: "", notice: "" });
+    try {
+      const operation = await startMpaAgentOperation({
+        operationKind,
+        runtimeId,
+        region,
+        mpaInstanceId,
+        sourceProfileId: `studio-runtime:${runtimeId}:${selectedAgentAppName || "a2a-default"}`,
+        targetKey: operationKind === "update"
+          ? mpaInstanceId
+          : `runtime:${region}:${runtimeId}`,
+        runtimeRevision: operationKind === "update" ? runtimeRevision : undefined,
+        draft,
+        idempotencyKey,
+      });
+      setMpaProfileApply({
+        saving: false,
+        error: operation.status === "succeeded"
+          ? ""
+          : operation.safeErrorCode || t("agentWorkspace.profileApplyIncomplete"),
+        notice: operation.status === "succeeded"
+          ? t("agentWorkspace.profileAppliedNotice", {
+              revision: operation.profileRevision ?? t("agentWorkspace.notAvailable"),
+            })
+          : "",
+      });
+      setDetailReloadToken((value) => value + 1);
+      setSessionConfigReloadToken((value) => value + 1);
+    } catch (error) {
+      setMpaProfileApply({
+        saving: false,
+        error: error instanceof Error
+          ? error.message
+          : t("agentWorkspace.profileApplyFailed"),
+        notice: "",
+      });
+    }
+  }
+
+  function editMpaProfileFromStudio() {
+    if (!selectedAgent?.runtimeId || selectedAgentCategory !== "mpa") return;
+    onEditMpaProfile?.({
+      draft,
+      runtimeId: selectedAgent.runtimeId,
+      mpaInstanceId: selectedMpaInstanceId || selectedAgent.runtimeId,
+      name: selectedName,
+      region: selectedAgent.region ?? "cn-beijing",
+      appName: selectedAgentAppName || "a2a-default",
+      currentVersion: selectedAgent.currentVersion ?? runtimeDetail?.currentVersion,
+      runtimeRevision:
+        selectedMpaProfileStatus?.runtimeRevision ||
+        selectedMpaProfileStatus?.etag ||
+        undefined,
+    });
+  }
+
+  useEffect(() => {
+    setMpaProfileApply({ saving: false, error: "", notice: "" });
+  }, [mpaAgentViewRequestKey]);
 
   useEffect(() => {
     const caseIds = new Set(feedbackCases.map((item) => item.id));
@@ -2373,6 +3714,10 @@ export function AgentWorkspace({
     if (selectedDeleteCount === 0 || deletingAgents) return;
     const runtimeCount = selectedDeletableAgents.length;
     const draftCount = selectedDeletableDrafts.length;
+    if (runtimeCount === 1 && draftCount === 0) {
+      void deleteSingleAgent(selectedDeletableAgents[0]);
+      return;
+    }
     setDeleteError("");
     setDeleteConfirmTarget({
       kind: "selection",
@@ -2437,14 +3782,36 @@ export function AgentWorkspace({
     }
   };
 
-  const deleteSingleAgent = (agent: AgentEntry) => {
+  const deleteSingleAgent = async (agent: AgentEntry) => {
     if (!onDeleteAgents || agent.canDelete !== true || deletingAgents) return;
     setDeleteError("");
+    let preview: MpaAgentDeletePreview | null = null;
+    if (agent.agentCategory === "mpa") {
+      if (!agent.runtimeId || !agent.region) {
+        setDeleteError(t("agentWorkspace.errors.loadMpaDeletePreview"));
+        return;
+      }
+      try {
+        preview = await getMpaAgentDeletePreview({
+          mpaInstanceId: agent.mpaInstanceId ?? agent.runtimeId,
+          runtimeId: agent.runtimeId,
+          region: agent.region,
+        });
+      } catch (cause) {
+        setDeleteError(cause instanceof Error ? cause.message : String(cause));
+        return;
+      }
+    }
     setDeleteConfirmTarget({
       kind: "agent",
       title: t("agentWorkspace.deleteAgentTitle"),
-      description: t("agentWorkspace.deleteAgentDescription", { name: agent.label }),
+      description: preview ? (
+        <MpaDeletePreviewDetails preview={preview} t={t} />
+      ) : (
+        t("agentWorkspace.deleteAgentDescription", { name: agent.label })
+      ),
       confirmLabel: t("agentWorkspace.deleteAgent"),
+      canConfirm: preview ? preview.canDelete : true,
       agent,
     });
   };
@@ -2980,7 +4347,38 @@ export function AgentWorkspace({
                       )}
                     />
                   )}
+                  {selectedAgentCategory === "mpa" &&
+                    (mpaAgentViewLoading ||
+                      mpaAgentViewError ||
+                      selectedMpaBindingStatus) && (
+                      <Alert
+                        className="aw-detail-fetch-alert"
+                        color={
+                          selectedMpaBindingStatus === "bound" &&
+                          !mpaAgentViewError
+                            ? "success"
+                            : "warning"
+                        }
+                        variant="soft"
+                        title={t("agentWorkspace.mpaControlPlane")}
+                        description={
+                          mpaAgentViewLoading
+                            ? t("agentWorkspace.loadingMpaAgentView")
+                            : mpaAgentViewError ||
+                              t(
+                                selectedMpaBindingStatus === "bound"
+                                  ? "agentWorkspace.mpaRuntimeBound"
+                                  : selectedMpaBindingStatus === "binding_ambiguous"
+                                    ? "agentWorkspace.mpaRuntimeBindingAmbiguous"
+                                    : selectedMpaBindingStatus === "orphan_runtime"
+                                      ? "agentWorkspace.mpaRuntimeOrphan"
+                                      : "agentWorkspace.mpaRuntimeMissing",
+                              )
+                        }
+                      />
+                    )}
                   {selectedAgent &&
+                    selectedAgentCategory !== "mpa" &&
                     selectedUpdateCapability &&
                     !selectedUpdateCapability.canUpdate && (
                       <div
@@ -3265,6 +4663,59 @@ export function AgentWorkspace({
                     </>
                   )}
                 </section>
+              )}
+              {section === "sessionConfig" && (
+                <SessionExecutionConfigPanel
+                  config={selectedSessionExecutionConfig}
+                  profileStatus={selectedMpaProfileStatus}
+                  loadable={sessionExecutionConfigLoadable}
+                  disabledReason={sessionConfigDisabledReason}
+                  loading={sessionConfigLoading}
+                  saving={sessionConfigSaving}
+                  upgrading={sessionConfigUpgradeRunning}
+                  error={sessionConfigError}
+                  notice={sessionConfigNotice}
+                  modelValue={sessionConfigModelInput}
+                  modelDirty={modelInputDirty}
+                  profileUpgradeAvailable={profileUpgradeAvailable}
+                  onModelChange={setSessionConfigModelInput}
+                  onSaveModel={() => void saveSessionModelOverride()}
+                  onInheritModel={() => void saveSessionModelOverride("inherit")}
+                  onClearMcp={() => void updateSessionMcpMode("clear")}
+                  onInheritMcp={() => void updateSessionMcpMode("inherit")}
+                  onUpgradeProfile={() => void upgradeSessionProfileRevision()}
+                  onRefresh={() => setSessionConfigReloadToken((value) => value + 1)}
+                />
+              )}
+              {section === "profileConfig" && (
+                <MpaProfileConfigPanel
+                  profile={profileDraft}
+                  profileStatus={selectedMpaProfileStatus}
+                  runtimeReady={Boolean(
+                    selectedAgent?.runtimeId &&
+                    selectedAgentCategory === "mpa" &&
+                    selectedMpaBindingStatus !== "runtime_missing" &&
+                    selectedMpaBindingStatus !== "binding_ambiguous",
+                  )}
+                  disabledReason={profileConfigDisabledReason}
+                  saving={mpaProfileApply.saving}
+                  error={mpaProfileApply.error}
+                  notice={mpaProfileApply.notice}
+                  onApply={() => void applyMpaProfileFromStudio()}
+                  onEditProfile={editMpaProfileFromStudio}
+                  onRefresh={() => setDetailReloadToken((value) => value + 1)}
+                />
+              )}
+              {section === "diagnostics" && (
+                <MpaDiagnosticsPanel
+                  data={selectedMpaDiagnostics}
+                  loadable={!diagnosticsDisabledReason}
+                  disabledReason={diagnosticsDisabledReason}
+                  loading={mpaDiagnosticsLoading}
+                  error={mpaDiagnosticsError}
+                  onRefresh={() => setMpaDiagnosticsReloadToken((value) => value + 1)}
+                  locale={i18n.resolvedLanguage ?? i18n.language}
+                />
               )}
               {section === "versions" && (
                 <section className="aw-version-stack">
@@ -3762,16 +5213,22 @@ export function AgentWorkspace({
                   <button
                     type="button"
                     className="aw-update studio-update-action"
-                    disabled={Boolean(updateBlockedReason)}
+                    disabled={selectedAgentCategory === "mpa" ? false : Boolean(updateBlockedReason)}
                     aria-busy={updateCapabilityLoading || undefined}
                     aria-describedby={updateBlockedReason ? updateReasonId : undefined}
-                    onClick={() =>
-                      selectedDraft
-                        ? onEditDraft?.(selectedDraft)
-                        : selectedUpdateCapability
-                          ? onUpdateAgent(selectedUpdateCapability)
-                          : undefined
-                    }
+                    onClick={() => {
+                      if (selectedAgentCategory === "mpa") {
+                        setSection("profileConfig");
+                        return;
+                      }
+                      if (selectedDraft) {
+                        onEditDraft?.(selectedDraft);
+                        return;
+                      }
+                      if (selectedUpdateCapability) {
+                        onUpdateAgent(selectedUpdateCapability);
+                      }
+                    }}
                   >
                     {updateCapabilityLoading ? (
                       <>
@@ -3781,6 +5238,8 @@ export function AgentWorkspace({
                         />
                         <span>{t("agentWorkspace.preparing")}</span>
                       </>
+                    ) : selectedAgentCategory === "mpa" ? (
+                      t("agentWorkspace.profileConfig")
                     ) : selectedDraft || selectedAgentUpdateDraft ? (
                       t("agentWorkspace.continueEditing")
                     ) : (
@@ -3824,6 +5283,7 @@ export function AgentWorkspace({
         confirmLabel={deletingAgents ? t("common.deleting") : deleteConfirmTarget.confirmLabel}
         closeLabel={t("agentWorkspace.closeDeleteConfirmation")}
         busy={deletingAgents}
+        confirmDisabled={deleteConfirmTarget.canConfirm === false}
         onCancel={() => setDeleteConfirmTarget(null)}
         onConfirm={() => void confirmDeleteTarget()}
       />

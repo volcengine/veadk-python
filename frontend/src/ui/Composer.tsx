@@ -356,14 +356,24 @@ export function Composer({
   const turnControlPending = turnControlBusy || ["pausing", "resuming"].includes(turnControl?.state ?? "");
   const canStop = busy && Boolean(onStop) && !turnControl;
   const turnStateLabel = turnControl
-    ? ({
+    ? (turnControl.resumeDisposition === "new_turn_required"
+      ? t("composer.turnState.newTurnRequired")
+      : ({
         running: t("composer.turnState.running"),
         pausing: t("composer.turnState.pausing"),
         paused: t("composer.turnState.paused"),
         resuming: t("composer.turnState.resuming"),
         interrupting: t("composer.turnState.interrupting"),
         cancelling: t("composer.turnState.cancelling"),
+        interrupted: t("composer.turnState.interrupted"),
+        completed: t("composer.turnState.completed"),
+        failed: t("composer.turnState.failed"),
+        rejected: t("composer.turnState.failed"),
+        cancelled: t("composer.turnState.cancelled"),
+        canceled: t("composer.turnState.cancelled"),
+        orphaned: t("composer.turnState.orphaned"),
       }[turnControl.state] ?? turnControl.state)
+    )
     : "";
   const canSend = videoMode
     ? videoTaskRunning ||

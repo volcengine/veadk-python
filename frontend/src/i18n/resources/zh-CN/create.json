@@ -572,7 +572,9 @@
     "actions": {
       "updateAgain": "再次更新",
       "deployAgain": "重新部署",
-      "updateAndPublish": "更新并发布"
+      "updateAndPublish": "更新并发布",
+      "applyProfile": "应用 Profile",
+      "applyProfileAgain": "再次应用 Profile"
     }
   },
   "traditional": {
@@ -1142,6 +1144,11 @@
       "generatingConfiguration": "正在生成部署配置",
       "runtimeNameExists": "Runtime 名称已存在，请修改后重试。",
       "preparing": "准备部署",
+      "applyingMpaProfile": "正在将 Agent 配置应用到 MPA Runtime",
+      "mpaProfileApplied": "MPA Runtime 配置已应用",
+      "runningMpaSmoke": "正在验证 MPA Runtime 执行链路",
+      "mpaReady": "MPA Runtime 已可运行",
+      "mpaOperationIncomplete": "MPA Runtime 初始化未完成，请重试此部署任务。",
       "complete": "部署完成",
       "failed": "部署失败",
       "updateAndPublish": "更新并发布",
@@ -1149,6 +1156,9 @@
         "build": "构建镜像",
         "deploy": "部署 Runtime",
         "publish": "发布服务",
+        "applyMpaProfile": "应用 MPA 配置",
+        "verifyMpaRuntime": "验证 MPA Runtime",
+        "mpaReady": "MPA Runtime 可运行",
         "running": "部署中"
       }
     },

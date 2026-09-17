@@ -572,7 +572,9 @@
     "actions": {
       "updateAgain": "Update again",
       "deployAgain": "Deploy again",
-      "updateAndPublish": "Update and publish"
+      "updateAndPublish": "Update and publish",
+      "applyProfile": "Apply Profile",
+      "applyProfileAgain": "Apply Profile again"
     }
   },
   "traditional": {
@@ -1142,6 +1144,11 @@
       "generatingConfiguration": "Generating deployment configuration",
       "runtimeNameExists": "This Runtime name already exists. Choose another name and try again.",
       "preparing": "Preparing deployment",
+      "applyingMpaProfile": "Applying the Agent profile to MPA Runtime",
+      "mpaProfileApplied": "MPA Runtime profile applied",
+      "runningMpaSmoke": "Verifying the MPA Runtime execution path",
+      "mpaReady": "MPA Runtime is ready",
+      "mpaOperationIncomplete": "MPA Runtime setup did not complete. Retry this deployment task.",
       "complete": "Deployment complete",
       "failed": "Deployment failed",
       "updateAndPublish": "Update and publish",
@@ -1149,6 +1156,9 @@
         "build": "Build image",
         "deploy": "Deploy Runtime",
         "publish": "Publish service",
+        "applyMpaProfile": "Apply MPA profile",
+        "verifyMpaRuntime": "Verify MPA Runtime",
+        "mpaReady": "MPA Runtime ready",
         "running": "Deploying"
       }
     },

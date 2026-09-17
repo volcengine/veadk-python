@@ -75,12 +75,14 @@ export interface MyAgentCardData {
   specificationLabel: string;
   specification: string;
   isMine?: boolean;
+  agentCategory?: RuntimeAgentType;
   region?: string;
   runtime?: {
     runtimeId: string;
+    mpaInstanceId?: string;
     region: string;
     currentVersion?: number | null;
-    agentCategory?: "general" | "mpa";
+    agentCategory?: RuntimeAgentType;
     canDelete: boolean;
     canManage?: boolean;
     canPublish?: boolean;
@@ -233,7 +235,12 @@ export function formatSandboxRemainingTime(
   return t("myAgents.sandboxRemaining", { hours, minutes });
 }
 
-function runtimeToAgent(runtime: CloudRuntime, t: TFunction<"ui">, agentCategory: RuntimeAgentType = "general"): MyAgentCardData {
+function runtimeToAgent(
+  runtime: CloudRuntime,
+  t: TFunction<"ui">,
+  agentCategory: RuntimeAgentType = "general",
+): MyAgentCardData {
+  const category = runtime.agentCategory ?? agentCategory;
   return {
     id: runtime.runtimeId,
     name: runtime.name,
@@ -242,11 +249,14 @@ function runtimeToAgent(runtime: CloudRuntime, t: TFunction<"ui">, agentCategory
     specificationLabel: t("myAgents.creator"),
     specification: formatResourceCreator(runtime.author),
     isMine: runtime.isMine,
+    agentCategory: category,
     runtime: {
       agentCategory: runtime.agentCategory ?? agentCategory,
       runtimeId: runtime.runtimeId,
+      mpaInstanceId: runtime.mpaInstanceId,
       region: runtime.region,
       currentVersion: runtime.currentVersion,
+      agentCategory: category,
       canDelete: runtime.canDelete,
       canManage: runtime.canManage,
       canPublish: runtime.canPublish,
@@ -309,6 +319,7 @@ function runtimeDetailTargetForCard(
     isMine: true,
     runtime: {
       runtimeId: target.runtimeId,
+      mpaInstanceId: target.mpaInstanceId,
       region: target.region,
       currentVersion: target.currentVersion,
       canDelete: false,
@@ -644,7 +655,7 @@ export interface MyAgentsProps {
   canCreatePersonalAgents: boolean;
   canUpdate: boolean;
   runtimeScope: RuntimeScope;
-  onCreateAgent: (region: string) => void;
+  onCreateAgent: (region: string, agentCategory: RuntimeAgentType) => void;
   onOpenCodexProjectUpload?: () => void;
   onUseAgent: (agent: MyAgentCardData) => Promise<void>;
   onViewAgentDetails: (agent: MyAgentCardData) => void;
@@ -1203,7 +1214,7 @@ export function MyAgents({
   const showEmpty = !showInitialLoading && visibleAgents.length === 0;
   let createAgent: (() => void) | undefined;
   if (activeType === "general" && canCreateRuntimeAgents) {
-    createAgent = () => onCreateAgent(region);
+    createAgent = () => onCreateAgent(region, "general");
   } else if (activeType === "mpa" && canCreateRuntimeAgents && cloudProvider === "volcengine") {
     createAgent = () => setMpaCreateRegion(region);
   } else if (isSandboxMyAgentType(activeType) && canCreatePersonalAgents) {

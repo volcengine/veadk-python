@@ -174,6 +174,12 @@ test("renders whole-Turn lifecycle controls from authoritative allowed actions",
   assert.doesNotMatch(composerSource, /onTurnControl\("cancel"\)/);
   assert.match(composerSource, /canPauseTurn[\s\S]*?onTurnControl\("pause"\)[\s\S]*?canResumeTurn[\s\S]*?onTurnControl\("resume"\)/);
   assert.ok(appSource.includes('getTurnControl(appName, sessionId)'));
+  assert.ok(appSource.includes('if (!busy && !turnControlBySessionRef.current[sessionId]) return;'));
+  assert.ok(appSource.includes('let controlUnavailable = false;'));
+  assert.ok(appSource.includes('if (controlUnavailable) return;'));
+  assert.ok(appSource.includes('if (!hadKnownControl) controlUnavailable = true;'));
+  assert.ok(appSource.includes('const currentRuntimeId = currentRuntime?.runtimeId ?? "";'));
+  assert.doesNotMatch(appSource, /\[agentInfo\?\.turnLifecycleControl, appName, busy, currentRuntime, sessionId\]/);
   assert.ok(appSource.includes('activeTurnControl.generation'));
   assert.ok(appSource.includes('activeTurnIsControllable'));
   assert.ok(appSource.includes('turnControl={activeTurnIsControllable ? activeTurnControl : null}'));
@@ -184,6 +190,14 @@ test("renders whole-Turn lifecycle controls from authoritative allowed actions",
   assert.ok(appSource.includes('cause instanceof TurnControlConflictError'));
   assert.ok(appSource.includes('next.resumeDisposition === "new_turn_required"'));
   assert.ok(appSource.includes('streamAbortsRef.current.get(sessionId)?.abort()'));
+  assert.ok(appSource.includes('continueTurnSSE({'));
+  assert.ok(appSource.includes('idempotencyKey: `mpa-continue:${control.taskId}:${control.generation}`'));
+  assert.ok(appSource.includes('async function streamTurnContinuation(sid: string, control: TurnControlState)'));
+  assert.ok(composerSource.includes('turnControl.resumeDisposition === "new_turn_required"'));
+  assert.ok(composerSource.includes('composer.turnState.newTurnRequired'));
+  assert.ok(composerSource.includes('interrupted: t("composer.turnState.interrupted")'));
+  assert.doesNotMatch(appSource, /Original task:/);
+  assert.doesNotMatch(appSource, /next\.continuationPrompt[\s\S]*?send\(/);
   assert.ok(appSource.includes('delete nextTurnControls[sid]'));
 });
 

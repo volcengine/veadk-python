@@ -71,8 +71,10 @@ test("runtime connections keep the Runtime resource name separate from Agent lab
   );
   assert.match(
     appSource,
-    /connectRuntime\([\s\S]*?result\.runtimeId,[\s\S]*?result\.runtimeName,[\s\S]*?agentName: result\.agentName/,
+    /connectRuntime\([\s\S]*?result\.runtimeId,[\s\S]*?result\.runtimeName,[\s\S]*?agentName: result\.agentName,[\s\S]*?mpaInstanceId: result\.mpaInstanceId/,
   );
+  assert.match(connectionsSource, /mpaInstanceId: c\.mpaInstanceId/);
+  assert.match(connectionsSource, /mpaInstanceId: mpaInstanceId\?\.trim\(\) \|\| previous\?\.mpaInstanceId/);
 });
 
 test("fresh deployments wait for the Runtime network to become reachable", () => {

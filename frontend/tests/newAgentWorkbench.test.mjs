@@ -330,11 +330,11 @@ test("workbench keeps the main-branch model fields and skill dialog on the first
   );
   const agentStep =
     workbenchSource.match(
-      /\{step === "agent" \? \(([\s\S]*?)\{step === "environment" \? \(/,
+      /\{step === "agent" \? \(([\s\S]*?)\{step === "environment" && !profileOnly \? \(/,
     )?.[1] ?? "";
   const environmentStep =
     workbenchSource.match(
-      /\{step === "environment" \? \(([\s\S]*?)\{step === "deployment" \? \(/,
+      /\{step === "environment" && !profileOnly \? \(([\s\S]*?)\{step === "deployment" && !profileOnly \? \(/,
     )?.[1] ?? "";
   assert.match(agentStep, /<NativeModelPicker/);
   assert.match(agentStep, /<SkillSourcePicker/);
@@ -353,6 +353,30 @@ test("workbench keeps the main-branch model fields and skill dialog on the first
     workbenchSource,
     />短期记忆|>长期记忆|>子智能体|>子 Agent/,
   );
+});
+
+test("MPA Profile-only edits apply the profile without the deployment steps", () => {
+  assert.match(workbenchSource, /profileOnly\?: boolean/);
+  assert.match(workbenchSource, /profileOnly = false/);
+  assert.match(
+    workbenchSource,
+    /if \(profileOnly\) \{[\s\S]*?onDeploy\(\{[\s\S]*?authentication: \{ type: "api_key" \}[\s\S]*?createEvaluationSets: false[\s\S]*?resources: deployResources/,
+  );
+  assert.match(workbenchSource, /step === "environment" && !profileOnly/);
+  assert.match(workbenchSource, /step === "deployment" && !profileOnly/);
+  assert.match(workbenchSource, /profileOnly[\s\S]*?t\("workbench\.actions\.applyProfileAgain"\)[\s\S]*?t\("workbench\.actions\.applyProfile"\)/);
+  assert.match(customCreateSource, /mpaProfileOnly\?: boolean/);
+  assert.match(customCreateSource, /profileOnly=\{deploymentTarget\?\.mpaProfileOnly\}/);
+  const profileOnlyStart = customCreateSource.indexOf("if (deploymentTarget?.mpaProfileOnly) {");
+  const normalDeployStart = customCreateSource.indexOf("const envMap = new Map", profileOnlyStart);
+  assert.ok(profileOnlyStart >= 0 && normalDeployStart > profileOnlyStart);
+  const profileOnlyBranch = customCreateSource.slice(profileOnlyStart, normalDeployStart);
+  assert.match(profileOnlyBranch, /const operationKind = deploymentTarget\.etag \? "update" : "create"/);
+  assert.match(profileOnlyBranch, /applyMpaProfileAfterDeployment\(\{/);
+  assert.match(profileOnlyBranch, /operationKind,/);
+  assert.match(profileOnlyBranch, /runtimeId: deploymentTarget\.runtimeId/);
+  assert.match(profileOnlyBranch, /runtimeRevision: deploymentTarget\.etag/);
+  assert.doesNotMatch(profileOnlyBranch, /handleDeploy\(/);
 });
 
 test("quick-mode next action stays disabled while model data is loading", () => {
@@ -382,7 +406,7 @@ test("quick-mode requires a model API key before continuing", () => {
   );
   assert.match(
     workbenchSource,
-    /const modelApiKeyMissing =[\s\S]*?modelSource === "ark"[\s\S]*?!draft\.deployment\?\.modelApiKeyId\?\.trim\(\)[\s\S]*?Boolean\(missingCustomModelCredential\)/,
+    /const modelApiKeyMissing =[\s\S]*?!profileOnly && modelSource === "ark"[\s\S]*?!draft\.deployment\?\.modelApiKeyId\?\.trim\(\)[\s\S]*?Boolean\(missingCustomModelCredential\)/,
   );
   assert.match(
     workbenchSource,

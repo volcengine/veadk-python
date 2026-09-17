@@ -2184,6 +2184,7 @@ def test_runtime_list_paginates_across_regions(
     assert first.json()["runtimes"][0]["cpuMilli"] == 1000
     assert first.json()["runtimes"][0]["memoryMb"] == 2048
     assert first.json()["runtimes"][0]["agentCategory"] == "mpa"
+    assert first.json()["runtimes"][0]["mpaInstanceId"] == "runtime-shanghai-new"
     assert first.json()["runtimes"][1]["agentCategory"] == "general"
     assert sorted(first_calls) == [
         ("cn-beijing", "0", 2),
@@ -2394,6 +2395,7 @@ def test_runtime_list_filters_mpa_owner_with_tag_service(
                 runtime_id=runtime_id,
                 status="Ready",
                 created_at="2026-07-21T04:00:00Z",
+                envs=[SimpleNamespace(key="MPA_AGENT_ID", value="mi-owned-mpa")],
                 tags=[],
             )
 
@@ -2444,6 +2446,7 @@ def test_runtime_list_filters_mpa_owner_with_tag_service(
     assert [item["runtimeId"] for item in response.json()["runtimes"]] == [
         "runtime-owned-mpa"
     ]
+    assert response.json()["runtimes"][0]["mpaInstanceId"] == "mi-owned-mpa"
     assert get_calls == ["runtime-owned-mpa"]
     assert tag_calls == [
         [
@@ -2451,6 +2454,324 @@ def test_runtime_list_filters_mpa_owner_with_tag_service(
             ("veadk:owner", ("developer",)),
         ]
     ]
+
+
+def test_mpa_agent_view_resolves_runtime_by_mpa_instance_tag(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    app = _create_frontend_app(
+        monkeypatch,
+        tmp_path,
+        admins="admin",
+        developers="developer",
+    )
+    get_calls: list[tuple[str, str]] = []
+    request_urls: list[str] = []
+
+    class _FakeRuntimeClient:
+        def __init__(self, **kwargs: Any) -> None:
+            self.region = kwargs["region"]
+
+        def get_runtime(self, request: Any) -> SimpleNamespace:
+            runtime_id = request.runtime_id
+            get_calls.append((self.region, runtime_id))
+            return SimpleNamespace(
+                name="legacy-mpa-runtime",
+                runtime_id=runtime_id,
+                status="Ready",
+                created_at="2026-09-16T00:00:00Z",
+                description="MPA runtime",
+                current_version_number=8,
+                envs=[SimpleNamespace(key="MPA_AGENT_ID", value="mi-runtime-view")],
+                artifact_url=(
+                    "agentkit-platform-2112682748-cn-beijing.cr.volces.com"
+                    "/agentkit/mpa-agent:test"
+                ),
+                network_configurations=[
+                    SimpleNamespace(
+                        endpoint="https://runtime.example",
+                        network_type="public",
+                    )
+                ],
+                authorizer_configuration=SimpleNamespace(
+                    key_auth=SimpleNamespace(api_key="runtime-api-key"),
+                    custom_jwt_authorizer=None,
+                ),
+                tags=[
+                    SimpleNamespace(key="veadk:agent-type", value="mpa"),
+                    SimpleNamespace(key="veadk:owner", value="developer"),
+                    SimpleNamespace(
+                        key="veadk:mpa-instance-id",
+                        value="mi-runtime-view",
+                    ),
+                ],
+            )
+
+    monkeypatch.setattr(
+        "agentkit.sdk.runtime.client.AgentkitRuntimeClient",
+        _FakeRuntimeClient,
+    )
+
+    class _FakeTagApi:
+        def __init__(self, _api_client: object) -> None:
+            pass
+
+        def get_resources(self, request: Any) -> SimpleNamespace:
+            filters = [
+                (
+                    getattr(item, "key", None) or getattr(item, "Key", ""),
+                    tuple(getattr(item, "values", None) or getattr(item, "Values", [])),
+                )
+                for item in (getattr(request, "tag_filters", None) or [])
+            ]
+            if filters == [
+                ("veadk:agent-type", ("mpa",)),
+                ("veadk:mpa-instance-id", ("mi-runtime-view",)),
+            ]:
+                return SimpleNamespace(
+                    resource_tag_mapping_list=[
+                        SimpleNamespace(
+                            resource_id="runtime-mpa-view",
+                            resource_trn=(
+                                "trn:agentkit:cn-beijing:2112682748:"
+                                "runtime/runtime-mpa-view"
+                            ),
+                            resource_type="runtime",
+                            tags=[
+                                SimpleNamespace(key="veadk:agent-type", value="mpa"),
+                                SimpleNamespace(key="veadk:owner", value="developer"),
+                                SimpleNamespace(
+                                    key="veadk:mpa-instance-id",
+                                    value="mi-runtime-view",
+                                ),
+                            ],
+                        )
+                    ],
+                    next_token="",
+                )
+            return SimpleNamespace(resource_tag_mapping_list=[], next_token="")
+
+    monkeypatch.setattr("volcenginesdktag.TAGApi", _FakeTagApi)
+
+    class _FakeResponse:
+        status_code = 200
+        headers = {"ETag": '"8"'}
+
+        def json(self) -> dict[str, Any]:
+            return {
+                "operationId": "runtime-profile-op",
+                "status": "applied",
+                "profileRevision": 8,
+                "runtimeRevision": "8",
+            }
+
+    class _FakeAsyncClient:
+        def __init__(self, **kwargs: Any) -> None:
+            del kwargs
+
+        async def __aenter__(self) -> "_FakeAsyncClient":
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        async def request(self, _method: str, url: str, **kwargs: Any) -> _FakeResponse:
+            request_urls.append(url)
+            assert kwargs["headers"]["Authorization"] == "Bearer runtime-api-key"
+            return _FakeResponse()
+
+    monkeypatch.setattr("httpx.AsyncClient", _FakeAsyncClient)
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/web/mpa/agents/mi-runtime-view/view?region=cn-beijing",
+            headers={"X-VeADK-Local-User": "developer"},
+        )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["bindingStatus"] == "bound"
+    assert body["runtime"]["runtimeId"] == "runtime-mpa-view"
+    assert body["runtime"]["mpaInstanceId"] == "mi-runtime-view"
+    assert request_urls == [
+        "https://runtime.example/api/v1/agents/mi-runtime-view/profile-status"
+    ]
+    assert get_calls == [("cn-beijing", "runtime-mpa-view")]
+
+
+def test_mpa_agent_view_resolves_unique_runtime_binding_from_main_app(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    app = _create_frontend_app(
+        monkeypatch,
+        tmp_path,
+        admins="admin",
+        developers="developer",
+    )
+    get_calls: list[tuple[str, str]] = []
+    request_urls: list[str] = []
+
+    class _FakeRuntimeClient:
+        def __init__(self, **kwargs: Any) -> None:
+            self.region = kwargs["region"]
+
+        def get_runtime(self, request: Any) -> SimpleNamespace:
+            runtime_id = request.runtime_id
+            get_calls.append((self.region, runtime_id))
+            if self.region != "cn-beijing":
+                raise RuntimeError("not found")
+            return SimpleNamespace(
+                name="MPA Runtime",
+                runtime_id=runtime_id,
+                status="Ready",
+                created_at="2026-09-16T00:00:00Z",
+                description="MPA runtime",
+                current_version_number=8,
+                envs=[SimpleNamespace(key="MPA_AGENT_ID", value="mi-runtime-view")],
+                artifact_url=(
+                    "agentkit-platform-2112682748-cn-beijing.cr.volces.com"
+                    "/agentkit/mpa-agent:test"
+                ),
+                network_configurations=[
+                    SimpleNamespace(
+                        endpoint="https://runtime.example",
+                        network_type="public",
+                    )
+                ],
+                authorizer_configuration=SimpleNamespace(
+                    key_auth=SimpleNamespace(api_key="runtime-api-key"),
+                    custom_jwt_authorizer=None,
+                ),
+                tags=[
+                    SimpleNamespace(key="veadk:agent-type", value="mpa"),
+                    SimpleNamespace(key="veadk:owner", value="developer"),
+                ],
+            )
+
+    monkeypatch.setattr(
+        "agentkit.sdk.runtime.client.AgentkitRuntimeClient",
+        _FakeRuntimeClient,
+    )
+
+    class _FakeTagApi:
+        def __init__(self, _api_client: object) -> None:
+            pass
+
+        def get_resources(self, request: Any) -> SimpleNamespace:
+            trns = set(getattr(request, "resource_trn_list", []) or [])
+            if not trns:
+                return SimpleNamespace(resource_tag_mapping_list=[], next_token="")
+            return SimpleNamespace(
+                resource_tag_mapping_list=[
+                    SimpleNamespace(
+                        resource_id="runtime-mpa-view",
+                        tags=[
+                            SimpleNamespace(key="veadk:agent-type", value="mpa"),
+                            SimpleNamespace(key="veadk:owner", value="developer"),
+                        ],
+                    )
+                ],
+                next_token="",
+            )
+
+    monkeypatch.setattr("volcenginesdktag.TAGApi", _FakeTagApi)
+
+    class _FakeResponse:
+        status_code = 200
+        headers = {"ETag": '"8"'}
+
+        def json(self) -> dict[str, Any]:
+            return {
+                "operationId": "runtime-profile-op",
+                "status": "applied",
+                "profileRevision": 8,
+                "runtimeRevision": "8",
+            }
+
+    class _FakeAsyncClient:
+        def __init__(self, **kwargs: Any) -> None:
+            del kwargs
+
+        async def __aenter__(self) -> "_FakeAsyncClient":
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        async def request(self, _method: str, url: str, **kwargs: Any) -> _FakeResponse:
+            request_urls.append(url)
+            assert kwargs["headers"]["Authorization"] == "Bearer runtime-api-key"
+            return _FakeResponse()
+
+    monkeypatch.setattr("httpx.AsyncClient", _FakeAsyncClient)
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/web/mpa/agents/mi-runtime-view/view"
+            "?runtimeId=runtime-mpa-view&region=cn-beijing",
+            headers={"X-VeADK-Local-User": "developer"},
+        )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["mpaInstanceId"] == "mi-runtime-view"
+    assert body["bindingStatus"] == "bound"
+    assert body["runtime"]["runtimeId"] == "runtime-mpa-view"
+    assert body["runtime"]["mpaInstanceId"] == "mi-runtime-view"
+    assert body["runtime"]["region"] == "cn-beijing"
+    assert body["runtime"]["currentVersion"] == 8
+    assert body["profile"]["profileRevision"] == 8
+    assert body["capabilities"]["canWrite"] is True
+    assert request_urls == [
+        "https://runtime.example/api/v1/agents/mi-runtime-view/profile-status"
+    ]
+    assert ("cn-beijing", "runtime-mpa-view") in get_calls
+
+
+def test_mpa_agent_view_reports_runtime_missing_without_profile_call(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    app = _create_frontend_app(
+        monkeypatch,
+        tmp_path,
+        admins="admin",
+        developers="developer",
+    )
+
+    class _FakeRuntimeClient:
+        def __init__(self, **kwargs: Any) -> None:
+            del kwargs
+
+        def get_runtime(self, _request: Any) -> SimpleNamespace:
+            raise RuntimeError("not found")
+
+    monkeypatch.setattr(
+        "agentkit.sdk.runtime.client.AgentkitRuntimeClient",
+        _FakeRuntimeClient,
+    )
+
+    class _UnexpectedHttpClient:
+        def __init__(self, **kwargs: Any) -> None:
+            del kwargs
+            raise AssertionError("missing Runtime must not call profile-status")
+
+    monkeypatch.setattr("httpx.AsyncClient", _UnexpectedHttpClient)
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/web/mpa/agents/missing-mpa/view?region=cn-beijing",
+            headers={"X-VeADK-Local-User": "developer"},
+        )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["bindingStatus"] == "runtime_missing"
+    assert body["capabilities"] == {
+        "canRead": False,
+        "canWrite": False,
+        "canDebug": False,
+    }
+    assert body["safeError"]["code"] == "runtime_missing"
 
 
 @pytest.mark.parametrize("scope", ["all", "mine"])
@@ -3738,6 +4059,10 @@ def test_runtime_proxy_bridges_a2a_only_runtime_for_studio_chat(
                 "session_id": "sid",
                 "model_id": "model-alt",
                 "custom_metadata": {
+                    "veadkExecution": {
+                        "executionConfigVersion": 6,
+                        "idempotencyKey": "run-key-1",
+                    },
                     "veadkInvocation": {
                         "skills": [
                             {
@@ -3747,7 +4072,7 @@ def test_runtime_proxy_bridges_a2a_only_runtime_for_studio_chat(
                                 "version": "v3",
                             }
                         ]
-                    }
+                    },
                 },
                 "new_message": {"role": "user", "parts": [{"text": "hello"}]},
             },
@@ -3839,6 +4164,10 @@ def test_runtime_proxy_bridges_a2a_only_runtime_for_studio_chat(
         json.loads(request["content"])["params"]["metadata"]
         == {
             "modelId": "model-alt",
+            "veadkExecution": {
+                "executionConfigVersion": 6,
+                "idempotencyKey": "run-key-1",
+            },
             "veadkInvocation": {
                 "skills": [
                     {

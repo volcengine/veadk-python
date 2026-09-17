@@ -2,7 +2,11 @@
 
 - **Component ID:** `mpa-runtime-provisioning`
 - **Status:** Draft; proposed changes are governed by the related PRD
+<<<<<<< HEAD
 - **Revision:** 2026-09-20
+=======
+- **Revision:** 2026-09-15
+>>>>>>> dd7f974c (feat(studio): deliver MPA P0 control plane)
 - **Chinese version:** [README.zh.md](README.zh.md)
 - **Related PRD:** [MPA Runtime Integration Hardening](../../prd-spec/bugfixes/mpa-runtime-integration/2026-09-12-mpa-runtime-integration-hardening.md)
 - **Related PRD:** [MPA Studio Workload Identity Provisioning](../../prd-spec/features/mpa-studio-workload-identity/2026-09-20-mpa-studio-workload-identity.md)
@@ -55,3 +59,20 @@ MPA provisioning defaults `OTEL_PYTHON_DISABLED_INSTRUMENTATIONS` to `sqlalchemy
 ## Managed creation boundary
 
 Studio MPA creation and `veadk mpa provision` are owned by [Studio MPA creation](../studio-mpa-creation/README.md). That path prepares account resources and uses real Runtime metadata bootstrap. The existing responsibilities and legacy entry points described here remain unchanged.
+
+## Proposed AgentKit P0 profile
+
+Governed by [P0 functional migration](../../prd-spec/features/mpa-p0-productionization/2026-09-15-mpa-p0-productionization-design.md). Baseline `CON-1` through `CON-6` remain historical/current integration contracts; the following explicitly proposed profile strengthens readiness and security without claiming implementation. Native/VeFaaS compatibility is separate. No ArkClaw users, metadata or old identifiers are imported.
+
+- `CON-7`: AgentKit-mode bootstrap uses a versioned manifest of account/workspace/MPA-instance/Runtime identity, endpoint, resource and server-side credential references. `agentkit-mpa-agent` consumes it and never calls ArkClaw configuration/identity/AppCenter fallback for required P0 functionality. Missing configuration returns a classified not-ready state and recoverable finalization step. Internal compatibility names such as `CLAW_SPACE_ID` may remain only as derived values with no old service lookup. Runtime owns MPA Profile revisions; bootstrap records only the binding and applied revision.
+- `CON-8`: Preserve prepare/create/finalize phases, but distinguish transport-ready from execution-ready. An unfinalized Runtime may answer bootstrap health while refusing user execution. This avoids requiring finalized endpoint credentials before the platform can report transport readiness. After endpoint/key/Tool and manifest finalization, execution readiness and A2A/worker smoke must pass before success is reported. Repeated create/finalize uses a stable operation ID and resource ownership checks; partial failure reports safe created IDs and next recovery step.
+- `CON-9`: Configure AgentKit custom-JWT issuer discovery and allowed client/audience per [runtime identity contract](../mpa-runtime-control/README.md), `CON-1`, and let BFF forward only a validated bearer. API key-auth and user identity are separate. New AgentKit profile validates final merged configuration after caller overrides; insecure JWT bypass or enabled legacy fallback is rejected. This deliberately constrains baseline last-wins `extra_env` only in the opt-in profile and must be tested as a public CLI/config boundary.
+- `CON-10`: Key rotation updates server-side references/configuration and reconciles runtime, built-in MCP and worker clients. Neither CLI nor UI receives secret values in normal results. Reconciliation failure remains failure, supports retry with the same operation ID, and never claims the old key was revoked before consumers are ready. Exact key release/rotation operations must be verified against platform APIs in PRD `T-1`.
+- `CON-11`: Release metadata pins Runtime image digest, applied MPA Profile revision, session execution-config schema, and worker protocol compatibility. Reuse the AgentKit SDK Runtime create/get/list/update/release/delete/listVersions/listInstances/getLogs methods; Managed Agent APIs are not part of P0. Implementation must still verify Runtime write permissions, idempotency, errors, and rollback behavior. Compatible rollback waits for execution readiness and smoke. New-platform schema evolution is additive; reject incompatible downgrade before mutation. Historical ArkClaw migration is not part of this lifecycle.
+- `CON-12`: Delete requires authorized impact preview, active Session/job and resource-reference checks, explicit confirmation, and durable cleanup progress. Shared Tool/Skill/storage resources are retained unless owned exclusively by the operation and separately authorized. Failed cleanup returns retryable/blocked status with safe identifiers; never report full deletion while owned runtime resources remain.
+
+These guarantees apply to both Studio and CLI through shared orchestration. The target platform operation inventory and bootstrap field/config names are a blocking `T-1` deliverable, not a claim of existing APIs.
+
+Verification maps `CON-7` through `CON-12` to PRD `AC-1`, `AC-2`, `AC-9`, `AC-10`: fresh bootstrap with legacy endpoints blocked; missing/finalization failure and restart; unsafe overrides; credential rotation/retry; compatible rollback; active/shared-resource deletion. Reuse existing provisioning regression targets above and add failing tests for the new profile. All proposed runtime/live results are `not_run`.
+
+2026-09-15: profile drafted for functional migration without historical data import; implementation and live evidence pending.

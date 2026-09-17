@@ -90,7 +90,7 @@ test("only administrators and developers receive Agent deployment controls", () 
     myAgentsSource,
     /\{createAgent \? \([\s\S]*?className="my-agent-create-card"/,
   );
-  assert.match(myAgentsSource, /if \(activeType === "general" && canCreateRuntimeAgents\)[\s\S]*?createAgent = \(\) => onCreateAgent\(region\)/);
+  assert.match(myAgentsSource, /if \(\(activeType === "general" \|\| activeType === "mpa"\) && canCreateRuntimeAgents\)[\s\S]*?createAgent = \(\) => onCreateAgent\(region, activeType\)/);
   assert.match(myAgentsSource, /else if \(isSandboxMyAgentType\(activeType\) && canCreatePersonalAgents\)[\s\S]*?createAgent = \(\) => onCreateSandboxAgent\(activeType\)/);
   assert.match(myAgentsSource, /activeType === "mpa"[\s\S]*?loadingRuntimes/);
 });

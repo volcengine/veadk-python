@@ -296,7 +296,10 @@ export function AgentSelector({
       connectSource: "navbar_picker",
     });
     setConnecting(rt.runtimeId);
-    connectRuntime(rt.runtimeId, rt.name, rt.region)
+    connectRuntime(rt.runtimeId, rt.name, rt.region, rt.currentVersion, {
+      agentCategory: rt.agentCategory,
+      mpaInstanceId: rt.mpaInstanceId,
+    })
       .then(async (agentId) => {
         await onSelect(agentId);
         operation.succeed({

@@ -1,0 +1,156 @@
+{
+  "barriers": {
+    "primary_ack": "released",
+    "worker_1_ack": "released",
+    "worker_2_ack": "released"
+  },
+  "calls": {
+    "runtime-control-status": 23,
+    "control-pause": 1,
+    "control-resume": 2,
+    "runtime-continue": 1,
+    "runtime-sse": 1,
+    "runtime-continue-replay": 1
+  },
+  "data": {
+    "runtimeId": "runtime-mpa-s2",
+    "runtimeName": "MPA S2 Fixture",
+    "region": "cn-beijing",
+    "appName": "a2a-default",
+    "sessionId": "turn_lifecycle-session",
+    "profileRevision": 6,
+    "latestProfileRevision": 7,
+    "executionConfig": {
+      "appName": "a2a-default",
+      "sessionId": "turn_lifecycle-session",
+      "revision": 6,
+      "etag": "\"6\"",
+      "mpaInstanceId": "runtime-mpa-s2",
+      "profileRevision": 6,
+      "profileDefaultRevision": 6,
+      "overrides": {},
+      "effectiveRefs": {
+        "model": {
+          "id": "model-base"
+        },
+        "mcpServers": [
+          {
+            "id": "mcp-default"
+          }
+        ]
+      },
+      "invalidRefs": [],
+      "updatedBy": "scenario-user",
+      "createdAt": "2026-09-15T00:00:00Z",
+      "updatedAt": "2026-09-15T00:00:00Z"
+    },
+    "profileUpgrades": {},
+    "events": [
+      {
+        "id": "event-after-continue",
+        "invocationId": "turn_lifecycle-continued-invocation",
+        "author": "a2a-default",
+        "partial": false,
+        "content": {
+          "role": "model",
+          "parts": [
+            {
+              "text": "Continued after safe point"
+            }
+          ]
+        },
+        "turnComplete": true
+      }
+    ],
+    "payloads": {
+      "control": [
+        {
+          "action": "pause",
+          "expectedGeneration": 0,
+          "idempotencyKey": "<redacted-pause-idempotency-key>"
+        },
+        {
+          "action": "resume",
+          "expectedGeneration": 1,
+          "idempotencyKey": "<redacted-resume-idempotency-key-1>"
+        },
+        {
+          "action": "resume",
+          "expectedGeneration": 3,
+          "idempotencyKey": "<redacted-resume-idempotency-key-2>"
+        }
+      ],
+      "continue": [
+        {
+          "expectedGeneration": 3,
+          "idempotencyKey": "mpa-continue:turn_lifecycle-task:3"
+        }
+      ]
+    },
+    "turnControl": {
+      "taskId": "turn_lifecycle-task",
+      "state": "interrupted",
+      "generation": 3,
+      "desiredState": "running",
+      "safePoint": null,
+      "checkpoint": null,
+      "allowedActions": [
+        "resume"
+      ],
+      "idempotentReplay": false,
+      "pausedAt": "2026-09-15T00:00:00Z",
+      "resumableUntil": "2026-09-15T00:05:00Z",
+      "resumeDisposition": "new_turn_required",
+      "continuationPrompt": "Continue from the last safe point without repeating completed side effects."
+    },
+    "participants": {
+      "primary": "running",
+      "worker-1": "running",
+      "worker-2": "running"
+    },
+    "controlReplays": {
+      "pause:08b67598-d10e-4eb9-a72d-6d7ddbee69c5": {
+        "taskId": "turn_lifecycle-task",
+        "state": "pausing",
+        "generation": 1,
+        "desiredState": "paused",
+        "safePoint": null,
+        "checkpoint": null,
+        "allowedActions": [],
+        "idempotentReplay": false,
+        "pausedAt": null,
+        "resumableUntil": null,
+        "resumeDisposition": "same_turn",
+        "continuationPrompt": null
+      },
+      "resume:712b93a3-2e5f-4e42-ac2d-9059b7007ecc": {
+        "taskId": "turn_lifecycle-task",
+        "state": "running",
+        "generation": 2,
+        "desiredState": "running",
+        "safePoint": null,
+        "checkpoint": null,
+        "allowedActions": [
+          "pause"
+        ],
+        "idempotentReplay": false,
+        "pausedAt": "2026-09-15T00:00:00Z",
+        "resumableUntil": "2026-09-15T00:05:00Z",
+        "resumeDisposition": "same_turn",
+        "continuationPrompt": null
+      }
+    },
+    "continuationReplays": {
+      "continue:mpa-continue:turn_lifecycle-task:3": {
+        "taskId": "turn_lifecycle-task",
+        "sessionId": "turn_lifecycle-session",
+        "invocationId": "turn_lifecycle-continued-invocation",
+        "turnId": "turn_lifecycle-continued-turn",
+        "operationId": "turn_lifecycle-continued-operation",
+        "executionConfigRevision": 6,
+        "continuationOf": "turn_lifecycle-turn",
+        "idempotentReplay": true
+      }
+    }
+  }
+}

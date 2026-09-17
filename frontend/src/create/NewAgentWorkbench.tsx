@@ -64,6 +64,7 @@ export interface NewAgentWorkbenchProps {
   deployRegion: string;
   runtimeName: string;
   isRuntimeUpdate?: boolean;
+  profileOnly?: boolean;
   deploying: boolean;
   deployStage: DeployStage | null;
   deployError: string;
@@ -781,6 +782,7 @@ export function NewAgentWorkbench({
   deployRegion,
   runtimeName,
   isRuntimeUpdate = false,
+  profileOnly = false,
   deploying,
   deployStage,
   deployError,
@@ -872,7 +874,7 @@ export function NewAgentWorkbench({
     ],
   );
   const modelApiKeyMissing =
-    (modelSource === "ark" && !draft.deployment?.modelApiKeyId?.trim()) ||
+    (!profileOnly && modelSource === "ark" && !draft.deployment?.modelApiKeyId?.trim()) ||
     Boolean(missingCustomModelCredential);
   const showModelApiKeyError =
     modelApiKeyMissing && (showAgentErrors || !modelDataLoading);
@@ -984,6 +986,18 @@ export function NewAgentWorkbench({
     if (step === "agent") {
       setAgentValidationVisible(true);
       if (agentHasErrors) return;
+      if (profileOnly) {
+        onDeploy({
+          authentication: { type: "api_key" },
+          sessionStorage,
+          sessionBackend,
+          minInstance: Number(minInstance) || 1,
+          maxInstance: Number(maxInstance) || 1,
+          createEvaluationSets: false,
+          resources: deployResources,
+        });
+        return;
+      }
       setStep("environment");
       return;
     }
@@ -1264,7 +1278,7 @@ export function NewAgentWorkbench({
                   </motion.div>
                 ) : null}
 
-                {step === "environment" ? (
+                {step === "environment" && !profileOnly ? (
                   <motion.div
                     key="environment"
                     className="new-agent-workbench__fields"
@@ -1291,7 +1305,7 @@ export function NewAgentWorkbench({
                   </motion.div>
                 ) : null}
 
-                {step === "deployment" ? (
+                {step === "deployment" && !profileOnly ? (
                   <motion.div
                     key="deployment"
                     className="new-agent-workbench__fields"
@@ -1743,7 +1757,11 @@ export function NewAgentWorkbench({
                 }
                 onClick={continueWizard}
               >
-                {step === "deployment"
+                {profileOnly
+                  ? deploySucceeded
+                    ? t("workbench.actions.applyProfileAgain")
+                    : t("workbench.actions.applyProfile")
+                  : step === "deployment"
                   ? deploySucceeded
                     ? isRuntimeUpdate
                       ? t("workbench.actions.updateAgain")

@@ -56,6 +56,27 @@ test("ADK client messages and headers follow the active locale", async (t) => {
   );
   assert.equal(
     localizeDeployStageMessage({
+      phase: "profile_applying",
+      message: "正在将 Agent 配置应用到 MPA Runtime",
+    }),
+    "Applying the Agent profile to MPA Runtime",
+  );
+  assert.equal(
+    localizeDeployStageMessage({
+      phase: "smoke_running",
+      message: "正在验证 MPA Runtime 执行链路",
+    }),
+    "Verifying the MPA Runtime execution path",
+  );
+  assert.equal(
+    localizeDeployStageMessage({
+      phase: "runnable",
+      message: "MPA Runtime 已可运行",
+    }),
+    "MPA Runtime is ready",
+  );
+  assert.equal(
+    localizeDeployStageMessage({
       phase: "build",
       message: "服务端旧文案",
       messageCode: "deploy.build.logs_complete",

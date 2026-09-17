@@ -216,7 +216,7 @@ test("renders Agent creation as the first dashed card instead of a toolbar butto
   assert.match(pageSource, /canCreateRuntimeAgents: boolean/);
   assert.match(pageSource, /canCreatePersonalAgents: boolean/);
   assert.match(pageSource, /cloudProvider: CloudProvider/);
-  assert.match(pageSource, /activeType === "general"[\s\S]*?onCreateAgent\(region\)[\s\S]*?onCreateSandboxAgent\(activeType\)/);
+  assert.match(pageSource, /\(activeType === "general" \|\| activeType === "mpa"\)[\s\S]*?onCreateAgent\(region, activeType\)[\s\S]*?onCreateSandboxAgent\(activeType\)/);
   assert.match(pageSource, /onCreateSandboxAgent: \(kind: "codex" \| SandboxAgentKind\) => void/);
   assert.match(pageSource, /<ResourceGrid className="my-agent-grid">[\s\S]*?createAgent \? \([\s\S]*?<ResourceCreateCard[\s\S]*?className="my-agent-create-card"[\s\S]*?t\("myAgents\.createAgent"\)[\s\S]*?visibleAgents\.map/);
   assert.doesNotMatch(pageSource, /my-agent-create-primary/);
@@ -280,6 +280,9 @@ test("agent cards reproduce the compact Figma hierarchy with card details and on
   assert.match(resourceStyles, /\.resource-card__identity-mark\s*\{[\s\S]*?--resource-identity-glow[\s\S]*?--resource-identity-accent[\s\S]*?linear-gradient\(/);
   assert.match(resourceStyles, /\.resource-card__actions\s*\{[\s\S]*?opacity: 0;[\s\S]*?pointer-events: none;/);
   assert.match(resourceStyles, /\.resource-card__target\s*\{[\s\S]*?position: absolute;[\s\S]*?inset: 0;[\s\S]*?z-index: 1;/);
+  assert.match(resourceStyles, /\.resource-card__footer\s*\{[\s\S]*?z-index: 2;[\s\S]*?pointer-events: none;/);
+  assert.match(resourceStyles, /\.resource-card__actions\s*\{[\s\S]*?z-index: 3;/);
+  assert.match(resourceStyles, /\.resource-card__action\s*\{[\s\S]*?pointer-events: auto;/);
   assert.match(resourceStyles, /@media \(hover: none\), \(pointer: coarse\)[\s\S]*?\.resource-card__actions\s*\{[\s\S]*?opacity: 1;/);
 });
 
@@ -459,11 +462,14 @@ test("loads Runtime pages by the selected ownership and region", () => {
   assert.match(pageSource, /description: runtime\.description\?\.trim\(\) \|\| t\("common\.noDescription"\)/);
   assert.match(pageSource, /specificationLabel: t\("myAgents\.creator"\)/);
   assert.match(pageSource, /specification: formatResourceCreator\(runtime\.author\)/);
+  assert.match(pageSource, /const category = runtime\.agentCategory \?\? agentCategory/);
+  assert.match(pageSource, /agentCategory: category/);
   assert.match(pageSource, /runtimeId: runtime\.runtimeId/);
   assert.match(pageSource, /region: runtime\.region/);
+  assert.match(pageSource, /agentCategory: category/);
   assert.match(pageSource, /<AgentCard[\s\S]*?key=\{agent\.id\}/);
   assert.match(pageSource, /const RUNTIME_PAGE_SIZE = 24/);
-  assert.match(pageSource, /onList\(page\.runtimes\.map\(\(runtime\) => runtimeToAgent\(runtime, t, agentCategory\)\)\)/);
+  assert.match(pageSource, /runtimeToAgent\(runtime, t, agentCategory\)/);
   assert.match(pageSource, /runtimeRequestRef\.current !== requestId/);
   assert.match(pageSource, /const runtimePageRequests = new Map/);
   assert.match(pageSource, /const requestKey = `\$\{agentCategory\}:\$\{runtimeScope\}:\$\{region\}:\$\{nextToken\}`/);
@@ -640,7 +646,8 @@ test("wires card details and connect actions into App navigation", () => {
   assert.match(pageSource, /appName\?: string/);
   assert.doesNotMatch(pageSource, /appName: info\.appName/);
   assert.match(appSource, /<MyAgents[\s\S]*?onCreateAgent=\{openAgentCreateFromMyAgents\}[\s\S]*?onUseAgent=/);
-  assert.match(appSource, /const openAgentCreateFromMyAgents = \(region: string\)[\s\S]*?setNewRuntimeRegion\(region\)/);
+  assert.match(appSource, /const openAgentCreateFromMyAgents = \([\s\S]*?agentCategory: "general" \| "mpa" = "general"[\s\S]*?setNewRuntimeRegion\(region\)/);
+  assert.match(appSource, /if \(agentCategory === "mpa"\)[\s\S]*?setCustomCreationSurface\("vulcan"\)[\s\S]*?setCreateView\("custom"\)/);
   assert.match(appSource, /<CustomCreate[\s\S]*?initialDeployRegion=\{newRuntimeRegion\}/);
   assert.match(appSource, /<CodePackageCreate[\s\S]*?initialDeployRegion=\{newRuntimeRegion\}/);
 });
@@ -818,7 +825,7 @@ test("uses connected Runtime state only for the card action", () => {
 test("authenticated users land on a new chat without a selected Agent", () => {
   assert.match(
     appSource,
-    /if \(id\.status === "authenticated"\)[\s\S]*?setAppName\(""\)[\s\S]*?setMyAgents\(false\)/,
+    /id\.status === "authenticated" &&[\s\S]*?!localStorage\.getItem\(LS\.session\)[\s\S]*?setAppName\(""\)[\s\S]*?setMyAgents\(false\)/,
   );
   assert.match(
     appSource,

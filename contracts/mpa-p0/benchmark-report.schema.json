@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "MPA P0 benchmark report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion", "revision", "endpoint", "warmupCount",
+    "requestCount", "concurrency", "p50Milliseconds",
+    "p95Milliseconds", "maxMilliseconds", "errorRate"
+  ],
+  "properties": {
+    "schemaVersion": {"const": 1},
+    "revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "endpoint": {"type": "string", "minLength": 1},
+    "warmupCount": {"const": 5},
+    "requestCount": {"const": 100},
+    "concurrency": {"const": 10},
+    "p50Milliseconds": {"type": "number", "minimum": 0},
+    "p95Milliseconds": {"type": "number", "minimum": 0},
+    "maxMilliseconds": {"type": "number", "minimum": 0},
+    "errorRate": {"type": "number", "minimum": 0, "maximum": 1}
+  }
+}

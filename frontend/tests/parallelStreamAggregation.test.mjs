@@ -132,6 +132,40 @@ test("replays interleaved history without token cards and binds feedback to fina
   assert.equal(turns[1].meta.feedback, undefined);
 });
 
+test("replays each persisted user round into a distinct assistant turn", () => {
+  const userEvent = (id, invocationId, text) => ({
+    id,
+    author: "user",
+    invocationId,
+    content: { role: "user", parts: [{ text }] },
+  });
+  const turns = eventsToTurns([
+    userEvent("user-1", "invocation-1", "first question"),
+    event("default", "first answer", {
+      invocationId: "invocation-1",
+      partial: false,
+      id: "answer-1",
+    }),
+    userEvent("user-2", "invocation-2", "second question"),
+    event("default", "second answer", {
+      invocationId: "invocation-2",
+      partial: false,
+      id: "answer-2",
+    }),
+  ]);
+  const assistantTurns = turns.filter((turn) => turn.role === "assistant");
+
+  assert.deepEqual(assistantTurns.map((turn) => blockText(turn, "text")), [
+    "first answer",
+    "second answer",
+  ]);
+  assert.deepEqual(assistantTurns.map((turn) => turn.meta.eventId), [
+    "answer-1",
+    "answer-2",
+  ]);
+  assert.equal(new Set(assistantTurns.map((turn) => turn.meta.localId)).size, 2);
+});
+
 test("keeps an OAuth-resumed response on its seeded turn when invocation changes", () => {
   const initialTurn = {
     role: "assistant",
@@ -315,3 +349,89 @@ for (const invocationIds of [true, false]) {
     assert.equal(new Set(ids).size, ids.length);
   });
 }
+
+test("closes the live sandbox task from its finalAlreadyEmitted wrapper response", () => {
+  const projector = createAssistantEventProjector("mpa-live");
+  let turns = [];
+  const invocationId = "mpa-invocation";
+  const callId = "sandbox-call";
+
+  for (const item of [
+    {
+      id: "sandbox-start",
+      author: "default",
+      invocationId,
+      partial: false,
+      content: {
+        role: "model",
+        parts: [{ functionCall: { id: callId, name: "sandbox_task", args: { task: "pwd" } } }],
+      },
+    },
+    {
+      id: "sandbox-command-result",
+      author: "Agent",
+      invocationId,
+      partial: false,
+      customMetadata: { source: "sandbox", eventType: "tool.result" },
+      content: {
+        role: "model",
+        parts: [{
+          functionResponse: {
+            id: "command-call",
+            name: "commandExecution",
+            response: { status: "completed", output: "/data/workspace" },
+          },
+        }],
+      },
+    },
+    {
+      ...event("Agent", "/data/workspace", {
+        invocationId,
+        id: "sandbox-answer-delta",
+        partial: true,
+      }),
+      customMetadata: { source: "sandbox", eventType: "message.delta" },
+    },
+  ]) {
+    const projection = projector.project(item);
+    assert.equal(projection.ignored, undefined);
+    turns = upsertProjectedAssistantTurn(turns, projection.turn);
+  }
+
+  const terminal = projector.project({
+    id: "sandbox-wrapper-response",
+    author: "default",
+    invocationId,
+    content: {
+      role: "user",
+      parts: [{
+        functionResponse: {
+          id: callId,
+          name: "sandbox_task",
+          response: {
+            status: "completed",
+            message: "Sandbox task result has been streamed to the session.",
+            finalAlreadyEmitted: true,
+          },
+        },
+      }],
+    },
+  });
+  assert.equal(terminal.ignored, undefined);
+  assert.equal(terminal.completed, true);
+  turns = upsertProjectedAssistantTurn(turns, terminal.turn);
+
+  assert.equal(turns.length, 1);
+  const sandboxTask = turns[0].blocks.find(
+    (block) => block.kind === "tool" && block.name === "sandbox_task",
+  );
+  assert.equal(sandboxTask?.done, true);
+  assert.equal(sandboxTask?.status, "completed");
+  assert.equal(blockText(turns[0], "text"), "/data/workspace");
+  assert.equal(turns[0].meta.streaming, false);
+  assert.equal(turns[0].meta.eventId, "sandbox-wrapper-response");
+  const [transportFinished] = projector.finish();
+  assert.equal(transportFinished.meta.localId, turns[0].meta.localId);
+  assert.equal(transportFinished.meta.streaming, false);
+});
+

@@ -81,9 +81,11 @@ import {
   bindGithubCicdRuntime,
   initializeGithubDeliveryMain,
   syncGithubCicdRuntime,
+  applyMpaProfileAfterDeployment,
   RuntimeProbeError,
   type DeployAuthentication,
   type DeployBuildLogSnapshot,
+  type MpaAgentOperation,
   type DeployResources,
   type DeployStage,
   type IdentityUserPool,
@@ -157,8 +159,11 @@ const DEPLOY_PHASE_ORDER: Record<string, number> = {
   publish: 4,
   update: 5,
   evaluation: 6,
-  complete: 7,
-  github: 8,
+  profile_applying: 7,
+  smoke_running: 8,
+  runnable: 9,
+  complete: 10,
+  github: 11,
 };
 
 function advanceDeploymentPhase(
@@ -500,10 +505,12 @@ export interface DeployResult {
   agentName: string;
   runtimeName: string;
   runtimeId?: string;
+  mpaInstanceId?: string;
   consoleUrl?: string;
   region?: string;
   version?: number | null;
   warnings?: string[];
+  mpaOperation?: MpaAgentOperation;
   feishuChannel?: {
     enabled: boolean;
     transport: string;
@@ -573,6 +580,8 @@ export interface DeployOptions {
   sessionStorage?: "in-memory" | "persistent";
   minInstance?: number;
   maxInstance?: number;
+  agentCategory?: "general" | "mpa";
+  mpaCompatibilityManifest?: Record<string, unknown>;
   authentication?: DeployAuthentication;
   createEvaluationSets?: boolean;
   im?: {
@@ -582,6 +591,7 @@ export interface DeployOptions {
   };
   envs?: DeployEnvVar[];
   resources?: DeployResources;
+  runtimeRevisionForMpa?: string;
 }
 
 export interface DeployEnvVar {
@@ -597,6 +607,7 @@ export interface DeploymentTaskUpdate {
   agentName: string;
   runtimeName: string;
   runtimeId?: string;
+  mpaInstanceId?: string;
   region: string;
   startedAt: number;
   status: "running" | "success" | "error" | "cancelled";
@@ -616,6 +627,10 @@ export interface DeploymentTaskUpdate {
   instanceRange?: { min: number; max: number };
   /** Whether this deployment initializes the Studio feedback evaluation sets. */
   createEvaluationSets?: boolean;
+  /** Whether this deployment applies a Studio Agent profile to an MPA Runtime. */
+  mpaProfile?: boolean;
+  /** Whether a create deployment runs the MPA Runtime execution smoke before becoming runnable. */
+  mpaSmoke?: boolean;
   /** Draft used to render the Agent detail while its Runtime is still publishing. */
   agentDraft?: AgentDraft;
   /** Re-runs the same project/config as a new deployment task. */
@@ -669,8 +684,12 @@ export interface ProjectPreviewProps {
   deploymentActionTargetId?: string;
   /** Existing Runtime id when this deployment updates an Agent in place. */
   deploymentRuntimeId?: string;
+  /** Existing MPA instance id when it differs from the platform Runtime id. */
+  deploymentMpaInstanceId?: string;
   /** Existing platform Runtime resource name when publishing an update. */
   deploymentRuntimeName?: string;
+  /** Current Runtime profile revision/ETag used for MPA Profile update CAS. */
+  deploymentRuntimeRevision?: string;
   /** Whether a new Runtime name was explicitly edited instead of generated. */
   deploymentRuntimeNameCustomized?: boolean;
   /** Updates the explicit Runtime name for a new deployment. */
@@ -828,7 +847,9 @@ export function ProjectPreview({
   deploymentConfirmation,
   deploymentActionTargetId,
   deploymentRuntimeId,
+  deploymentMpaInstanceId,
   deploymentRuntimeName,
+  deploymentRuntimeRevision,
   deploymentRuntimeNameCustomized = false,
   onDeploymentRuntimeNameChange,
   onDeploymentStarted,
@@ -994,6 +1015,10 @@ export function ProjectPreview({
     !isRuntimeUpdate &&
     instanceRange.valid &&
     (instanceRange.min !== 1 || instanceRange.max !== 5);
+  const githubUpdateOffloaded =
+    Boolean(deploymentRuntimeId && githubCicdBinding?.pipelineId);
+  const isMpaDeployment = Boolean(agentDraft);
+  const shouldRunMpaLifecycle = isMpaDeployment && !githubUpdateOffloaded;
   const baseDeploymentSteps = deploymentPrimaryPane
     ? codePackageDeploySteps(t)
     : deploySteps(t);
@@ -1003,10 +1028,22 @@ export function ProjectPreview({
   const deploymentStepsBeforeGithub = effectiveCreateEvaluationSets
     ? [...deploymentStepsWithInstanceUpdate, { phase: "evaluation", label: t("projectPreview.steps.createEvaluationSets") }]
     : deploymentStepsWithInstanceUpdate;
-  const deploymentSteps =
-    (deploymentRuntimeId && githubCicdBinding?.pipelineId) || pendingGithubCicd
+  const deploymentStepsWithGithub =
+    githubUpdateOffloaded || pendingGithubCicd
       ? [...deploymentStepsBeforeGithub, { phase: "github", label: t("projectPreview.steps.syncCode") }]
       : deploymentStepsBeforeGithub;
+  const deploymentSteps = shouldRunMpaLifecycle
+    ? [
+        ...deploymentStepsWithGithub,
+        { phase: "profile_applying", label: t("projectPreview.steps.applyMpaProfile") },
+        ...(!isRuntimeUpdate
+          ? [
+              { phase: "smoke_running", label: t("projectPreview.steps.verifyMpaRuntime") },
+              { phase: "runnable", label: t("projectPreview.steps.mpaReady") },
+            ]
+          : []),
+      ]
+    : deploymentStepsWithGithub;
 
   function clearModelApiKeyReveal() {
     modelApiKeyRevealAbortRef.current?.abort();
@@ -1612,6 +1649,8 @@ export function ProjectPreview({
         ? { min: instanceRange.min, max: instanceRange.max }
         : undefined,
       createEvaluationSets: effectiveCreateEvaluationSets,
+      mpaProfile: shouldRunMpaLifecycle,
+      mpaSmoke: shouldRunMpaLifecycle && !isRuntimeUpdate,
     };
     onDeploymentTaskChange?.(initialTask);
     onDeploymentStarted?.(initialTask);
@@ -1620,6 +1659,9 @@ export function ProjectPreview({
     let latestPhase = initialTask.phase ?? "prepare";
     let latestMessage = initialTask.message;
     let latestMessageCode = initialTask.messageCode;
+    let latestRuntimeId = deploymentRuntimeId;
+    let latestRegion = deployRegion;
+    let latestMpaInstanceId = deploymentMpaInstanceId;
     const terminalBuildLog = (
       status: DeployBuildLogSnapshot["status"],
     ): DeployBuildLogSnapshot | undefined => (
@@ -1674,6 +1716,39 @@ export function ProjectPreview({
       }
       return safeTelemetryErrorMessage(error);
     };
+    const publishMpaStage = (
+      phase: string,
+      message: string,
+      pct = 0,
+      level: DeployStage["level"] = "info",
+    ) => {
+      const stage: DeployStage = { level, phase, message, pct };
+      latestPhase = phase;
+      latestMessage = message;
+      latestMessageCode = undefined;
+      if (mountedRef.current) {
+        setStageMap((prev) => ({ ...prev, [phase]: stage }));
+        setActivePhase(phase);
+      }
+      onDeploymentTaskChange?.({
+        id: taskId,
+        agentName: taskAgentName,
+        runtimeName: taskRuntimeName,
+        runtimeId: latestRuntimeId,
+        region: latestRegion,
+        startedAt: taskStartedAt,
+        status: "running",
+        phase,
+        label: deploymentSteps.find((step) => step.phase === phase)?.label ?? phase,
+        message,
+        pct,
+        githubDelivery: Boolean(pendingGithubCicd || latestGithubLog),
+        mpaProfile: shouldRunMpaLifecycle,
+        mpaSmoke: shouldRunMpaLifecycle && !isRuntimeUpdate,
+        ...(latestGithubLog ? { githubLog: latestGithubLog } : {}),
+        ...terminalBuildLogUpdate("complete"),
+      });
+    };
     try {
       let activeGithubBinding = githubCicdBinding;
       if (deploymentRuntimeId && githubCicdBinding?.pipelineId) {
@@ -1693,8 +1768,8 @@ export function ProjectPreview({
           id: taskId,
           agentName: taskAgentName,
           runtimeName: taskRuntimeName,
-          runtimeId: deploymentRuntimeId,
-          region: deployRegion,
+          runtimeId: latestRuntimeId,
+          region: latestRegion,
           startedAt: taskStartedAt,
           status: "running",
           phase: "github",
@@ -1707,6 +1782,7 @@ export function ProjectPreview({
         const synced = await syncGithubCicdRuntime({
           runtimeId: deploymentRuntimeId,
           project,
+          agentCategory: isMpaDeployment ? "mpa" : "general",
         });
         activeGithubBinding = synced;
         if (mountedRef.current) {
@@ -1778,6 +1854,8 @@ export function ProjectPreview({
             message: latestMessage,
             messageCode: latestMessageCode,
             pct: s.pct,
+            mpaProfile: shouldRunMpaLifecycle,
+            mpaSmoke: shouldRunMpaLifecycle && !isRuntimeUpdate,
             ...(latestBuildLog ? { buildLog: latestBuildLog } : {}),
           });
         },
@@ -1787,6 +1865,7 @@ export function ProjectPreview({
           sessionStorage: inMemorySession ? "in-memory" : "persistent",
           minInstance: instanceRange.min,
           maxInstance: instanceRange.max,
+          agentCategory: isMpaDeployment ? "mpa" : "general",
           ...(!isRuntimeUpdate
             ? {
                 authentication:
@@ -1812,10 +1891,18 @@ export function ProjectPreview({
           ...(!isRuntimeUpdate ? { resources: deployResources } : {}),
         },
       );
+      latestRuntimeId = result.runtimeId || deploymentRuntimeId;
+      latestRegion = result.region || deployRegion;
+      let completeResult = result;
+      latestMpaInstanceId =
+        completeResult.mpaInstanceId || deploymentMpaInstanceId;
+      if (shouldRunMpaLifecycle && !latestRuntimeId) {
+        throw new Error(t("projectPreview.errors.mpaRuntimeIdMissing"));
+      }
       if (
         !deploymentRuntimeId &&
         pendingGithubCicd &&
-        result.runtimeId
+        completeResult.runtimeId
       ) {
         latestPhase = "github";
         const githubLog = githubDeliveryLog(t("projectPreview.task.initializingGithub"));
@@ -1831,10 +1918,10 @@ export function ProjectPreview({
         }
         onDeploymentTaskChange?.({
           id: taskId,
-          agentName: result.agentName || taskAgentName,
-          runtimeName: result.runtimeName || taskRuntimeName,
-          runtimeId: result.runtimeId,
-          region: result.region || deployRegion,
+          agentName: completeResult.agentName || taskAgentName,
+          runtimeName: completeResult.runtimeName || taskRuntimeName,
+          runtimeId: completeResult.runtimeId,
+          region: completeResult.region || deployRegion,
           startedAt: taskStartedAt,
           status: "running",
           phase: "github",
@@ -1850,9 +1937,10 @@ export function ProjectPreview({
             githubUrl: pendingGithubCicd.githubUrl,
             githubToken: pendingGithubCicd.githubToken,
             baseBranch: pendingGithubCicd.baseBranch,
-            runtimeName: result.agentName || taskRuntimeName,
-            runtimeId: result.runtimeId,
-            region: result.region || deployRegion,
+            runtimeName: completeResult.agentName || taskRuntimeName,
+            runtimeId: completeResult.runtimeId,
+            region: completeResult.region || deployRegion,
+            agentCategory: isMpaDeployment ? "mpa" : "general",
             cloudProvider: pendingGithubCicd.cloudProvider,
             projectPath: ".",
             volcengineAccessKey: pendingGithubCicd.volcengineAccessKey,
@@ -1876,10 +1964,10 @@ export function ProjectPreview({
           }
           onDeploymentTaskChange?.({
             id: taskId,
-            agentName: result.agentName || taskAgentName,
-            runtimeName: result.runtimeName || taskRuntimeName,
-            runtimeId: result.runtimeId,
-            region: result.region || deployRegion,
+            agentName: completeResult.agentName || taskAgentName,
+            runtimeName: completeResult.runtimeName || taskRuntimeName,
+            runtimeId: completeResult.runtimeId,
+            region: completeResult.region || deployRegion,
             startedAt: taskStartedAt,
             status: "running",
             phase: "github",
@@ -1898,10 +1986,10 @@ export function ProjectPreview({
           );
           onDeploymentTaskChange?.({
             id: taskId,
-            agentName: result.agentName || taskAgentName,
-            runtimeName: result.runtimeName || taskRuntimeName,
-            runtimeId: result.runtimeId,
-            region: result.region || deployRegion,
+            agentName: completeResult.agentName || taskAgentName,
+            runtimeName: completeResult.runtimeName || taskRuntimeName,
+            runtimeId: completeResult.runtimeId,
+            region: completeResult.region || deployRegion,
             startedAt: taskStartedAt,
             status: "error",
             phase: "github",
@@ -1917,12 +2005,12 @@ export function ProjectPreview({
             }),
           );
         }
-      } else if (!deploymentRuntimeId && activeGithubBinding?.pipelineId && result.runtimeId) {
+      } else if (!deploymentRuntimeId && activeGithubBinding?.pipelineId && completeResult.runtimeId) {
         try {
           const bound = await bindGithubCicdRuntime({
             pipelineId: activeGithubBinding.pipelineId,
-            runtimeId: result.runtimeId,
-            region: result.region || deployRegion,
+            runtimeId: completeResult.runtimeId,
+            region: completeResult.region || deployRegion,
             cloudProvider: activeGithubBinding.cloudProvider ?? cloudProvider,
           });
           activeGithubBinding = bound;
@@ -1937,43 +2025,111 @@ export function ProjectPreview({
           }
         }
       }
+      let mpaOperation: MpaAgentOperation | undefined;
+      if (shouldRunMpaLifecycle && agentDraft && (completeResult.runtimeId || deploymentRuntimeId)) {
+        const runtimeId = String(completeResult.runtimeId || deploymentRuntimeId || "");
+        const runtimeRegion = completeResult.region || deployRegion;
+        latestRuntimeId = runtimeId;
+        latestRegion = runtimeRegion;
+        taskRuntimeName = completeResult.runtimeName || taskRuntimeName;
+        publishMpaStage(
+          "profile_applying",
+          t("projectPreview.task.applyingMpaProfile"),
+        );
+        mpaOperation = await applyMpaProfileAfterDeployment({
+          operationKind: isRuntimeUpdate ? "update" : "create",
+          runtimeId,
+          region: runtimeRegion,
+          mpaInstanceId:
+            deploymentMpaInstanceId ?? completeResult.mpaInstanceId,
+          agentName: taskAgentName,
+          sourceDraftId: initialTask.draftId,
+          draft: agentDraft,
+          runtimeName: requestedRuntimeName || runtimeId,
+          runtimeRevision: isRuntimeUpdate ? deploymentRuntimeRevision : undefined,
+          taskId,
+        });
+        if (mpaOperation.status !== "succeeded") {
+          const failedPhase =
+            mpaOperation.stage === "smoke_running"
+              ? "smoke_running"
+              : "profile_applying";
+          const failedMessage =
+            mpaOperation.safeErrorCode ||
+            t("projectPreview.errors.mpaOperationIncomplete");
+          publishMpaStage(failedPhase, failedMessage, 100, "error");
+          throw new Error(
+            failedMessage,
+          );
+        }
+        if (isRuntimeUpdate) {
+          publishMpaStage(
+            "profile_applying",
+            t("projectPreview.task.mpaProfileApplied"),
+            100,
+            "success",
+          );
+        } else {
+          publishMpaStage(
+            "smoke_running",
+            t("projectPreview.task.runningMpaSmoke"),
+            100,
+            "success",
+          );
+          publishMpaStage(
+            "runnable",
+            t("projectPreview.task.mpaReady"),
+            100,
+            "success",
+          );
+        }
+        completeResult = { ...completeResult, mpaOperation };
+      }
       if (mountedRef.current) {
-        setDeployResult(result);
+        setDeployResult(completeResult);
         setActivePhase(null);
       }
       operation.succeed({
-        runtimeId: String(result.runtimeId || deploymentRuntimeId || ""),
+        runtimeId: String(completeResult.runtimeId || deploymentRuntimeId || ""),
       });
       onDeploymentTaskChange?.({
         id: taskId,
-        agentName: result.agentName || taskAgentName,
-        runtimeName: result.runtimeName || taskRuntimeName,
-        runtimeId: result.runtimeId || deploymentRuntimeId,
-        region: result.region || deployRegion,
+        agentName: completeResult.agentName || taskAgentName,
+        runtimeName: completeResult.runtimeName || taskRuntimeName,
+        runtimeId: latestRuntimeId,
+        mpaInstanceId: completeResult.mpaInstanceId,
+        region: latestRegion,
         startedAt: taskStartedAt,
         status: "success",
-        phase: "complete",
+        phase: mpaOperation && !isRuntimeUpdate ? "runnable" : "complete",
         label: t("projectPreview.task.deploymentComplete"),
-        message: result.warnings?.join(t("environmentCenter.listSeparator")),
+        message:
+          mpaOperation && !isRuntimeUpdate
+            ? t("projectPreview.task.mpaReady")
+            : completeResult.warnings?.join(t("environmentCenter.listSeparator")),
         githubDelivery: Boolean(pendingGithubCicd || latestGithubLog),
+        mpaProfile: Boolean(mpaOperation),
+        mpaSmoke: Boolean(mpaOperation && !isRuntimeUpdate),
         ...(latestGithubLog ? { githubLog: latestGithubLog } : {}),
         ...terminalBuildLogUpdate("complete"),
       });
       try {
-        await onDeploymentComplete?.(result);
+        await onDeploymentComplete?.(completeResult);
       } catch (error) {
         if (!(error instanceof RuntimeProbeError)) throw error;
         onDeploymentTaskChange?.({
           id: taskId,
-          agentName: result.agentName || taskAgentName,
-          runtimeName: result.runtimeName || taskRuntimeName,
-          runtimeId: result.runtimeId || deploymentRuntimeId,
-          region: result.region || deployRegion,
+          agentName: completeResult.agentName || taskAgentName,
+          runtimeName: completeResult.runtimeName || taskRuntimeName,
+          runtimeId: latestRuntimeId,
+          region: latestRegion,
           startedAt: taskStartedAt,
           status: "success",
           phase: "complete",
           label: t("projectPreview.task.deployedNotConnected"),
           message: error.message,
+          mpaProfile: Boolean(mpaOperation),
+          mpaSmoke: Boolean(mpaOperation && !isRuntimeUpdate),
           ...terminalBuildLogUpdate("complete"),
         });
       }
@@ -1993,12 +2149,15 @@ export function ProjectPreview({
           id: taskId,
           agentName: taskAgentName,
           runtimeName: taskRuntimeName,
-          runtimeId: deploymentRuntimeId,
-          region: deployRegion,
+          runtimeId: latestRuntimeId,
+          mpaInstanceId: latestMpaInstanceId,
+          region: latestRegion,
           startedAt: taskStartedAt,
           status: "cancelled",
           label: t("projectPreview.task.cancelled"),
           message: t("projectPreview.task.cancelledHint"),
+          mpaProfile: Boolean(latestPhase === "profile_applying" || latestPhase === "smoke_running"),
+          mpaSmoke: Boolean(latestPhase === "smoke_running"),
           ...terminalBuildLogUpdate("complete"),
         });
         return;
@@ -2019,14 +2178,17 @@ export function ProjectPreview({
           id: taskId,
           agentName: taskAgentName,
           runtimeName: taskRuntimeName,
-          runtimeId: deploymentRuntimeId,
-          region: deployRegion,
+          runtimeId: latestRuntimeId,
+          mpaInstanceId: latestMpaInstanceId,
+          region: latestRegion,
           startedAt: taskStartedAt,
           status: "running",
           statusUnconfirmed: true,
           phase: latestPhase,
           label: t("projectPreview.task.deploymentStatusUnconfirmed"),
           message: t("projectPreview.errors.deploymentStatusUnconfirmed"),
+          mpaProfile: Boolean(agentDraft),
+          mpaSmoke: Boolean(agentDraft && !isRuntimeUpdate),
           ...(latestBuildLog ? { buildLog: latestBuildLog } : {}),
         });
         return;
@@ -2045,8 +2207,8 @@ export function ProjectPreview({
         id: taskId,
         agentName: taskAgentName,
         runtimeName: taskRuntimeName,
-        runtimeId: deploymentRuntimeId,
-        region: deployRegion,
+        runtimeId: latestRuntimeId,
+        region: latestRegion,
         startedAt: taskStartedAt,
         status: "error",
         phase: latestPhase,
@@ -2060,6 +2222,8 @@ export function ProjectPreview({
         ...(failedInGithub
           ? { githubDelivery: true, githubLog: latestGithubLog }
           : {}),
+        mpaProfile: Boolean(latestPhase === "profile_applying" || latestPhase === "smoke_running"),
+        mpaSmoke: Boolean(latestPhase === "smoke_running"),
         retry: requestDeploymentConfirmation,
       });
     } finally {
@@ -2601,6 +2765,7 @@ export function ProjectPreview({
                   region={deployRegion}
                   cloudProvider={cloudProvider}
                   runtimeId={deploymentRuntimeId}
+                  agentCategory={isMpaDeployment ? "mpa" : "general"}
                   binding={githubCicdBinding}
                   showSetup={!isRuntimeUpdate}
                   onPendingCicdChange={setPendingGithubCicd}

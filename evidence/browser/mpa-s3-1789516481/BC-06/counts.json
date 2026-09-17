@@ -1,0 +1,12 @@
+{
+  "beforeCount": 1,
+  "afterCount": 1,
+  "expired": {
+    "status": 410,
+    "body": "{\"detail\":{\"code\":\"cursor_expired\",\"message\":\"cursor_expired\"}}"
+  },
+  "state": {
+    "status": 200,
+    "body": "{\"barriers\":{},\"calls\":{\"runtime-run\":2,\"runtime-sse\":4},\"data\":{\"runtimeId\":\"runtime-mpa-s2\",\"runtimeName\":\"MPA S2 Fixture\",\"region\":\"cn-beijing\",\"appName\":\"a2a-default\",\"sessionId\":\"cursor_expired-session\",\"profileRevision\":6,\"latestProfileRevision\":7,\"executionConfig\":{\"appName\":\"a2a-default\",\"sessionId\":\"cursor_expired-session\",\"revision\":6,\"etag\":\"\\\"6\\\"\",\"mpaInstanceId\":\"runtime-mpa-s2\",\"profileRevision\":6,\"profileDefaultRevision\":6,\"overrides\":{},\"effectiveRefs\":{\"model\":{\"id\":\"model-base\"},\"mcpServers\":[{\"id\":\"mcp-default\"}]},\"invalidRefs\":[],\"updatedBy\":\"scenario-user\",\"createdAt\":\"2026-09-15T00:00:00Z\",\"updatedAt\":\"2026-09-15T00:00:00Z\"},\"profileUpgrades\":{},\"events\":[{\"id\":\"event-before-refresh\",\"author\":\"a2a-default\",\"partial\":false,\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"Before refresh\"}]},\"turnComplete\":true}],\"payloads\":{\"run\":[{\"content\":\"continue after refresh\",\"executionConfigVersion\":6},{\"content\":\"continue after refresh\",\"executionConfigVersion\":6}],\"sse\":[{\"invocationId\":\"cursor_expired-invocation\",\"lastEventId\":\"event-before-refresh\"},{\"invocationId\":\"cursor_expired-invocation\",\"lastEventId\":\"missing-event\"},{\"invocationId\":\"cursor_expired-invocation\",\"lastEventId\":\"event-before-refresh\"},{\"invocationId\":\"cursor_expired-invocation\",\"lastEventId\":\"missing-event\"}]}}}"
+  }
+}

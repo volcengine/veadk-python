@@ -326,7 +326,10 @@ test("Skill space cards keep the shared reveal action and load more while scroll
   assert.match(skillCenterSource, /results\.scrollHeight - results\.scrollTop - results\.clientHeight <= 240/);
   assert.match(resourceCardSource, /<ResourceCardRevealAction/);
   assert.match(resourceCollectionStylesSource, /\.resource-card\s*\{[^}]*overflow:\s*visible;/);
-  assert.match(resourceCollectionStylesSource, /\.resource-card__actions\s*\{[^}]*z-index:\s*2;/);
+  assert.match(resourceCollectionStylesSource, /\.resource-card__target\s*\{[^}]*z-index:\s*1;/);
+  assert.match(resourceCollectionStylesSource, /\.resource-card__footer\s*\{[^}]*z-index:\s*2;[^}]*pointer-events:\s*none;/);
+  assert.match(resourceCollectionStylesSource, /\.resource-card__actions\s*\{[^}]*z-index:\s*3;/);
+  assert.match(resourceCollectionStylesSource, /\.resource-card__action\s*\{[^}]*pointer-events:\s*auto;/);
 });
 
 test("Skill upload uses a large drag-and-drop target", () => {

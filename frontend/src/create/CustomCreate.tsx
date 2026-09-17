@@ -157,6 +157,7 @@ import {
   checkRuntimeNameAvailability,
   deleteGeneratedAgentTestRun,
   deployAgentkitProject,
+  applyMpaProfileAfterDeployment,
   generateAgentDraftFromRequirement,
   generateAgentProject,
   listModelApiKeys,
@@ -3975,12 +3976,14 @@ interface CustomCreateProps extends CreateModeProps {
   /** Existing Runtime target when editing an Agent from the library. */
   deploymentTarget?: {
     runtimeId: string;
+    mpaInstanceId?: string;
     name: string;
     region: string;
     appName?: string;
     currentVersion?: number | null;
     etag?: string;
     editMode?: "source-preserving" | "regenerate";
+    mpaProfileOnly?: boolean;
     configuredMcpEnvKeys?: string[];
     configuredRuntimeEnvKeys?: string[];
   };
@@ -5147,6 +5150,7 @@ export function CustomCreate({
         runtimeId: deploymentTarget?.runtimeId,
         runtimeName: options?.runtimeName ?? deploymentRuntimeName,
         appName: deploymentTarget?.appName,
+        agentCategory: "mpa",
         editMode: deploymentTarget?.editMode,
         draft:
           deploymentTarget || mcpGatewayManaged ? codegenDraft(draft) : undefined,
@@ -5323,6 +5327,11 @@ export function CustomCreate({
       pct: 0,
     });
     let activeTask: DeploymentTaskUpdate | null = null;
+    let latestPhase = "prepare";
+    let latestLabel = t("traditional.deployment.preparing");
+    let latestMessage = t("traditional.deployment.generatingConfiguration");
+    let latestRuntimeId = deploymentTarget?.runtimeId;
+    let latestRegion = deploymentTarget?.region ?? deployRegion;
     try {
       if (!deploymentTarget) {
         const availability = await checkRuntimeNameAvailability(
@@ -5339,17 +5348,17 @@ export function CustomCreate({
       setProject(generated);
       const taskId = crypto.randomUUID();
       const startedAt = Date.now();
-      let latestPhase = "prepare";
-      let latestLabel = t("traditional.deployment.preparing");
-      let latestMessage = t("traditional.deployment.generatingConfiguration");
       const taskBase = {
         id: taskId,
         ...(workspaceDraftId ? { draftId: workspaceDraftId } : {}),
         agentName: deploymentDraft.name,
         runtimeName: deploymentRuntimeName.trim(),
-        region: deployRegion,
+        runtimeId: deploymentTarget?.runtimeId,
+        region: deploymentTarget?.region ?? deployRegion,
         startedAt,
         agentDraft: deploymentDraft,
+        mpaProfile: true,
+        mpaSmoke: !deploymentTarget,
       };
       const initialTask: DeploymentTaskUpdate = {
         ...taskBase,
@@ -5362,6 +5371,82 @@ export function CustomCreate({
       activeTask = initialTask;
       onDeploymentTaskChange?.(initialTask);
       onDeploymentStarted?.(initialTask);
+
+      if (deploymentTarget?.mpaProfileOnly) {
+        latestPhase = "profile_applying";
+        latestLabel = t("traditional.deployment.stages.applyMpaProfile");
+        latestMessage = t("traditional.deployment.applyingMpaProfile");
+        setNewWorkbenchDeployStage({
+          level: "info",
+          phase: latestPhase,
+          message: latestMessage,
+          pct: 0,
+        });
+        onDeploymentTaskChange?.({
+          ...taskBase,
+          status: "running",
+          phase: latestPhase,
+          label: latestLabel,
+          message: latestMessage,
+          pct: 0,
+          mpaProfile: true,
+          mpaSmoke: false,
+        });
+        const operationKind = deploymentTarget.etag ? "update" : "create";
+        const mpaOperation = await applyMpaProfileAfterDeployment({
+          draft: deploymentDraft,
+          taskId,
+          agentName: deploymentDraft.name,
+          runtimeId: deploymentTarget.runtimeId,
+          region: deploymentTarget.region,
+          operationKind,
+          mpaInstanceId: deploymentTarget.mpaInstanceId,
+          runtimeName: deploymentRuntimeName.trim(),
+          sourceDraftId: workspaceDraftId,
+          runtimeRevision: deploymentTarget.etag,
+        });
+        if (mpaOperation.status !== "succeeded") {
+          latestMessage =
+            mpaOperation.safeErrorCode ||
+            t("traditional.deployment.mpaOperationIncomplete");
+          setNewWorkbenchDeployStage({
+            level: "error",
+            phase: latestPhase,
+            message: latestMessage,
+            pct: 100,
+          });
+          throw new Error(latestMessage);
+        }
+        setNewWorkbenchDeploySucceeded(true);
+        setNewWorkbenchDeployStage({
+          level: "success",
+          phase: latestPhase,
+          message: t("traditional.deployment.mpaProfileApplied"),
+          pct: 100,
+        });
+        onDeploymentTaskChange?.({
+          ...taskBase,
+          status: "success",
+          phase: "complete",
+          label: t("traditional.deployment.complete"),
+          message: t("traditional.deployment.mpaProfileApplied"),
+          pct: 100,
+          mpaProfile: true,
+          mpaSmoke: false,
+        });
+        await onDeploymentComplete?.({
+          apikey: "",
+          url: "",
+          agentName: deploymentDraft.name,
+          runtimeName: deploymentRuntimeName.trim(),
+          runtimeId: deploymentTarget.runtimeId,
+          mpaInstanceId: deploymentTarget.mpaInstanceId,
+          region: deploymentTarget.region,
+          version: deploymentTarget.currentVersion,
+          mpaOperation,
+        });
+        return;
+      }
 
       const envMap = new Map(
         Object.entries(allEnvValues)
@@ -5419,6 +5504,104 @@ export function CustomCreate({
           envs: [...envMap].map(([key, value]) => ({ key, value })),
         },
       );
+      let completeResult = result;
+      const mpaRuntimeId = result.runtimeId || deploymentTarget?.runtimeId || "";
+      const mpaRegion = result.region || deploymentTarget?.region || deployRegion;
+      latestRuntimeId = mpaRuntimeId || latestRuntimeId;
+      latestRegion = mpaRegion;
+      if (mpaRuntimeId) {
+        latestPhase = "profile_applying";
+        latestLabel = t("traditional.deployment.stages.applyMpaProfile");
+        latestMessage = t("traditional.deployment.applyingMpaProfile");
+        setNewWorkbenchDeployStage({
+          level: "info",
+          phase: latestPhase,
+          message: latestMessage,
+          pct: 0,
+        });
+        onDeploymentTaskChange?.({
+          ...taskBase,
+          runtimeName: result.runtimeName || taskBase.runtimeName,
+          runtimeId: mpaRuntimeId,
+          region: mpaRegion,
+          status: "running",
+          phase: latestPhase,
+          label: latestLabel,
+          message: latestMessage,
+          pct: 0,
+          mpaProfile: true,
+          mpaSmoke: !deploymentTarget,
+        });
+        const mpaOperation = await applyMpaProfileAfterDeployment({
+          draft: deploymentDraft,
+          taskId,
+          agentName: deploymentDraft.name,
+          runtimeId: mpaRuntimeId,
+          region: mpaRegion,
+          operationKind: deploymentTarget ? "update" : "create",
+          mpaInstanceId:
+            deploymentTarget?.mpaInstanceId ?? result.mpaInstanceId,
+          runtimeName: deploymentRuntimeName.trim() || result.runtimeName,
+          sourceDraftId: workspaceDraftId,
+          runtimeRevision: deploymentTarget?.etag,
+        });
+        if (mpaOperation.status !== "succeeded") {
+          latestPhase =
+            mpaOperation.stage === "smoke_running"
+              ? "smoke_running"
+              : "profile_applying";
+          latestLabel =
+            latestPhase === "smoke_running"
+              ? t("traditional.deployment.stages.verifyMpaRuntime")
+              : t("traditional.deployment.stages.applyMpaProfile");
+          latestMessage =
+            mpaOperation.safeErrorCode ||
+            t("traditional.deployment.mpaOperationIncomplete");
+          setNewWorkbenchDeployStage({
+            level: "error",
+            phase: latestPhase,
+            message: latestMessage,
+            pct: 100,
+          });
+          throw new Error(latestMessage);
+        }
+        if (deploymentTarget) {
+          latestMessage = t("traditional.deployment.mpaProfileApplied");
+          setNewWorkbenchDeployStage({
+            level: "success",
+            phase: latestPhase,
+            message: latestMessage,
+            pct: 100,
+          });
+        } else {
+          latestPhase = "smoke_running";
+          latestLabel = t("traditional.deployment.stages.verifyMpaRuntime");
+          latestMessage = t("traditional.deployment.runningMpaSmoke");
+          onDeploymentTaskChange?.({
+            ...taskBase,
+            runtimeName: result.runtimeName || taskBase.runtimeName,
+            runtimeId: mpaRuntimeId,
+            region: mpaRegion,
+            status: "running",
+            phase: latestPhase,
+            label: latestLabel,
+            message: latestMessage,
+            pct: 100,
+            mpaProfile: true,
+            mpaSmoke: true,
+          });
+          latestPhase = "runnable";
+          latestLabel = t("traditional.deployment.stages.mpaReady");
+          latestMessage = t("traditional.deployment.mpaReady");
+          setNewWorkbenchDeployStage({
+            level: "success",
+            phase: latestPhase,
+            message: latestMessage,
+            pct: 100,
+          });
+        }
+        completeResult = { ...result, mpaOperation };
+      }
       setNewWorkbenchDeploySucceeded(true);
       setNewWorkbenchDeployStage({
         level: "success",
@@ -5428,16 +5611,20 @@ export function CustomCreate({
       });
       onDeploymentTaskChange?.({
         ...taskBase,
-        runtimeName: result.runtimeName || taskBase.runtimeName,
-        runtimeId: result.runtimeId,
-        region: result.region || deployRegion,
+        runtimeName: completeResult.runtimeName || taskBase.runtimeName,
+        runtimeId: completeResult.runtimeId || deploymentTarget?.runtimeId,
+        region: completeResult.region || deploymentTarget?.region || deployRegion,
         status: "success",
-        phase: "complete",
+        phase: completeResult.mpaOperation && !deploymentTarget ? "runnable" : "complete",
         label: t("traditional.deployment.complete"),
-        message: result.warnings?.join("；"),
+        message: completeResult.mpaOperation && !deploymentTarget
+          ? t("traditional.deployment.mpaReady")
+          : completeResult.warnings?.join("；"),
         pct: 100,
+        mpaProfile: true,
+        mpaSmoke: Boolean(completeResult.mpaOperation && !deploymentTarget),
       });
-      await onDeploymentComplete?.(result);
+      await onDeploymentComplete?.(completeResult);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setNewWorkbenchDeployError(message);
@@ -5452,9 +5639,13 @@ export function CustomCreate({
           startedAt: Date.now(),
         }),
         status: "error",
-        phase: activeTask?.phase,
+        runtimeId: latestRuntimeId,
+        region: latestRegion,
+        phase: latestPhase,
         label: t("traditional.deployment.failed"),
         message,
+        mpaProfile: true,
+        mpaSmoke: !deploymentTarget,
         retry: () => deployFromNewWorkbench(deploymentOptions),
       };
       onDeploymentTaskChange?.(failedTask);
@@ -5574,6 +5765,7 @@ export function CustomCreate({
         deployRegion={deployRegion}
         runtimeName={deploymentRuntimeName}
         isRuntimeUpdate={Boolean(deploymentTarget)}
+        profileOnly={deploymentTarget?.mpaProfileOnly}
         deploying={newWorkbenchDeploying}
         deployStage={newWorkbenchDeployStage}
         deployError={newWorkbenchDeployError}
@@ -6695,7 +6887,9 @@ export function CustomCreate({
                 }
                 deploymentActionTargetId="cw-publish-primary-action"
                 deploymentRuntimeId={deploymentTarget?.runtimeId}
+                deploymentMpaInstanceId={deploymentTarget?.mpaInstanceId}
                 deploymentRuntimeName={deploymentRuntimeName}
+                deploymentRuntimeRevision={deploymentTarget?.etag}
                 deploymentRuntimeNameCustomized={
                   !!deploymentTarget ||
                   !!draft.deployment?.runtimeNameCustomized

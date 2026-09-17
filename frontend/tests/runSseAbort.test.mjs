@@ -39,7 +39,345 @@ const result = await build({
 const moduleUrl = `data:text/javascript;base64,${Buffer.from(
   result.outputFiles[0].contents,
 ).toString("base64")}`;
-const { runSseFirstEventTimeoutError, runSSE } = await import(moduleUrl);
+const {
+  clearRemoteApps,
+  createSession,
+  deleteSession,
+  getSession,
+  listSessions,
+  continueTurn,
+  continueTurnSSE,
+  registerRemoteApp,
+  runSseFirstEventTimeoutError,
+  runSSE,
+} = await import(moduleUrl);
+
+test("createSession uses the MPA instance id instead of the Runtime id", async (t) => {
+  const previousFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = previousFetch;
+    clearRemoteApps();
+  });
+
+  registerRemoteApp("mpa-agent", {
+    app: "default",
+    runtimeId: "r-runtime-1",
+    mpaInstanceId: "mi-agent-1",
+    region: "cn-beijing",
+    agentCategory: "mpa",
+  });
+
+  const captured = [];
+  globalThis.fetch = async (url, init) => {
+    captured.push({
+      url: String(url),
+      body: init?.body ? JSON.parse(String(init.body)) : null,
+    });
+    if (String(url).includes("/profile-status")) {
+      return Response.json({
+        operationId: "op-1",
+        status: "applied",
+        profileRevision: 12,
+        runtimeRevision: "v1",
+        etag: "12",
+      });
+    }
+    return Response.json({ sessionId: "session-1" });
+  };
+
+  const sessionId = await createSession("mpa-agent", "user");
+
+  assert.equal(sessionId, "session-1");
+  assert.equal(captured.length, 2);
+  assert.match(
+    captured[0].url,
+    /\/web\/runtime-proxy\/r-runtime-1\/api\/v1\/agents\/mi-agent-1\/profile-status/,
+  );
+  assert.deepEqual(captured[1].body, {
+    mpaInstanceId: "mi-agent-1",
+    profileRevision: 12,
+  });
+});
+
+test("createSession hydrates the MPA instance id for cached Runtime connections", async (t) => {
+  const previousFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = previousFetch;
+    clearRemoteApps();
+  });
+
+  registerRemoteApp("mpa-agent", {
+    app: "default",
+    runtimeId: "r-runtime-1",
+    region: "cn-beijing",
+    agentCategory: "mpa",
+  });
+
+  const captured = [];
+  globalThis.fetch = async (url, init) => {
+    captured.push({
+      url: String(url),
+      body: init?.body ? JSON.parse(String(init.body)) : null,
+    });
+    if (String(url).includes("/web/runtime-detail")) {
+      return Response.json({
+        runtimeId: "r-runtime-1",
+        mpaInstanceId: "mi-agent-from-detail",
+        name: "mi-agent-from-detail",
+        description: "",
+        status: "Ready",
+        statusMessage: "",
+        model: "",
+        project: "default",
+        region: "cn-beijing",
+        createdAt: "",
+        updatedAt: "",
+        resources: {},
+        envs: [],
+        memoryId: "",
+        toolId: "",
+        knowledgeId: "",
+        mcpToolsetId: "",
+        artifactUrl: "",
+        artifactType: "",
+        networkTypes: [],
+        endpoint: "",
+        authType: "key_auth",
+      });
+    }
+    if (String(url).includes("/profile-status")) {
+      return Response.json({
+        operationId: "op-1",
+        status: "applied",
+        profileRevision: 13,
+        runtimeRevision: "v2",
+        etag: "13",
+      });
+    }
+    return Response.json({ id: "session-2" });
+  };
+
+  const sessionId = await createSession("mpa-agent", "user");
+
+  assert.equal(sessionId, "session-2");
+  assert.equal(captured.length, 3);
+  assert.match(captured[0].url, /\/web\/runtime-detail\?/);
+  assert.match(
+    captured[1].url,
+    /\/web\/runtime-proxy\/r-runtime-1\/api\/v1\/agents\/mi-agent-from-detail\/profile-status/,
+  );
+  assert.deepEqual(captured[2].body, {
+    mpaInstanceId: "mi-agent-from-detail",
+    profileRevision: 13,
+  });
+});
+
+test("createSession continues with profile revision zero when MPA profile is absent", async (t) => {
+  const previousFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = previousFetch;
+    clearRemoteApps();
+  });
+
+  registerRemoteApp("mpa-agent", {
+    app: "default",
+    runtimeId: "r-runtime-1",
+    mpaInstanceId: "mi-agent-1",
+    region: "cn-beijing",
+    agentCategory: "mpa",
+  });
+
+  const captured = [];
+  globalThis.fetch = async (url, init) => {
+    captured.push({
+      url: String(url),
+      body: init?.body ? JSON.parse(String(init.body)) : null,
+    });
+    if (String(url).includes("/profile-status")) {
+      return Response.json(
+        { detail: { code: "profile_not_found", message: "profile_not_found" } },
+        { status: 404 },
+      );
+    }
+    return Response.json({ sessionId: "session-1" }, { status: 201 });
+  };
+
+  const sessionId = await createSession("mpa-agent", "user");
+
+  assert.equal(sessionId, "session-1");
+  assert.equal(captured.length, 2);
+  assert.deepEqual(captured[1].body, {
+    mpaInstanceId: "mi-agent-1",
+    profileRevision: 0,
+  });
+});
+
+test("listSessions uses the native MPA Runtime session API", async (t) => {
+  const previousFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = previousFetch;
+    clearRemoteApps();
+  });
+
+  registerRemoteApp("mpa-agent", {
+    app: "default",
+    runtimeId: "r-runtime-1",
+    region: "cn-beijing",
+    agentCategory: "mpa",
+  });
+
+  const captured = [];
+  globalThis.fetch = async (url, init = {}) => {
+    captured.push({
+      url: String(url),
+      method: init.method ?? "GET",
+    });
+    return Response.json({
+      sessions: [
+        {
+          id: "session-1",
+          appName: "default",
+          userId: "agentkit-key-auth",
+          lastUpdateTime: 1789630185,
+          title: "done",
+          status: "idle",
+        },
+      ],
+    });
+  };
+
+  const sessions = await listSessions("mpa-agent", "studio-user");
+
+  assert.equal(sessions.length, 1);
+  assert.equal(sessions[0].id, "session-1");
+  assert.equal(captured.length, 1);
+  assert.match(
+    captured[0].url,
+    /\/web\/runtime-proxy\/r-runtime-1\/api\/v1\/sessions\?_runtime_region=cn-beijing$/,
+  );
+  assert.equal(captured[0].method, "GET");
+});
+
+test("listSessions treats legacy MPA Runtime connections with mpaInstanceId as native MPA", async (t) => {
+  const previousFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = previousFetch;
+    clearRemoteApps();
+  });
+
+  registerRemoteApp("mpa-agent", {
+    app: "default",
+    runtimeId: "r-runtime-1",
+    mpaInstanceId: "mi-agent-1",
+    region: "cn-beijing",
+  });
+
+  const captured = [];
+  globalThis.fetch = async (url, init = {}) => {
+    captured.push({
+      url: String(url),
+      method: init.method ?? "GET",
+    });
+    return Response.json({ sessions: [] });
+  };
+
+  await listSessions("mpa-agent", "studio-user");
+
+  assert.equal(captured.length, 1);
+  assert.match(captured[0].url, /\/api\/v1\/sessions\?_runtime_region=cn-beijing$/);
+  assert.doesNotMatch(captured[0].url, /\/apps\/default\/users\/studio-user\/sessions/);
+});
+
+test("getSession hydrates MPA Runtime session events from the native events API", async (t) => {
+  const previousFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = previousFetch;
+    clearRemoteApps();
+  });
+
+  registerRemoteApp("mpa-agent", {
+    app: "default",
+    runtimeId: "r-runtime-1",
+    region: "cn-beijing",
+    agentCategory: "mpa",
+  });
+
+  const captured = [];
+  globalThis.fetch = async (url, init = {}) => {
+    captured.push({
+      url: String(url),
+      method: init.method ?? "GET",
+    });
+    if (String(url).includes("/api/v1/sessions/session-1/events")) {
+      return Response.json({
+        events: [
+          {
+            id: "event-1",
+            author: "default",
+            partial: false,
+            content: { parts: [{ text: "done" }] },
+          },
+        ],
+      });
+    }
+    return Response.json({
+      id: "session-1",
+      appName: "default",
+      userId: "agentkit-key-auth",
+      lastUpdateTime: 1789630185,
+      title: "done",
+      status: "idle",
+    });
+  };
+
+  const session = await getSession("mpa-agent", "studio-user", "session-1");
+
+  assert.equal(session.id, "session-1");
+  assert.equal(session.events.length, 1);
+  assert.equal(session.events[0].id, "event-1");
+  assert.equal(captured.length, 2);
+  assert.match(
+    captured[0].url,
+    /\/web\/runtime-proxy\/r-runtime-1\/api\/v1\/sessions\/session-1\?_runtime_region=cn-beijing$/,
+  );
+  assert.match(
+    captured[1].url,
+    /\/web\/runtime-proxy\/r-runtime-1\/api\/v1\/sessions\/session-1\/events\?_runtime_region=cn-beijing$/,
+  );
+});
+
+test("deleteSession uses the native MPA Runtime session API", async (t) => {
+  const previousFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = previousFetch;
+    clearRemoteApps();
+  });
+
+  registerRemoteApp("mpa-agent", {
+    app: "default",
+    runtimeId: "r-runtime-1",
+    region: "cn-beijing",
+    agentCategory: "mpa",
+  });
+
+  const captured = [];
+  globalThis.fetch = async (url, init = {}) => {
+    captured.push({
+      url: String(url),
+      method: init.method ?? "GET",
+    });
+    return Response.json({ sessionId: "session-1" });
+  };
+
+  await deleteSession("mpa-agent", "studio-user", "session-1");
+
+  assert.equal(captured.length, 1);
+  assert.match(
+    captured[0].url,
+    /\/web\/runtime-proxy\/r-runtime-1\/api\/v1\/sessions\/session-1\?_runtime_region=cn-beijing&_method=DELETE$/,
+  );
+  assert.equal(captured[0].method, "POST");
+});
 
 test("runSSE forwards cancellation after yielding partial output", async (t) => {
   const previousFetch = globalThis.fetch;
@@ -97,6 +435,352 @@ test("runSSE forwards cancellation after yielding partial output", async (t) => 
     assert.equal(error.name, "AbortError");
     return true;
   });
+});
+
+test("runSSE forwards execution idempotency headers and metadata through the local BFF", async (t) => {
+  const previousFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = previousFetch;
+  });
+
+  const captured = [];
+  globalThis.fetch = async (url, init) => {
+    captured.push({
+      url: String(url),
+      headers: new Headers(init.headers),
+      body: JSON.parse(String(init.body)),
+    });
+    if (String(url).includes("/api/v1/sessions/session/run")) {
+      return Response.json({
+        sessionId: "session",
+        invocationId: "e-accepted",
+        turnId: "turn-accepted",
+        operationId: "op-accepted",
+        executionConfigRevision: 7,
+      });
+    }
+    return new Response(
+      'data: {"partial":true,"content":{"parts":[{"text":"accepted"}]}}\n\n',
+      {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream" },
+      },
+    );
+  };
+
+  const events = runSSE({
+    appName: "agent",
+    userId: "user",
+    sessionId: "session",
+    text: "hello",
+    idempotencyKey: "turn-key-1",
+    executionConfigVersion: 7,
+    lastEventId: "event-before-refresh",
+  });
+
+  const first = await events.next();
+  assert.equal(first.done, false);
+  assert.equal(captured.length, 1);
+  assert.equal(captured[0].url, "/run_sse");
+  assert.equal(captured[0].headers.get("Idempotency-Key"), "turn-key-1");
+  assert.equal(captured[0].body.executionConfigVersion, 7);
+  assert.equal(captured[0].body.lastEventId, "event-before-refresh");
+  assert.deepEqual(captured[0].body.custom_metadata.veadkExecution, {
+    executionConfigVersion: 7,
+    idempotencyKey: "turn-key-1",
+  });
+  await events.return();
+});
+
+test("runSSE resumes an MPA runtime stream from the last event id", async (t) => {
+  const previousFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = previousFetch;
+    clearRemoteApps();
+  });
+
+  registerRemoteApp("mpa-agent", {
+    app: "default",
+    runtimeId: "runtime-1",
+    region: "cn-beijing",
+    agentCategory: "mpa",
+  });
+
+  const captured = [];
+  globalThis.fetch = async (url, init) => {
+    captured.push({
+      url: String(url),
+      headers: new Headers(init.headers),
+      body: JSON.parse(String(init.body)),
+    });
+    if (String(url).includes("/api/v1/sessions/session/run")) {
+      return Response.json({
+        sessionId: "session",
+        invocationId: "e-accepted",
+        turnId: "turn-accepted",
+        operationId: "op-accepted",
+        executionConfigRevision: 7,
+      });
+    }
+    return new Response(
+      'data: {"partial":false,"id":"event-after-refresh","content":{"parts":[{"text":"accepted"}]}}\n\n',
+      {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream" },
+      },
+    );
+  };
+
+  const events = runSSE({
+    appName: "mpa-agent",
+    userId: "user",
+    sessionId: "session",
+    text: "hello",
+    idempotencyKey: "turn-key-1",
+    executionConfigVersion: 7,
+    lastEventId: "event-before-refresh",
+  });
+
+  const first = await events.next();
+  assert.equal(first.done, false);
+  assert.equal(first.value.id, "event-after-refresh");
+  assert.equal(captured.length, 2);
+  assert.match(captured[0].url, /\/web\/runtime-proxy\/runtime-1\/api\/v1\/sessions\/session\/run/);
+  assert.equal(captured[0].headers.get("Idempotency-Key"), "turn-key-1");
+  assert.deepEqual(captured[0].body, {
+    content: "hello",
+    executionConfigVersion: 7,
+  });
+  assert.match(captured[1].url, /\/web\/runtime-proxy\/runtime-1\/api\/v1\/sessions\/session\/sse/);
+  assert.deepEqual(captured[1].body, {
+    invocationId: "e-accepted",
+    lastEventId: "event-before-refresh",
+  });
+  await events.return();
+});
+
+test("runSSE stops an MPA runtime stream on named done before heartbeat", async (t) => {
+  const previousFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = previousFetch;
+    clearRemoteApps();
+  });
+
+  registerRemoteApp("mpa-agent", {
+    app: "default",
+    runtimeId: "runtime-1",
+    region: "cn-beijing",
+    agentCategory: "mpa",
+  });
+
+  globalThis.fetch = async (url, _init) => {
+    if (String(url).includes("/api/v1/sessions/session/run")) {
+      return Response.json({
+        sessionId: "session",
+        invocationId: "e-accepted",
+        turnId: "turn-accepted",
+        operationId: "op-accepted",
+        executionConfigRevision: 1,
+      });
+    }
+    return new Response(
+      [
+        'event: message\ndata: {"partial":true,"content":{"parts":[{"text":"hello"}]}}\n\n',
+        'event: done\ndata: {"sessionId":"session","invocationId":"e-accepted"}\n\n',
+        'event: heartbeat\ndata: {"message":"ping"}\n\n',
+      ].join(""),
+      {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream" },
+      },
+    );
+  };
+
+  const events = runSSE({
+    appName: "mpa-agent",
+    userId: "user",
+    sessionId: "session",
+    text: "hello",
+    idempotencyKey: "turn-key-1",
+    executionConfigVersion: 1,
+  });
+
+  const first = await events.next();
+  const second = await events.next();
+  assert.equal(first.done, false);
+  assert.equal(first.value.content.parts[0].text, "hello");
+  assert.equal(second.done, true);
+});
+
+test("runSSE forwards zero execution config revisions for initial MPA sessions", async (t) => {
+  const previousFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = previousFetch;
+    clearRemoteApps();
+  });
+
+  registerRemoteApp("mpa-agent", {
+    app: "default",
+    runtimeId: "runtime-1",
+    region: "cn-beijing",
+    agentCategory: "mpa",
+  });
+
+  const captured = [];
+  globalThis.fetch = async (url, init) => {
+    captured.push({
+      url: String(url),
+      body: init?.body ? JSON.parse(String(init.body)) : null,
+    });
+    if (String(url).includes("/api/v1/sessions/session/run")) {
+      return Response.json({
+        sessionId: "session",
+        invocationId: "e-accepted",
+      });
+    }
+    return new Response(
+      [
+        'event: message\ndata: {"partial":false,"id":"event-1","content":{"parts":[{"text":"ok"}]}}\n\n',
+        'event: done\ndata: {"sessionId":"session","invocationId":"e-accepted"}\n\n',
+      ].join(""),
+      {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream" },
+      },
+    );
+  };
+
+  const events = runSSE({
+    appName: "mpa-agent",
+    userId: "user",
+    sessionId: "session",
+    text: "hello",
+    idempotencyKey: "turn-key-1",
+    executionConfigVersion: 0,
+  });
+
+  await events.next();
+
+  assert.deepEqual(captured[0].body, {
+    content: "hello",
+    executionConfigVersion: 0,
+  });
+});
+
+test("continueTurn calls the MPA runtime continuation endpoint", async (t) => {
+  const previousFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = previousFetch;
+    clearRemoteApps();
+  });
+
+  registerRemoteApp("mpa-agent", {
+    app: "default",
+    runtimeId: "runtime-1",
+    region: "cn-beijing",
+    agentCategory: "mpa",
+  });
+
+  const captured = [];
+  globalThis.fetch = async (url, init) => {
+    captured.push({
+      url: String(url),
+      headers: new Headers(init.headers),
+      body: JSON.parse(String(init.body)),
+    });
+    return Response.json({
+      taskId: "task-1",
+      sessionId: "session",
+      invocationId: "e-continued",
+      turnId: "turn-continued",
+      operationId: "op-continued",
+      executionConfigRevision: 7,
+      continuationOf: "turn-old",
+      idempotentReplay: false,
+    });
+  };
+
+  const result = await continueTurn(
+    "mpa-agent",
+    "session",
+    "task-1",
+    2,
+    "continue-key-1",
+  );
+
+  assert.equal(result.invocationId, "e-continued");
+  assert.equal(result.continuationOf, "turn-old");
+  assert.equal(captured.length, 1);
+  assert.match(captured[0].url, /\/web\/runtime-proxy\/runtime-1\/api\/v1\/a2a\/tasks\/task-1\/continue/);
+  assert.equal(captured[0].headers.get("Idempotency-Key"), "continue-key-1");
+  assert.deepEqual(captured[0].body, { expectedGeneration: 2 });
+});
+
+test("continueTurnSSE streams a runtime continuation without starting a normal run", async (t) => {
+  const previousFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = previousFetch;
+    clearRemoteApps();
+  });
+
+  registerRemoteApp("mpa-agent", {
+    app: "default",
+    runtimeId: "runtime-1",
+    region: "cn-beijing",
+    agentCategory: "mpa",
+  });
+
+  const captured = [];
+  globalThis.fetch = async (url, init) => {
+    captured.push({
+      url: String(url),
+      headers: new Headers(init.headers),
+      body: JSON.parse(String(init.body)),
+    });
+    if (String(url).includes("/api/v1/a2a/tasks/task-1/continue")) {
+      return Response.json({
+        taskId: "task-1",
+        sessionId: "session",
+        invocationId: "e-continued",
+        turnId: "turn-continued",
+        operationId: "op-continued",
+        executionConfigRevision: 7,
+        continuationOf: "turn-old",
+        idempotentReplay: false,
+      });
+    }
+    return new Response(
+      'data: {"partial":false,"id":"event-after-continue","content":{"parts":[{"text":"continued"}]}}\n\n',
+      {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream" },
+      },
+    );
+  };
+
+  const events = continueTurnSSE({
+    appName: "mpa-agent",
+    sessionId: "session",
+    taskId: "task-1",
+    expectedGeneration: 2,
+    idempotencyKey: "continue-key-1",
+    lastEventId: "event-before-continue",
+  });
+
+  const first = await events.next();
+  assert.equal(first.done, false);
+  assert.equal(first.value.id, "event-after-continue");
+  assert.equal(captured.length, 2);
+  assert.match(captured[0].url, /\/api\/v1\/a2a\/tasks\/task-1\/continue/);
+  assert.doesNotMatch(captured[0].url, /\/api\/v1\/sessions\/session\/run/);
+  assert.equal(captured[0].headers.get("Idempotency-Key"), "continue-key-1");
+  assert.deepEqual(captured[0].body, { expectedGeneration: 2 });
+  assert.match(captured[1].url, /\/api\/v1\/sessions\/session\/sse/);
+  assert.deepEqual(captured[1].body, {
+    invocationId: "e-continued",
+    lastEventId: "event-before-continue",
+  });
+  await events.return();
 });
 
 test("runSSE aborts when no first event arrives before the deadline", async (t) => {

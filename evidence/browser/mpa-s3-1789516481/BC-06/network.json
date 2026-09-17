@@ -1,0 +1,86 @@
+[
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:18175/oauth2/userinfo",
+    "postData": null,
+    "status": 404
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:18175/web/runtime-proxy/runtime-mpa-s2/web/agent-info/a2a-default?_runtime_region=cn-beijing",
+    "postData": null,
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:18175/web/runtime-proxy/runtime-mpa-s2/apps/a2a-default/users/scenario-user/sessions?_runtime_region=cn-beijing",
+    "postData": null,
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:18175/web/runtime-proxy/runtime-mpa-s2/apps/a2a-default/users/scenario-user/sessions/cursor_expired-session?_runtime_region=cn-beijing",
+    "postData": null,
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:18175/oauth2/userinfo",
+    "postData": null,
+    "status": 404
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:18175/web/runtime-proxy/runtime-mpa-s2/web/agent-info/a2a-default?_runtime_region=cn-beijing",
+    "postData": null,
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:18175/web/runtime-proxy/runtime-mpa-s2/apps/a2a-default/users/scenario-user/sessions?_runtime_region=cn-beijing",
+    "postData": null,
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:18175/web/runtime-proxy/runtime-mpa-s2/apps/a2a-default/users/scenario-user/sessions/cursor_expired-session?_runtime_region=cn-beijing",
+    "postData": null,
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:18175/web/mpa/sessions/cursor_expired-session/execution-config?runtimeId=runtime-mpa-s2&region=cn-beijing",
+    "postData": null,
+    "status": 200
+  },
+  {
+    "method": "POST",
+    "url": "http://127.0.0.1:18175/web/runtime-proxy/runtime-mpa-s2/api/v1/sessions/cursor_expired-session/run?_runtime_region=cn-beijing",
+    "postData": "{\"content\":\"continue after refresh\",\"executionConfigVersion\":6}",
+    "status": 200
+  },
+  {
+    "method": "POST",
+    "url": "http://127.0.0.1:18175/web/runtime-proxy/runtime-mpa-s2/api/v1/sessions/cursor_expired-session/sse?_runtime_region=cn-beijing",
+    "postData": "{\"invocationId\":\"cursor_expired-invocation\",\"lastEventId\":\"event-before-refresh\"}",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:18175/web/runtime-proxy/runtime-mpa-s2/apps/a2a-default/users/scenario-user/sessions?_runtime_region=cn-beijing",
+    "postData": null,
+    "status": 200
+  },
+  {
+    "method": "POST",
+    "url": "http://127.0.0.1:18175/web/runtime-proxy/runtime-mpa-s2/api/v1/sessions/cursor_expired-session/sse?_runtime_region=cn-beijing",
+    "postData": "{\"invocationId\":\"cursor_expired-invocation\",\"lastEventId\":\"missing-event\"}",
+    "status": 410
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:18175/__test/mpa/scenarios/cursor_expired",
+    "postData": null,
+    "status": 200
+  }
+]

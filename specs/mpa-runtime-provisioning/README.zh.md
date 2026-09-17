@@ -2,7 +2,11 @@
 
 - **Component ID：** `mpa-runtime-provisioning`
 - **状态：** 草案；提议变更由关联 PRD 管理
+<<<<<<< HEAD
 - **修订日期：** 2026-09-20
+=======
+- **修订日期：** 2026-09-15
+>>>>>>> dd7f974c (feat(studio): deliver MPA P0 control plane)
 - **English version:** [README.md](README.md)
 - **关联 PRD：** [MPA Runtime 集成加固](../../prd-spec/bugfixes/mpa-runtime-integration/2026-09-12-mpa-runtime-integration-hardening.zh.md)
 - **关联 PRD：** [MPA Studio 工作负载身份创建](../../prd-spec/features/mpa-studio-workload-identity/2026-09-20-mpa-studio-workload-identity.zh.md)
@@ -55,3 +59,20 @@ MPA 部署默认注入 `OTEL_PYTHON_DISABLED_INSTRUMENTATIONS=sqlalchemy,asyncpg
 ## 托管创建边界
 
 Studio MPA 创建和 `veadk mpa provision` 由 [Studio MPA 创建](../studio-mpa-creation/README.zh.md)负责。该路径准备账号资源并通过真实 Runtime 元数据初始化。本文原有职责和旧入口保持不变。
+
+## 拟议 AgentKit P0 profile
+
+由 [P0 功能迁移](../../prd-spec/features/mpa-p0-productionization/2026-09-15-mpa-p0-productionization-design.zh.md) 管理。基线 `CON-1` 至 `CON-6` 保留为历史/当前集成契约；以下拟议 profile 加强 readiness 和安全，不表示已实现。原生/VeFaaS 兼容路径独立保留，不导入 ArkClaw 用户、元数据或旧标识。
+
+- `CON-7`：AgentKit 模式使用版本化 bootstrap manifest，包含 account/workspace/MPA-instance/Runtime 身份、endpoint、resource 和服务端 credential 引用。由 `agentkit-mpa-agent` 消费，P0 必需功能不得调用 ArkClaw configuration/identity/AppCenter fallback。缺失配置返回分类 not-ready 状态和可恢复 finalization 步骤。`CLAW_SPACE_ID` 等内部兼容名仅可作为派生值保留，不查询旧服务。Runtime 持有 MPA Profile revision，bootstrap 只记录绑定和已应用 revision。
+- `CON-8`：保留 prepare/create/finalize 阶段，区分 transport-ready 与 execution-ready。未 finalization 的 Runtime 可响应 bootstrap health，但拒绝用户执行，避免平台 transport-ready 前必须已有最终 endpoint 凭据的循环依赖。Endpoint/key/Tool/manifest 完成后，execution readiness 与 A2A/worker smoke 均通过才报告成功。重复 create/finalize 使用稳定 operation ID 并检查资源所有权；部分失败返回安全资源 ID 和下一恢复步骤。
+- `CON-9`：按 [runtime 身份契约](../mpa-runtime-control/README.zh.md) `CON-1` 配置 AgentKit custom JWT issuer discovery、allowed client/audience，并由 BFF 转发已验证 bearer；API key-auth 与用户身份独立。新 AgentKit profile 在 caller override 合并后验证最终配置，拒绝 JWT bypass 或开启旧 fallback。这仅在 opt-in profile 中有意约束基线 `extra_env` last-wins，必须作为公共 CLI/config 边界验证。
+- `CON-10`：Key 轮换更新服务端引用/配置，并对齐 runtime、内置 MCP、worker client。CLI/UI 普通结果不包含原值。Reconciliation 失败保持失败，允许相同 operation ID 重试；消费者未就绪前不声称旧 key 已撤销。实际 key release/rotation operation 由 PRD `T-1` 对照平台 API 验证。
+- `CON-11`：发布 metadata 固定 runtime image digest、已应用 MPA Profile revision、session execution-config schema、worker protocol 兼容。复用 AgentKit SDK 的 Runtime create/get/list/update/release/delete/listVersions/listInstances/getLogs；Managed Agent API 不在 P0。实施时仍需验证 Runtime 写操作的权限、幂等、错误和回滚行为。兼容回滚等待 execution-ready 和 smoke；新平台 schema 增量演进，不兼容降级在写操作前拒绝。历史 ArkClaw 迁移不属于此生命周期。
+- `CON-12`：删除要求授权影响预览、活动 Session/job 与资源引用检查、显式确认、持久化清理进度。共享 Tool/Skill/storage 保留，除非属于该操作独占且另行授权。清理失败返回 retryable/blocked 状态和安全 ID；仍有所属 runtime 资源时不报告全部删除完成。
+
+Studio/CLI 通过共享编排遵循相同保证。平台 operation 清单与 bootstrap field/config 名称是阻塞性 `T-1` 交付物，不是现有 API 声明。
+
+`CON-7` 至 `CON-12` 验证映射 PRD `AC-1`、`AC-2`、`AC-9`、`AC-10`：阻断旧端点的全新启动、缺失配置/finalization 失败/重启、不安全 override、轮换/重试、兼容回滚、活动/共享资源删除。复用上述 provisioning 回归并为新 profile 增加失败测试。拟议 runtime/live 结果均为 `not_run`。
+
+2026-09-15：新增无历史导入的功能迁移 profile 草案，实现与真实证据待补。

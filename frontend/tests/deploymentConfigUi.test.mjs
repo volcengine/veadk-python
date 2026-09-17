@@ -475,6 +475,6 @@ test("leaves feedback evaluation sets off by default in both deployment workbenc
   );
   assert.match(
     projectPreviewSource,
-    /const initialTask: DeploymentTaskUpdate =[\s\S]*?createEvaluationSets: effectiveCreateEvaluationSets,\s*\n\s*};/,
+    /const initialTask: DeploymentTaskUpdate =[\s\S]*?createEvaluationSets: effectiveCreateEvaluationSets,/,
   );
 });

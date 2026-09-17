@@ -278,6 +278,82 @@ export interface AssistantEventProjection {
 const fnCall = (p: AdkPart) => p.functionCall ?? p.function_call;
 const fnResp = (p: AdkPart) => p.functionResponse ?? p.function_response;
 
+function eventMetadata(ev: AdkEvent): Record<string, unknown> {
+  const metadata = ev.customMetadata ?? ev.custom_metadata;
+  return metadata && typeof metadata === "object" && !Array.isArray(metadata)
+    ? (metadata as Record<string, unknown>)
+    : {};
+}
+
+function nestedMetadata(
+  metadata: Record<string, unknown>,
+  key: string,
+): Record<string, unknown> {
+  const value = metadata[key];
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function metadataString(metadata: Record<string, unknown>, key: string): string {
+  const value = metadata[key];
+  return typeof value === "string" ? value : "";
+}
+
+function mpaMetadata(ev: AdkEvent): Record<string, unknown> {
+  return nestedMetadata(eventMetadata(ev), "mpa");
+}
+
+function mpaEventType(ev: AdkEvent): string {
+  const metadata = eventMetadata(ev);
+  const mpa = mpaMetadata(ev);
+  return (
+    metadataString(metadata, "eventType") ||
+    metadataString(metadata, "event_type") ||
+    metadataString(mpa, "eventType") ||
+    metadataString(mpa, "event_type") ||
+    metadataString(mpa, "kind")
+  );
+}
+
+function isMpaSandboxEvent(ev: AdkEvent): boolean {
+  const metadata = eventMetadata(ev);
+  const mpa = mpaMetadata(ev);
+  return (
+    metadataString(metadata, "source") === "sandbox" ||
+    metadataString(mpa, "source") === "sandbox"
+  );
+}
+
+function isMpaUsageEvent(ev: AdkEvent): boolean {
+  const eventType = mpaEventType(ev);
+  return eventType === "usage.updated" || eventType === "usage";
+}
+
+function isFinalAlreadyEmittedSandboxResponse(ev: AdkEvent): boolean {
+  return (ev.content?.parts ?? []).some((part) => {
+    const response = fnResp(part);
+    const payload = response?.response;
+    return (
+      response?.name === "sandbox_task" &&
+      payload &&
+      typeof payload === "object" &&
+      !Array.isArray(payload) &&
+      (payload as Record<string, unknown>).finalAlreadyEmitted === true
+    );
+  });
+}
+
+function completeSandboxTaskBlocks(blocks: Block[]) {
+  for (const block of blocks) {
+    if (block.kind !== "tool" || block.name !== "sandbox_task" || block.done) {
+      continue;
+    }
+    block.done = true;
+    block.status = "completed";
+  }
+}
+
 function toolNamesMatch(left: string, right: string): boolean {
   if (left === right) return true;
   const commandAliases = new Set([
@@ -528,6 +604,21 @@ export function applyEvent(acc: Acc, ev: AdkEvent): Acc {
   const blocks = acc.blocks.map((b) => ({ ...b }));
   let liveStart = acc.liveStart;
   let pendingCodexProgress = acc.pendingCodexProgress.slice();
+  if (isMpaUsageEvent(ev)) {
+    return { blocks, liveStart, pendingCodexProgress };
+  }
+  if (isFinalAlreadyEmittedSandboxResponse(ev)) {
+    // The Runtime has already streamed the sandbox answer and uses this
+    // wrapper response only as the parent tool's completion signal. Preserve
+    // those live answer deltas while closing the parent activity card.
+    completeSandboxTaskBlocks(blocks);
+    closeThinking(blocks);
+    return {
+      blocks,
+      liveStart: blocks.length,
+      pendingCodexProgress,
+    };
+  }
   const parts = ev.content?.parts ?? [];
   const progressUpdates = parts.flatMap((part) => {
     const progress = parseBranchCompareProgress(
@@ -618,6 +709,8 @@ export function applyEvent(acc: Acc, ev: AdkEvent): Acc {
           ev.actions?.transfer_to_agent ||
           i18n.t("app:common.unknownAgent");
         blocks.push({ kind: "agent-transfer", agentName, done: false });
+      } else if (fc.name === "sandbox_task" && isMpaSandboxEvent(ev)) {
+        continue;
       } else if (fc.name === REQUEST_EUC) {
         // MCP/tool OAuth: render a dedicated auth card instead of a tool row.
         const args = (fc.args ?? {}) as Record<string, any>;
@@ -776,6 +869,9 @@ export function applyEvent(acc: Acc, ev: AdkEvent): Acc {
       })),
     );
   }
+  if (isMpaSandboxEvent(ev) && mpaEventType(ev) === "invocation.completed") {
+    completeSandboxTaskBlocks(blocks);
+  }
   closeThinking(blocks); // a consolidated thinking segment is complete
   liveStart = blocks.length;
   return { blocks, liveStart, pendingCodexProgress };
@@ -783,6 +879,7 @@ export function applyEvent(acc: Acc, ev: AdkEvent): Acc {
 
 function completesAssistantResponse(ev: AdkEvent, blocks: Block[]): boolean {
   if (ev.partial === true) return false;
+  if (isFinalAlreadyEmittedSandboxResponse(ev)) return true;
   const parts = ev.content?.parts ?? [];
   const hasFinalAnswerPart = parts.some((part) => {
     const text = visiblePartText(part);
@@ -841,6 +938,11 @@ function eventAffectsAssistantTurn(ev: AdkEvent): boolean {
   );
 }
 
+function isUserEchoEvent(ev: AdkEvent): boolean {
+  if (ev.author !== "user" && ev.content?.role !== "user") return false;
+  return !(ev.content?.parts ?? []).some((part) => fnCall(part) || fnResp(part));
+}
+
 /** Keep one mutable stream accumulator per active Agent response. Parallel
  *  Agents can interleave token events, so a single "current author" loses
  *  content and creates one turn per author switch. A completed response closes
@@ -882,9 +984,21 @@ export function createAssistantEventProjector(
 
   return {
     project(ev: AdkEvent): AssistantEventProjection {
-      // Some Runtime streams replay the submitted user event. The UI already
-      // inserted that turn; agent-authored tool responses still belong here.
-      if (ev.author === "user" || (ev.id && seenEventIds.has(ev.id))) {
+      if (isUserEchoEvent(ev)) {
+        return {
+          turn: { role: "assistant", blocks: [] },
+          completed: false,
+          ignored: true,
+        };
+      }
+      if (isMpaUsageEvent(ev)) {
+        return {
+          turn: { role: "assistant", blocks: [] },
+          completed: false,
+          ignored: true,
+        };
+      }
+      if (ev.id && seenEventIds.has(ev.id)) {
         return {
           turn: { role: "assistant", blocks: [] },
           completed: false,
@@ -898,10 +1012,21 @@ export function createAssistantEventProjector(
           seenEventIds.delete(eventIdOrder.shift()!);
         }
       }
-      const author = ev.author && ev.author !== "user" ? ev.author : "";
+      const rawAuthor = ev.author && ev.author !== "user" ? ev.author : "";
       const invocationId = ev.invocationId ?? ev.invocation_id ?? "";
-      const key = keyFor(author, invocationId);
+      let author = isMpaSandboxEvent(ev) ? "" : rawAuthor;
+      let key = keyFor(author, invocationId);
       let state = active.get(key);
+      if (!state && isMpaSandboxEvent(ev) && invocationId) {
+        const existing = [...active.entries()].find(([candidate]) =>
+          candidate.startsWith(`${invocationId}\u0000`)
+        );
+        if (existing) {
+          key = existing[0];
+          state = existing[1];
+          author = state.meta.author ?? "";
+        }
+      }
       if (!state && seededKey) {
         const seeded = active.get(seededKey);
         if (seeded && (!seeded.meta.author || seeded.meta.author === author)) {
@@ -909,6 +1034,18 @@ export function createAssistantEventProjector(
           seededKey = undefined;
           state = seeded;
         }
+      }
+      // The MPA live stream can omit the persisted sandbox
+      // `invocation.completed` event and finish with only the wrapper response.
+      // Use that response to close the active parent tool. During history
+      // replay the completed sandbox event has already closed the turn, so the
+      // same wrapper response must remain ignored to avoid a duplicate card.
+      if (!state && isFinalAlreadyEmittedSandboxResponse(ev)) {
+        return {
+          turn: { role: "assistant", blocks: [] },
+          completed: false,
+          ignored: true,
+        };
       }
       if (!state && !eventAffectsAssistantTurn(ev)) {
         return {
@@ -948,10 +1085,15 @@ export function createAssistantEventProjector(
         blocks: state.acc.blocks,
         meta: state.meta,
       };
-      if (completed) {
+      const awaitsPersistedSandboxFinal =
+        completed && isFinalAlreadyEmittedSandboxResponse(ev);
+      if (completed && !awaitsPersistedSandboxFinal) {
         active.delete(key);
         seededKey = undefined;
       } else {
+        // Keep the terminal wrapper state addressable until transport finish.
+        // Some stored/replayed streams can still deliver the authoritative
+        // sandbox invocation.completed event immediately after the wrapper.
         active.set(key, state);
       }
       return { turn, completed };
@@ -990,7 +1132,10 @@ export function eventsToTurns(
   sessionState: Record<string, unknown> = {},
 ): Turn[] {
   let turns: Turn[] = [];
-  let projector = createAssistantEventProjector("adk-history");
+  let historySegment = 0;
+  const nextProjector = () =>
+    createAssistantEventProjector(`adk-history-${historySegment++}`);
+  let projector = nextProjector();
   for (const ev of events) {
     // Classify by author only: function-response events are authored by the
     // agent but carry content.role === "user", so a role-based check would
@@ -1031,8 +1176,7 @@ export function eventsToTurns(
       if (files.length) blocks.push({ kind: "attachment", files });
       if (text) blocks.push({ kind: "text", text });
       turns.push({ role: "user", blocks, meta: { ts: ev.timestamp } });
-      // Upserts span the full history, so each user turn needs a unique prefix.
-      projector = createAssistantEventProjector(`adk-history-${turns.length}`);
+      projector = nextProjector();
     } else {
       const projection = projector.project(ev);
       if (!projection.ignored) {

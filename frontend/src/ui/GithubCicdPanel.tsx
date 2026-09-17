@@ -18,6 +18,7 @@ interface GithubCicdPanelProps {
   region: string;
   cloudProvider: CloudProvider;
   runtimeId?: string;
+  agentCategory?: "general" | "mpa";
   binding?: GithubCicdPipelineResult | null;
   disabled?: boolean;
   showSetup?: boolean;
@@ -35,6 +36,7 @@ export interface PendingGithubCicdConfig {
   volcengineSecretKey: string;
   volcengineSessionToken?: string;
   cloudProvider: CloudProvider;
+  agentCategory?: "general" | "mpa";
   pipelineId?: string;
 }
 
@@ -133,6 +135,7 @@ export function GithubCicdPanel({
   region,
   cloudProvider,
   runtimeId,
+  agentCategory = "general",
   binding,
   disabled = false,
   showSetup = true,
@@ -280,6 +283,7 @@ export function GithubCicdPanel({
           volcengineSecretKey,
           volcengineSessionToken: volcengineSessionToken.trim(),
           cloudProvider,
+          agentCategory,
         });
         setPendingCicdSelected(true);
         return;
@@ -292,6 +296,7 @@ export function GithubCicdPanel({
             runtimeName: project.name,
             runtimeId: runtimeId ?? "",
             region,
+            agentCategory,
             cloudProvider,
             projectPath: ".",
             volcengineAccessKey: volcengineAccessKey.trim(),
@@ -327,6 +332,7 @@ export function GithubCicdPanel({
           volcengineSessionToken: volcengineSessionToken.trim(),
           pipelineId: boundResult.pipelineId,
           cloudProvider,
+          agentCategory,
         });
       }
       if (!isCicdMode || runtimeId) {

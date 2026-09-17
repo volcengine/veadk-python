@@ -425,7 +425,7 @@ export function Sidebar({
   const [collapsed, setCollapsed] = useState(autoCollapsedRef.current);
   const combinedHistory = sessions.map((session) => ({
     id: session.id,
-    title: sessionTitle(session.events, t("history.newConversation")),
+    title: session.title || sessionTitle(session.events, t("history.newConversation")),
     createdAt: (session.lastUpdateTime ?? 0) * 1_000,
   })).sort((left, right) => right.createdAt - left.createdAt);
   const toggleCollapsed = () => {

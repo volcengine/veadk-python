@@ -6917,7 +6917,7 @@ a.search-result { text-decoration: none; color: inherit; }
   padding: 24px 20px;
 }
 
-.studio-confirm-body p {
+.studio-confirm-body > div {
   margin: 0;
   color: hsl(var(--foreground));
   font-size: 14px;

@@ -1,0 +1,58 @@
+{
+  "aBefore": {
+    "text": "会话配置\n\n查看和调整当前 MPA Session 的执行配置。变更只对下一轮对话生效。\n\n配置 revision\n6\nSession Profile revision\n6\n最新 Profile revision\n7\nETag\n\"6\"\n检测到新的 Profile revision：v6 → v7。\n升级 Session Profile\n模型覆盖\n\n使用 Profile 默认值\n\n模型 ID\n保存\n继承 Profile 默认值\nMCP 服务\n\n使用 Profile 默认值\n\n已选择 1 个\nmcp-default\n清空 MCP 服务\n继承 Profile 默认值",
+    "inputValue": "model-base",
+    "inputPlaceholder": "model-base"
+  },
+  "aAfter": {
+    "text": "会话配置\n\n查看和调整当前 MPA Session 的执行配置。变更只对下一轮对话生效。\n\n会话配置已更新，下一轮对话将使用新 revision。\n配置 revision\n7\nSession Profile revision\n6\n最新 Profile revision\n7\nETag\n\"7\"\n检测到新的 Profile revision：v6 → v7。\n升级 Session Profile\n模型覆盖\n\nSession 覆盖\n\n模型 ID\n保存\n继承 Profile 默认值\nMCP 服务\n\n使用 Profile 默认值\n\n已选择 1 个\nmcp-default\n清空 MCP 服务\n继承 Profile 默认值",
+    "inputValue": "model-browser-a",
+    "inputPlaceholder": "model-browser-a"
+  },
+  "bBefore": {
+    "text": "会话配置\n\n查看和调整当前 MPA Session 的执行配置。变更只对下一轮对话生效。\n\n配置 revision\n6\nSession Profile revision\n6\n最新 Profile revision\n7\nETag\n\"6\"\n检测到新的 Profile revision：v6 → v7。\n升级 Session Profile\n模型覆盖\n\n使用 Profile 默认值\n\n模型 ID\n保存\n继承 Profile 默认值\nMCP 服务\n\n使用 Profile 默认值\n\n已选择 1 个\nmcp-default\n清空 MCP 服务\n继承 Profile 默认值",
+    "inputValue": "model-base",
+    "inputPlaceholder": "model-base"
+  },
+  "bConflict": {
+    "text": "会话配置\n\n查看和调整当前 MPA Session 的执行配置。变更只对下一轮对话生效。\n\n该 Session 已被其他位置修改，已展示最新配置，请确认后再保存。\n重试\n配置 revision\n7\nSession Profile revision\n6\n最新 Profile revision\n7\nETag\n\"7\"\n检测到新的 Profile revision：v6 → v7。\n升级 Session Profile\n模型覆盖\n\nSession 覆盖\n\n模型 ID\n保存\n继承 Profile 默认值\nMCP 服务\n\n使用 Profile 默认值\n\n已选择 1 个\nmcp-default\n清空 MCP 服务\n继承 Profile 默认值",
+    "inputValue": "model-browser-a",
+    "inputPlaceholder": "model-browser-a"
+  },
+  "aUpgrade": {
+    "text": "会话配置\n\n查看和调整当前 MPA Session 的执行配置。变更只对下一轮对话生效。\n\nSession Profile 已升级，下一轮对话将使用新 revision。\n配置 revision\n8\nSession Profile revision\n7\n最新 Profile revision\n7\nETag\n\"8\"\n模型覆盖\n\nSession 覆盖\n\n模型 ID\n保存\n继承 Profile 默认值\nMCP 服务\n\n使用 Profile 默认值\n\n已选择 1 个\nmcp-upgraded\n清空 MCP 服务\n继承 Profile 默认值",
+    "inputValue": "model-browser-a",
+    "inputPlaceholder": "model-browser-a"
+  },
+  "finalConfig": {
+    "appName": "a2a-default",
+    "sessionId": "session-s2",
+    "revision": 8,
+    "etag": "\"8\"",
+    "mpaInstanceId": "runtime-mpa-s2",
+    "profileRevision": 7,
+    "profileDefaultRevision": 7,
+    "overrides": {
+      "model": {
+        "mode": "replace",
+        "value": {
+          "id": "model-browser-a"
+        }
+      }
+    },
+    "effectiveRefs": {
+      "model": {
+        "id": "model-browser-a"
+      },
+      "mcpServers": [
+        {
+          "id": "mcp-upgraded"
+        }
+      ]
+    },
+    "invalidRefs": [],
+    "updatedBy": "scenario-user",
+    "createdAt": "2026-09-15T00:00:00Z",
+    "updatedAt": "2026-09-15T01:00:00Z"
+  }
+}

@@ -1,0 +1,352 @@
+[
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:5174/oauth2/userinfo",
+    "status": 404
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:5174/web/ui-config",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:5174/web/runtime-config",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:5174/oauth2/userinfo",
+    "status": 404
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:5174/web/ui-config",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:5174/web/runtime-config",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:5174/web/sandbox/capabilities",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:5174/web/deepseek-harness/capabilities",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:5174/web/access",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:5174/web/runtime-proxy/runtime-mpa-s2/web/agent-info/a2a-default?_runtime_region=cn-beijing",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:5174/web/skill-workbench/capabilities",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:5174/web/runtime-proxy/runtime-mpa-s2/apps/a2a-default/users/scenario-user/sessions?_runtime_region=cn-beijing",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:5174/web/evaluation/statuses?runtimeId=runtime-mpa-s2&region=cn-beijing&appName=a2a-default&userId=scenario-user",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:5174/web/runtime-proxy/runtime-mpa-s2/apps/a2a-default/users/scenario-user/sessions/turn_lifecycle-session?_runtime_region=cn-beijing",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:5174/web/studio-update",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:5174/web/runtime-proxy/runtime-mpa-s2/api/v1/a2a/tasks/by-session/turn_lifecycle-session/control?_runtime_region=cn-beijing",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:5174/web/runtime-tool-channel/runtime-mpa-s2/capabilities?region=cn-beijing",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:5174/web/v3/environments",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:5174/web/studio-update",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:5174/web/workspaces",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:5174/web/runtime-proxy/runtime-mpa-s2/api/v1/a2a/tasks/by-session/turn_lifecycle-session/control?_runtime_region=cn-beijing",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:5174/web/runtime-proxy/runtime-mpa-s2/apps/a2a-default/users/scenario-user/sessions/turn_lifecycle-session?_runtime_region=cn-beijing",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:5174/web/runtime-proxy/runtime-mpa-s2/api/v1/a2a/tasks/by-session/turn_lifecycle-session/control?_runtime_region=cn-beijing",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:5174/web/runtime-proxy/runtime-mpa-s2/api/v1/a2a/tasks/by-session/turn_lifecycle-session/control?_runtime_region=cn-beijing",
+    "status": 200
+  },
+  {
+    "method": "POST",
+    "url": "http://127.0.0.1:5174/web/runtime-proxy/runtime-mpa-s2/api/v1/a2a/tasks/by-session/turn_lifecycle-session/control/pause?_runtime_region=cn-beijing",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:5174/web/runtime-proxy/runtime-mpa-s2/api/v1/a2a/tasks/by-session/turn_lifecycle-session/control?_runtime_region=cn-beijing",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:5174/web/runtime-proxy/runtime-mpa-s2/api/v1/a2a/tasks/by-session/turn_lifecycle-session/control?_runtime_region=cn-beijing",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:5174/web/runtime-proxy/runtime-mpa-s2/api/v1/a2a/tasks/by-session/turn_lifecycle-session/control?_runtime_region=cn-beijing",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:5174/web/runtime-proxy/runtime-mpa-s2/api/v1/a2a/tasks/by-session/turn_lifecycle-session/control?_runtime_region=cn-beijing",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:5174/web/runtime-proxy/runtime-mpa-s2/api/v1/a2a/tasks/by-session/turn_lifecycle-session/control?_runtime_region=cn-beijing",
+    "status": 200
+  },
+  {
+    "method": "POST",
+    "url": "http://127.0.0.1:5174/web/runtime-proxy/runtime-mpa-s2/api/v1/a2a/tasks/by-session/turn_lifecycle-session/control/resume?_runtime_region=cn-beijing",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:5174/web/runtime-proxy/runtime-mpa-s2/api/v1/a2a/tasks/by-session/turn_lifecycle-session/control?_runtime_region=cn-beijing",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:5174/web/runtime-proxy/runtime-mpa-s2/api/v1/a2a/tasks/by-session/turn_lifecycle-session/control?_runtime_region=cn-beijing",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:5174/web/runtime-proxy/runtime-mpa-s2/api/v1/a2a/tasks/by-session/turn_lifecycle-session/control?_runtime_region=cn-beijing",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:5174/web/runtime-proxy/runtime-mpa-s2/api/v1/a2a/tasks/by-session/turn_lifecycle-session/control?_runtime_region=cn-beijing",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:5174/oauth2/userinfo",
+    "status": 404
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:5174/web/ui-config",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:5174/web/runtime-config",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:5174/oauth2/userinfo",
+    "status": 404
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:5174/web/ui-config",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:5174/web/runtime-config",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:5174/web/sandbox/capabilities",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:5174/web/deepseek-harness/capabilities",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:5174/web/access",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:5174/web/runtime-proxy/runtime-mpa-s2/web/agent-info/a2a-default?_runtime_region=cn-beijing",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:5174/web/skill-workbench/capabilities",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:5174/web/runtime-proxy/runtime-mpa-s2/apps/a2a-default/users/scenario-user/sessions?_runtime_region=cn-beijing",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:5174/web/evaluation/statuses?runtimeId=runtime-mpa-s2&region=cn-beijing&appName=a2a-default&userId=scenario-user",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:5174/web/runtime-proxy/runtime-mpa-s2/apps/a2a-default/users/scenario-user/sessions/turn_lifecycle-session?_runtime_region=cn-beijing",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:5174/web/studio-update",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:5174/web/runtime-proxy/runtime-mpa-s2/api/v1/a2a/tasks/by-session/turn_lifecycle-session/control?_runtime_region=cn-beijing",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:5174/web/runtime-tool-channel/runtime-mpa-s2/capabilities?region=cn-beijing",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:5174/web/v3/environments",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:5174/web/workspaces",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:5174/web/studio-update",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:5174/web/runtime-proxy/runtime-mpa-s2/api/v1/a2a/tasks/by-session/turn_lifecycle-session/control?_runtime_region=cn-beijing",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:5174/web/runtime-proxy/runtime-mpa-s2/apps/a2a-default/users/scenario-user/sessions/turn_lifecycle-session?_runtime_region=cn-beijing",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:5174/web/runtime-proxy/runtime-mpa-s2/api/v1/a2a/tasks/by-session/turn_lifecycle-session/control?_runtime_region=cn-beijing",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:5174/web/runtime-proxy/runtime-mpa-s2/api/v1/a2a/tasks/by-session/turn_lifecycle-session/control?_runtime_region=cn-beijing",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:5174/web/runtime-proxy/runtime-mpa-s2/api/v1/a2a/tasks/by-session/turn_lifecycle-session/control?_runtime_region=cn-beijing",
+    "status": 200
+  },
+  {
+    "method": "POST",
+    "url": "http://127.0.0.1:5174/web/runtime-proxy/runtime-mpa-s2/api/v1/a2a/tasks/by-session/turn_lifecycle-session/control/resume?_runtime_region=cn-beijing",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:5174/web/runtime-proxy/runtime-mpa-s2/api/v1/a2a/tasks/by-session/turn_lifecycle-session/control?_runtime_region=cn-beijing",
+    "status": 200
+  },
+  {
+    "method": "POST",
+    "url": "http://127.0.0.1:5174/web/runtime-proxy/runtime-mpa-s2/api/v1/a2a/tasks/turn_lifecycle-task/continue?_runtime_region=cn-beijing",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:5174/web/runtime-proxy/runtime-mpa-s2/api/v1/a2a/tasks/by-session/turn_lifecycle-session/control?_runtime_region=cn-beijing",
+    "status": 200
+  },
+  {
+    "method": "POST",
+    "url": "http://127.0.0.1:5174/web/runtime-proxy/runtime-mpa-s2/api/v1/sessions/turn_lifecycle-session/sse?_runtime_region=cn-beijing",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:5174/web/runtime-proxy/runtime-mpa-s2/apps/a2a-default/users/scenario-user/sessions?_runtime_region=cn-beijing",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:5174/web/evaluation/statuses?runtimeId=runtime-mpa-s2&region=cn-beijing&appName=a2a-default&userId=scenario-user",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:5174/web/runtime-proxy/runtime-mpa-s2/api/v1/a2a/tasks/by-session/turn_lifecycle-session/control?_runtime_region=cn-beijing",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:5174/web/runtime-proxy/runtime-mpa-s2/api/v1/a2a/tasks/by-session/turn_lifecycle-session/control?_runtime_region=cn-beijing",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "url": "http://127.0.0.1:5174/web/runtime-proxy/runtime-mpa-s2/api/v1/a2a/tasks/by-session/turn_lifecycle-session/control?_runtime_region=cn-beijing",
+    "status": 200
+  }
+]

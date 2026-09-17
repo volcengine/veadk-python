@@ -423,6 +423,136 @@ test("merges command aliases with one call id in live and history projections", 
   assert.deepEqual(historyTools, liveTools);
 });
 
+test("replays MPA sandbox events as one agent turn with completed tools", () => {
+  const events = [
+    {
+      id: "user-1",
+      author: "user",
+      invocationId: "inv-1",
+      content: { role: "user", parts: [{ text: "run analysis" }] },
+    },
+    {
+      id: "delegate-1",
+      author: "default",
+      invocationId: "inv-1",
+      partial: false,
+      content: {
+        role: "model",
+        parts: [
+          { text: "I will inspect it.", thought: true },
+          {
+            functionCall: {
+              id: "sandbox-1",
+              name: "sandbox_task",
+              args: { task: "inspect repo" },
+            },
+          },
+        ],
+      },
+    },
+    {
+      id: "tool-start-1",
+      author: "Agent",
+      invocationId: "inv-1",
+      partial: false,
+      customMetadata: { source: "sandbox", eventType: "tool.call" },
+      content: {
+        role: "model",
+        parts: [
+          {
+            functionCall: {
+              id: "cmd-1",
+              name: "exec_command",
+              args: { command: "pwd" },
+            },
+          },
+        ],
+      },
+    },
+    {
+      id: "usage-1",
+      author: "Agent",
+      invocationId: "inv-1",
+      partial: false,
+      customMetadata: { source: "sandbox", eventType: "usage.updated" },
+      content: { role: "model", parts: [{ text: "[usage] 100 tokens" }] },
+    },
+    {
+      id: "tool-result-1",
+      author: "Agent",
+      invocationId: "inv-1",
+      partial: false,
+      customMetadata: { source: "sandbox", eventType: "tool.result" },
+      content: {
+        role: "model",
+        parts: [
+          {
+            functionResponse: {
+              id: "cmd-1",
+              name: "commandExecution",
+              response: { status: "completed", output: "/data/workspace\n" },
+            },
+          },
+        ],
+      },
+    },
+    {
+      id: "sandbox-response-1",
+      author: "default",
+      invocationId: "inv-1",
+      content: {
+        role: "model",
+        parts: [
+          {
+            functionResponse: {
+              id: "sandbox-1",
+              name: "sandbox_task",
+              response: {
+                status: "completed",
+                message: "Sandbox task result has been streamed to the session.",
+                finalAlreadyEmitted: true,
+              },
+            },
+          },
+        ],
+      },
+    },
+    {
+      id: "final-1",
+      author: "Agent",
+      invocationId: "inv-1",
+      partial: false,
+      customMetadata: { source: "sandbox", eventType: "invocation.completed" },
+      content: { role: "model", parts: [{ text: "Task completed." }] },
+    },
+  ];
+
+  const turns = eventsToTurns(events);
+  const assistantTurns = turns.filter((turn) => turn.role === "assistant");
+  const tools = assistantTurns
+    .flatMap((turn) => turn.blocks)
+    .filter((block) => block.kind === "tool");
+  const visibleText = assistantTurns
+    .flatMap((turn) => turn.blocks)
+    .filter((block) => block.kind === "text")
+    .map((block) => block.text)
+    .join("\n");
+
+  assert.equal(assistantTurns.length, 1);
+  assert.equal(assistantTurns[0].meta.author, "default");
+  assert.equal(tools.length, 2);
+  assert.equal(tools[0].name, "sandbox_task");
+  assert.equal(tools[0].done, true);
+  assert.equal(tools[1].name, "exec_command");
+  assert.equal(tools[1].done, true);
+  assert.equal(tools[1].status, "completed");
+  assert.equal(
+    assistantTurns.some((turn) => turn.meta.author === "Agent"),
+    false,
+  );
+  assert.equal(visibleText, "Task completed.");
+});
+
 test("keeps partial command output running until the terminal result", () => {
   let accumulator = applyEvent(emptyAcc(), {
     content: {
@@ -580,6 +710,62 @@ test("keeps A2A transport status in pending metadata without answer blocks", () 
   assert.equal(projection.turn.blocks.length, 0);
   assert.equal(projection.turn.meta.a2aStatus, "working");
   assert.equal(projector.finish()[0].meta.streaming, false);
+});
+
+test("ignores user-authored Runtime echo events during assistant streaming", () => {
+  const projector = createAssistantEventProjector("runtime-echo", {
+    role: "assistant",
+    blocks: [],
+    meta: { localId: "pending-assistant", streaming: true },
+  });
+
+  const echoedUser = projector.project({
+    id: "user-event-1",
+    author: "default",
+    content: {
+      role: "user",
+      parts: [{ text: "do not duplicate me in the assistant turn" }],
+    },
+  });
+  const assistant = projector.project({
+    id: "assistant-event-1",
+    author: "default",
+    content: {
+      role: "model",
+      parts: [{ text: "final answer" }],
+    },
+  });
+
+  assert.equal(echoedUser.ignored, true);
+  assert.equal(echoedUser.turn.blocks.length, 0);
+  assert.equal(assistant.ignored, undefined);
+  assert.equal(assistant.completed, true);
+  assert.equal(assistant.turn.meta?.localId, "pending-assistant");
+  assert.deepEqual(assistant.turn.blocks, [{ kind: "text", text: "final answer" }]);
+});
+
+test("keeps user-role function responses in assistant streaming", () => {
+  const projector = createAssistantEventProjector("function-response");
+
+  const projection = projector.project({
+    id: "function-response-1",
+    author: "default",
+    content: {
+      role: "user",
+      parts: [{
+        functionResponse: {
+          id: "tool-1",
+          name: "search",
+          response: { status: "ok" },
+        },
+      }],
+    },
+  });
+
+  assert.equal(projection.ignored, undefined);
+  assert.equal(projection.turn.blocks.length, 1);
+  assert.equal(projection.turn.blocks[0].kind, "tool");
+  assert.equal(projection.turn.blocks[0].done, true);
 });
 
 test("bounds duplicate event tracking for long-running projector instances", () => {
