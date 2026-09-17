@@ -40,7 +40,7 @@
     "unsupportedRouteHint": "提示：该 Runtime 未提供会话能力运行接口，可能是 Runtime 版本与当前 Studio 不兼容。",
     "toolArgumentHint": "提示：模型生成的工具参数格式不完整，请重新发送一次。",
     "resourceCollectionExpiredHint": "提示：本次资源清单已失效，请重新发送任务；系统会重新收集资源后再创建 Agent。",
-    "networkConfigurationHint": "提示：请检查共享公网出口等网络配置，然后重试。",
+    "networkConfigurationHint": "提示：请稍后重试，查看 Runtime、模型或网关日志。",
     "modelQuotaHint": "提示：模型当前触发了 TPM/RPM 配额限制，请稍后重试或提高模型配额。",
     "rawResponseLabel": "原始响应："
   },
@@ -405,7 +405,7 @@
     "agentSearchFailed": "Agent 检索失败",
     "emptySseBody": "HTTP 200，SSE 响应体为空。",
     "noDisplayableSseReply": "HTTP 200，SSE 响应中没有可展示的模型回复。",
-    "firstSseEventTimeout": "30 秒内未收到首个 SSE 事件。",
+    "firstSseEventTimeout": "60 秒内未收到首个 SSE 事件。请稍后重试，或查看 Runtime、模型、网关日志定位原因。",
     "runSessionFailed": "运行会话失败",
     "runSseFailedWithDetail": "运行会话失败：{{status}}：{{detail}}",
     "checkRuntimeNameFailed": "检查 Runtime 名称失败",

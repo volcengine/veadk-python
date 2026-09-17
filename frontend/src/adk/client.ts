@@ -1727,9 +1727,9 @@ export function runSseIncompleteResponseError(): string {
   return formatRunSseError(adkT("client.noDisplayableSseReply"));
 }
 
-const RUN_SSE_FIRST_EVENT_TIMEOUT_MS = 30_000;
+const RUN_SSE_FIRST_EVENT_TIMEOUT_MS = 60_000;
 export function runSseFirstEventTimeoutError(): string {
-  return formatRunSseError(adkT("client.firstSseEventTimeout"));
+  return adkT("client.firstSseEventTimeout");
 }
 
 interface RunSseFirstEventDeadline {

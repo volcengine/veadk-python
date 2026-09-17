@@ -24,7 +24,10 @@ test("ADK client messages and headers follow the active locale", async (t) => {
   assert.equal(sandboxStatusLabel("ready"), "就绪");
   assert.equal(cloudRegionOptions("volcengine")[0].label, "华北 2（北京）");
   assert.equal(withLocaleHeaders().get("Accept-Language"), "zh-CN");
-  assert.match(runSseFirstEventTimeoutError(), /30 秒内未收到首个 SSE 事件/);
+  assert.equal(
+    runSseFirstEventTimeoutError(),
+    "60 秒内未收到首个 SSE 事件。请稍后重试，或查看 Runtime、模型、网关日志定位原因。",
+  );
   assert.equal(
     localizeDeployStageMessage({
       phase: "build",
@@ -38,7 +41,10 @@ test("ADK client messages and headers follow the active locale", async (t) => {
   assert.equal(sandboxStatusLabel("ready"), "Ready");
   assert.equal(cloudRegionOptions("volcengine")[0].label, "China North 2 (Beijing)");
   assert.equal(withLocaleHeaders().get("Accept-Language"), "en-US");
-  assert.match(runSseFirstEventTimeoutError(), /No SSE event was received within 30 seconds/);
+  assert.equal(
+    runSseFirstEventTimeoutError(),
+    "No SSE event was received within 60 seconds. Try again later, and review the Runtime, model, or gateway logs.",
+  );
   assert.equal(
     localizeDeployStageMessage({
       phase: "build",

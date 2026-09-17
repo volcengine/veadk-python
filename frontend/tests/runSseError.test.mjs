@@ -18,7 +18,8 @@ const result = await build({
 const moduleUrl = `data:text/javascript;base64,${Buffer.from(result.outputFiles[0].contents).toString("base64")}`;
 const { formatRunSseError } = await import(moduleUrl);
 
-const NETWORK_HINT = "提示：请检查共享公网出口等网络配置，然后重试。";
+const GENERIC_RECOVERY_HINT =
+  "提示：请稍后重试，查看 Runtime、模型或网关日志。";
 const MODEL_QUOTA_HINT =
   "提示：模型当前触发了 TPM/RPM 配额限制，请稍后重试或提高模型配额。";
 
@@ -29,7 +30,7 @@ test("adds memory guidance only when the response says the session is missing", 
   assert.match(formatted, /in-memory/);
   assert.match(formatted, /进程重启/);
   assert.match(formatted, /基于数据库的持久化短期记忆/);
-  assert.ok(formatted.endsWith(NETWORK_HINT));
+  assert.ok(formatted.endsWith(GENERIC_RECOVERY_HINT));
 });
 
 test("identifies an unsupported harness route without blaming memory", () => {
@@ -43,15 +44,15 @@ test("does not guess at the cause of an unexplained 404", () => {
   const error = "run_sse failed: 404：upstream error";
   const formatted = formatRunSseError(error);
   assert.ok(formatted.startsWith(`原始响应：${error}`));
-  assert.ok(formatted.endsWith(NETWORK_HINT));
+  assert.ok(formatted.endsWith(GENERIC_RECOVERY_HINT));
   assert.doesNotMatch(formatted, /会话已不存在|Runtime 未提供/);
 });
 
-test("preserves unrelated errors before appending network guidance", () => {
+test("preserves unrelated errors before appending generic recovery guidance", () => {
   for (const error of ["run_sse failed: 500", "create_session failed: 404"]) {
     const formatted = formatRunSseError(error);
     assert.ok(formatted.startsWith(`原始响应：${error}`));
-    assert.ok(formatted.endsWith(NETWORK_HINT));
+    assert.ok(formatted.endsWith(GENERIC_RECOVERY_HINT));
   }
 });
 
@@ -67,7 +68,7 @@ test("preserves malformed tool argument details and adds an actionable message",
   const formatted = formatRunSseError(error);
   assert.ok(formatted.startsWith(`原始响应：${error}`));
   assert.match(formatted, /模型生成的工具参数格式不完整/);
-  assert.ok(formatted.endsWith(NETWORK_HINT));
+  assert.ok(formatted.endsWith(GENERIC_RECOVERY_HINT));
 });
 
 test("explains an expired resource collection without blaming public egress", () => {
@@ -84,7 +85,7 @@ test("does not claim that a model error was caused by public egress", () => {
   const error = "ModelInvocationError: upstream model returned 503";
   const formatted = formatRunSseError(error);
   assert.ok(formatted.startsWith(`原始响应：${error}`));
-  assert.ok(formatted.endsWith(NETWORK_HINT));
+  assert.ok(formatted.endsWith(GENERIC_RECOVERY_HINT));
   assert.doesNotMatch(formatted, /Runtime 可能|无法访问模型服务|导致/);
 });
 
@@ -107,5 +108,5 @@ test("does not duplicate an original-response label provided by HTTP handling", 
   const formatted = formatRunSseError(error);
   assert.equal(formatted.match(/原始响应：/g)?.length, 1);
   assert.ok(formatted.startsWith("run_sse failed: 502"));
-  assert.ok(formatted.endsWith(NETWORK_HINT));
+  assert.ok(formatted.endsWith(GENERIC_RECOVERY_HINT));
 });
