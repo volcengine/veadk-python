@@ -1,3 +1,4 @@
+import { SandboxFileContext } from "./ui/SandboxFileLink";
 import {
   useCallback,
   useEffect,
@@ -7955,32 +7956,34 @@ export default function App() {
                   turnIsStreaming ? <ThinkingPlaceholder a2aStatus={turn.meta?.a2aStatus} /> : null
                 ) : (
                   <>
-                    <Blocks
-                      appName={appName}
-                      blocks={turn.blocks}
-                      streaming={turnIsStreaming}
-                      onStreamFrame={turnIsStreaming ? followConversationStreamFrame : undefined}
-                      onStreamComplete={
-                        isLast && !activeConversationBusy && presentingStream
-                          ? () => completeStreamPresentation(sessionId)
-                          : undefined
-                      }
-                      onAction={onAction}
-                      onAuth={onAuth}
-                      onArtifactDownload={(filename, version) =>
-                        downloadArtifact(appName, userId, sessionId, filename, version)
-                      }
-                      onArtifactPreview={(filename, version) =>
-                        previewArtifact(appName, userId, sessionId, filename, version)
-                      }
-                      onResolveDelivery={resolveIntelligentDelivery}
-                      onResolveDeliveryComparison={resolveIntelligentDeliveryComparison}
-                      onDownloadDelivery={downloadIntelligentDelivery}
-                      onDeployDelivery={setIntelligentDeployment}
-                      onBranchSelect={(branch) => {
-                        setInput(t("conversation.continueBranch", { branch: branch.label }));
-                      }}
-                    />
+                    <SandboxFileContext.Provider value={{ appName, sessionId }}>
+                      <Blocks
+                        appName={appName}
+                        blocks={turn.blocks}
+                        streaming={turnIsStreaming}
+                        onStreamFrame={turnIsStreaming ? followConversationStreamFrame : undefined}
+                        onStreamComplete={
+                          isLast && !activeConversationBusy && presentingStream
+                            ? () => completeStreamPresentation(sessionId)
+                            : undefined
+                        }
+                        onAction={onAction}
+                        onAuth={onAuth}
+                        onArtifactDownload={(filename, version) =>
+                          downloadArtifact(appName, userId, sessionId, filename, version)
+                        }
+                        onArtifactPreview={(filename, version) =>
+                          previewArtifact(appName, userId, sessionId, filename, version)
+                        }
+                        onResolveDelivery={resolveIntelligentDelivery}
+                        onResolveDeliveryComparison={resolveIntelligentDeliveryComparison}
+                        onDownloadDelivery={downloadIntelligentDelivery}
+                        onDeployDelivery={setIntelligentDeployment}
+                        onBranchSelect={(branch) => {
+                          setInput(t("conversation.continueBranch", { branch: branch.label }));
+                        }}
+                      />
+                    </SandboxFileContext.Provider>
                     {/* Finalized turn that produced no visible answer (e.g. only
                         thinking + an empty A2UI surface) — show a fallback note. */}
                     {!turnIsStreaming && !turnHasVisibleContent(turn) && (

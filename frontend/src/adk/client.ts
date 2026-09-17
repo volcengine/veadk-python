@@ -1206,6 +1206,19 @@ function decodeArtifactData(value: string): Uint8Array {
   return bytes;
 }
 
+export async function fetchSessionFile(
+  appName: string,
+  sessionId: string,
+  path: string,
+  signal: AbortSignal,
+): Promise<Blob> {
+  const { ep } = resolve(appName);
+  const url = `/api/v1/sessions/${encodeURIComponent(sessionId)}/files/download?path=${encodeURIComponent(path)}`;
+  const response = await apiFetch(url, { signal }, ep, TRANSFER_REQUEST_TIMEOUT_MS);
+  if (!response.ok) throw new Error(`SESSION_FILE_HTTP_${response.status}`);
+  return response.blob();
+}
+
 export async function downloadArtifact(
   appName: string,
   userId: string,

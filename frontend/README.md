@@ -1073,3 +1073,7 @@ Runtime tasks now follow mono's list/calendar workflow: status filtering, creati
 ### A2A 长耗时请求
 
 连接 A2A Runtime 后，对话会显示等待响应、排队或执行中的状态。收到有效状态后会继续等待最终回复，不因任务耗时超过 30 秒而自动中断。等待响应不代表 Runtime 已接受任务；错误或连接中断也不代表后台任务已取消，请先确认任务状态再重试创建等操作。
+
+### Sandbox file downloads
+
+Assistant Markdown links under `/data/output/` or `/data/workspace/` appear as download buttons in conversation history and streaming messages. Studio uses the current Runtime and session through its authenticated proxy; files remain available only while that Sandbox and file exist. Legacy `<file-card>` and `<personal-drive-enable-card>` payloads are hidden in conversation rendering. A failed download can be retried by clicking the button again. Run `npm run test:sandbox-download-coverage` for the focused regression suite.
