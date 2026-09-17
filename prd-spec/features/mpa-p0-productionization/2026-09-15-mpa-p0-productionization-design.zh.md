@@ -2,7 +2,7 @@
 
 - Change ID：`mpa-p0-productionization`
 - 状态：`approved`；已实现至 S5-08，其余 S5 P0 门禁待完成
-- 创建 / 修订：2026-09-15 / 2026-09-17
+- 创建 / 修订：2026-09-15 / 2026-09-18
 - English：[2026-09-15-mpa-p0-productionization-design.md](2026-09-15-mpa-p0-productionization-design.md)
 - 组件契约：[Studio MPA 控制面](../../../specs/studio-mpa-control-plane/README.zh.md)、[MPA Runtime 部署](../../../specs/mpa-runtime-provisioning/README.zh.md)、[MPA Runtime 控制](../../../specs/mpa-runtime-control/README.zh.md)
 
@@ -385,6 +385,8 @@ Runtime 仓库的可复现门禁为 `make test` 和 `make coverage`（95%）；�
 | 2026-09-17 | 多轮完成回答持久展示回归 | pass | 之前的 post-SSE 事件栅栏对账可以防止过期持久数据覆盖最新实时回答，但没有覆盖持久多轮历史重放。严格 DOM 检查复现了真实缺陷：两条用户轮次重放为两个用户节点，却只剩一个 assistant 节点。根因是 `eventsToTurns(...)` 在每段历史都用相同 `adk-history` 前缀重建 projector；每个 projector 都生成 `localId=adk-history-0`，后续 assistant 轮次因此在 upsert 时替换更早轮次。Studio 现在为每个历史分段使用单调递增前缀，使 projector 本地序号在整个 Session transcript 内保持唯一。回归测试修复前稳定失败且只得到 `second answer`，修复后同时得到两条回答、两个最终事件 ID 和不同 local ID。focused tests 返回 43 passed；完整前端测试返回 1236 passed；`npx tsc --noEmit`、i18n、生产构建与 scoped diff 检查均通过。随后对真实 Studio Session 严格按顺序检查 `.turn--assistant` 节点：新增两轮实时对话完成并额外等待 30 秒后，五个 assistant turn 均保留；整页重载后仍保留五个且顺序正确。由于提问或 reasoning 也可能包含同样文本，整页文本命中被明确排除为验收证据。 |
 | 2026-09-17 | MPA 实时父级沙箱活动终态收敛 | pass | 真实 Studio 执行稳定复现：命令卡片和最终回答均已完成，但父级 `sandbox_task` 卡片仍为 `running`。抓取的 SSE 帧证明，实时订阅先输出回答增量，随后只输出 `status=completed`、`finalAlreadyEmitted=true` 的 `sandbox_task` wrapper response；持久事件列表还包含 `source=sandbox,eventType=invocation.completed`，所以刷新后原本就是正确状态。Studio 不再无条件丢弃 wrapper；当 invocation 仍有 active turn 时，它用 wrapper 关闭父级工具，同时保留已推流的回答/工具 block，并以 wrapper event ID 将 projected turn 标记为非 streaming；持久重放已经由 sandbox final event 关闭 Turn 时仍忽略 wrapper，避免重复卡片。focused regression 在旧逻辑上失败，修复后通过。完整 `npm --prefix frontend test` 返回 1237 passed；`npx tsc --noEmit`、i18n、生产 build 与 scoped diff 检查均通过。新的真实 Studio `whoami` 执行先观察到父/子活动进入 running，随后在不刷新页面的情况下出现最终回答 `root`，父级变为 `data-status=completed`，spinner 消失且 remaining running activity 为 0；整页刷新后，最新两条活动仍为 completed、无 spinner，最终回答仍可见。 |
 | 2026-09-17 | Runtime operation ledger 与 Profile CAS 加固 | pass，但存在仓库基线门禁例外 | Runtime schema version 8 新增 SQL `runtime_operations` ledger，具备 24 小时 TTL、规范化 request hash、已脱敏 response snapshot/resource IDs、compare-and-swap 状态迁移，以及按 principal/agent/action 授权的 `GET /api/v1/runtime-operations/{operationId}`。Profile apply 现在以认证 principal 作为幂等主体，对完整规范化 Profile 求 hash，映射 model/Tool/Skill/MCP/Multiagent，并在切换 `mpa_agents` revision 的同一事务内原子校验 `If-None-Match`/`If-Match`。非法强 ETag 返回 `400 invalid_precondition`；模型 `max_tokens` 和 Secret reference 字段允许使用，内联 Secret 字段仍被拒绝。Profile upgrade 可跨 Runtime service/store 实例重放持久结果。验证：Runtime focused tests 39 passed；PostgreSQL migration/restart/cross-store replay/Profile-CAS tests 11 passed 且资源已清理；changed-file Ruff 通过；`git diff --check` 通过。最终完整行为回归 2501 passed、14 skipped，但 `make coverage` 记为 fail，因为仓库总覆盖率为 93.47%，低于未修改的 95% 阈值。全仓 Ruff 也因当前 `origin/master` 中 P0 diff 之外文件的 27 个既有问题而 fail；没有降低阈值或放宽规则。 |
+| 2026-09-18 | 旧 ADK 接口的 AgentKit key-auth 兼容 | pass | Runtime version 61 虽然处于 `Ready` 且使用 AgentKit `key_auth`，但携带有效凭据访问 `GET /list-apps` 仍返回 `401`，原因是旧 `require_auth` 依赖在 Session、Profile 和 A2A 链路已改用 `Authorization` Runtime principal 后，仍强制要求 `X-Jwt-Token`。Runtime commit `eecc6e3` 仅在 `MPA_AGENTKIT_MODE=true` 时让 `require_auth` 从 `Authorization` 建立 principal；非 AgentKit 部署继续保留旧 Header 契约，缺失凭据仍 fail closed。定向测试 49 passed，完整 `make test` 2506 passed、14 skipped，focused Ruff 和 diff hygiene 均通过。镜像 `agentkit-platform-2112682748-cn-beijing.cr.volces.com/agentkit/mpa_agent:mpa-p0-adk-auth-eecc6e3-20260917`（`sha256:6ac6a2712ecd1c7950125dc9afc6467373a08142fbd6c3577aba12f126079bef`）已发布为 Runtime `r-yeuujrrcowb21078p9jh` version 62，状态为 `Ready`；Runtime 直连与 Studio BFF 的 `/list-apps` 探测均返回 `200 ["default"]`。这是鉴权适配修复，不增加表、字段或持久状态。 |
+| 2026-09-18 | Runtime v62 真实 Studio 对话展示闭环 | 已验证的对话展示子集通过 | 新建 Studio Session `bee3db38-edcc-4020-b925-3d9d6a3a7adc`，通过沙箱执行 `printf 'MPA_V62_BROWSER_OK\n'`。父级 `sandbox_task` 活动和子命令活动均进入 `completed`，命令退出码为 0；最终回答在执行完成时可见，30 秒后仍保留，整页刷新后可恢复。输入框可编辑，发送控件恢复为 `aria-label=发送`，页面无 spinner 或运行中文案。证据位于 `evidence/browser/mpa-v62-live/`。这证明本次真实链路中的“工具一直运行、结果完成后消失”回归已闭环，但不替代 S5-12 负责的完整 `BC-01`–`BC-09` 矩阵。 |
 
 ## 13. 实现变更记录
 
@@ -395,6 +397,10 @@ Runtime 仓库的可复现门禁为 `make test` 和 `make coverage`（95%）；�
 2026-09-16：在 `agentkit-mpa-agent` 实现 S5-01a canary-safe redaction。Secret reference migration 读到 legacy 明文后，会先把这些值注册为 value-aware redaction 字面值，再创建外部引用。API access log、Session 输出脱敏、Runtime Console 脱敏、lifecycle details 和 trace-step 持久化会从字符串和嵌套结构中移除已注册字面值，同时不会因为宽泛 key-name 规则误隐藏 `flow_id`、`user_code` 等业务参数。schema version 8 随后将同一脱敏边界扩展到 Runtime operation response/resource snapshot。
 
 2026-09-17：完成持久 Runtime operation 与 Profile CAS 加固。SQL 和 in-memory operation store 现在共享一致的 identity、TTL、安全 replay 与 compare-and-swap 状态迁移语义；授权状态接口不返回 principal/idempotency/request-hash 内部字段。Profile create/update 的前置条件校验和 revision 切换在同一个 PostgreSQL advisory-lock 事务内执行，双连接测试证明同一 ETag 只能被一个 writer 消费。
+
+2026-09-18：修复 AgentKit key-auth 部署下旧 ADK endpoint 的鉴权接线。Runtime version 62 在 AgentKit mode 下让 `/list-apps` 等 `require_auth` consumer 从 `Authorization` 解析已认证 Runtime principal，同时在非 AgentKit mode 下保留旧 `X-Jwt-Token` 行为。该变更仅调整鉴权 adapter，不涉及数据模型迁移。
+
+2026-09-18：完成 Runtime version 62 的真实 Studio 对话展示验收。沙箱父级/子级活动均进入终态，最终回答在执行完成和 30 秒延迟后保持可见，刷新后恢复同一结果。本证据关闭具体的生产态对话回归；在所有已定义浏览器 Case 执行完成前，S5-12 仍保持未完成。
 
 2026-09-16：在 VeADK 实现 S5-02 BFF `MpaAgentView` 切片。`GET /web/mpa/agents/{mpaInstanceId}/view` 统一输出 0/1/N Runtime binding 判定、active operation 摘要、Runtime metadata、Profile status、capabilities 和 safe error。0 个 binding 为 `runtime_missing`；多个 binding 为 `binding_ambiguous`；唯一 MPA-tagged Runtime 会暴露 binding 状态，后续切片据此区分 Profile 写入、Session 配置和 Debug 能力。消费该 view-model 的前端详情页仍属于 S5-03。
 

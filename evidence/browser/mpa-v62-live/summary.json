@@ -1,0 +1,487 @@
+{
+  "pass": true,
+  "prompt": "请在沙箱中执行 printf 'MPA_V62_BROWSER_OK\\n'，并在完成后用一句话确认结果。",
+  "sessionId": "bee3db38-edcc-4020-b925-3d9d6a3a7adc",
+  "appName": "agentkit:rt_r-yeuujrrcowb21078p9jh:default",
+  "completed": {
+    "answerVisible": true,
+    "tools": [
+      {
+        "status": "completed",
+        "title": "已调用 sandbox_task",
+        "summary": "sandbox_task",
+        "text": "已调用 sandbox_tasksandbox_task查看原始数据",
+        "spinning": false
+      },
+      {
+        "status": "completed",
+        "title": "已运行命令",
+        "summary": "/bin/bash -lc \"printf 'MPA_V62_BROWSER_OK\\\\n'\"",
+        "text": "已运行命令/bin/bash -lc \"printf 'MPA_V62_BROWSER_OK\\\\n'\"566 ms · 退出码 0$ /bin/bash -lc \"printf 'MPA_V62_BROWSER_OK\\\\n'\"查看原始数据",
+        "spinning": false
+      }
+    ],
+    "runningText": [],
+    "composerDisabled": false,
+    "sendButtonLabel": "发送",
+    "sendingDisabled": true
+  },
+  "after30s": {
+    "answerVisible": true,
+    "tools": [
+      {
+        "status": "completed",
+        "title": "已调用 sandbox_task",
+        "summary": "sandbox_task",
+        "text": "已调用 sandbox_tasksandbox_task查看原始数据",
+        "spinning": false
+      },
+      {
+        "status": "completed",
+        "title": "已运行命令",
+        "summary": "/bin/bash -lc \"printf 'MPA_V62_BROWSER_OK\\\\n'\"",
+        "text": "已运行命令/bin/bash -lc \"printf 'MPA_V62_BROWSER_OK\\\\n'\"566 ms · 退出码 0$ /bin/bash -lc \"printf 'MPA_V62_BROWSER_OK\\\\n'\"查看原始数据",
+        "spinning": false
+      }
+    ],
+    "runningText": [],
+    "composerDisabled": false,
+    "sendButtonLabel": "发送"
+  },
+  "afterRefresh": {
+    "answerVisible": true,
+    "tools": [
+      {
+        "status": "completed",
+        "title": "已调用 sandbox_task",
+        "summary": "sandbox_task",
+        "text": "已调用 sandbox_tasksandbox_task查看原始数据",
+        "spinning": false
+      },
+      {
+        "status": "completed",
+        "title": "已运行命令",
+        "summary": "/bin/bash -lc \"printf 'MPA_V62_BROWSER_OK\\\\n'\"",
+        "text": "已运行命令/bin/bash -lc \"printf 'MPA_V62_BROWSER_OK\\\\n'\"566 ms · 退出码 0$ /bin/bash -lc \"printf 'MPA_V62_BROWSER_OK\\\\n'\"查看原始数据",
+        "spinning": false
+      }
+    ],
+    "runningText": [],
+    "composerDisabled": false,
+    "sendButtonLabel": "发送"
+  },
+  "network": [
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/node_modules/.vite/deps/react_jsx-dev-runtime.js?v=b4e46dc1"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/src/i18n/runtime.ts"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/src/create/runtimeModelName.ts"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/src/adk/runSseError.ts"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/src/adk/runtimeLogs.ts"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/src/adk/sse.ts"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/src/adk/runtimeDescription.ts"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/src/adk/runtimeDiscovery.ts?t=1789656081339"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/src/create/runtimeName.ts"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/src/create/a2aSpaces.ts"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/src/telemetry/runtime.ts"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/src/ui/RuntimeLogsDialog.tsx"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/src/create/deepseek/runtimeAdapter.ts"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/src/automations/runtimeDelivery.ts?t=1789656081339"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/src/ui/RuntimeLogsDialog.css"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/web/runtime-config"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/web/runtime-config"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/web/evaluation/statuses?runtimeId=r-yeuujrrcowb21078p9jh&region=cn-beijing&appName=default&userId=superops"
+    },
+    {
+      "status": 404,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/web/runtime-proxy/r-yeuujrrcowb21078p9jh/web/agent-info/default?_runtime_region=cn-beijing"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/web/runtime-tool-channel/r-yeuujrrcowb21078p9jh/capabilities?region=cn-beijing"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/web/runtime-proxy/r-yeuujrrcowb21078p9jh/api/v1/sessions?_runtime_region=cn-beijing"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/web/runtime-proxy/r-yeuujrrcowb21078p9jh/api/v1/sessions/004f81ab-fc41-44f4-80d2-bbc8bc7db64f?_runtime_region=cn-beijing"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/web/runtime-proxy/r-yeuujrrcowb21078p9jh/api/v1/sessions/004f81ab-fc41-44f4-80d2-bbc8bc7db64f/events?_runtime_region=cn-beijing"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/node_modules/.vite/deps/react_jsx-dev-runtime.js?v=b4e46dc1"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/src/i18n/runtime.ts"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/src/create/runtimeModelName.ts"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/src/adk/runSseError.ts"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/src/adk/runtimeLogs.ts"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/src/adk/sse.ts"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/src/adk/runtimeDescription.ts"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/src/adk/runtimeDiscovery.ts?t=1789656081339"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/src/create/runtimeName.ts"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/src/create/a2aSpaces.ts"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/src/telemetry/runtime.ts"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/src/ui/RuntimeLogsDialog.tsx"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/src/create/deepseek/runtimeAdapter.ts"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/src/automations/runtimeDelivery.ts?t=1789656081339"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/src/ui/RuntimeLogsDialog.css"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/web/runtime-config"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/web/runtime-config"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/web/runtimes?scope=all&page_size=15&region=all&agentCategory=mpa"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/web/runtime-proxy/r-yeuujrrcowb21078p9jh/list-apps?_runtime_region=cn-beijing&probe_retry=connect"
+    },
+    {
+      "status": 200,
+      "method": "POST",
+      "url": "http://127.0.0.1:5173/web/runtime-route-channel/r-yeuujrrcowb21078p9jh/connect?region=cn-beijing"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/web/evaluation/statuses?runtimeId=r-yeuujrrcowb21078p9jh&region=cn-beijing&appName=default&userId=superops"
+    },
+    {
+      "status": 404,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/web/runtime-proxy/r-yeuujrrcowb21078p9jh/web/agent-info/default?_runtime_region=cn-beijing"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/web/runtime-proxy/r-yeuujrrcowb21078p9jh/api/v1/sessions?_runtime_region=cn-beijing"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/web/runtime-tool-channel/r-yeuujrrcowb21078p9jh/capabilities?region=cn-beijing"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/web/runtime-proxy/r-yeuujrrcowb21078p9jh/api/v1/agents/mi-jap8l3qdi9wk/profile-status?_runtime_region=cn-beijing"
+    },
+    {
+      "status": 201,
+      "method": "POST",
+      "url": "http://127.0.0.1:5173/web/runtime-proxy/r-yeuujrrcowb21078p9jh/api/v1/sessions?_runtime_region=cn-beijing"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/web/mpa/sessions/bee3db38-edcc-4020-b925-3d9d6a3a7adc/execution-config?runtimeId=r-yeuujrrcowb21078p9jh&region=cn-beijing"
+    },
+    {
+      "status": 200,
+      "method": "POST",
+      "url": "http://127.0.0.1:5173/web/runtime-proxy/r-yeuujrrcowb21078p9jh/api/v1/sessions/bee3db38-edcc-4020-b925-3d9d6a3a7adc/run?_runtime_region=cn-beijing"
+    },
+    {
+      "status": 200,
+      "method": "POST",
+      "url": "http://127.0.0.1:5173/web/runtime-proxy/r-yeuujrrcowb21078p9jh/api/v1/sessions/bee3db38-edcc-4020-b925-3d9d6a3a7adc/sse?_runtime_region=cn-beijing"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/web/evaluation/statuses?runtimeId=r-yeuujrrcowb21078p9jh&region=cn-beijing&appName=default&userId=superops"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/web/runtime-proxy/r-yeuujrrcowb21078p9jh/api/v1/sessions?_runtime_region=cn-beijing"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/web/runtime-proxy/r-yeuujrrcowb21078p9jh/api/v1/sessions/bee3db38-edcc-4020-b925-3d9d6a3a7adc?_runtime_region=cn-beijing"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/web/runtime-proxy/r-yeuujrrcowb21078p9jh/api/v1/sessions/bee3db38-edcc-4020-b925-3d9d6a3a7adc/events?_runtime_region=cn-beijing"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/node_modules/.vite/deps/react_jsx-dev-runtime.js?v=b4e46dc1"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/src/i18n/runtime.ts"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/src/create/runtimeModelName.ts"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/src/adk/runSseError.ts"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/src/adk/sse.ts"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/src/adk/runtimeLogs.ts"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/src/adk/runtimeDescription.ts"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/src/adk/runtimeDiscovery.ts?t=1789656081339"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/src/create/runtimeName.ts"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/src/create/a2aSpaces.ts"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/src/telemetry/runtime.ts"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/src/ui/RuntimeLogsDialog.tsx"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/src/create/deepseek/runtimeAdapter.ts"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/src/automations/runtimeDelivery.ts?t=1789656081339"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/src/ui/RuntimeLogsDialog.css"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/web/runtime-config"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/web/runtime-config"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/web/evaluation/statuses?runtimeId=r-yeuujrrcowb21078p9jh&region=cn-beijing&appName=default&userId=superops"
+    },
+    {
+      "status": 404,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/web/runtime-proxy/r-yeuujrrcowb21078p9jh/web/agent-info/default?_runtime_region=cn-beijing"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/web/runtime-tool-channel/r-yeuujrrcowb21078p9jh/capabilities?region=cn-beijing"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/web/runtime-proxy/r-yeuujrrcowb21078p9jh/api/v1/sessions?_runtime_region=cn-beijing"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/web/runtime-proxy/r-yeuujrrcowb21078p9jh/api/v1/sessions/bee3db38-edcc-4020-b925-3d9d6a3a7adc?_runtime_region=cn-beijing"
+    },
+    {
+      "status": 200,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/web/runtime-proxy/r-yeuujrrcowb21078p9jh/api/v1/sessions/bee3db38-edcc-4020-b925-3d9d6a3a7adc/events?_runtime_region=cn-beijing"
+    }
+  ],
+  "consoleErrors": [
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 503 (Service Unavailable)",
+    "Failed to load resource: the server responded with a status of 503 (Service Unavailable)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 503 (Service Unavailable)",
+    "Failed to load resource: the server responded with a status of 503 (Service Unavailable)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 503 (Service Unavailable)",
+    "Failed to load resource: the server responded with a status of 503 (Service Unavailable)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)"
+  ]
+}

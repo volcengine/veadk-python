@@ -228,6 +228,7 @@ Estimates are ideal engineer-days including test-first implementation and target
   - Owner repo: `veadk-python`; participating repo: `agentkit-mpa-agent`; depends on `S5-10`; acceptance `AC-9`; verification `VC-21`; estimate 1d.
 - [ ] `S5-12` Execute all browser Cases.
   - Owner repo: `veadk-python`; participating repo: `agentkit-mpa-agent`; depends on `S5-01`, `S5-01a`, and `S5-02`–`S5-11`; acceptance `AC-3`, `AC-5`, `AC-6`, `AC-7`, `AC-8`, `AC-10`; verification `VC-15` and full `VC-17` (`BC-01`–`BC-09`); estimate 1d.
+  - Status 2026-09-18: a production-like Studio chat-display subset passed against deployed Runtime `r-yeuujrrcowb21078p9jh` version 62. New Session `bee3db38-edcc-4020-b925-3d9d6a3a7adc` executed `printf 'MPA_V62_BROWSER_OK\n'`; parent and child sandbox activities reached `completed`, the final answer remained visible after completion and 30 seconds, and refresh restored the same answer and terminal tool cards without spinner/running text. Evidence is under `evidence/browser/mpa-v62-live/`. S5-12 remains open because this run does not execute or replace the complete `BC-01`–`BC-09` matrix.
 - [ ] `S5-13` Execute final two-repository regression, coverage, PostgreSQL, and performance gates.
   - Owner repo: `veadk-python`; participating repo: `agentkit-mpa-agent`; depends on `S5-01a`, `S5-11`, `S5-12`; acceptance `AC-6`, `AC-9`, `AC-10`, `AC-12`; verification `VC-15`, `VC-18E`, `VC-19` final; estimate 1.5d.
 - [ ] `S5-14` Execute full live creation/identity/Profile regression.

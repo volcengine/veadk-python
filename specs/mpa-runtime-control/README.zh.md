@@ -2,7 +2,7 @@
 
 - Component ID：`mpa-runtime-control`
 - 状态：`draft`；S1、S2、S3、S4、S5-01、S5-01a、S5-04 与 S5-08 Session 创建修复已实现；S5-06 与 S5-07 no-impact 记录已补充；其余 S5 仍为目标契约
-- 修订日期：2026-09-17
+- 修订日期：2026-09-18
 - English：[README.md](README.md)
 - PRD：[MPA AgentKit P0 功能迁移](../../prd-spec/features/mpa-p0-productionization/2026-09-15-mpa-p0-productionization-design.zh.md)
 - 负责代码：`agentkit-mpa-agent` 的 Agent、Session、A2A、worker、鉴权与诊断模块
@@ -18,6 +18,8 @@ AgentKit Studio 持有 MPA 创作入口以及 Skill、Tool、Environment、Vault
 P0 统一使用 `RuntimePrincipal v1`：`iss`、`aud`/authorized client、`sub`、`account_id`、`workspace_id`、`agent_id`、`actions[]`、`iat`、`nbf`、`exp`、`jti`，允许时钟偏差 30 秒。Studio OAuth/gateway 中间件先验证用户 bearer token，BFF 只转发这份已验证 token；AgentKit Runtime custom JWT authorizer 和 mpa-agent 通过同一 issuer discovery/JWKS 按 `kid` 校验签名、轮换、audience/client 和时效。token TTL 由现有 issuer 策略决定，M0 必须记录实测值，不能在 BFF 自签或假定 5 分钟。每次副作用前都通过可注入的 `RuntimePrincipalAuthorizer` 接线查询当前授权/撤权状态。不得信任浏览器 owner/account Header，也不得把 Runtime key-auth 当最终用户身份。
 
 REST 使用 `Authorization: Bearer <runtime-assertion>`；A2A 使用 `X-Ve-TIP-Token`，但 TIP verifier 必须映射出同一 `RuntimePrincipal`，不能只保留 `sub`。现有 `X-Jwt-Token` 仅作为旧 capability 路径：缺少 v1 scope claim 的请求可读取旧资源，但不能调用 Profile、execution-config、run/continue 等新写接口。`DISABLE_JWT_AUTH` 只允许本地测试 profile，AgentKit mode 启动时若开启则 execution-ready 失败。
+
+当 `MPA_AGENTKIT_MODE=true` 时，仍依赖 `require_auth` 的旧 ADK endpoint（包括 `GET /list-apps`）复用同一个 AgentKit `Authorization` Runtime principal，不再单独强制要求 `X-Jwt-Token`。这是 adapter 兼容规则，不是第二套身份机制。非 AgentKit mode 继续保持既有 `X-Jwt-Token` 契约。无论直连 Runtime 还是经过 Studio BFF proxy，缺失或非法的 AgentKit 凭据都必须 fail closed。
 
 在 Profile apply、Session 创建/读取、执行配置修改、Turn 接受、resume/continue、Secret 解析和外部工具 dispatch 前检查对应 scope。已实现的 S4-06 子集只在 accepted Turn dispatch payload 与 inbox metadata 中持久化规范化的非 secret `RuntimePrincipal` 快照，使后台执行和重启恢复无需保存 bearer token 也能复核授权。撤权阻止后续副作用；已发出的外部副作用不声称可撤销。普通响应、日志、trace、错误和诊断不包含 Secret 原值。已实现的 S5-01a 子集会把 Secret reference migration 读到的 legacy 明文 Secret 字面值注册到进程内脱敏 registry，然后在 API access log、Session 对用户可见输出/events、Runtime Console 响应、lifecycle details 和 trace-step 持久化中遮盖这些精确值。该 value-aware redaction 会保留 `flow_id`、`user_code` 等非 Secret 业务标识。
 
@@ -177,3 +179,7 @@ uv run --group dev pytest \
 2026-09-17：实现 S5-08 MPA Session 创建初始化修复。Runtime 现在会在 `POST /api/v1/sessions` 收到 Studio 传入的 `mpaInstanceId + profileRevision` 且未显式传入 `executionConfigRevision` 时，创建第一条 `session_execution_configs` revision，并在创建响应中返回 `executionConfigRevision=1`。恢复或迁移调用方显式传入的 revision 仍会原样保留。验证覆盖 Runtime focused tests（186 passed）、focused Ruff，以及已发布到 Runtime `r-yeuujrrcowb21078p9jh` version 58 的镜像 `agentkit-platform-2112682748-cn-beijing.cr.volces.com/agentkit/mpa_agent:mpa-p0-sessioncfg-init-local-20260917`。真实 BFF/runtime 检查显示 native Session create 返回 revision 1，`/run` 可接受 `executionConfigVersion=1`，`/sse` 输出最终文本并发送 `event: done`。
 
 2026-09-17：实现 schema version 8，完成持久 Runtime operation/Profile CAS 合约。SQL 与 in-memory operation store 现在执行一致的 24 小时 identity/replay 策略、保存已脱敏安全结果，并以 compare-and-swap 推进状态。Profile apply 使用认证 principal 与完整规范化 payload hash，映射全部 P0 Profile 资源类别，并在同一个 PostgreSQL 事务中完成 ETag 校验与 current revision 切换。真实双连接合约证明同一 ETag 只能被一个并发 writer 消费。
+
+2026-09-18：在 Runtime commit `eecc6e3` 中完成旧 ADK endpoint 与 AgentKit key-auth 的鉴权对齐。AgentKit mode 下，`require_auth` 现在从 `Authorization` 建立 Runtime principal；非 AgentKit mode 保留既有 `X-Jwt-Token` 行为。定向测试 49 passed，完整 `make test` 2506 passed、14 skipped，focused Ruff 与 diff hygiene 均通过。产出镜像 `agentkit-platform-2112682748-cn-beijing.cr.volces.com/agentkit/mpa_agent:mpa-p0-adk-auth-eecc6e3-20260917`（`sha256:6ac6a2712ecd1c7950125dc9afc6467373a08142fbd6c3577aba12f126079bef`）已发布为 Runtime `r-yeuujrrcowb21078p9jh` version 62，状态为 `Ready`；Runtime 直连和 Studio BFF 的 `/list-apps` 调用均返回 `200 ["default"]`。本次没有改变 Runtime schema 或持久数据模型。
+
+2026-09-18：在 Runtime version 62 上完成真实 Studio 验收，新建 Session `bee3db38-edcc-4020-b925-3d9d6a3a7adc` 并在沙箱执行 `printf 'MPA_V62_BROWSER_OK\n'`。父级沙箱活动和子命令活动均进入 `completed`；最终回答在完成时和 30 秒后持续可见，整页刷新后恢复回答和终态工具卡，页面没有 spinner 或运行中文案。证据位于 `evidence/browser/mpa-v62-live/`。该结果只验证本次对话展示路径，不关闭 S5-12 的完整 `BC-01`–`BC-09` 门禁。
