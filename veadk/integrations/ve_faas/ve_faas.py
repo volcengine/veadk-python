@@ -36,6 +36,7 @@ from volcenginesdkvefaas.models.tag_for_create_function_input import (
 import veadk.config
 import veadk.integrations.ve_faas as vefaas
 from veadk.integrations.ve_apig.ve_apig import APIGateway
+from veadk.integrations.ve_faas.upload_progress import CodeUploadProgress
 from veadk.integrations.ve_faas.ve_faas_utils import (
     signed_request,
     zip_and_encode_folder,
@@ -313,15 +314,21 @@ class VeFaaS:
         response = None
         for attempt in range(1, attempts + 1):
             try:
-                response = requests.put(
-                    url=upload_url,
-                    data=code_zip_data,
-                    headers=headers,
-                    timeout=(
-                        _STANDARD_CODE_UPLOAD_TIMEOUT_SECONDS,
-                        _code_upload_timeout_seconds(code_zip_size),
-                    ),
-                )
+                with CodeUploadProgress(code_zip_data, attempt, attempts) as body:
+                    response = requests.put(
+                        url=upload_url,
+                        data=body,
+                        headers=headers,
+                        timeout=(
+                            _STANDARD_CODE_UPLOAD_TIMEOUT_SECONDS,
+                            _code_upload_timeout_seconds(code_zip_size),
+                        ),
+                    )
+                    if not (200 <= response.status_code < 300):
+                        raise ValueError(
+                            "Function code upload failed with status code "
+                            f"{response.status_code}."
+                        )
                 break
             except (requests.ConnectionError, requests.Timeout) as upload_error:
                 if attempt == attempts:
@@ -336,11 +343,6 @@ class VeFaaS:
                 raise ValueError("Function code upload request failed.") from None
         if response is None:
             raise ValueError("Function code upload request failed.")
-        if not (200 <= response.status_code < 300):
-            raise ValueError(
-                f"Function code upload failed with status code {response.status_code}."
-            )
-
         # Mount the TOS bucket to function instance
         res = signed_request(
             ak=self.ak,
