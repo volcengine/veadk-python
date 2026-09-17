@@ -2,7 +2,7 @@ import React from "react";
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ThinkingPlaceholder } from "../src/ui/Blocks";
-import { createAssistantEventProjector } from "../src/blocks";
+import { createAssistantEventProjector, eventsToTurns } from "../src/blocks";
 import { i18n } from "../src/i18n/runtime";
 
 describe("A2A waiting presentation", () => {
@@ -46,4 +46,15 @@ it("ignores user echo frames before and after assistant output", () => {
   expect(projector.project(reply).ignored).not.toBe(true);
   expect(projector.project(echo).ignored).toBe(true);
   expect(projector.project(reply).ignored).toBe(true);
+});
+
+it("preserves historical replies across user boundaries", () => {
+  const events = ["user", "agent", "user", "agent"].map((author, i) => ({
+    author, id: `history-${i}`, partial: false,
+    content: { parts: [{text: ["question 1", "answer 1", "question 2", "answer 2"][i]}] },
+  }));
+  const turns = eventsToTurns(events);
+  expect(turns.map(t => t.blocks.filter(b => b.kind === "text").map(b => b.text).join("")))
+    .toEqual(["question 1", "answer 1", "question 2", "answer 2"]);
+  expect(turns[1].meta?.localId).not.toBe(turns[3].meta?.localId);
 });
