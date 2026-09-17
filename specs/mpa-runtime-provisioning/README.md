@@ -44,3 +44,5 @@ Missing endpoint, key, Runtime ID, or APIG ID blocks metadata finalization. Runt
 | End-to-end | Create/reuse an isolated Runtime, inspect metadata without printing keys, invoke A2A and built-in MCP, and observe two MCP-cache intervals |
 
 VeADK MPA provisioning defaults DISABLE_JWT_AUTH to true. Explicit extra_env values override this default, including false. Gateway authentication and other deployment paths are unchanged.
+
+MPA provisioning defaults `OTEL_PYTHON_DISABLED_INSTRUMENTATIONS` to `sqlalchemy,asyncpg,psycopg,psycopg2,dbapi`, suppressing database auto-instrumentation while preserving business tracing. Explicit `extra_env` overrides win, including an empty string to re-enable instrumentation. This applies to newly provisioned or explicitly redeployed resources, not existing running instances.
