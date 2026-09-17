@@ -40,7 +40,7 @@
     "unsupportedRouteHint": "Tip: This Runtime does not provide the session run API and may be incompatible with the current Studio version.",
     "toolArgumentHint": "Tip: The model generated incomplete tool arguments. Send the request again.",
     "resourceCollectionExpiredHint": "Tip: This resource collection has expired. Send the task again so the system can collect the resources before creating the Agent.",
-    "networkConfigurationHint": "Tip: Check network settings such as the shared public egress, then try again.",
+    "networkConfigurationHint": "Tip: Try again later, and review the Runtime, model, or gateway logs.",
     "modelQuotaHint": "Tip: The model has reached its TPM/RPM quota. Try again later or increase the model quota.",
     "rawResponseLabel": "Raw response: "
   },
@@ -405,7 +405,7 @@
     "agentSearchFailed": "Agent search failed",
     "emptySseBody": "HTTP 200 with an empty SSE response body.",
     "noDisplayableSseReply": "HTTP 200, but the SSE response did not contain a displayable model reply.",
-    "firstSseEventTimeout": "No SSE event was received within 30 seconds.",
+    "firstSseEventTimeout": "No SSE event was received within 60 seconds. Try again later, and review the Runtime, model, or gateway logs.",
     "runSessionFailed": "Session run failed",
     "runSseFailedWithDetail": "run_sse failed ({{status}}): {{detail}}",
     "checkRuntimeNameFailed": "Failed to check the Runtime name",

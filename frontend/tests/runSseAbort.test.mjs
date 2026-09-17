@@ -135,13 +135,13 @@ test("runSSE aborts when no first event arrives before the deadline", async (t) 
   });
 
   const next = events.next();
-  assert.equal(timeoutMs, 30_000);
+  assert.equal(timeoutMs, 60_000);
   timeoutCallback();
 
   await assert.rejects(next, (error) => {
     assert.equal(error.message, runSseFirstEventTimeoutError());
-    assert.match(error.message, /No SSE event was received within 30 seconds/);
-    assert.match(error.message, /Check network settings such as the shared public egress, then try again/);
+    assert.match(error.message, /No SSE event was received within 60 seconds/);
+    assert.match(error.message, /review the Runtime, model, or gateway logs/);
     return true;
   });
 });
@@ -160,7 +160,7 @@ test("runSSE clears the first-event deadline after yielding the first event", as
   let timeoutCallback;
   let clearedTimer;
   globalThis.setTimeout = (callback, ms, ...args) => {
-    assert.equal(ms, 30_000);
+    assert.equal(ms, 60_000);
     timeoutCallback = () => callback(...args);
     return 7;
   };
@@ -214,7 +214,7 @@ test("runSSE formats a fetch rejection before any response arrives", async (t) =
 
   await assert.rejects(events.next(), (error) => {
     assert.match(error.message, /^Raw response: TypeError: fetch failed: upstream unavailable/);
-    assert.match(error.message, /Check network settings such as the shared public egress, then try again/);
+    assert.match(error.message, /review the Runtime, model, or gateway logs/);
     return true;
   });
 });
@@ -240,7 +240,7 @@ test("runSSE preserves an AbortError rejected by fetch", async (t) => {
   await assert.rejects(events.next(), (error) => {
     assert.equal(error, abortError);
     assert.equal(error.name, "AbortError");
-    assert.doesNotMatch(error.message, /Raw response|shared public egress/);
+    assert.doesNotMatch(error.message, /Raw response|Runtime, model, or gateway logs/);
     return true;
   });
 });
@@ -265,7 +265,7 @@ test("runSSE rejects an HTTP 200 response that contains no valid events", async 
 
   await assert.rejects(
     events.next(),
-    /Raw response: HTTP 200 with an empty SSE response body\.[\s\S]*Check network settings such as the shared public egress, then try again/,
+    /Raw response: HTTP 200 with an empty SSE response body\.[\s\S]*review the Runtime, model, or gateway logs/,
   );
 });
 
@@ -290,7 +290,7 @@ test("runSSE formats malformed SSE JSON without losing the original data", async
   await assert.rejects(events.next(), (error) => {
     assert.match(error.message, /^Raw response: Error: Failed to parse the SSE event JSON/);
     assert.match(error.message, /Raw data: malformed-json/);
-    assert.match(error.message, /Check network settings such as the shared public egress, then try again/);
+    assert.match(error.message, /review the Runtime, model, or gateway logs/);
     return true;
   });
 });
@@ -335,7 +335,7 @@ test("runSSE preserves a partial event and reports an unexpected stream failure"
   assert.equal(first.value.content.parts[0].text, "part");
   await assert.rejects(events.next(), (error) => {
     assert.match(error.message, /^Raw response: TypeError: terminated/);
-    assert.match(error.message, /Check network settings such as the shared public egress, then try again/);
+    assert.match(error.message, /review the Runtime, model, or gateway logs/);
     assert.doesNotMatch(error.message, /Runtime may|Unable to access the model service/);
     return true;
   });
