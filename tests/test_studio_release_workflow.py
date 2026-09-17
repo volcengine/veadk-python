@@ -142,11 +142,11 @@ def test_smoke_gate_requires_unexpected_studio_exit_to_fail_closed() -> None:
 def test_verification_reuses_checked_inputs_and_rebuilds_current_source(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from frontend.service.studio_release_server import publisher
     from veadk.cli import (
         agentkit_cli,
         studio_dependencies,
         studio_package,
-        studio_release,
     )
 
     sources = [
@@ -200,6 +200,9 @@ def test_verification_reuses_checked_inputs_and_rebuilds_current_source(
         (destination / "index.html").write_text("current frontend")
 
     def build_bundle(**kwargs: Any) -> tuple[Path, Any]:
+        assert kwargs["thin"] is True
+        assert kwargs["provider"] == "volcengine"
+        assert "PATH" in kwargs["env"]
         assert (kwargs["frontend_assets"] / "index.html").is_file()
         for dependency in (*sources, artifact):
             content = (kwargs["dependency_wheels"] / dependency.filename).read_bytes()
@@ -215,7 +218,7 @@ def test_verification_reuses_checked_inputs_and_rebuilds_current_source(
     monkeypatch.setattr("urllib.request.urlopen", download)
     monkeypatch.setattr(agentkit_cli, "download_agentkit_cli_archive", download_cli)
     monkeypatch.setattr(studio_package, "build_frontend_assets", build_frontend)
-    monkeypatch.setattr(studio_release, "build_studio_release", build_bundle)
+    monkeypatch.setattr(publisher, "build_studio_release", build_bundle)
     script = _verification_script()
     exec(script, {})
     assert len(downloads) == 3

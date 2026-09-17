@@ -23,6 +23,7 @@ on:
       - 'tests/test_harness_sidecar_release_gate.py'
       - 'tests/test_cloud.py'
       - 'tests/test_studio_release_server.py'
+      - 'tests/test_studio_release_cold_start.py'
       - 'tests/test_studio_release_workflow.py'
       - 'veadk/cli/generated_agent_codegen.py'
       - 'veadk/cli/generated_agent_mcp.py'
@@ -60,6 +61,7 @@ on:
       - 'tests/test_harness_sidecar_release_gate.py'
       - 'tests/test_cloud.py'
       - 'tests/test_studio_release_server.py'
+      - 'tests/test_studio_release_cold_start.py'
       - 'tests/test_studio_release_workflow.py'
       - 'veadk/cli/generated_agent_codegen.py'
       - 'veadk/cli/generated_agent_mcp.py'
@@ -149,6 +151,7 @@ jobs:
           (
             python -m pytest -q \
               tests/test_studio_release_server.py::test_release_server_agentkit_cli_pin_matches_veadk \
+              tests/test_studio_release_cold_start.py \
               tests/test_studio_release_server.py::test_publisher_repairs_missing_agentkit_cli_before_manifest \
               tests/test_studio_release_server.py::test_release_server_zip_normalizes_runtime_file_permissions \
               tests/test_studio_release_server.py::test_stage_deployment_uses_frontend_service_package \
