@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type HTMLAttributes, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type HTMLAttributes, type KeyboardEvent, type ReactNode } from "react";
 import type { CodeBlockProps } from "../CodeBlock";
 import { ScrollArea } from "../../primitives/ScrollArea";
 import { FileExplorerChevron, FileExplorerFileIcon, FileExplorerFolderIcon } from "./FileExplorerIcons";
@@ -49,6 +49,12 @@ export interface FileExplorerProps extends Omit<HTMLAttributes<HTMLDivElement>, 
   autoFormat?: boolean;
   /** 默认 true，超长行按面板宽度折行，不增加行号 */
   wordWrap?: boolean;
+  /** 自定义只读文件预览，支持异步加载、富文档和媒体；未提供时展示代码 */
+  renderPreview?: (file: FileExplorerFile | undefined) => ReactNode;
+  /** 文件浏览器高度，数字单位为 px */
+  height?: CSSProperties["height"];
+  /** 窄屏时将文件树放到预览上方 */
+  narrowLayout?: "split" | "stack";
 }
 
 interface TreeRow {
@@ -90,7 +96,11 @@ export function FileExplorer({
   onSave,
   autoFormat = true,
   wordWrap = true,
+  renderPreview,
+  height,
+  narrowLayout = "split",
   className = "",
+  style,
   ...props
 }: FileExplorerProps) {
   const [localSelection, setLocalSelection] = useState(defaultSelectedId);
@@ -209,7 +219,7 @@ export function FileExplorer({
   }
 
   return (
-    <div {...props} className={`studio-file-explorer ${className}`.trim()}>
+    <div {...props} className={`studio-file-explorer ${className}`.trim()} data-narrow-layout={narrowLayout} style={{ height, ...style }}>
       <ScrollArea className="studio-file-explorer__tree-area" aria-label={treeLabel}>
         <div role="tree" aria-label={treeLabel} className="studio-file-explorer__tree">
           {rows.map((row, index) => {
@@ -253,7 +263,7 @@ export function FileExplorer({
           {rows.length === 0 && <div className="studio-file-explorer__empty-tree">暂无文件</div>}
         </div>
       </ScrollArea>
-        {file ? (
+        {renderPreview ? renderPreview(file) : file ? (
           <FileExplorerPane
             key={file.id}
             file={file} draft={draft} allowEdit={allowEdit} autoFormat={autoFormat} wordWrap={wordWrap}

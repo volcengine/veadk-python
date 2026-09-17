@@ -412,6 +412,40 @@ See [deployment and operation](service/studio_release_notifier/README.md).
   deployment and never enters generated source, workflow, documentation, or
   logs; cloud credentials remain GitHub Secrets or Runtime environment variables.
 - **Tracing viewer**: a span tree + detail panel from the ADK debug trace.
+- **Runtime session artifacts**: in a chat that supports Studio Tools, select
+  `studio_write_artifact` for the current session and ask the Agent to save a
+  report, chart, or document. This tool runs in the Studio BFF through the
+  existing tool channel. It uses Studio's configured TOS bucket and server-side
+  credentials, including the cloud Studio IAM role's STS credentials, to write
+  `artifacts/{user_id}/{session_id}/{relative_file_path}`. User and session IDs
+  come from the authenticated tool context; model arguments do not select the
+  owner, session, bucket, or credentials. Creating and updating Agents is
+  unchanged: the tool is selected per session, with no changes to the generator,
+  default system prompt, or Runtime mount configuration.
+  The tool accepts UTF-8 text up to 1 MiB per file; saving the same relative path
+  replaces that file in the current session.
+  A persistent `会话产物` button above the chat composer opens the shared Drawer
+  and FileExplorer. Runtime access is checked before reading the signed-in
+  user's session directory. Changing sessions closes the previous preview;
+  the directory supports refresh and pagination, and refreshes when a reply
+  completes. Empty sessions and access or network failures have separate states.
+  Configure `VEADK_STUDIO_TOS_BUCKET` and `VEADK_STUDIO_TOS_REGION` in Studio;
+  the Studio execution identity needs read, write, and list access to this
+  storage. Reads and writes use the Studio bucket's region on both Volcengine
+  and BytePlus. When Studio storage is configured, previews use that bucket even
+  if the Runtime has an unrelated TOS mount. Without Studio storage, the reader
+  retains support for an existing artifact mount; configuration, authorization,
+  and TOS failures do not silently switch storage.
+  HTML, Markdown, images, JSON, and text can be previewed; other formats remain
+  downloadable. HTML uses a scriptless sandbox with inline styles and up to
+  32 authenticated, same-session relative images. External resources and scripts
+  are disabled. Preview limits are 5 MB per file and 20 MB for embedded images;
+  larger files can be downloaded. Small files are prefetched after replies;
+  bounded per-session caches survive closing the panel, and HTML appears before
+  its relative images finish loading.
+  The BFF tool requires no Runtime TOS mount or separate mount credentials.
+  The tool saves files to the session directory; arbitrary files in `/tmp`
+  or an independent Sandbox are not collected.
 - **Message feedback**: rate persisted Runtime replies with accessible,
   repository-drawn like/dislike controls. Studio identifies the final ADK Event,
   stores the latest rating through the existing Session state-delta API, and

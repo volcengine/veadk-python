@@ -142,6 +142,7 @@ import {
 } from "./adk/connections";
 import { defaultCloudRegion, formatCloudRegion } from "./adk/cloudProvider";
 import { Blocks, ThinkingPlaceholder } from "./ui/Blocks";
+import { RuntimeArtifacts } from "./runtime-artifacts/RuntimeArtifacts";
 import { Composer } from "./ui/Composer";
 import { InvocationChips } from "./ui/InvocationChips";
 import { MediaGroup } from "./ui/Media";
@@ -6670,6 +6671,16 @@ export default function App() {
           <div
             className={`composer-slot${sandboxSession ? " sandbox-composer-wrap" : ""}`}
           >
+            {!sandboxSession && currentRuntime && sessionId && (
+              <div className="runtime-artifact-entry" data-share-image-exclude="true">
+                <RuntimeArtifacts key={`${userId}:${currentRuntime.runtimeId}:${currentRuntime.region}:${currentRuntimeAppName || appName}:${sessionId}`} scope={{
+                  runtimeId: currentRuntime.runtimeId,
+                  region: currentRuntime.region,
+                  appName: currentRuntimeAppName || appName,
+                  sessionId,
+                }} busy={activeConversationBusy} />
+              </div>
+            )}
             {sandboxSession && (
               <SandboxSessionWarning
                 agentName={

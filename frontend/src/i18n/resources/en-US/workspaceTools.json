@@ -374,7 +374,8 @@
       "coding": "Coding",
       "get_city_weather": "City weather",
       "get_location_weather": "Location weather",
-      "web_fetch": "Fetch web content"
+      "web_fetch": "Fetch web content",
+      "studio_write_artifact": "Save session artifact"
     },
     "closeDialog": "Close dialog",
     "title": "Add Studio tools",

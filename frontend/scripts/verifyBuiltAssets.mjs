@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { extractJavaScriptImports } from "./assetImports.mjs";
 
 const webuiRoot = fileURLToPath(new URL("../../veadk/webui/", import.meta.url));
 const baseUrl = process.argv[2]
@@ -63,11 +64,15 @@ function verifyReference(fromFile, reference) {
 for (const relativeFile of relativeFiles) {
   if (!/\.(?:html|css|js)$/.test(relativeFile)) continue;
   const contents = await readFile(path.join(webuiRoot, relativeFile), "utf8");
+  if (relativeFile.endsWith(".js")) {
+    for (const reference of extractJavaScriptImports(contents, relativeFile)) {
+      verifyReference(relativeFile, reference);
+    }
+    continue;
+  }
   const patterns = relativeFile.endsWith(".html")
     ? [/(?:src|href)=["']([^"']+)["']/g]
-    : relativeFile.endsWith(".css")
-      ? [/url\(\s*["']?([^"')]+)["']?\s*\)/g]
-      : [/(?:\bfrom\s*|\bimport\s*\(\s*)["']([^"']+)["']/g];
+    : [/url\(\s*["']?([^"')]+)["']?\s*\)/g];
   for (const pattern of patterns) {
     for (const match of contents.matchAll(pattern)) verifyReference(relativeFile, match[1]);
   }
