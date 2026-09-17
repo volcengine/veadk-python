@@ -164,6 +164,7 @@ def build_runtime_env(
         "SCHEDULED_TASK_BACKEND": "postgresql",
         # Identity adaptation (FR-10): no arkclaw identity pools in this scenario.
         "IDENTITY_STARTUP_ENABLED": "false",
+        "DISABLE_JWT_AUTH": "true",
         "MPA_LAZY_LOGIN": "false",
         # VeADK uses external resources and only retains CLAW_SPACE_ID as a
         # compatibility identifier. It must not query the ArkClaw registry.

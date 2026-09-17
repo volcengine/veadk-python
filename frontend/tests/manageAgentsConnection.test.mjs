@@ -112,3 +112,13 @@ test("management defaults to the active provider region without trailing list wh
     /\.manage\s*\{[\s\S]*?padding:\s*28px 24px 16px;/,
   );
 });
+
+test("task Runtime selection survives a failed chat connection", () => {
+  const start = appSource.indexOf("const connectMyAgent = async");
+  const end = appSource.indexOf("const openMyAgentDetails", start);
+  const connect = appSource.slice(start, end);
+  assert.ok(connect.indexOf("setSelectedCronRuntime({") < connect.indexOf("await connectRuntimeForUser("));
+  assert.match(connect, /runtimeId: agent\.runtime\.runtimeId, name: agent\.name, region: agent\.runtime\.region/);
+  assert.match(appSource, /selectedRuntime=\{selectedCronRuntime \?\? currentRuntime \?\? selectedDraftStudioRuntime\}/);
+  assert.match(appSource, /useEffect\(\(\) => setSelectedCronRuntime\(undefined\), \[appName\]\)/);
+});

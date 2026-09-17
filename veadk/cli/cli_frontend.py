@@ -10495,6 +10495,21 @@ def _run_frontend_server(
                 **({"metadata": request_metadata} if request_metadata else {}),
             },
         }
+        # A blocking A2A server may not send headers until the task completes.
+        # Acknowledge the Studio wait without claiming Runtime acceptance.
+        yield (
+            "data: "
+            + json.dumps(
+                {
+                    "id": str(uuid4()),
+                    "author": str(card.get("name") or _RUNTIME_A2A_VIRTUAL_APP),
+                    "partial": True,
+                    "content": {"role": "model", "parts": []},
+                    "customMetadata": {"a2aStatus": "connecting"},
+                }
+            )
+            + "\n\n"
+        ).encode("utf-8")
         client = httpx.AsyncClient(timeout=None)
         upstream = None
         try:
@@ -10782,6 +10797,19 @@ def _run_frontend_server(
         return _build_agentkit_proxy_headers(
             dict(request.headers), apikey, validated_authorization
         )
+
+    from frontend.server.mpa_cron import mount_routes as mount_mpa_cron_routes
+
+    mount_mpa_cron_routes(
+        app,
+        user_for=_sandbox_owner,
+        authorize=_authorized_runtime_for_connection,
+        connection=_resolve_runtime_conn,
+        region_for=_coerce_cloud_region,
+        authorization=lambda request, apikey, auth_type: _runtime_request_headers(
+            request, apikey=apikey, auth_type=auth_type
+        ).get("Authorization", ""),
+    )
 
     @app.get("/web/runtime-tool-channel/{runtime_id}/capabilities")
     async def _runtime_tool_channel_capabilities(runtime_id: str, request: Request):
@@ -11142,6 +11170,10 @@ def _run_frontend_server(
             apikey=apikey,
             auth_type=auth_type,
         )
+        # Match scheduled-task ownership and never forward browser identity claims.
+        principal = _current_principal(request)
+        if principal is not None:
+            headers["x-user-id"] = principal.owner_id
         # GET/HEAD probes never need a request body. Avoid reading from an
         # already-disconnected browser request after the control-plane lookup;
         # detail/list navigation deliberately cancels stale probes.

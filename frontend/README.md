@@ -1047,3 +1047,33 @@ Sandbox。修改这些模板只需要更新 Studio，不需要重建镜像，也
 模板中的新依赖不会自动安装，运行环境依赖仍由镜像管理。
 
 其他地域需要显式设置 `STUDIO_WORKSPACE_IMAGE`，避免错误使用跨地域镜像。
+
+### MPA Runtime scheduled tasks
+
+Select a connected cloud Runtime and open the Runtime scheduled tasks tab.
+Studio uses gateway authentication to call `/api/v1/esa-cron-tasks`, without TOP
+credential acquisition, enterprise UID configuration, JWT or user identity headers.
+The MPA Runtime must have `DISABLE_JWT_AUTH=true` and support all-user read access
+(commit `833c6bc` or later). Gateway authentication and Studio Runtime authorization
+remain enforced. The operator must enable this mode on the Runtime explicitly;
+Studio never changes the authentication setting.
+
+The list shows all users' tasks in the selected Runtime's configured store, with
+search, pagination, prompt details, execution counts and success rate. Errors are
+not rendered as empty results. No task mutations are performed.
+
+Run `npm run test:mpa-cron-coverage` and
+`python -m pytest tests/frontend/server/test_mpa_cron.py --cov=frontend.server.mpa_cron --cov-branch --cov-fail-under=96`
+for isolated client/server checks.
+
+### Runtime task management (2026-09-15)
+
+Runtime tasks now follow mono's list/calendar workflow: status filtering, creation, editing, copying, deletion, enable/disable, run now, and execution history. Select a cloud Runtime first. The server forwards the authenticated Studio user as `x-user-id`; with MPA JWT disabled, that user's task data remains isolated. No JWT input or TOP credential exchange is used. Enter the Runtime's Agent ID when creating a task. Complex Cron expressions display only the server's next execution in the calendar. Mutations and history use the existing MPA REST interfaces; Runtime upgrades and ADK session authentication are separate concerns.
+
+### A2A 长耗时请求
+
+连接 A2A Runtime 后，对话会显示等待响应、排队或执行中的状态。收到有效状态后会继续等待最终回复，不因任务耗时超过 30 秒而自动中断。等待响应不代表 Runtime 已接受任务；错误或连接中断也不代表后台任务已取消，请先确认任务状态再重试创建等操作。
+
+### Sandbox file downloads
+
+Assistant Markdown links under `/data/output/` or `/data/workspace/` appear as download buttons in conversation history and streaming messages. Studio uses the current Runtime and session through its authenticated proxy; files remain available only while that Sandbox and file exist. Legacy `<file-card>` and `<personal-drive-enable-card>` payloads are hidden in conversation rendering. A failed download can be retried by clicking the button again. Run `npm run test:sandbox-download-coverage` for the focused regression suite.

@@ -1,3 +1,4 @@
+import { fetchMpaCronTasks, manageMpaTask, fetchMpaRuns, type MpaRuntime } from "./mpaCronTasks";
 // Thin client for the Google ADK API server (the same server `veadk frontend`
 // launches). Uses relative URLs so it works same-origin in production and via
 // the Vite dev proxy in development.
@@ -1203,6 +1204,19 @@ function decodeArtifactData(value: string): Uint8Array {
     bytes[index] = binary.charCodeAt(index);
   }
   return bytes;
+}
+
+export async function fetchSessionFile(
+  appName: string,
+  sessionId: string,
+  path: string,
+  signal: AbortSignal,
+): Promise<Blob> {
+  const { ep } = resolve(appName);
+  const url = `/api/v1/sessions/${encodeURIComponent(sessionId)}/files/download?path=${encodeURIComponent(path)}`;
+  const response = await apiFetch(url, { signal }, ep, TRANSFER_REQUEST_TIMEOUT_MS);
+  if (!response.ok) throw new Error(`SESSION_FILE_HTTP_${response.status}`);
+  return response.blob();
 }
 
 export async function downloadArtifact(
@@ -5231,3 +5245,10 @@ export async function updateSandboxTool(kind: SandboxToolKind): Promise<{
   if (typeof payload.updated !== "boolean") throw new Error(adkT("client.invalidSandboxUpdate"));
   return { updated: payload.updated, state: sandboxImageState(payload.state) };
 }
+
+export function listMpaCronTasks(runtime: MpaRuntime, offset: number, query: string, signal?: AbortSignal) {
+  return fetchMpaCronTasks(apiFetch, runtime, offset, query, signal);
+}
+
+export function requestMpaTask(runtime: MpaRuntime, method: string, suffix: string, payload?: unknown, signal?: AbortSignal) { return manageMpaTask(apiFetch, runtime, method, suffix, payload, signal); }
+export function listMpaRuns(runtime: MpaRuntime, taskId: string, offset: number, signal?: AbortSignal) { return fetchMpaRuns(apiFetch, runtime, taskId, offset, signal); }
