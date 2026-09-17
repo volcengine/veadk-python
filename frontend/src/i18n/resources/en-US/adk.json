@@ -519,6 +519,7 @@
     "checkRuntimeUpdateFailed": "Failed to check Runtime update capability (HTTP {{status}}). Try again later.",
     "loadRuntimeDetailFailed": "Failed to load Runtime details",
     "generateProjectFailed": "Failed to generate the project",
+    "generateProjectTimedOut": "Generating the publish preview project timed out. Please try again.",
     "generateAgentConfigFailed": "Failed to generate the Agent configuration",
     "createDebugRunFailed": "Failed to create the debug run",
     "createDebugSessionFailed": "Failed to create the debug session",

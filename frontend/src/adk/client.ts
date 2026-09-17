@@ -5035,14 +5035,38 @@ export interface GeneratedAgentTestRun {
   planHash?: string;
 }
 
+const GENERATED_AGENT_PROJECT_TIMEOUT_MS = 60_000;
+
+function isGeneratedAgentProjectDeadlineError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const name = "name" in error ? (error as { name?: unknown }).name : undefined;
+  if (name === "TimeoutError") return true;
+  if (name !== "AbortError") return false;
+  const message = "message" in error ? (error as { message?: unknown }).message : "";
+  return typeof message !== "string" || message === "" || /abort/i.test(message);
+}
+
 export async function generateAgentProject(
   draft: AgentDraft,
 ): Promise<AgentProject> {
-  const res = await apiFetch("/web/generated-agent-projects", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ draft }),
-  });
+  let res: Response;
+  try {
+    res = await apiFetch(
+      "/web/generated-agent-projects",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ draft }),
+      },
+      {},
+      GENERATED_AGENT_PROJECT_TIMEOUT_MS,
+    );
+  } catch (error) {
+    if (isGeneratedAgentProjectDeadlineError(error)) {
+      throw new Error(adkT("client.generateProjectTimedOut"));
+    }
+    throw error;
+  }
   if (!res.ok) {
     throw new Error(await httpErrorMessage(res, adkT("client.generateProjectFailed")));
   }
