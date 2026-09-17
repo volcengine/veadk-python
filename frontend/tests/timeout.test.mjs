@@ -71,3 +71,23 @@ test("generated-agent creation deadline exceeds both backend readiness windows",
     /apiFetch\([\s\S]*?\},\s*\{\},\s*GENERATED_AGENT_TEST_RUN_TIMEOUT_MS,\s*\)/,
   );
 });
+
+test("generated-agent project creation uses its own publish preview deadline", () => {
+  const declaration = clientSource.match(
+    /const GENERATED_AGENT_PROJECT_TIMEOUT_MS = ([\d_]+);/,
+  );
+  assert.ok(declaration, "generated project creation needs a dedicated deadline");
+  const timeoutMs = Number(declaration[1].replaceAll("_", ""));
+  assert.equal(timeoutMs, 60_000);
+
+  const generateProject = functionSource(
+    "export async function generateAgentProject",
+    "export interface GeneratedAgentDraftResult",
+  );
+  assert.match(
+    generateProject,
+    /apiFetch\([\s\S]*?"\/web\/generated-agent-projects"[\s\S]*?\},\s*\{\},\s*GENERATED_AGENT_PROJECT_TIMEOUT_MS,\s*\)/,
+  );
+  assert.match(generateProject, /isGeneratedAgentProjectDeadlineError\(error\)/);
+  assert.match(generateProject, /adkT\("client\.generateProjectTimedOut"\)/);
+});

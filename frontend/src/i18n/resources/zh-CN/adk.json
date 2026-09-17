@@ -519,6 +519,7 @@
     "checkRuntimeUpdateFailed": "检查 Runtime 更新能力失败（HTTP {{status}}），请稍后重试。",
     "loadRuntimeDetailFailed": "加载 Runtime 详情失败",
     "generateProjectFailed": "生成项目失败",
+    "generateProjectTimedOut": "生成发布预览项目超时，请稍后重试。",
     "generateAgentConfigFailed": "生成 Agent 配置失败",
     "createDebugRunFailed": "创建调试运行失败",
     "createDebugSessionFailed": "创建调试会话失败",
