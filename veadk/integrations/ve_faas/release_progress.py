@@ -76,6 +76,7 @@ class ReleaseProgress:
         app_id: str,
         secrets: tuple[str, ...],
         emit: Callable[[str], None],
+        resource_label: str = "Application",
     ) -> None:
         self.english = provider == "byteplus"
         self.secrets = secrets
@@ -91,7 +92,7 @@ class ReleaseProgress:
         self.warnings: set[str] = set()
         self.message(
             self.text("开始云端构建与部署", "Starting cloud build and deployment")
-            + f" | {provider} / {region} | Application: {app_id}"
+            + f" | {provider} / {region} | {resource_label}: {app_id}"
         )
 
     def text(self, chinese: str, english: str) -> str:
@@ -124,8 +125,8 @@ class ReleaseProgress:
             f"{self.stage} | {self.text('已用时', 'Elapsed')} {self.elapsed()}"
         )
 
-    def waiting(self) -> None:
-        if time.monotonic() - self.last_output >= 15:
+    def waiting(self, interval: float = 15) -> None:
+        if time.monotonic() - self.last_output >= interval:
             self.message(
                 f"{self.stage} | {self.text('已用时', 'Elapsed')} {self.elapsed()} | "
                 + self.text(
@@ -202,31 +203,42 @@ class ReleaseProgress:
         selected = keys if final else [keys[self.link_cursor % len(keys)]]
         self.link_cursor += 1
         for key in selected:
-            try:
-                content, truncated = _read_build_log(self.links[key])
-            except Exception:
-                # Build logs can appear later than the control-plane link.
-                self.warning(
-                    key,
-                    self.text(
-                        "构建日志暂不可用，将继续尝试读取",
-                        "Build log is not available yet; it will be retried",
-                    ),
+            self.build_log(self.links[key], final=final)
+
+    def build_log(self, url: str, *, final: bool = False) -> str:
+        """Read a known build log URL, including URLs without a .log suffix."""
+        key = url.partition("?")[0]
+        try:
+            content, truncated = _read_build_log(url)
+        except Exception:
+            # Build logs can appear later than the control-plane link.
+            self.warning(
+                "final:" + key if final else key,
+                self.text(
+                    "未能读取最终构建日志，可在云控制台查看",
+                    "Final build log could not be read; check the cloud console",
                 )
-                continue
-            self.warnings.discard(key)
-            lines = content.splitlines()
-            if lines and (truncated or (not final and not content.endswith("\n"))):
-                lines.pop()
-            self._new_lines(key, lines, self.text("构建日志", "Build log"))
-            if truncated:
-                self.warning(
-                    "truncated:" + key,
-                    self.text(
-                        "构建日志超出单次读取范围，完整日志可在云控制台查看",
-                        "Build log exceeds the read limit; view the full log in the cloud console",
-                    ),
-                )
+                if final
+                else self.text(
+                    "构建日志暂不可用，将继续尝试读取",
+                    "Build log is not available yet; it will be retried",
+                ),
+            )
+            return ""
+        self.warnings.discard(key)
+        lines = content.splitlines()
+        if lines and (truncated or (not final and not content.endswith("\n"))):
+            lines.pop()
+        self._new_lines(key, lines, self.text("构建日志", "Build log"))
+        if truncated:
+            self.warning(
+                "truncated:" + key,
+                self.text(
+                    "构建日志超出单次读取范围，完整日志可在云控制台查看",
+                    "Build log exceeds the read limit; view the full log in the cloud console",
+                ),
+            )
+        return redact_release_log("\n".join(lines), self.secrets)
 
     def complete(self, url: str) -> None:
         self.message(
