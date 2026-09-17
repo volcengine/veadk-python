@@ -14,8 +14,13 @@
 
 from __future__ import annotations
 
+import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 
+import pytest
 import yaml
 
 
@@ -30,6 +35,112 @@ def _run_script(job: dict[str, object]) -> str:
     return "\n".join(
         str(step.get("run") or "") for step in steps if isinstance(step, dict)
     )
+
+
+def test_sidecar_dependency_cache_and_triggers_follow_lockfile() -> None:
+    workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    # PyYAML's YAML 1.1 parser treats the Actions `on` key as True.
+    triggers = workflow[True]
+    for event in ("push", "pull_request"):
+        assert {"pyproject.toml", "uv.lock"} <= set(triggers[event]["paths"])
+    steps = workflow["jobs"]["backend-gate"]["steps"]
+    uv_steps = [step for step in steps if "astral-sh/setup-uv@" in step.get("uses", "")]
+    assert len(uv_steps) == 1
+    settings = uv_steps[0]["with"]
+    assert settings["enable-cache"] is True
+    assert {"pyproject.toml", "uv.lock"} <= set(
+        settings["cache-dependency-glob"].split()
+    )
+
+
+@pytest.mark.parametrize("failed_module", ["", "pytest", "coverage"])
+def test_sidecar_checks_use_frozen_environment_and_propagate_failure(
+    tmp_path: Path, failed_module: str
+) -> None:
+    steps = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"][
+        "backend-gate"
+    ]["steps"]
+    install = next(
+        step["run"]
+        for step in steps
+        if step.get("name") == "Install Python test dependencies"
+    )
+    checks = next(
+        step["run"]
+        for step in steps
+        if step.get("name") == "Run Python Sidecar checks in parallel"
+    )
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    calls = tmp_path / "calls.jsonl"
+    github_path = tmp_path / "github-path"
+    github_path.touch()
+    # Simulate a cold runner: only the installer can create the test interpreter.
+    # Never resolve dependencies or launch actual tests from this shell contract.
+    uv = bin_dir / "uv"
+    uv.write_text(
+        f"#!{sys.executable}\n"
+        "import pathlib, sys\n"
+        "args = sys.argv[1:]\n"
+        "assert args[0] == 'sync' and '--frozen' in args\n"
+        "assert args[args.index('--extra') + 1] == 'dev'\n"
+        "target = pathlib.Path('.venv/bin/python')\n"
+        "target.parent.mkdir(parents=True)\n"
+        "target.write_bytes(pathlib.Path('test-python').read_bytes())\n"
+        "target.chmod(0o755)\n",
+        encoding="utf-8",
+    )
+    uv.chmod(0o755)
+    system_python = bin_dir / "python"
+    system_python.write_text("#!/bin/sh\nexit 97\n", encoding="utf-8")
+    system_python.chmod(0o755)
+    (tmp_path / "test-python").write_text(
+        f"#!{sys.executable}\n"
+        "import json, os, sys\n"
+        "assert sys.argv[1:3] in (['-m', 'pytest'], ['-m', 'coverage'])\n"
+        "with open(os.environ['SIDECAR_TEST_CALLS'], 'a') as stream:\n"
+        "    stream.write(json.dumps(sys.argv[1:]) + '\\n')\n"
+        "sys.exit(1 if sys.argv[2] == os.environ['SIDECAR_FAILED_MODULE'] else 0)\n",
+        encoding="utf-8",
+    )
+    env = {
+        **os.environ,
+        "PATH": f"{bin_dir}{os.pathsep}{os.defpath}",
+        "GITHUB_PATH": str(github_path),
+        "GITHUB_WORKSPACE": str(tmp_path),
+        "RUNNER_TEMP": str(tmp_path),
+        "SIDECAR_TEST_CALLS": str(calls),
+        "SIDECAR_FAILED_MODULE": failed_module,
+    }
+    result = subprocess.run(
+        ["bash", "-e", "-o", "pipefail", "-c", install],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    added_paths = github_path.read_text(encoding="utf-8").splitlines()
+    env["PATH"] = os.pathsep.join([*added_paths, env["PATH"]])
+    result = subprocess.run(
+        ["bash", "-e", "-o", "pipefail", "-c", checks],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == (1 if failed_module else 0), (
+        result.stdout + result.stderr
+    )
+    commands = [json.loads(line) for line in calls.read_text().splitlines()]
+    assert sum(command[:2] == ["-m", "pytest"] for command in commands) == 4
+    if failed_module != "pytest":
+        coverage = next(command for command in commands if command[1] == "coverage")
+        assert "--fail-under=91" in coverage
+    for group in ("coverage", "lifecycle", "credentials", "release"):
+        assert f"::group::Python Sidecar {group}" in result.stdout
 
 
 def test_sidecar_release_gate_runs_backend_and_frontend_in_parallel() -> None:
