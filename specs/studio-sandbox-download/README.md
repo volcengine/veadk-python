@@ -16,4 +16,4 @@ No persistent data/configuration or protocol changes. Existing history and strea
 ## Verification and change record
 Tests: frontend/tests/sandboxDownload.test.tsx and sandboxDownloadClient.test.ts. Cover CON-1/2/3 including negative paths, current Runtime/session routing, cancellation and retry. Run `npm --prefix frontend test`, dedicated Vitest coverage and build, plus browser history download. PRD records results and limits. Implemented; see PRD for verification.
 
-- CON-4: Conversation Markdown hides `file-card` and `personal-drive-enable-card` elements including their children. Download controls use primary theme colors, 16px text, 44px minimum height, visible keyboard focus and wrapping filenames. Surrounding message text is retained. Tested in sandboxDownload.test.tsx.
+- CON-4: Conversation Markdown hides `file-card` and `personal-drive-enable-card` elements including their children. Download controls use primary theme colors, 16px text, 44px minimum height, visible keyboard focus and wrapping filenames. Each download control occupies its own line with content-sized width. Surrounding message text is retained. Tested in sandboxDownload.test.tsx.
