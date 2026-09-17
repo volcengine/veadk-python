@@ -14,7 +14,6 @@
 
 import json
 import os
-import re
 import shutil
 import tempfile
 import time
@@ -36,6 +35,10 @@ from volcenginesdkvefaas.models.tag_for_create_function_input import (
 import veadk.config
 import veadk.integrations.ve_faas as vefaas
 from veadk.integrations.ve_apig.ve_apig import APIGateway
+from veadk.integrations.ve_faas.release_progress import (
+    ReleaseProgress,
+    extract_release_log_urls as _extract_release_log_urls,
+)
 from veadk.integrations.ve_faas.upload_progress import CodeUploadProgress
 from veadk.integrations.ve_faas.ve_faas_utils import (
     signed_request,
@@ -70,7 +73,6 @@ def _code_upload_timeout_seconds(code_zip_size: int) -> int:
 
 
 _APPLICATION_REVISION_LOG_MAX_BYTES = 50_000
-_RELEASE_LOG_URL_PATTERN = re.compile(r"https://[^\s<>\]\"']+")
 _TRANSIENT_VEFAAS_ERROR_MARKERS = (
     "connection aborted",
     "connection error",
@@ -102,18 +104,6 @@ def _is_transient_vefaas_error(error: BaseException) -> bool:
             return True
         current = current.__cause__ or current.__context__
     return False
-
-
-def _extract_release_log_urls(text: str) -> list[str]:
-    urls: list[str] = []
-    seen: set[str] = set()
-    for match in _RELEASE_LOG_URL_PATTERN.finditer(text):
-        url = match.group(0).rstrip(").,;")
-        if ".log" not in url or url in seen:
-            continue
-        seen.add(url)
-        urls.append(url)
-    return urls
 
 
 def _download_release_log_url(url: str) -> str:
@@ -291,12 +281,14 @@ class VeFaaS:
             path (str): Local project path.
         """
         # Get zipped code data
+        logger.info("Packaging project for upload")
         code_zip_data, code_zip_size, error = zip_and_encode_folder(path)
         logger.info(
             f"Zipped project size: {code_zip_size / 1024 / 1024:.2f} MB",
         )
 
         # Upload code to VeFaaS temp bucket
+        logger.info("Preparing code upload address for function %s", function_id)
         req = volcenginesdkvefaas.GetCodeUploadAddressRequest(
             function_id=function_id, content_length=code_zip_size
         )
@@ -344,6 +336,7 @@ class VeFaaS:
         if response is None:
             raise ValueError("Function code upload request failed.")
         # Mount the TOS bucket to function instance
+        logger.info("Code uploaded; attaching the bundle to function %s", function_id)
         res = signed_request(
             ak=self.ak,
             sk=self.sk,
@@ -354,6 +347,7 @@ class VeFaaS:
             host=self._openapi_host(),
         )
 
+        logger.info("Code bundle attached; ready for cloud build and deployment")
         return res
 
     def _create_function(self, function_name: str, path: str):
@@ -463,29 +457,70 @@ class VeFaaS:
         )
 
     def _release_application(self, app_id: str):
+        progress = ReleaseProgress(
+            provider=getattr(self, "provider", DEFAULT_CLOUD_PROVIDER),
+            region=getattr(self, "region", ""),
+            app_id=app_id,
+            secrets=tuple(
+                getattr(self, key, "") for key in ("ak", "sk", "session_token")
+            ),
+            emit=logger.info,
+        )
         release_response = self._start_application_release(app_id)
         release_revision_number = _release_revision_number(release_response)
 
-        status, full_response = self._get_application_status(app_id)
-        while status not in ["deploy_success", "deploy_fail"]:
-            time.sleep(10)
+        while True:
             status, full_response = self._get_application_status(app_id)
+            if release_revision_number is None:
+                # Do not attach an older stable revision's logs to this release.
+                revision = full_response.get("Result", {}).get("NewRevisionNumber")
+                if revision:
+                    release_revision_number = _release_revision_number(
+                        {"NewRevisionNumber": revision}
+                    )
+            progress.status(status, release_revision_number)
+            if status == "deploy_fail":
+                break
+            if release_revision_number is not None:
+                try:
+                    lines = self._get_application_logs(
+                        app_id=app_id,
+                        revision_number=release_revision_number,
+                        timeout=5,
+                    )
+                except Exception:
+                    # Optional diagnostics must not abort a running deployment.
+                    progress.log_error()
+                else:
+                    progress.logs(lines, final=status == "deploy_success")
+            if status == "deploy_success":
+                break
+            progress.waiting()
+            time.sleep(3)
 
         if status == "deploy_success":
             cloud_resource = full_response["Result"]["CloudResource"]
             cloud_resource = json.loads(cloud_resource)
             url = cloud_resource["framework"]["url"]["system_url"]
+            progress.complete(url)
             return url
         else:
             logger.error(
                 f"Release application failed. Application ID: {app_id}, Status: {status}"
             )
-            raw_logs = "\n".join(
-                self._get_application_logs(
+            try:
+                failure_logs = self._get_application_logs(
                     app_id=app_id,
                     revision_number=release_revision_number,
                 )
-            )
+            except Exception:
+                failure_logs = progress.snapshots.get("control", []) + [
+                    progress.text(
+                        "未能读取最终发布日志，请检查日志权限或网络；下方保留云端失败状态",
+                        "Final release logs could not be read; check log permissions or connectivity. Cloud failure status follows",
+                    )
+                ]
+            raw_logs = "\n".join(failure_logs)
             provider = getattr(self, "provider", DEFAULT_CLOUD_PROVIDER)
             log_text = _format_release_failure_text(
                 raw_logs=raw_logs,
@@ -1429,6 +1464,7 @@ class VeFaaS:
         *,
         revision_number: int | None = None,
         limit: int = _APPLICATION_REVISION_LOG_MAX_BYTES,
+        timeout: float = 5,
     ) -> list[str]:
         if revision_number is None:
             _, application = self._get_application_status(app_id)
@@ -1461,6 +1497,7 @@ class VeFaaS:
                 region=self.region,
                 host=self._openapi_host(),
                 session_token=self.session_token,
+                timeout=timeout,
             )
 
         response = request_page()
