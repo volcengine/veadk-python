@@ -783,6 +783,40 @@ if unexpected:
     )
 
 
+def test_intelligent_development_runner_defers_sandbox_transport_until_first_use() -> (
+    None
+):
+    root = Path(__file__).resolve().parents[2]
+    script = """
+import sys
+
+from frontend.server.intelligent_development_runs import runner, shell
+
+assert shell.RunShell is not None
+for module in (
+    "frontend.server.sandbox_remote",
+    "agentkit.toolkit.cli.sandbox.sandbox_client",
+    "requests",
+):
+    assert module not in sys.modules, module
+
+transport = runner.SandboxRemoteTransport("http://127.0.0.1:1")
+from frontend.server.sandbox_remote import SandboxRemoteTransport
+
+assert isinstance(transport, SandboxRemoteTransport)
+assert "agentkit.toolkit.cli.sandbox.sandbox_client" in sys.modules
+assert "requests" in sys.modules
+"""
+
+    subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
 def test_workspace_projects_defers_sandbox_transport_until_first_use() -> None:
     root = Path(__file__).resolve().parents[2]
     script = """

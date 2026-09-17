@@ -22,7 +22,7 @@ import json
 from collections.abc import Awaitable, Callable
 from dataclasses import asdict, replace
 from datetime import datetime, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from frontend.server.intelligent_development import DeliveryReference, StudioCredentials
 from frontend.server.intelligent_development_projects import (
@@ -47,7 +47,6 @@ from frontend.server.intelligent_development_task import (
     remove_completion_file,
     result_reporting_prompt,
 )
-from frontend.server.sandbox_remote import SandboxRemoteTransport
 from veadk.cli.codex_app_server import (
     CodexAppServerEvent,
     CodexAppServerRequestError,
@@ -65,6 +64,19 @@ from .models import Run
 from .output import TaskTextProjection
 from .repository import RunCapacity, RunConflict, RunLeaseLost, RunRepository
 from .shell import RunShell
+
+if TYPE_CHECKING:
+    from frontend.server.sandbox_remote import SandboxRemoteTransport
+else:
+
+    def SandboxRemoteTransport(endpoint: str):  # noqa: N802
+        """Load the injectable transport only when a development run needs it."""
+        from frontend.server.sandbox_remote import (
+            SandboxRemoteTransport as _SandboxRemoteTransport,
+        )
+
+        return _SandboxRemoteTransport(endpoint)
+
 
 logger = get_logger(__name__)
 _PERMISSIONS = CodexPermissionSettings(
