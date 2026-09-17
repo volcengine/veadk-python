@@ -30,3 +30,7 @@ User confirmed downloads work and requested hiding legacy file-card contents and
 - PASS: real Chrome localhost:8765, last MPA agent, existing random-file history: legacy path hidden, visible download button, Enter activates loading and download; Runtime proxy upstream HTTP 200. User independently confirmed download before the presentation update. Error/retry/cancellation and Unicode paths validated in isolated tests, not deliberately induced in live Sandbox. Narrow viewport not run.
 - Backend/Python regression: not applicable (no Python edits). Build warns about existing bundle sizes. Generated vendor bundles retain upstream trailing whitespace; authored source diff whitespace clean.
 - Review: authentication stays in existing transport, conversation context scopes the feature, path traversal/unsupported roots excluded, abort and object URL cleanup tested. No credentials or production payloads added to fixtures.
+
+Presentation follow-up: user requested a line break before the download button. Use block-level flex with fit-content width so each button occupies its own line without stretching. CSS-only change; existing functional coverage remains applicable.
+
+Verification: build, 1102 frontend tests and pre-commit passed; local Studio restarted with rebuilt assets. Narrow-screen browser check not rerun for this CSS-only adjustment.

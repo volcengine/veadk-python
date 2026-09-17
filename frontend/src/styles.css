@@ -1708,7 +1708,8 @@ body {
 .md a { color: hsl(var(--primary)); text-decoration: underline; text-underline-offset: 2px; }
 .md a:hover { opacity: 0.8; }
 .md a.sandbox-file-download {
-  display: inline-flex;
+  display: flex;
+  width: fit-content;
   align-items: center;
   gap: 10px;
   max-width: 100%;

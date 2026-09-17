@@ -16,4 +16,4 @@
 ## 验证与变更记录
 测试：frontend/tests/sandboxDownload.test.tsx、sandboxDownloadClient.test.ts。覆盖 CON-1/2/3，包括非法路径、当前 Runtime/会话路由、取消与重试。执行 `npm --prefix frontend test`、专用 Vitest 覆盖率、构建与浏览器历史下载。PRD 记录结果和边界。已实现，验证结果见 PRD。
 
-- CON-4：会话 Markdown 隐藏 `file-card`、`personal-drive-enable-card` 元素及其内容。下载入口使用主题 primary 色、16px 字体、最小 44px 高度、可见键盘焦点和文件名换行。保留周围消息正文。由 sandboxDownload.test.tsx 验证。
+- CON-4：会话 Markdown 隐藏 `file-card`、`personal-drive-enable-card` 元素及其内容。下载入口使用主题 primary 色、16px 字体、最小 44px 高度、可见键盘焦点和文件名换行。每个下载入口独占一行，宽度随内容适配。保留周围消息正文。由 sandboxDownload.test.tsx 验证。
