@@ -910,7 +910,8 @@ avoid linking another checkout's older `node_modules` directory. If TypeScript
 reports missing `i18next` or `react-i18next` despite their entries in
 `package.json`, install from the current lockfile with `npm ci`, then rerun the
 check. Do not remove imports or change source types to work around missing
-dependencies
+dependencies. This also applies to component tests: reinstall dependencies in
+the worktree itself instead of borrowing the main checkout’s `node_modules`
 
 ## Branding
 

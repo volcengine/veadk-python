@@ -3390,6 +3390,7 @@ function DebugComparisonWorkspace({
                     <section
                       className="cw-ab-card-face cw-ab-card-front"
                       aria-hidden={variant.configOpen}
+                      inert={variant.configOpen}
                     >
                       <header className="cw-ab-card-head">
                         <div className="cw-ab-card-title">
@@ -3527,6 +3528,7 @@ function DebugComparisonWorkspace({
                     <section
                       className="cw-ab-card-face cw-ab-card-back"
                       aria-hidden={!variant.configOpen}
+                      inert={!variant.configOpen}
                     >
                       <header className="cw-ab-config-head">
                         <div>

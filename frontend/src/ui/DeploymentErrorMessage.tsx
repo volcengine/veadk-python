@@ -3,9 +3,7 @@ import { useTranslation } from "react-i18next";
 import { Button, CopyButton } from "@openai/apps-sdk-ui/components/Button";
 import {
   ArrowRotateCcw,
-  Check,
   Collapse,
-  Copy,
   Expand,
 } from "@openai/apps-sdk-ui/components/Icon";
 
@@ -83,9 +81,7 @@ export function DeploymentErrorMessage({
           pill={false}
           title={t("deploymentError.copy")}
           aria-label={t("deploymentError.copy")}
-        >
-          {({ copied }) => copied ? <Check /> : <Copy />}
-        </CopyButton>
+        />
       </div>
     </div>
   );
