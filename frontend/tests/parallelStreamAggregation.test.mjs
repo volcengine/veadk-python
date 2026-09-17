@@ -295,3 +295,23 @@ test("ignores streamed user echoes without dropping agent tool responses", () =>
   const answer = projector.project(event("default", "done", { partial: false }));
   assert.equal(blockText(answer.turn, "text"), "done");
 });
+
+for (const invocationIds of [true, false]) {
+  test(`history retains all replies across user turns (invocation IDs: ${invocationIds})`, () => {
+    const input = [
+      event("user", "question 1"),
+      event("alpha", "answer 1", {partial: false}),
+      event("beta", "answer 1b", {partial: false}),
+      event("user", "question 2"),
+      event("alpha", "answer 2", {partial: false}),
+      event("alpha", "answer 2b", {partial: false}),
+      event("user", "question 3"),
+      event("alpha", "answer 3", {partial: false}),
+    ].map((item, i) => ({...item, id: `history-${i}`, invocationId: invocationIds ? `inv-${i < 3 ? 1 : i < 6 ? 2 : 3}` : undefined}));
+    const result = eventsToTurns(input);
+    assert.deepEqual(result.map(t => blockText(t, "text")), input.map(e => e.content.parts[0].text));
+    assert.deepEqual(result.map(t => t.role), input.map(e => e.author === "user" ? "user" : "assistant"));
+    const ids = result.filter(t => t.role === "assistant").map(t => t.meta.localId);
+    assert.equal(new Set(ids).size, ids.length);
+  });
+}

@@ -1031,7 +1031,8 @@ export function eventsToTurns(
       if (files.length) blocks.push({ kind: "attachment", files });
       if (text) blocks.push({ kind: "text", text });
       turns.push({ role: "user", blocks, meta: { ts: ev.timestamp } });
-      projector = createAssistantEventProjector("adk-history");
+      // Upserts span the full history, so each user turn needs a unique prefix.
+      projector = createAssistantEventProjector(`adk-history-${turns.length}`);
     } else {
       const projection = projector.project(ev);
       if (!projection.ignored) {
