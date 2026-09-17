@@ -294,7 +294,7 @@ jobs:
             runtime_venv="$RUNNER_TEMP/studio-release-runtime-${provider}"
             log="$RUNNER_TEMP/studio-${provider}.log"
             response="$RUNNER_TEMP/studio-${provider}-ui-config.json"
-            export package_dir
+            export package_dir bundle_path="${bundle[0]}"
             test ! -e "$package_dir"
             test ! -e "$runtime_venv"
             uv run --frozen --group dev python - <<'PY'
@@ -303,8 +303,7 @@ jobs:
 
           from veadk.cli.studio_self_update import extract_studio_bundle
 
-          output_dir = Path(os.environ["RUNNER_TEMP"]) / "studio-release-output"
-          bundle = next(output_dir.glob("studio-bundle-*.zip"))
+          bundle = Path(os.environ["bundle_path"])
           extract_studio_bundle(bundle, Path(os.environ["package_dir"]))
           PY
             uv venv --python 3.12 "$runtime_venv"
