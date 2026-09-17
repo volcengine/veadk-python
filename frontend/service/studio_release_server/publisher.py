@@ -24,6 +24,7 @@ import os
 import re
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -71,7 +72,7 @@ _MAX_STUDIO_BUNDLE_BYTES = 300 * 1024 * 1024
 _MAX_STUDIO_RELEASES = 50
 _AGENTKIT_CLI_ARCHIVE = "agentkit-linux-x64.tar.gz"
 _AGENTKIT_CLI_ARCHIVE_SHA256 = (
-    "4439d14b4be6ccb90f6eea896adf959ffef4ab4983f41e449d80c79d4cd95de3"
+    "8cc62477c582a7b9c3f460d2558bed45ee4c81c0169eabc228ddb19387268473"
 )
 _STUDIO_RELEASE_CONTRACT = "agentkit-cli-v1"
 _STUDIO_RUNTIME_MANIFEST = "studio-runtime.json"
@@ -812,7 +813,8 @@ def ensure_studio_bundle_agentkit_cli(
     )
     try:
         with zipfile.ZipFile(bundle, "a") as archive:
-            archive.write(
+            _write_zip_file(
+                archive,
                 cli_archive,
                 _AGENTKIT_CLI_ARCHIVE,
                 compress_type=zipfile.ZIP_STORED,
@@ -988,6 +990,7 @@ def _build_local_requirements(
             veadk_wheel=built_wheels[0],
             dependency_sources=dependency_sources,
             environment=env,
+            optimize_cold_start=True,
         )
     except ValueError as error:
         raise StudioPublisherError(str(error)) from error
@@ -1009,6 +1012,12 @@ def _studio_run_script(*, thin: bool = False) -> str:
         else "python3 -m veadk.cli.studio_companion "
         f'--archive "$ROOT_DIR/{_AGENTKIT_CLI_ARCHIVE}"\n'
     )
+    studio = (
+        "python3 -m veadk.cli.studio_start "
+        '--provider "${CLOUD_PROVIDER:-${AGENTKIT_CLOUD_PROVIDER:-volcengine}}" '
+        "--auth-mode frontend "
+        '--host "$HOST" --port "$PORT"\n'
+    )
     return (
         "#!/bin/bash\n"
         "set -ex\n"
@@ -1021,11 +1030,22 @@ def _studio_run_script(*, thin: bool = False) -> str:
         "HOST=0.0.0.0\n"
         "PORT=${_FAAS_RUNTIME_PORT:-8000}\n"
         'export PYTHONPATH="./site-packages${PYTHONPATH:+:$PYTHONPATH}"\n'
-        f"{companion}"
-        "exec python3 -m veadk.cli.cli studio "
-        '--provider "${CLOUD_PROVIDER:-${AGENTKIT_CLOUD_PROVIDER:-volcengine}}" '
-        "--auth-mode frontend "
-        '--host "$HOST" --port "$PORT"\n'
+        'trap \'kill "${COMPANION_PID:-}" "${STUDIO_PID:-}" '
+        "2>/dev/null || true' INT TERM\n"
+        f"{companion.rstrip()} &\n"
+        "COMPANION_PID=$!\n"
+        f"{studio.rstrip()} &\n"
+        "STUDIO_PID=$!\n"
+        'if ! wait "$COMPANION_PID"; then\n'
+        '  kill "$STUDIO_PID" 2>/dev/null || true\n'
+        '  wait "$STUDIO_PID" 2>/dev/null || true\n'
+        "  exit 1\n"
+        "fi\n"
+        "COMPANION_PID=\n"
+        'if wait "$STUDIO_PID"; then\n'
+        '  echo "studio_process_exited_unexpectedly" >&2\n'
+        "fi\n"
+        "exit 1\n"
     )
 
 
@@ -1346,11 +1366,33 @@ def _validate_public_wheel_license(path: Path, expected_name: str) -> None:
         )
 
 
+def _write_zip_file(
+    archive: zipfile.ZipFile,
+    path: Path,
+    relative: Path | str,
+    *,
+    compress_type: int,
+) -> None:
+    relative_path = Path(relative)
+    info = zipfile.ZipInfo.from_file(path, relative_path)
+    info.create_system = 3
+    mode = 0o755 if relative_path.as_posix() == "run.sh" else 0o644
+    info.external_attr = (stat.S_IFREG | mode) << 16
+    info.compress_type = compress_type
+    with path.open("rb") as input_file, archive.open(info, "w") as output_file:
+        shutil.copyfileobj(input_file, output_file)
+
+
 def _zip_directory(source: Path, destination: Path) -> None:
     with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for path in sorted(source.rglob("*")):
             if path.is_file():
-                archive.write(path, path.relative_to(source))
+                _write_zip_file(
+                    archive,
+                    path,
+                    path.relative_to(source),
+                    compress_type=zipfile.ZIP_DEFLATED,
+                )
 
 
 def build_studio_release(

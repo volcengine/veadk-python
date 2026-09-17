@@ -316,6 +316,15 @@ def test_mcp_servers_json_recovers_public_shape_without_headers() -> None:
     assert raw_secret not in json.dumps(editor_draft)
 
 
+def test_zero_mcp_servers_json_is_valid_no_user_mcp_state() -> None:
+    recovery = recover_mcp_from_runtime_environment({"MCP_SERVERS_JSON": "[]"})
+
+    assert recovery.format == "servers-json"
+    assert recovery.tools == ()
+    assert recovery.configured_reference_keys == ()
+    assert mcp_secret_values_from_runtime_environment({"MCP_SERVERS_JSON": "[]"}) == {}
+
+
 def test_structured_mcp_servers_reject_shared_url_with_distinct_names() -> None:
     with pytest.raises(LegacyRecoveryError, match="legacy_mcp_url_duplicate"):
         build_sidecar_mcp_servers_json(

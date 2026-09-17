@@ -35,6 +35,8 @@ from frontend.service.studio_release_server.publisher import (
     validate_studio_bundle_dependencies,
 )
 
+from veadk.cli import studio_release as studio_release_module
+
 from veadk.cli.studio_dependencies import (
     STUDIO_AGENTKIT_CLI_ARTIFACT,
     STUDIO_DEPENDENCY_SOURCES,
@@ -68,6 +70,32 @@ def _manifest(content: bytes = b"bundle") -> StudioReleaseManifest:
         created_at="2026-07-24T15:30:45+08:00",
         changelog=("新增版本选择", "修复自更新权限"),
     )
+
+
+def test_release_zip_normalizes_runtime_file_permissions(tmp_path: Path) -> None:
+    package = tmp_path / "package"
+    package.mkdir()
+    run_script = package / "run.sh"
+    run_script.write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
+    run_script.chmod(0o600)
+    cli_archive = package / "agentkit-linux-x64.tar.gz"
+    cli_archive.write_bytes(b"cli")
+    cli_archive.chmod(0o600)
+    regular_file = package / "requirements.txt"
+    regular_file.write_text("dependency\n", encoding="utf-8")
+    regular_file.chmod(0o700)
+    bundle = tmp_path / "bundle.zip"
+
+    studio_release_module._zip_directory(package, bundle)
+
+    with zipfile.ZipFile(bundle) as archive:
+        assert archive.getinfo("run.sh").create_system == 3
+        assert archive.getinfo("run.sh").external_attr >> 16 & 0o777 == 0o755
+        assert (
+            archive.getinfo("agentkit-linux-x64.tar.gz").external_attr >> 16 & 0o777
+            == 0o644
+        )
+        assert archive.getinfo("requirements.txt").external_attr >> 16 & 0o777 == 0o644
 
 
 class _FakeTosClient:
@@ -729,12 +757,17 @@ def test_publisher_entrypoint_exports_exact_managed_cli_source() -> None:
     )
 
 
-def test_release_entrypoint_starts_companion_and_studio_concurrently() -> None:
-    run_script = studio_run_script(provider="volcengine")
-
+@pytest.mark.parametrize(
+    "run_script",
+    (studio_run_script(provider="volcengine"), publisher._studio_run_script()),
+    ids=("direct-package", "release-server"),
+)
+def test_release_entrypoint_starts_companion_and_studio_concurrently(
+    run_script: str,
+) -> None:
     companion_start = run_script.index("python3 -m veadk.cli.studio_companion")
     companion_pid = run_script.index("COMPANION_PID=$!", companion_start)
-    studio_start = run_script.index("python3 -m veadk.cli.cli studio")
+    studio_start = run_script.index("python3 -m veadk.cli.studio_start")
     studio_pid = run_script.index("STUDIO_PID=$!", studio_start)
     companion_wait = run_script.index('wait "$COMPANION_PID"', studio_pid)
     studio_wait = run_script.index('wait "$STUDIO_PID"', companion_wait)
@@ -746,12 +779,34 @@ def test_release_entrypoint_starts_companion_and_studio_concurrently() -> None:
     assert 'kill "$STUDIO_PID"' in run_script
 
 
+def test_release_entrypoint_does_not_load_generic_cli() -> None:
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; import veadk.cli.studio_start; "
+            "assert 'veadk.cli.cli' not in sys.modules",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+
+
 @pytest.mark.parametrize(
     ("companion_exit", "expected_returncode", "studio_terminated"),
-    (("0", 0, False), ("7", 1, True)),
+    (("0", 1, False), ("7", 1, True)),
+)
+@pytest.mark.parametrize(
+    "entrypoint_script",
+    (studio_run_script(provider="volcengine"), publisher._studio_run_script()),
+    ids=("direct-package", "release-server"),
 )
 def test_release_entrypoint_parallel_startup_fails_closed(
     tmp_path: Path,
+    entrypoint_script: str,
     companion_exit: str,
     expected_returncode: int,
     studio_terminated: bool,
@@ -762,7 +817,7 @@ def test_release_entrypoint_parallel_startup_fails_closed(
     fake_bin.mkdir()
     entrypoint = package / "run.sh"
     entrypoint.write_text(
-        studio_run_script(provider="volcengine"),
+        entrypoint_script,
         encoding="utf-8",
     )
     entrypoint.chmod(0o755)
@@ -799,12 +854,16 @@ def test_release_entrypoint_parallel_startup_fails_closed(
         env=environment,
         timeout=5,
         check=False,
+        capture_output=True,
+        text=True,
     )
 
     assert completed.returncode == expected_returncode
     assert (tmp_path / "companion-started").is_file()
     assert (tmp_path / "studio-started").is_file()
     assert (tmp_path / "studio-terminated").exists() is studio_terminated
+    if companion_exit == "0":
+        assert "studio_process_exited_unexpectedly" in completed.stderr
 
 
 def test_release_entrypoint_prefers_bundled_dependencies(
@@ -889,10 +948,12 @@ def test_build_release_uses_prepared_frontend_and_wheels(
         frontend_assets: Path | None = None,
         dependency_wheels: Path | None = None,
         provider: str = "volcengine",
+        optimize_cold_start: bool = False,
     ) -> str:
         captured["frontend"] = frontend_assets
         captured["wheels"] = dependency_wheels
         captured["requirements_provider"] = provider
+        captured["optimize_cold_start"] = optimize_cold_start
         package_dir.mkdir(parents=True)
         (package_dir / "veadk.whl").write_bytes(b"wheel")
         return "./veadk.whl\n"
@@ -938,5 +999,6 @@ def test_build_release_uses_prepared_frontend_and_wheels(
         "frontend": frontend_assets,
         "wheels": dependency_wheels,
         "requirements_provider": "byteplus",
+        "optimize_cold_start": True,
         "package_provider": None,
     }

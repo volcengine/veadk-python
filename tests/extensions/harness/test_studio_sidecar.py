@@ -147,6 +147,61 @@ def test_normalize_studio_intent_preserves_ops_profile() -> None:
     assert all(intent.component_overrides.values())
 
 
+def test_selectable_intent_signature_canonicalizes_only_fixed_ops_defaults() -> None:
+    legacy_ops = sidecar.studio_harness_selectable_intent_signature(
+        {
+            "profile": "ops",
+            "componentOverrides": {"mcp_resilience": True},
+        }
+    )
+    canonical_ops = sidecar.studio_harness_selectable_intent_signature(
+        {
+            "profile": "ops",
+            "componentOverrides": {
+                "context_engine": True,
+                "compressor": False,
+                "verifier": True,
+                "long_run_control": True,
+                "mcp_resilience": True,
+            },
+        }
+    )
+    changed_ops = sidecar.studio_harness_selectable_intent_signature(
+        {
+            "profile": "ops",
+            "componentOverrides": {
+                "context_engine": True,
+                "compressor": True,
+                "verifier": True,
+                "long_run_control": True,
+                "mcp_resilience": True,
+            },
+        }
+    )
+    sparse_default = sidecar.studio_harness_selectable_intent_signature(
+        {
+            "profile": "default",
+            "componentOverrides": {"mcp_resilience": True},
+        }
+    )
+    expanded_default = sidecar.studio_harness_selectable_intent_signature(
+        {
+            "profile": "default",
+            "componentOverrides": {
+                "context_engine": True,
+                "compressor": False,
+                "verifier": True,
+                "long_run_control": True,
+                "mcp_resilience": True,
+            },
+        }
+    )
+
+    assert legacy_ops == canonical_ops
+    assert changed_ops != canonical_ops
+    assert sparse_default != expanded_default
+
+
 def test_normalize_studio_intent_rejects_hidden_sql_override() -> None:
     with pytest.raises(ValueError, match="sql_readonly"):
         sidecar.normalize_studio_harness_intent(

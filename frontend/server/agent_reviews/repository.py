@@ -19,9 +19,6 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator
 from typing import Any
 
-from agentkit.sdk.runtime import types as sdk
-from agentkit.sdk.runtime.client import AgentkitRuntimeClient
-
 from frontend.server.agentkit_clients import create_agentkit_client
 from frontend.server.storage import StudioProvider
 
@@ -38,6 +35,8 @@ class AgentReviewRepository:
         self.credentials = credentials
 
     def client(self, region: str) -> Any:
+        from agentkit.sdk.runtime.client import AgentkitRuntimeClient
+
         access_key, secret_key, token = self.credentials()
         return create_agentkit_client(
             AgentkitRuntimeClient,
@@ -49,11 +48,15 @@ class AgentReviewRepository:
         )
 
     def get(self, region: str, runtime_id: str) -> Any:
+        from agentkit.sdk.runtime import types as sdk
+
         return self.client(region).get_runtime(
             sdk.GetRuntimeRequest.model_validate({"RuntimeId": runtime_id})
         )
 
     def list(self, region: str) -> Iterator[Any]:
+        from agentkit.sdk.runtime import types as sdk
+
         client = self.client(region)
         token = ""
         seen: set[str] = set()

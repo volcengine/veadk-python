@@ -1,4 +1,4 @@
-# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd. and/or its affiliates.
+# Copyright (c) 2025 Beijing Volcano Engine Technology Co., Ltd. and/or its affiliates.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -23,13 +23,14 @@ from typing import Any
 
 from veadk.utils.logger import get_logger
 
-from .client import ModelApiKeyClient, ModelCatalogClient, ModelCatalogError, Provider
+from .client import ModelApiKeyClient, ModelCatalogClient
 from .models import (
     ModelApiKeyOption,
     ModelApiKeysResponse,
     ModelOption,
     ModelOptionsResponse,
 )
+from .protocol import ModelCatalogError, Provider
 
 logger = get_logger(__name__)
 

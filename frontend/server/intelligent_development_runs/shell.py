@@ -24,12 +24,13 @@ from __future__ import annotations
 import asyncio
 import json
 import shlex
-from typing import Any
-
-from frontend.server.sandbox_remote import SandboxRemoteTransport
+from typing import TYPE_CHECKING, Any
 
 from .models import Run
 from .repository import RunRepository
+
+if TYPE_CHECKING:
+    from frontend.server.sandbox_remote import SandboxRemoteTransport
 
 
 class CommandUnconfirmed(RuntimeError):

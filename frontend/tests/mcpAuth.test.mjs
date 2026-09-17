@@ -35,19 +35,14 @@ function draft(overrides = {}) {
 }
 
 const {
-  confirmMcpCredentialReuse,
-  clearMcpConfiguredAuth,
   configuredMcpEnvKeys,
   deploymentMcpSecretValues,
-  mcpCredentialActionRequired,
   mcpConfigurationConflict,
-  mcpCredentialReuseValues,
+  hydrateMcpCredentialValues,
   mcpAuthTokenInputValue,
   mcpUrlNeedsPathWarning,
   prepareMcpAuth,
-  replaceMcpCredentialForChangedUrl,
   removedConfiguredMcpEnvKeys,
-  removeMcpCredentialForChangedUrl,
   sourcePreservingMcpSecretValues,
   updateMcpAuthTokenInput,
   updateMcpUrlInput,
@@ -136,36 +131,25 @@ test("shows recovered MCP credentials and clears their binding with the input", 
   assert.equal(replaced.authToken, "replacement-secret");
   assert.equal(replaced.credentialConfigured, false);
 
-  const removed = clearMcpConfiguredAuth({ ...tool, authToken: undefined });
-  assert.equal(removed.authToken, undefined);
-  assert.equal(removed.authTokenEnv, undefined);
-  assert.equal(removed.credentialConfigured, false);
-
   const prepared = prepareMcpAuth(draft({ mcpTools: [tool] }));
   assert.equal(prepared.draft.mcpTools[0].authTokenEnv, tool.authTokenEnv);
   assert.equal(prepared.draft.mcpTools[0].credentialConfigured, undefined);
   assert.doesNotMatch(JSON.stringify(prepared.draft), /recovered-secret|configured.*true/i);
 });
 
-test("wires the MCP URL-change credential choices into the editor and deploy payload", () => {
+test("uses one masked Bearer Token input without credential-mode choices", () => {
   assert.match(
     customCreateSource,
     /onChange\(\s*tools\.map\([\s\S]*?updateMcpUrlInput\(tool, e\.target\.value\)/,
   );
-  assert.match(
-    customCreateSource,
-    /aria-invalid=\{mcpCredentialActionRequired\(tool\)\}/,
-  );
-  assert.match(customCreateSource, /t\("traditional\.mcp\.reuseCredential"\)/);
-  assert.match(customCreateSource, /t\("traditional\.mcp\.replaceCredential"\)/);
-  assert.match(customCreateSource, /t\("traditional\.mcp\.noAuth"\)/);
-  assert.match(
-    customCreateSource,
-    /mcpCredentialReuses:\s*deploymentTarget[\s\S]*?mcpCredentialReuseValues\(draft\)/,
-  );
+  assert.match(customCreateSource, /type=\{revealedTokenIndex === i \? "text" : "password"\}/);
+  assert.match(customCreateSource, /autoComplete="new-password"/);
+  assert.doesNotMatch(customCreateSource, /mcpCredentialActionRequired/);
+  assert.doesNotMatch(customCreateSource, /traditional\.mcp\.(reuseCredential|replaceCredential|noAuth)/);
+  assert.doesNotMatch(customCreateSource, /mcpCredentialReuses:/);
 });
 
-test("requires an explicit credential decision when a published MCP URL changes", () => {
+test("keeps the populated credential when a published MCP URL changes", () => {
   const published = {
     name: "orders",
     transport: "http",
@@ -181,60 +165,22 @@ test("requires an explicit credential decision when a published MCP URL changes"
     published,
     "https://new-mcp.example.com/orders/mcp",
   );
-  assert.equal(changed.authToken, undefined);
-  assert.equal(changed.credentialUpdate, "pending");
-  assert.equal(mcpCredentialActionRequired(changed), true);
-  assert.equal(mcpAuthTokenInputValue(changed), "");
-
-  const reused = confirmMcpCredentialReuse(changed);
-  assert.equal(reused.credentialUpdate, "reuse");
-  assert.equal(mcpCredentialActionRequired(reused), false);
-  assert.deepEqual(mcpCredentialReuseValues(draft({ mcpTools: [reused] })), [
+  assert.equal(changed.authToken, "recovered-secret");
+  assert.equal(mcpAuthTokenInputValue(changed), "recovered-secret");
+  assert.deepEqual(sourcePreservingMcpSecretValues(draft({ mcpTools: [changed] })), [
     {
       agentName: "sales-agent",
       name: "orders",
       url: "https://new-mcp.example.com/orders/mcp",
-      sourceAuthTokenEnv: "MCP_SALES_AGENT_ORDERS_AUTH_TOKEN",
+      value: "recovered-secret",
     },
   ]);
 
   const restored = updateMcpUrlInput(
-    reused,
+    changed,
     "https://mcp.example.com/orders/mcp/",
   );
-  assert.equal(restored.credentialUpdate, undefined);
-  assert.equal(restored.credentialConfigured, true);
-  assert.equal(
-    restored.authTokenEnv,
-    "MCP_SALES_AGENT_ORDERS_AUTH_TOKEN",
-  );
-});
-
-test("submits an explicit reuse decision for an unnamed MCP without inventing a browser identity", () => {
-  const published = {
-    name: "",
-    transport: "http",
-    url: "https://old-mcp.example.com/vtrace",
-    authTokenEnv: "MCP_SALES_AGENT_TOOL_1_AUTH_TOKEN",
-    credentialConfigured: true,
-    credentialSourceUrl: "https://old-mcp.example.com/vtrace",
-    credentialSourceAuthTokenEnv: "MCP_SALES_AGENT_TOOL_1_AUTH_TOKEN",
-  };
-
-  const changed = updateMcpUrlInput(
-    published,
-    "https://new-mcp.example.com/mcp",
-  );
-  const reused = confirmMcpCredentialReuse(changed);
-
-  assert.deepEqual(mcpCredentialReuseValues(draft({ mcpTools: [reused] })), [
-    {
-      agentName: "sales-agent",
-      name: "",
-      url: "https://new-mcp.example.com/mcp",
-      sourceAuthTokenEnv: "MCP_SALES_AGENT_TOOL_1_AUTH_TOKEN",
-    },
-  ]);
+  assert.equal(restored.authToken, "recovered-secret");
 });
 
 test("describes the MCP root-path check without requiring a /mcp suffix", () => {
@@ -245,26 +191,23 @@ test("describes the MCP root-path check without requiring a /mcp suffix", () => 
   }
 });
 
-test("supports replacing or explicitly removing auth after an MCP URL change", () => {
+test("replaces or removes auth directly through the Bearer Token input", () => {
   const changed = updateMcpUrlInput(
     {
       name: "orders",
       transport: "http",
       url: "https://mcp.example.com/orders/mcp",
       authTokenEnv: "MCP_SALES_AGENT_ORDERS_AUTH_TOKEN",
+      authToken: "recovered-secret",
       credentialConfigured: true,
     },
     "https://new-mcp.example.com/orders/mcp",
   );
 
-  const replacing = replaceMcpCredentialForChangedUrl(changed);
-  assert.equal(replacing.authTokenEnv, undefined);
-  assert.equal(replacing.credentialUpdate, "replace");
   const replacement = updateMcpAuthTokenInput(
-    replacing,
+    changed,
     "replacement-secret",
   );
-  assert.equal(replacement.credentialUpdate, "replace");
   assert.deepEqual(
     deploymentMcpSecretValues(draft({ mcpTools: [replacement] })),
     [
@@ -277,11 +220,59 @@ test("supports replacing or explicitly removing auth after an MCP URL change", (
     ],
   );
 
-  const removed = removeMcpCredentialForChangedUrl(changed);
-  assert.equal(removed.credentialUpdate, "remove");
+  const removed = updateMcpAuthTokenInput(changed, "");
   assert.equal(removed.authTokenEnv, undefined);
-  assert.equal(mcpCredentialActionRequired(removed), false);
-  assert.deepEqual(mcpCredentialReuseValues(draft({ mcpTools: [removed] })), []);
+  assert.equal(removed.authToken, undefined);
+  assert.equal(removed.credentialConfigured, false);
+});
+
+test("hydrates configured credentials recursively by exact published slot", () => {
+  const source = draft({
+    mcpTools: [
+      {
+        name: "orders",
+        transport: "http",
+        url: "https://mcp.example.com/orders",
+        authTokenEnv: "MCP_ORDERS_TOKEN",
+        credentialConfigured: true,
+      },
+    ],
+    subAgents: [
+      draft({
+        name: "worker",
+        mcpTools: [
+          {
+            name: "inventory",
+            transport: "http",
+            url: "https://mcp.example.com/inventory",
+            authTokenEnv: "MCP_INVENTORY_TOKEN",
+            credentialConfigured: true,
+          },
+        ],
+      }),
+    ],
+  });
+
+  const hydrated = hydrateMcpCredentialValues(source, [
+    {
+      agentName: "sales-agent",
+      name: "orders",
+      url: "https://mcp.example.com/orders",
+      authTokenEnv: "MCP_ORDERS_TOKEN",
+      value: "orders-secret",
+    },
+    {
+      agentName: "worker",
+      name: "inventory",
+      url: "https://mcp.example.com/inventory",
+      authTokenEnv: "MCP_INVENTORY_TOKEN",
+      value: "inventory-secret",
+    },
+  ]);
+
+  assert.equal(hydrated.mcpTools[0].authToken, "orders-secret");
+  assert.equal(hydrated.subAgents[0].mcpTools[0].authToken, "inventory-secret");
+  assert.equal(source.mcpTools[0].authToken, undefined);
 });
 
 test("finds duplicate MCP names and canonical endpoint URLs before deploy", () => {
@@ -395,7 +386,7 @@ test("shows and focuses duplicate MCP validation before any publish work", () =>
   );
 });
 
-test("keeps unchanged reference-only credentials eligible for server resolution", () => {
+test("keeps unchanged populated credentials explicit for every execution path", () => {
   const unchanged = draft({
     mcpTools: [
       {
@@ -403,6 +394,7 @@ test("keeps unchanged reference-only credentials eligible for server resolution"
         transport: "http",
         url: "https://mcp.example.com/orders/mcp",
         authTokenEnv: "MCP_SALES_AGENT_ORDERS_AUTH_TOKEN",
+        authToken: "recovered-secret",
         credentialConfigured: true,
         credentialSourceUrl: "https://mcp.example.com/orders/mcp",
         credentialSourceAuthTokenEnv: "MCP_SALES_AGENT_ORDERS_AUTH_TOKEN",
@@ -410,16 +402,15 @@ test("keeps unchanged reference-only credentials eligible for server resolution"
     ],
   });
 
-  assert.equal(mcpCredentialActionRequired(unchanged.mcpTools[0]), false);
-  assert.deepEqual(deploymentMcpSecretValues(unchanged), []);
-  assert.deepEqual(mcpCredentialReuseValues(unchanged), []);
+  assert.equal(mcpAuthTokenInputValue(unchanged.mcpTools[0]), "recovered-secret");
+  assert.equal(deploymentMcpSecretValues(unchanged)[0].value, "recovered-secret");
+  assert.equal(sourcePreservingMcpSecretValues(unchanged)[0].value, "recovered-secret");
   const prepared = prepareMcpAuth(unchanged).draft.mcpTools[0];
   assert.equal(
     prepared.authTokenEnv,
     "MCP_SALES_AGENT_ORDERS_AUTH_TOKEN",
   );
   assert.equal(prepared.credentialSourceUrl, undefined);
-  assert.equal(prepared.credentialUpdate, undefined);
 });
 
 test("derives configured and removed MCP keys across nested agent graphs", () => {
@@ -477,7 +468,9 @@ test("derives configured and removed MCP keys across nested agent graphs", () =>
         ...node,
         agent: {
           ...node.agent,
-          mcpTools: node.agent.mcpTools.map(clearMcpConfiguredAuth),
+          mcpTools: node.agent.mcpTools.map((tool) =>
+            updateMcpAuthTokenInput(tool, ""),
+          ),
         },
       })),
     },

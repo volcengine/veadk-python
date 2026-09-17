@@ -176,14 +176,16 @@ def initialize_runtime_roles(
     identity_region: str,
     credentials: Callable[[], tuple[str, str, str | None]],
     environment: Mapping[str, str],
-    super_admin: str = "",
-    admins: str = "",
-    developers: str = "",
 ) -> UserManagementService:
-    """Migrate older releases on startup before accepting authenticated requests"""
+    """Read and validate roles that a deployment identity already initialized."""
     initialized = environment.get(
         "VEADK_STUDIO_IDENTITY_ROLES", ""
     ).strip().lower() in {"1", "true", "yes"}
+    if not initialized:
+        raise click.ClickException(
+            "Studio Identity role setup failed: roles_not_initialized; run the "
+            "deployment Identity migration before starting Studio"
+        )
     service = UserManagementService(
         IdentityDirectory(pool_uid, provider, identity_region, credentials),
         pool_uid,
@@ -191,37 +193,10 @@ def initialize_runtime_roles(
         provider,
     )
     try:
-        service.initialize(
-            super_admin, admins, developers, allow_initialize=not initialized
-        )
+        service.initialize(allow_initialize=False)
     except UserManagementError as error:
         raise click.ClickException(
             f"Studio Identity role setup failed: {error.code}; check Identity user/group "
             "permissions and the legacy role lists, then retry"
         ) from error
-    legacy_keys = (
-        "VEADK_STUDIO_SUPER_ADMIN",
-        "VEADK_STUDIO_ADMINS",
-        "VEADK_STUDIO_DEVELOPERS",
-    )
-    if (not initialized or any(environment.get(key) for key in legacy_keys)) and (
-        function_id := environment.get("VEADK_STUDIO_FUNCTION_ID")
-    ):
-        from veadk.integrations.ve_faas.ve_faas import VeFaaS
-
-        ak, sk, token = credentials()
-        deployment = VeFaaS(
-            access_key=ak,
-            secret_key=sk,
-            session_token=token or "",
-            region=environment.get("VEADK_STUDIO_DEPLOY_REGION") or identity_region,
-            project_name=environment.get("VEADK_STUDIO_PROJECT", "default"),
-            provider=provider,
-        )
-        clear_legacy_role_environment(
-            function_client=deployment.client,
-            function_id=function_id,
-            pool_uid=pool_uid,
-            client_uid=client_uid,
-        )
     return service

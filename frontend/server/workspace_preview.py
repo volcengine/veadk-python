@@ -27,6 +27,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from frontend.server.sandbox_remote_errors import SandboxRemoteError
 from veadk.cli.frontend_sandbox import (
     SandboxCloudGateway,
     SandboxCloudSession,
@@ -130,22 +131,29 @@ def mount_workspace_preview_routes(
     creator_resolver: Callable[[Request], str],
 ) -> None:
     tool_id = (os.getenv("STUDIO_WORKSPACE_TOOL_ID") or "").strip()
-    from frontend.server.workspace_projects import PersistentWorkspaceProjects
-    from frontend.server.sandbox_remote import SandboxRemoteError
+    projects = None
 
-    projects = PersistentWorkspaceProjects(gateway, tool_id)
+    def project_service():
+        nonlocal projects
+        if projects is None:
+            from frontend.server.workspace_projects import PersistentWorkspaceProjects
 
-    def require_tool() -> None:
+            projects = PersistentWorkspaceProjects(gateway, tool_id)
+        return projects
+
+    def require_tool():
         nonlocal tool_id
         tool_id = (os.getenv("STUDIO_WORKSPACE_TOOL_ID") or "").strip()
-        projects.tool_id = tool_id
         if not tool_id:
             raise HTTPException(503, "请先配置工作区 Sandbox 镜像")
+        service = project_service()
+        service.tool_id = tool_id
+        return service
 
     @app.get("/web/workspace-preview/state")
     async def workspace_state(request: Request) -> JSONResponse:
         owner = owner_resolver(request)
-        require_tool()
+        projects = require_tool()
         try:
             return JSONResponse(
                 await projects.state(owner),
@@ -157,7 +165,7 @@ def mount_workspace_preview_routes(
     @app.get("/web/workspace-preview/projects")
     async def list_projects(request: Request) -> JSONResponse:
         owner = owner_resolver(request)
-        require_tool()
+        projects = require_tool()
         try:
             cloud, names = await projects.list(owner, creator_resolver(request))
             details = await projects.describe(cloud, names)
@@ -175,7 +183,7 @@ def mount_workspace_preview_routes(
     @app.post("/web/workspace-preview/projects")
     async def create_project(request: Request, body: ProjectInput) -> JSONResponse:
         owner = owner_resolver(request)
-        require_tool()
+        projects = require_tool()
         try:
             cloud = await projects.create(owner, creator_resolver(request), body.name)
             return project_response(cloud, body.name)
@@ -185,7 +193,7 @@ def mount_workspace_preview_routes(
     @app.post("/web/workspace-preview/projects/{project_name}/open")
     async def open_project(request: Request, project_name: str) -> JSONResponse:
         owner = owner_resolver(request)
-        require_tool()
+        projects = require_tool()
         try:
             cloud = await projects.open(owner, creator_resolver(request), project_name)
             return project_response(cloud, project_name)

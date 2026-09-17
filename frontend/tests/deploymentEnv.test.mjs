@@ -26,6 +26,7 @@ const {
   runtimeEnvJsonError,
   runtimeEnvMissingError,
   runtimeEnvRequirementHint,
+  runtimeDebugEnvVars,
   runtimeEnvVars,
 } = await loadTypeScriptModule("../src/create/deploymentEnv.ts");
 const {
@@ -278,6 +279,63 @@ test("server-managed secrets are displayed but excluded from browser deploy payl
   );
   assert.deepEqual(runtimeEnvVars(specs, {}), []);
   assert.equal(firstMissingRuntimeEnv(specs, {}), undefined);
+});
+
+test("debug payload restores only explicit MCP secrets hidden by resilience", () => {
+  const specs = [
+    { key: "PUBLIC_SETTING", required: false },
+    {
+      key: "MCP_AGENT_PRIMARY_AUTH_TOKEN",
+      required: false,
+      secret: true,
+      readOnly: true,
+      serverManaged: true,
+      hidden: true,
+    },
+    {
+      key: "MCP_AGENT_SECONDARY_AUTH_TOKEN",
+      required: false,
+      secret: true,
+      readOnly: true,
+      serverManaged: true,
+      hidden: true,
+    },
+    {
+      key: "MODEL_AGENT_API_KEY",
+      required: true,
+      secret: true,
+      readOnly: true,
+      serverManaged: true,
+    },
+  ];
+  const values = {
+    PUBLIC_SETTING: "enabled",
+    MCP_AGENT_PRIMARY_AUTH_TOKEN: "primary-test-secret",
+    MCP_AGENT_SECONDARY_AUTH_TOKEN: "secondary-test-secret",
+    MODEL_AGENT_API_KEY: "must-remain-server-managed",
+  };
+
+  assert.deepEqual(
+    runtimeDebugEnvVars(specs, values, {
+      MCP_AGENT_PRIMARY_AUTH_TOKEN: "primary-test-secret",
+      MCP_AGENT_SECONDARY_AUTH_TOKEN: "secondary-test-secret",
+    }),
+    [
+      { key: "PUBLIC_SETTING", value: "enabled" },
+      {
+        key: "MCP_AGENT_PRIMARY_AUTH_TOKEN",
+        value: "primary-test-secret",
+      },
+      {
+        key: "MCP_AGENT_SECONDARY_AUTH_TOKEN",
+        value: "secondary-test-secret",
+      },
+    ],
+  );
+  assert.match(
+    customCreateSource,
+    /runtimeDebugEnvVars\([\s\S]*?prepareMcpAuth\(draft\)\.envValues/,
+  );
 });
 
 test("defaults knowledgebase creation to VikingDB collections", () => {

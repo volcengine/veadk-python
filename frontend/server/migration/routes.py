@@ -19,16 +19,11 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from fastapi import HTTPException, Query, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import Response
-
-from frontend.server.source_projects import (
-    SOURCE_PROJECT_EXCEPTIONS,
-    SourceProjectService,
-)
 
 from .evaluation.models import EvaluationDatasetBody, ResumeEvaluationBody
 from .evaluation.service import MigrationEvaluationService
@@ -44,6 +39,9 @@ from .service import (
 )
 
 logger = logging.getLogger(__name__)
+if TYPE_CHECKING:
+    from frontend.server.source_projects import SourceProjectService
+
 _ZIP_CONTENT_TYPES = {
     "application/zip",
     "application/x-zip-compressed",
@@ -153,7 +151,7 @@ def mount_migration_routes(
                     "versionId": version.version_id,
                     "message": "源码已保存到已迁移项目。",
                 }
-            except (MigrationError, *SOURCE_PROJECT_EXCEPTIONS) as error:
+            except MigrationError as error:
                 logger.warning(
                     "Could not persist migration source task_id=%s error_type=%s",
                     task_id,
@@ -164,11 +162,20 @@ def mount_migration_routes(
                     "message": "源码暂未保存，可刷新任务重试。",
                     "retryable": True,
                 }
-            except Exception:
-                logger.exception(
-                    "Unexpected migration persistence failure task_id=%s",
-                    task_id,
-                )
+            except Exception as error:
+                from frontend.server.source_projects import SOURCE_PROJECT_EXCEPTIONS
+
+                if isinstance(error, SOURCE_PROJECT_EXCEPTIONS):
+                    logger.warning(
+                        "Could not persist migration source task_id=%s error_type=%s",
+                        task_id,
+                        type(error).__name__,
+                    )
+                else:
+                    logger.exception(
+                        "Unexpected migration persistence failure task_id=%s",
+                        task_id,
+                    )
                 result = {
                     "state": "failed",
                     "message": "源码暂未保存，可刷新任务重试。",
@@ -378,12 +385,10 @@ def mount_migration_routes(
     @app.get("/web/agent-migrations/capabilities")
     async def capabilities(request: Request) -> dict[str, object]:
         owner_resolver(request)
-        payload = await invoke("capabilities", service.capabilities)
+        payload: dict[str, object] = await invoke("capabilities", service.capabilities)
         if evaluation_service is not None:
-            payload = {
-                **payload,
-                "evaluation": evaluation_service.capabilities(),
-            }
+            payload = dict(payload)
+            payload["evaluation"] = evaluation_service.capabilities()
         return payload
 
     @app.get("/web/agent-migrations/tasks")

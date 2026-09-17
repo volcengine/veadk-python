@@ -1,4 +1,4 @@
-# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd. and/or its affiliates.
+# Copyright (c) 2025 Beijing Volcano Engine Technology Co., Ltd. and/or its affiliates.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,16 +17,19 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any
 
 from frontend.server.video.client import ArkHttpClient, ArkServiceError
 from veadk.utils.volcengine_sign import volcengine_signed_request
 
-CloudCredentials = tuple[str, str, str | None]
-CredentialResolver = Callable[[], CloudCredentials]
-Provider = Literal["volcengine", "byteplus"]
+from .protocol import (
+    CloudCredentials,
+    CredentialResolver,
+    ModelCatalogError,
+    Provider,
+    SignedRequest,
+)
 
 _PAGE_SIZE = 100
 _MAX_PAGES = 100
@@ -54,17 +57,6 @@ PROVIDER_CONFIGS: dict[Provider, ModelCatalogProviderConfig] = {
         api_base="https://ark.ap-southeast.bytepluses.com/api/v3",
     ),
 }
-
-
-class ModelCatalogError(RuntimeError):
-    """A sanitized, retryable failure safe to return to a Studio client."""
-
-    def __init__(self, message: str, *, status_code: int = 502) -> None:
-        super().__init__(message)
-        self.status_code = status_code
-
-
-SignedRequest = Callable[..., Any]
 
 
 class ModelCatalogClient:
