@@ -42,3 +42,5 @@
 | `CON-1`、`CON-2`、`CON-5` | `uv run --extra dev pytest tests/integrations/test_mpa_provision_env.py tests/cli/test_cli_mpa.py` |
 | `CON-2`、`CON-3`、`CON-4`、`CON-6` | `uv run --extra dev pytest tests/integrations/test_mpa_runtime.py` |
 | 端到端 | 创建/复用隔离 Runtime，不打印 Key 地检查 metadata，调用 A2A 和内置 MCP，并观察两个 MCP 缓存周期 |
+
+VeADK MPA 部署默认设置 DISABLE_JWT_AUTH=true。extra_env 显式配置优先，包括 false。网关鉴权及其他部署路径不变。
