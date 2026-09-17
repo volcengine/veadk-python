@@ -4642,6 +4642,13 @@ def test_runtime_update_capability_distinguishes_incompatible_and_network_errors
     runtime = _runtime_with_public_endpoint(_runtime("runtime-1", "developer"))
     mode = "unsupported"
 
+    # Error classification must not depend on scheduling a background SDK lookup
+    # within two seconds on busy CI workers; separate tests cover pending latency
+    monkeypatch.setattr(
+        "veadk.cli.cli_frontend._RUNTIME_UPDATE_CAPABILITY_INITIAL_WAIT_SECONDS",
+        30.0,
+    )
+
     monkeypatch.setattr(
         AgentkitRuntimeClient,
         "get_runtime",

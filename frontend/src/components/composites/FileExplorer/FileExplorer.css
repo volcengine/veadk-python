@@ -151,6 +151,8 @@
 
 @media (max-width: 640px) {
   .studio-file-explorer { grid-template-columns: minmax(132px, 38%) minmax(0, 1fr); }
+  .studio-file-explorer[data-narrow-layout="stack"] { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(96px, 28%) minmax(0, 1fr); }
+  .studio-file-explorer[data-narrow-layout="stack"] .studio-file-explorer__tree-area { border-right: 0; border-bottom: 1px solid var(--studio-border-subtle); }
 }
 
 @media (prefers-reduced-motion: reduce) {

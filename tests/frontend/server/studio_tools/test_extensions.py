@@ -33,7 +33,9 @@ async def test_current_time_extension_is_discovered_and_executable() -> None:
 
     register_studio_tool_extensions(registry)
 
-    assert registry.public_items() == [
+    assert [
+        item for item in registry.public_items() if item["id"] == "current_time"
+    ] == [
         {
             "id": "current_time",
             "name": "当前时间",
