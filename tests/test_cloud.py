@@ -14,10 +14,12 @@
 
 import os
 import tempfile
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from threading import Thread
 from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import ANY, AsyncMock, Mock, patch
 
 import pytest
 import requests
@@ -416,7 +418,7 @@ def test_vefaas_code_upload_callback_uses_configured_region() -> None:
 
     upload.assert_called_once_with(
         url="https://example.com/upload",
-        data=b"archive",
+        data=ANY,
         headers={"Content-Type": "application/zip"},
         timeout=(300, 300),
     )
@@ -456,7 +458,7 @@ def test_vefaas_large_code_upload_uses_bounded_extended_timeout() -> None:
 
     upload.assert_called_once_with(
         url="https://example.com/upload",
-        data=b"archive",
+        data=ANY,
         headers={"Content-Type": "application/zip"},
         timeout=(300, 1800),
     )
@@ -473,6 +475,15 @@ def test_vefaas_large_code_upload_retries_one_connection_interruption() -> None:
         upload_address="https://example.com/upload"
     )
     archive_size = 64 * 1024 * 1024 + 1
+    sent = []
+
+    def send_archive(**kwargs):
+        body = kwargs["data"]
+        assert body.uploaded == 0
+        sent.append(b"".join(body))
+        if len(sent) == 1:
+            raise requests.ConnectionError()
+        return Mock(status_code=200)
 
     with (
         patch(
@@ -481,7 +492,7 @@ def test_vefaas_large_code_upload_retries_one_connection_interruption() -> None:
         ),
         patch(
             "veadk.integrations.ve_faas.ve_faas.requests.put",
-            side_effect=[requests.ConnectionError(), Mock(status_code=200)],
+            side_effect=send_archive,
         ) as upload,
         patch("veadk.integrations.ve_faas.ve_faas.signed_request") as callback,
         patch("veadk.integrations.ve_faas.ve_faas.time.sleep") as sleep,
@@ -489,9 +500,82 @@ def test_vefaas_large_code_upload_retries_one_connection_interruption() -> None:
         service._upload_and_mount_code("function-id", ".")
 
     assert upload.call_count == 2
-    assert upload.call_args_list[0] == upload.call_args_list[1]
+    assert sent == [b"archive", b"archive"]
+    assert (
+        upload.call_args_list[0].kwargs["data"] is not upload.call_args.kwargs["data"]
+    )
     sleep.assert_called_once_with(1)
     callback.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    "provider,region", [("volcengine", "cn-shanghai"), ("byteplus", "ap-southeast-1")]
+)
+@pytest.mark.parametrize("status_code", [200, 403, 503])
+def test_vefaas_progress_upload_preserves_http_body_and_checks_response(
+    provider: str, region: str, status_code: int, capsys: pytest.CaptureFixture[str]
+) -> None:
+    archive = bytes(range(256)) * 1024 + b"zip trailer"
+    received = []
+
+    class UploadHandler(BaseHTTPRequestHandler):
+        def do_PUT(self) -> None:
+            received.append(
+                (
+                    dict(self.headers),
+                    self.rfile.read(int(self.headers["Content-Length"])),
+                )
+            )
+            self.send_response(status_code)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, *_args) -> None:
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), UploadHandler)
+    worker = Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    service = VeFaaS(
+        "test_access_key", "test_secret_key", region=region, provider=provider
+    )
+    service.client = Mock()
+    service.client.get_code_upload_address.return_value = Mock(
+        upload_address=f"http://127.0.0.1:{server.server_port}/upload"
+    )
+    try:
+        with (
+            patch(
+                "veadk.integrations.ve_faas.ve_faas.zip_and_encode_folder",
+                return_value=(archive, len(archive), None),
+            ),
+            patch("veadk.integrations.ve_faas.ve_faas.signed_request") as callback,
+        ):
+            if status_code == 200:
+                service._upload_and_mount_code("function-id", ".")
+                callback.assert_called_once()
+                assert callback.call_args.kwargs["region"] == region
+            else:
+                with pytest.raises(ValueError, match=f"status code {status_code}"):
+                    service._upload_and_mount_code("function-id", ".")
+                callback.assert_not_called()
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=5)
+
+    assert len(received) == 1
+    headers, payload = received[0]
+    assert payload == archive
+    assert headers["Content-Length"] == str(len(archive))
+    assert headers["Content-Type"] == "application/zip"
+    assert "Transfer-Encoding" not in headers
+    output = capsys.readouterr().err
+    assert "100%" in output
+    assert "MB/s" in output
+    assert "Waiting for response" in output
+    assert ("Uploaded code" in output) == (status_code == 200)
+    assert ("Upload failed" in output) == (status_code != 200)
 
 
 def test_vefaas_code_upload_callback_uses_byteplus_host() -> None:
@@ -526,6 +610,71 @@ def test_vefaas_code_upload_callback_uses_byteplus_host() -> None:
         session_token="",
         host="vefaas.ap-southeast-1.byteplusapi.com",
     )
+
+
+@pytest.mark.parametrize(
+    "provider,region", [("volcengine", "cn-shanghai"), ("byteplus", "ap-southeast-1")]
+)
+@pytest.mark.parametrize("retry_succeeds", [True, False])
+def test_vefaas_partial_upload_retry_restarts_body_and_progress(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    provider: str,
+    region: str,
+    retry_succeeds: bool,
+) -> None:
+    archive = b"x" * 150_000
+    service = VeFaaS(
+        "test_access_key", "test_secret_key", region=region, provider=provider
+    )
+    service.client = Mock()
+    service.client.get_code_upload_address.return_value = Mock(
+        upload_address="https://example.com/upload"
+    )
+    monkeypatch.setattr(
+        "veadk.integrations.ve_faas.ve_faas._LARGE_CODE_BUNDLE_BYTES", 100_000
+    )
+    attempts = []
+
+    def send_archive(**kwargs):
+        body = kwargs["data"]
+        assert body.uploaded == 0
+        attempts.append(body)
+        if len(attempts) == 1 or not retry_succeeds:
+            chunks = iter(body)
+            assert next(chunks) == archive[: 64 * 1024]
+            next(chunks)
+            assert body.uploaded == 64 * 1024
+            raise requests.Timeout("upload timed out")
+        assert b"".join(body) == archive
+        return Mock(status_code=200)
+
+    with (
+        patch(
+            "veadk.integrations.ve_faas.ve_faas.zip_and_encode_folder",
+            return_value=(archive, len(archive), None),
+        ),
+        patch(
+            "veadk.integrations.ve_faas.ve_faas.requests.put", side_effect=send_archive
+        ),
+        patch("veadk.integrations.ve_faas.ve_faas.signed_request") as callback,
+        patch("veadk.integrations.ve_faas.ve_faas.time.sleep"),
+    ):
+        if retry_succeeds:
+            service._upload_and_mount_code("function-id", ".")
+            callback.assert_called_once()
+        else:
+            with pytest.raises(ValueError, match="upload request failed"):
+                service._upload_and_mount_code("function-id", ".")
+            callback.assert_not_called()
+    assert len(attempts) == 2
+    output = capsys.readouterr().err
+    assert "(1/2)" in output
+    assert "(2/2)" in output
+    retry_line = next(line for line in output.splitlines() if "(2/2)" in line)
+    assert "  0%" in retry_line
+    assert "0.00 / 0.14 MB" in retry_line
+    assert ("Uploaded code" in output) == retry_succeeds
 
 
 def test_vefaas_byteplus_application_uses_configured_template() -> None:
