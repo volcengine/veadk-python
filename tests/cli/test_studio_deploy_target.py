@@ -1040,6 +1040,7 @@ def test_studio_deploy_passes_region_and_project_to_cloud_engine(
             captured.update(kwargs)
 
         def deploy(self, **kwargs: object) -> SimpleNamespace:
+            captured["deployment"] = kwargs
             return SimpleNamespace(
                 vefaas_endpoint="https://studio.example.com",
                 vefaas_application_id="app-id",
@@ -1122,6 +1123,11 @@ def test_studio_deploy_passes_region_and_project_to_cloud_engine(
     assert result.exit_code == 0, result.output
     assert captured["region"] == expected_region
     assert captured["project"] == expected_project
+    deployment = captured["deployment"]
+    assert isinstance(deployment, dict)
+    assert deployment["cpu_milli"] == 8000
+    assert deployment["memory_mb"] == 16384
+    assert deployment["max_instance"] == 1
     assert captured["volcengine_session_token"] == "sts-token"
     assert captured["identity_client"] == {
         "access_key": "ak",
@@ -1504,6 +1510,9 @@ def test_studio_deploy_byteplus_wires_provider_to_cloud_engine_and_package(
     assert identity["enable_vefaas_iam_fallback"] is False
     deploy = captured["deploy"]
     assert isinstance(deploy, dict)
+    assert deploy["cpu_milli"] == 8000
+    assert deploy["memory_mb"] == 16384
+    assert deploy["max_instance"] == 1
     assert deploy["enable_mcp_session"] is False
     assert deploy["disable_gateway_cors"] is True
     assert "--provider byteplus --auth-mode frontend" in str(captured["run_script"])

@@ -30,6 +30,7 @@ from veadk.integrations.ve_apig.ve_apig import APIGateway
 from veadk.integrations.ve_code_pipeline.ve_code_pipeline import VeCodePipeline
 from veadk.integrations.ve_faas.ve_faas import VeFaaS
 from veadk.utils.cloud_provider import (
+    CloudProvider,
     agentkit_openapi_base,
     apmplus_otlp_endpoint,
     cp_openapi_host,
@@ -66,6 +67,80 @@ def test_vefaas_create_function_uses_configured_project() -> None:
 
     request = service.client.create_function.call_args.args[0]
     assert request.project_name == "studio-project"
+    assert request.cpu_milli is None
+    assert request.memory_mb == 2048
+
+
+@pytest.mark.parametrize("provider", ["volcengine", "byteplus"])
+@pytest.mark.parametrize("existing", [False, True])
+@pytest.mark.parametrize("studio_resources", [False, True])
+def test_cloud_deploy_function_resources(
+    provider: CloudProvider, existing: bool, studio_resources: bool, tmp_path: Path
+) -> None:
+    engine = CloudAgentEngine(
+        volcengine_access_key="test_access_key",
+        volcengine_secret_key="test_secret_key",
+        provider=provider,
+        region="ap-southeast-1" if provider == "byteplus" else "cn-beijing",
+    )
+    service = engine._vefaas_service
+    service.client = Mock()
+    service.client.create_function.return_value = SimpleNamespace(
+        id="function-id", project_name="default"
+    )
+    service.client.get_function.return_value = SimpleNamespace(
+        command="bash ./run.sh", envs=[]
+    )
+    service.find_app_id_by_name = Mock(
+        return_value="application-id" if existing else None
+    )
+    service._get_application_status = Mock(
+        return_value=(
+            "deploy_success",
+            {
+                "Result": {
+                    "CloudResource": '{"framework":{"function":'
+                    '{"Id":"function-id","Name":"studio-app-fn"}}}'
+                }
+            },
+        )
+    )
+    service._upload_and_mount_code = Mock()
+    service._create_application = Mock(return_value="application-id")
+    service._release_application = Mock(return_value="https://studio.example")
+    service.ensure_application_route_methods = Mock()
+    service.get_application_route = Mock(return_value=("gateway", "service", "route"))
+
+    with (
+        patch("veadk.cloud.cloud_agent_engine.CloudApp"),
+        patch.dict("veadk.config.veadk_environments", {}, clear=True),
+    ):
+        engine.deploy(
+            "studio-app",
+            str(tmp_path),
+            gateway_name="gateway",
+            gateway_service_name="service",
+            gateway_upstream_name="upstream",
+            cpu_milli=8000 if studio_resources else None,
+            memory_mb=16384 if studio_resources else None,
+            max_instance=1 if studio_resources else None,
+        )
+
+    operation = (
+        service.client.update_function if existing else service.client.create_function
+    )
+    operation.assert_called_once()
+    request = operation.call_args.args[0]
+    assert request.cpu_milli == (8000 if studio_resources else None)
+    assert request.memory_mb == (
+        16384 if studio_resources else None if existing else 2048
+    )
+    service.client.update_function_resource.assert_called_once()
+    resources = service.client.update_function_resource.call_args.args[0]
+    assert resources.function_id == "function-id"
+    assert resources.min_instance == 1
+    assert resources.max_instance == (1 if studio_resources else None)
+    assert resources.reserved_frozen_instance is None
 
 
 @pytest.mark.parametrize("provider", ["volcengine", "byteplus"])
@@ -230,6 +305,9 @@ def test_vefaas_deploy_updates_existing_application_in_place() -> None:
         environment_overrides={"VEADK_STUDIO_DEPLOY_ID": "deploy-id"},
         disable_gateway_cors=True,
         normalize_studio_entrypoint=True,
+        cpu_milli=None,
+        memory_mb=None,
+        max_instance=None,
     )
     service._create_function.assert_not_called()
     service._create_application.assert_not_called()
@@ -389,7 +467,9 @@ def test_vefaas_deploy_can_disable_gateway_cors() -> None:
         "application-id",
         disable_cors=True,
     )
-    service._set_function_min_instance.assert_called_once_with("function-id")
+    service._set_function_min_instance.assert_called_once_with(
+        "function-id", max_instance=None
+    )
 
 
 def test_vefaas_code_upload_callback_uses_configured_region() -> None:
