@@ -53,6 +53,7 @@ from veadk.integrations.mpa.mpa_runtime import provision_runtime
 from veadk.integrations.mpa.mpa_skill_space import ensure_skill_space
 from veadk.integrations.mpa.mpa_tool import ensure_codex_worker_tool
 from veadk.integrations.mpa.mpa_verify import VerificationResult, verify_instance
+from veadk.cli.cli_mpa_control import control
 
 
 def _make_seed_engine(params: MpaProvisionParams):
@@ -222,7 +223,10 @@ def _gateway_id_from_endpoint_prefix(prefix: str, gateways: list[Any]) -> str:
 
 @click.group()
 def mpa() -> None:
-    """VeADK-version mpa-agent provisioning."""
+    """Provision and manage mpa-agent through AgentKit Studio."""
+
+
+mpa.add_command(control)
 
 
 @mpa.command("provision")

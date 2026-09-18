@@ -1,7 +1,7 @@
 # MPA AgentKit P0 功能迁移与落地
 
 - Change ID：`mpa-p0-productionization`
-- 状态：`approved`；已实现至 S5-08，其余 S5 P0 门禁待完成
+- 状态：`approved`；已实现至 S5-09，其余 S5 P0 门禁待完成
 - 创建 / 修订：2026-09-15 / 2026-09-18
 - English：[2026-09-15-mpa-p0-productionization-design.md](2026-09-15-mpa-p0-productionization-design.md)
 - 组件契约：[Studio MPA 控制面](../../../specs/studio-mpa-control-plane/README.zh.md)、[MPA Runtime 部署](../../../specs/mpa-runtime-provisioning/README.zh.md)、[MPA Runtime 控制](../../../specs/mpa-runtime-control/README.zh.md)
@@ -388,6 +388,7 @@ Runtime 仓库的可复现门禁为 `make test` 和 `make coverage`（95%）；�
 | 2026-09-18 | 旧 ADK 接口的 AgentKit key-auth 兼容 | pass | Runtime version 61 虽然处于 `Ready` 且使用 AgentKit `key_auth`，但携带有效凭据访问 `GET /list-apps` 仍返回 `401`，原因是旧 `require_auth` 依赖在 Session、Profile 和 A2A 链路已改用 `Authorization` Runtime principal 后，仍强制要求 `X-Jwt-Token`。Runtime commit `eecc6e3` 仅在 `MPA_AGENTKIT_MODE=true` 时让 `require_auth` 从 `Authorization` 建立 principal；非 AgentKit 部署继续保留旧 Header 契约，缺失凭据仍 fail closed。定向测试 49 passed，完整 `make test` 2506 passed、14 skipped，focused Ruff 和 diff hygiene 均通过。镜像 `agentkit-platform-2112682748-cn-beijing.cr.volces.com/agentkit/mpa_agent:mpa-p0-adk-auth-eecc6e3-20260917`（`sha256:6ac6a2712ecd1c7950125dc9afc6467373a08142fbd6c3577aba12f126079bef`）已发布为 Runtime `r-yeuujrrcowb21078p9jh` version 62，状态为 `Ready`；Runtime 直连与 Studio BFF 的 `/list-apps` 探测均返回 `200 ["default"]`。这是鉴权适配修复，不增加表、字段或持久状态。 |
 | 2026-09-18 | Runtime v62 真实 Studio 对话展示闭环 | 已验证的对话展示子集通过 | 新建 Studio Session `bee3db38-edcc-4020-b925-3d9d6a3a7adc`，通过沙箱执行 `printf 'MPA_V62_BROWSER_OK\n'`。父级 `sandbox_task` 活动和子命令活动均进入 `completed`，命令退出码为 0；最终回答在执行完成时可见，30 秒后仍保留，整页刷新后可恢复。输入框可编辑，发送控件恢复为 `aria-label=发送`，页面无 spinner 或运行中文案。证据位于 `evidence/browser/mpa-v62-live/`。这证明本次真实链路中的“工具一直运行、结果完成后消失”回归已闭环，但不替代 S5-12 负责的完整 `BC-01`–`BC-09` 矩阵。 |
 | 2026-09-18 | S5-08 共享 Python 控制面 client | 通过，Pyright 除外（blocked） | 新增公开异步 `veadk.integrations.mpa.MpaControlPlaneClient`，以及共享的 Profile、operation、Agent view/capability、Session execution-config、delete-preview 和安全错误 schema。它只调用 Studio BFF endpoint，并集中处理 bearer 注入、由调用方保持稳定的幂等 key、CAS ETag、响应校验、timeout 分类和脱敏错误；非结构化响应 detail 不会作为错误码透出。Studio Runtime transport 改为导入共享 Profile/execution-config schema。原设计列出了 operation get，但 BFF 只实现了 active-list/retry；现已补充按 owner 授权的 `GET /web/mpa/agent-operations/{operationId}`，使终态 operation 轮询完整。未调用 Managed Agent，未新增 Runtime API、数据库表或 `agentkit-mpa-agent` 改动。定向 client 测试 19 passed；完整 Studio MPA backend 与共享 client 测试 73 passed；focused Ruff、compileall、pre-commit 和 diff check 通过。使用仓库声明的 `dev + extensions + sandbox` extras 执行全仓回归，结果为 4639 passed、8 skipped、2 xfailed。`uv run pyright ...` 因仓库环境没有 `pyright` 可执行文件记为 `blocked`。 |
+| 2026-09-18 | S5-09 Studio 控制面 CLI | 通过，Pyright 除外（blocked） | 新增独立的 `veadk mpa control` 命令组，同时保留基础设施用途的 `veadk mpa create`。它仅通过共享 `MpaControlPlaneClient` 和 Studio BFF 提供 view/create/update、operation list/get/retry、Profile status/apply、Session config get/patch/profile-upgrade 和 delete preview。JSON 文件/stdin 输入使用共享 Pydantic schema；Profile Secret 字段在发网前失败；bearer 从不输出；写操作保留显式、由调用方稳定复用的幂等键和 CAS revision/ETag；响应 ETag 保留；脱敏后的控制面失败映射到固定退出码 `1/3/4/5`，本地用法错误继续使用 Click 退出码 `2`。loopback BFF 证明了真实请求路径、Header、body、202 处理、旧 Runtime 只读输出，以及 BFF 已收到请求后的同 key timeout 重放。两轮审查修复了嵌套 help 在未配置 URL 时不可用的问题，并澄清 JSON 与本地 usage-error 文本的边界。验证：focused CLI 22 passed；共享 client 加 MPA CLI 54 passed；全量 CLI 1402 passed、4 skipped；规定的并行 Python 回归 4661 passed、8 skipped、2 xfailed；focused Ruff/format、compileall 和 diff check 通过。Pyright 因环境没有可执行文件记为 `blocked`。无需修改 Runtime API、Runtime 数据库、前端、Managed Agent 或 `agentkit-mpa-agent`。 |
 
 ## 13. 实现变更记录
 
@@ -404,6 +405,10 @@ Runtime 仓库的可复现门禁为 `make test` 和 `make coverage`（95%）；�
 2026-09-18：完成 Runtime version 62 的真实 Studio 对话展示验收。沙箱父级/子级活动均进入终态，最终回答在执行完成和 30 秒延迟后保持可见，刷新后恢复同一结果。本证据关闭具体的生产态对话回归；在所有已定义浏览器 Case 执行完成前，S5-12 仍保持未完成。
 
 2026-09-18：完成 S5-08 共享 Python 控制面 client 提取。BFF 与后续 CLI consumer 现在共用 `veadk.integrations.mpa` 中公开的 MPA Profile/operation/capability/Session schema；`MpaControlPlaneClient` 集中处理 Studio bearer 鉴权、幂等与 ETag Header、结构化安全错误、响应校验、连接复用和终态 operation 查询。BFF 仍持有 Runtime 授权与编排职责，CLI 仍作为 BFF client，不导入 FastAPI route，也不接收 Runtime 凭据。本切片不改变 Runtime schema 或 API。
+
+2026-09-18：S5-09 CLI 设计评审在实现前明确了命令和职责边界。既有 `veadk mpa create` 继续作为基础设施部署流程；管理面等价能力新增在 `veadk mpa control` 下，只覆盖 Studio BFF 已持有的 view、生命周期 operation、Profile、Session execution-config 和 delete-preview API。输入使用 JSON 文件/stdin，必须显式传入所需的幂等键和 ETag，输出/错误退出码保持稳定，认证材料绝不输出。Chat、Turn 执行和 Runtime 诊断不重复开发，也不通过 CLI 直连 Runtime；在另行评审共享 BFF 契约前，它们继续使用现有 Studio 执行面/诊断面。该边界不需要修改 Runtime API 或数据模型。
+
+2026-09-18：按评审方案实现并验证 S5-09。新控制面 CLI 的所有网络操作都委托 `MpaControlPlaneClient`，保留旧部署命令，并覆盖完整 VC-22 管理面，不新增 Runtime 直连路径。成功结果与 BFF 错误为可解析 JSON；Click 本地用法/输入错误保持文本并退出 `2`。鉴权、冲突/前置条件、可重试及其他 BFF 错误分别退出 `3`、`4`、`5`、`1`。已验证的 timeout Case 确认首个写请求到达 BFF 后，调用方使用完全相同的已持久化幂等键重试。
 
 2026-09-16：在 VeADK 实现 S5-02 BFF `MpaAgentView` 切片。`GET /web/mpa/agents/{mpaInstanceId}/view` 统一输出 0/1/N Runtime binding 判定、active operation 摘要、Runtime metadata、Profile status、capabilities 和 safe error。0 个 binding 为 `runtime_missing`；多个 binding 为 `binding_ambiguous`；唯一 MPA-tagged Runtime 会暴露 binding 状态，后续切片据此区分 Profile 写入、Session 配置和 Debug 能力。消费该 view-model 的前端详情页仍属于 S5-03。
 

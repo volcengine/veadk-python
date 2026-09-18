@@ -269,9 +269,9 @@ Commands/files marked "to add" below are deliverables of the corresponding slice
 ### VC-22: CLI parity
 
 - Preconditions: shared `MpaControlPlaneClient` and CLI commands implemented; controlled BFF fixture available.
-- Command: `uv run --extra dev pytest tests/integrations/test_mpa_control_plane_client.py tests/cli/test_cli_mpa_control.py -q` (to add).
-- Input: create/update, operation list/get/retry, MPA Profile revisions, Session profile-upgrade, 409/412/428, old Runtime, and timeout/replay; no Managed Agent endpoint is called.
-- Expected: CLI does not import a FastAPI route; it shares schema/client with UI; writes carry a key and handle 202; JSON is parseable, exit codes are stable, and no Secret is exposed; retry after timeout uses the same key and does not repeat a write.
+- Command: `uv run --extra dev pytest tests/integrations/test_mpa_control_plane_client.py tests/cli/test_cli_mpa_control.py -q`.
+- Input: `veadk mpa control` view, create/update, operation list/get/retry, Profile status/apply, Session config get/patch/profile-upgrade, delete preview, 401/403/409/412/428, old Runtime, and timeout/replay; no Managed Agent endpoint or direct Runtime URL is called. The legacy infrastructure command remains `veadk mpa create`.
+- Expected: CLI does not import a FastAPI route; it shares schemas and `MpaControlPlaneClient` with Studio; writes carry a caller-persisted key and handle 202; CAS commands require the current ETag or Runtime revision; JSON is parseable; no bearer, Runtime credential, or secret-like Profile field is exposed. Exit codes are `0` success, `2` local usage/input, `3` authorization, `4` conflict/precondition, `5` retryable transport/server failure, and `1` other control-plane failure. Retry after timeout reuses the same key and does not repeat a write. Chat/Turn/Debug are not part of this Case because no shared Studio BFF CLI contract exists for them; the CLI must not compensate by bypassing Studio.
 - Evidence: `evidence/automated/<run-id>/VC-22.xml`, UI/CLI response comparison, and secret scan.
 - Failure handling: any semantic divergence, duplicate write, or leak blocks S5.
 

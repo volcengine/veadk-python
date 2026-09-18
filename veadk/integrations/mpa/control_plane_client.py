@@ -130,9 +130,7 @@ class MpaAgentView(BaseModel):
     binding_status: str = Field(alias="bindingStatus")
     runtime: dict[str, Any] | None = None
     profile: dict[str, Any] | None = None
-    capabilities: MpaAgentCapabilities = Field(
-        default_factory=MpaAgentCapabilities
-    )
+    capabilities: MpaAgentCapabilities = Field(default_factory=MpaAgentCapabilities)
     etag: str = ""
 
 
@@ -308,8 +306,7 @@ class MpaControlPlaneClient:
             ):
                 raise TypeError
             return [
-                MpaAgentOperation.model_validate(item)
-                for item in payload["operations"]
+                MpaAgentOperation.model_validate(item) for item in payload["operations"]
             ]
         except (TypeError, ValueError, ValidationError) as error:
             raise MpaControlPlaneError(
@@ -415,8 +412,7 @@ class MpaControlPlaneClient:
                 "runtimeId": runtime_id,
                 "region": region,
                 "changes": [
-                    change.model_dump(mode="json", by_alias=True)
-                    for change in changes
+                    change.model_dump(mode="json", by_alias=True) for change in changes
                 ],
             },
         )
@@ -480,9 +476,7 @@ class MpaControlPlaneClient:
             ) from error
 
     @classmethod
-    def _model_with_etag(
-        cls, response: httpx.Response, model: type[_Model]
-    ) -> _Model:
+    def _model_with_etag(cls, response: httpx.Response, model: type[_Model]) -> _Model:
         try:
             payload = response.json()
             if not isinstance(payload, dict):
@@ -529,16 +523,13 @@ class MpaControlPlaneClient:
                 detail.get("code"), response.status_code
             )
             request_id = str(
-                detail.get("requestId")
-                or response.headers.get("X-Request-Id", "")
+                detail.get("requestId") or response.headers.get("X-Request-Id", "")
             )
             current_state = detail.get("currentState")
             if not isinstance(current_state, dict):
                 current_state = None
         else:
-            code = MpaControlPlaneClient._safe_error_code(
-                detail, response.status_code
-            )
+            code = MpaControlPlaneClient._safe_error_code(detail, response.status_code)
             request_id = response.headers.get("X-Request-Id", "")
             current_state = None
         return MpaControlPlaneError(

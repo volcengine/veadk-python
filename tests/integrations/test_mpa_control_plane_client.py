@@ -267,23 +267,20 @@ async def test_retry_operation_reuses_original_request_without_new_key() -> None
         client = MpaControlPlaneClient(
             base_url="https://studio.example.test", transport=transport
         )
-        operation = await client.retry_operation(
-            "mpaop/retry 1", _operation_request()
-        )
+        operation = await client.retry_operation("mpaop/retry 1", _operation_request())
 
     assert operation.retry_count == 1
     sent = requests[0]
     assert sent.method == "POST"
-    assert (
-        sent.url.raw_path
-        == b"/web/mpa/agent-operations/mpaop%2Fretry%201/retry"
-    )
+    assert sent.url.raw_path == b"/web/mpa/agent-operations/mpaop%2Fretry%201/retry"
     assert "Idempotency-Key" not in sent.headers
     assert json.loads(sent.content)["operationKind"] == "create"
 
 
 @pytest.mark.asyncio
-async def test_profile_status_and_apply_profile_preserve_etag_and_create_semantics() -> None:
+async def test_profile_status_and_apply_profile_preserve_etag_and_create_semantics() -> (
+    None
+):
     requests: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -448,9 +445,7 @@ async def test_execution_config_read_and_delete_preview_use_runtime_scope() -> N
         config = await client.get_session_execution_config(
             "session/read 1", runtime_id="runtime-1"
         )
-        preview = await client.get_delete_preview(
-            "mpa-1", runtime_id="runtime-1"
-        )
+        preview = await client.get_delete_preview("mpa-1", runtime_id="runtime-1")
 
     assert config.revision == 1
     assert config.etag == '"1"'

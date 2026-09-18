@@ -269,9 +269,9 @@
 ### VC-22：CLI parity
 
 - 前置：共享 `MpaControlPlaneClient` 和 CLI 命令已实现，受控 BFF fixture 可用。
-- 命令：`uv run --extra dev pytest tests/integrations/test_mpa_control_plane_client.py tests/cli/test_cli_mpa_control.py -q`（需新增）。
-- 输入：create/update、operation list/get/retry、MPA Profile revisions、Session profile-upgrade、409/412/428、旧 Runtime、timeout/replay；不调用 Managed Agent endpoint。
-- 预期：CLI 不 import FastAPI route；与 UI 共用 schema/client；写操作携带 key 并处理 202；JSON 可解析、exit code 稳定、无 Secret；timeout 后同 key 不重复写。
+- 命令：`uv run --extra dev pytest tests/integrations/test_mpa_control_plane_client.py tests/cli/test_cli_mpa_control.py -q`。
+- 输入：`veadk mpa control` 的 view、create/update、operation list/get/retry、Profile status/apply、Session config get/patch/profile-upgrade、delete preview，以及 401/403/409/412/428、旧 Runtime、timeout/replay；不调用 Managed Agent endpoint，也不直连 Runtime URL。历史基础设施命令仍为 `veadk mpa create`。
+- 预期：CLI 不 import FastAPI route；与 Studio 共用 schema 和 `MpaControlPlaneClient`；写操作携带由调用方持久复用的 key 并处理 202；CAS 命令要求当前 ETag 或 Runtime revision；JSON 可解析；不输出 bearer、Runtime credential 或含 Secret 的 Profile 字段。退出码固定为：`0` 成功、`2` 本地用法/输入错误、`3` 鉴权错误、`4` 冲突/前置条件错误、`5` 可重试 transport/server 失败、`1` 其他控制面失败。timeout 后重试复用同一 key，不重复写。Chat/Turn/Debug 因缺少共享 Studio BFF CLI 契约，不属于本 Case；CLI 不得通过绕过 Studio 补偿。
 - 证据：`evidence/automated/<run-id>/VC-22.xml`、UI/CLI 响应对照与 secret scan。
 - 失败处理：任何语义分叉、重复写或泄漏阻断 S5。
 
