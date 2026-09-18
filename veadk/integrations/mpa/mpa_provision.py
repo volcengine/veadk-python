@@ -173,6 +173,7 @@ def build_runtime_env(
         # Keep trace timing and structured spans without exporting raw content.
         "APMPLUS_TRACE_CONTENT": "false",
         "FORCE_APMPLUS_EXPORTER_REGISTRATION": "true",
+        "OTEL_PYTHON_DISABLED_INSTRUMENTATIONS": "sqlalchemy,asyncpg,psycopg,psycopg2,dbapi",
         # Without arkclaw userpool/client/workload resources there is no TIP
         # issuer for Studio. The Runtime remains protected by APIG key auth;
         # disable only the inner TIP gate so Studio A2A calls can reach it.
