@@ -138,9 +138,16 @@ class OrphanRuntimeClient(FakeRuntimeClient):
 
 
 class FakeOperationService:
-    def __init__(self, *, fail: bool = False, get_missing: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        fail: bool = False,
+        get_missing: bool = False,
+        listed_operation: MpaLifecycleOperation | None = None,
+    ) -> None:
         self.fail = fail
         self.get_missing = get_missing
+        self.listed_operation = listed_operation
         self.started: list[tuple[Any, str]] = []
         self.retried: list[tuple[Any, str]] = []
         self.gotten: list[tuple[str, str]] = []
@@ -168,7 +175,16 @@ class FakeOperationService:
 
     async def list_active(self, owner_id: str) -> list[MpaLifecycleOperation]:
         self.listed.append(owner_id)
-        return [_operation(operationId="mpaop-1", ownerId=owner_id)]
+        if self.listed_operation is not None:
+            return [self.listed_operation]
+        return [
+            _operation(
+                operationId="mpaop-1",
+                ownerId=owner_id,
+                status="active",
+                stage="profile_applying",
+            )
+        ]
 
 
 def _operation(**overrides: Any) -> MpaLifecycleOperation:
@@ -527,6 +543,34 @@ def test_mpa_agent_delete_preview_allows_visible_idle_sessions():
     assert body["sessionCounts"]["total"] == 2
     assert body["sessionCounts"]["active"] == 0
     assert body["cleanupPlan"][0]["count"] == 2
+
+
+def test_mpa_agent_delete_preview_ignores_recovered_retryable_operation():
+    runtime_client = FakeRuntimeClient()
+    operation_service = FakeOperationService(
+        listed_operation=_operation(
+            status="failed_retryable",
+            stage="smoke_running",
+            safeErrorCode="runtime_unavailable",
+        )
+    )
+    client = _app(
+        runtime_client,
+        operation_service=operation_service,
+        runtime_bindings=[_binding("runtime-1")],
+    )
+
+    response = client.get(
+        "/web/mpa/agents/mpa-1/delete-preview",
+        params={"runtimeId": "runtime-1", "region": "cn-beijing"},
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["canDelete"] is True
+    assert body["blockers"] == []
+    assert body["activeOperation"]["status"] == "failed_retryable"
+    assert body["profile"]["status"] == "applied"
 
 
 def test_mpa_agent_delete_preview_requires_single_runtime_binding():

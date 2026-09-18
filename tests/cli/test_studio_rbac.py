@@ -3453,6 +3453,108 @@ def test_mpa_runtime_delete_cleans_idle_sessions_then_runtime(
     ]
 
 
+def test_mpa_runtime_delete_ignores_recovered_retryable_operation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from agentkit.sdk.runtime.client import AgentkitRuntimeClient
+    from frontend.server.mpa.operations import MpaLifecycleOperation
+
+    runtime = _runtime_with_public_endpoint(
+        _runtime("runtime-mpa-recovered-delete", "developer")
+    )
+    runtime.tags.append(SimpleNamespace(key="veadk:agent-type", value="mpa"))
+    deleted: list[str] = []
+    runtime_requests: list[tuple[str, str]] = []
+
+    class OperationService:
+        async def list_active(self, _owner_id: str) -> list[MpaLifecycleOperation]:
+            return [
+                MpaLifecycleOperation.model_validate(
+                    {
+                        "operationId": "mpaop-recovered",
+                        "operationKind": "create",
+                        "ownerId": "developer",
+                        "targetKey": "runtime-mpa-recovered-delete",
+                        "idempotencyKeyHash": "idem-hash",
+                        "requestHash": "request-hash",
+                        "stage": "smoke_running",
+                        "status": "failed_retryable",
+                        "mpaInstanceId": "runtime-mpa-recovered-delete",
+                        "runtimeId": runtime.runtime_id,
+                        "runtimeRegion": "cn-beijing",
+                        "safeErrorCode": "runtime_unavailable",
+                        "createdAt": "2026-09-15T00:00:00Z",
+                        "updatedAt": "2026-09-15T00:00:00Z",
+                    }
+                )
+            ]
+
+    def get_runtime(_self: Any, request: Any) -> SimpleNamespace:
+        assert request.runtime_id == runtime.runtime_id
+        return runtime
+
+    def delete_runtime(_self: Any, request: Any) -> None:
+        deleted.append(request.runtime_id)
+
+    class RuntimeAsyncClient:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> "RuntimeAsyncClient":
+            return self
+
+        async def __aexit__(self, *_args: Any) -> None:
+            return None
+
+        async def request(
+            self, method: str, url: str, **_kwargs: Any
+        ) -> _RuntimeJsonResponse:
+            runtime_requests.append((method, url))
+            if url.endswith(
+                "/api/v1/agents/runtime-mpa-recovered-delete/profile-status"
+            ):
+                return _RuntimeJsonResponse(
+                    {"operationId": "op-1", "status": "applied"}
+                )
+            if url.endswith("/api/v1/sessions"):
+                return _RuntimeJsonResponse(
+                    {"sessions": [{"sessionId": "session-idle", "status": "idle"}]}
+                )
+            if url.endswith("/api/v1/sessions/session-idle"):
+                return _RuntimeJsonResponse({}, status_code=204)
+            raise AssertionError(f"unexpected Runtime request {method} {url}")
+
+    monkeypatch.setattr(AgentkitRuntimeClient, "get_runtime", get_runtime)
+    monkeypatch.setattr(AgentkitRuntimeClient, "delete_runtime", delete_runtime)
+    monkeypatch.setattr("httpx.AsyncClient", RuntimeAsyncClient)
+    monkeypatch.setattr(
+        "frontend.server.mpa.create_operation_service",
+        lambda **_kwargs: OperationService(),
+    )
+    app = _create_studio_app(monkeypatch, tmp_path, developers="developer")
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/web/delete-runtime",
+            headers={"X-VeADK-Local-User": "developer"},
+            json={
+                "runtimeId": runtime.runtime_id,
+                "region": "cn-beijing",
+                "agentCategory": "mpa",
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"success": True}
+    assert deleted == [runtime.runtime_id]
+    assert [method for method, _url in runtime_requests] == [
+        "GET",
+        "GET",
+        "DELETE",
+    ]
+
+
 def test_delete_runtime_ignores_untrusted_mpa_category_for_general_runtime(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

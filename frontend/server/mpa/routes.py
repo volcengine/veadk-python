@@ -630,6 +630,27 @@ async def _active_operation(
     return None
 
 
+def _operation_blocks_delete(
+    operation: dict[str, Any] | None,
+    *,
+    binding_status: str,
+    profile: dict[str, Any] | None,
+) -> bool:
+    """Return whether a lifecycle operation still represents unsafe deletion work."""
+    if not operation:
+        return False
+    status = str(operation.get("status") or "")
+    if status == "active":
+        return True
+    if status != "failed_retryable":
+        return False
+    if binding_status != "bound":
+        return True
+    if not profile:
+        return True
+    return str(profile.get("status") or "").casefold() != "applied"
+
+
 async def _runtime_bindings(
     *,
     request: Request,
@@ -734,7 +755,11 @@ async def _mpa_agent_delete_preview_payload(
     blockers: list[str] = []
     if binding_status != "bound":
         blockers.append(binding_status)
-        if active_operation:
+        if _operation_blocks_delete(
+            active_operation,
+            binding_status=binding_status,
+            profile=None,
+        ):
             blockers.append("active_operation")
         return _delete_preview_payload(
             mpa_instance_id=mpa_instance_id,
@@ -775,7 +800,11 @@ async def _mpa_agent_delete_preview_payload(
             binding_status = "orphan_runtime"
         else:
             _raise_runtime_error(error)
-    if active_operation:
+    if _operation_blocks_delete(
+        active_operation,
+        binding_status=binding_status,
+        profile=profile,
+    ):
         blockers.append("active_operation")
     if _active_session_payloads(sessions):
         blockers.append("active_sessions")
@@ -987,6 +1016,7 @@ __all__ = [
     "_active_operation",
     "_delete_preview_payload",
     "_mpa_agent_delete_preview_payload",
+    "_operation_blocks_delete",
     "_session_payload",
     "mount_mpa_profile_routes",
 ]

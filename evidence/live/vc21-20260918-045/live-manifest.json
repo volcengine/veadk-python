@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "runId": "vc21-20260918-045",
+  "resourcePrefix": "mpa-p0-e2e-vc21-20260918-045",
+  "provider": "volcengine",
+  "region": "cn-beijing",
+  "project": "default",
+  "runtimeImageUrl": "agentkit-platform-2112682748-cn-beijing.cr.volces.com/agentkit/mpa_agent_vc21c:mpa-p0-smoke-v29-eecc6e3-20260918",
+  "runtimeImageDigest": "sha256:078519c796b03b298a95ef7a6614f92121bc124513dbb472a7496c95821ee723",
+  "model": "source-runtime-model",
+  "postgres": "dedicated-database",
+  "stepTimeoutSeconds": 120,
+  "costCapUsd": 1,
+  "cleanupOwner": "mpa-p0-e2e"
+}

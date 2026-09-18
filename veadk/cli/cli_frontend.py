@@ -11449,6 +11449,7 @@ def _run_frontend_server(
         _ACTIVE_SESSION_STATUSES,
         _active_operation,
         _delete_preview_payload,
+        _operation_blocks_delete,
         _session_payload,
     )
 
@@ -11642,7 +11643,13 @@ def _run_frontend_server(
             for item in session_payloads
             if item["status"].casefold() in _ACTIVE_SESSION_STATUSES
         ]
-        if active_operation:
+        if _operation_blocks_delete(
+            active_operation,
+            binding_status=(
+                "orphan_runtime" if "orphan_runtime" in blockers else "bound"
+            ),
+            profile=profile,
+        ):
             blockers.append("active_operation")
         if active_sessions:
             blockers.append("active_sessions")

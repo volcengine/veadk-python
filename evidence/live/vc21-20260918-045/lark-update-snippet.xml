@@ -1,0 +1,41 @@
+<h2>S5-11 / VC-21 真实生命周期验证闭环</h2>
+<p><b>结论：</b>VC-21 已在真实 AgentKit 控制面与 mpa-agent Runtime 上通过。run <code>vc21-20260918-045</code> 使用隔离 Runtime、Tool 与 PostgreSQL database，最终 runner 返回 <code>{"case":"VC-21","residue":[],"status":"passed"}</code>，说明创建、更新、失败恢复、回滚语义、删除阻断、idle session 清理、最终删除和资源清理均已闭环。</p>
+<table>
+  <thead>
+    <tr>
+      <th background-color="light-gray">阶段</th>
+      <th background-color="light-gray">验证内容</th>
+      <th background-color="light-gray">结果</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Runtime provisioning</td>
+      <td>基于 source Runtime v62 创建独立 Runtime、独立 Worker Tool 和独立 PostgreSQL database，并通过 Studio Profile apply 与 execution-ready smoke。</td>
+      <td>通过</td>
+    </tr>
+    <tr>
+      <td>Worker smoke</td>
+      <td>Runtime 通过 AgentKit Sandbox 获取真实 Worker endpoint，执行 <code>ready -> create_session -> start_turn -> get_turn -> follow=false replay</code>，确认 Worker Turn 终态和可读事件。</td>
+      <td>通过</td>
+    </tr>
+    <tr>
+      <td>Update / recovery</td>
+      <td>同镜像 update/recovery 按 no-op 处理；受控失败不产生错误成功状态，恢复后再次 smoke 通过。</td>
+      <td>通过</td>
+    </tr>
+    <tr>
+      <td>Rollback</td>
+      <td>当 Runtime 已运行目标镜像且 AgentKit 不接受 Ready 状态重复 release 时，记录 <code>noRollbackNeeded=true</code>，但仍要求 rollback smoke 通过。</td>
+      <td>通过</td>
+    </tr>
+    <tr>
+      <td>Delete</td>
+      <td>验证 active operation 与 active session 会阻断删除；idle session 会先经 Runtime 删除，再删除 AgentKit Runtime；最终无资源残留。</td>
+      <td>通过</td>
+    </tr>
+  </tbody>
+</table>
+<p><b>本次修复：</b>真实 run <code>vc21-20260918-044</code> 暴露 Studio 删除逻辑会把已恢复的 <code>failed_retryable/smoke_running</code> operation 永久视为 <code>active_operation</code> blocker，即使 Runtime binding 已为 <code>bound</code> 且 <code>profile-status</code> 为 <code>applied</code>。已修复为：真正 <code>active</code> operation 继续阻断；<code>failed_retryable</code> 只有在 Runtime 未绑定或 Profile 未 applied 时阻断；已恢复可用的 Runtime 允许清理删除。</p>
+<p><b>代码与测试：</b>VeADK 新增/调整 VC-21 runner、live driver、delete-preview/delete-runtime guard 和回归测试；Runtime 新增 Worker <code>get_turn</code> client、真实 Sandbox endpoint smoke、OpenAPI Tool 鉴权模式、local_ephemeral mount 跳过与结构化 worker diagnostics。本轮定向验证：Runtime 106 passed、Runtime Ruff passed；VeADK CLI/route/driver 49 passed、focused Ruff passed；两仓 <code>git diff --check</code> passed。</p>
+<p><b>文档同步：</b>已同步本地 PRD/spec/OpenSpec：PRD 记录 S5-11 pass；VC-21 用例改为已执行命令；Studio 控制面 <code>CON-30</code> 明确 recovered retryable operation 的删除语义；Runtime 控制 spec 明确 execution-smoke 的真实 Worker 协议与 no new public API / no DB table change 结论。</p>

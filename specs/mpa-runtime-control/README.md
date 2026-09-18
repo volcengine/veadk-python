@@ -1,7 +1,7 @@
 # MPA Runtime Control
 
 - Component ID: `mpa-runtime-control`
-- Status: `draft`; S1, S2, S3, S4, S5-01, S5-01a, S5-04, and the S5-08 Session creation fix are implemented; S5-06 and S5-07 no-impact records are captured; remaining S5 contracts remain target behavior
+- Status: `draft`; S1, S2, S3, S4, S5-01, S5-01a, S5-04, the S5-08 Session creation fix, and S5-11 live lifecycle verification are implemented or recorded; S5-06 and S5-07 no-impact records are captured; remaining S5 contracts remain target behavior
 - Revised: 2026-09-18
 - Chinese: [README.zh.md](README.zh.md)
 - PRD: [MPA AgentKit P0 Functional Migration](../../prd-spec/features/mpa-p0-productionization/2026-09-15-mpa-p0-productionization-design.md)
@@ -11,7 +11,7 @@
 
 AgentKit Studio owns the MPA authoring entry and platform Skill, Tool, Environment, Vault, and other resources. P0 does not use Managed Agent CRUD/version/Session. mpa-agent owns immutable executable Profile revisions, session execution configuration versions, Turn execution records, participant state, and diagnostic linkage. It does not provide templates, experts, review/install, or a separate publishing service. Studio/BFF is a client and orchestrator, not execution-state authority.
 
-At code revision `2f5e039`, the Runtime already had Agent config revisions, Session CRUD/run/SSE/events/MCP, A2A generation/lease and pause/resume, worker interruption, health/readiness, and Runtime Console. Those were reuse points. The current P0 branch has since implemented the S1 Profile/readiness/auth foundation, the S2 Session execution-config/Profile-upgrade Runtime subset, the S3 Turn acceptance, dispatcher recovery, and refresh cursor subset, the S4-01/S4-02 participant data-model plus pause-barrier subset, the S4-03 lease-aware resume boundary, the S4-04 Runtime linked continuation API/outbox, and the S5-08 MPA Session creation initialization fix described below. Studio control wiring and final diagnostics remain later target contracts.
+At code revision `2f5e039`, the Runtime already had Agent config revisions, Session CRUD/run/SSE/events/MCP, A2A generation/lease and pause/resume, worker interruption, health/readiness, and Runtime Console. Those were reuse points. The current P0 branch has since implemented the S1 Profile/readiness/auth foundation, the S2 Session execution-config/Profile-upgrade Runtime subset, the S3 Turn acceptance, dispatcher recovery, and refresh cursor subset, the S4-01/S4-02 participant data-model plus pause-barrier subset, the S4-03 lease-aware resume boundary, the S4-04 Runtime linked continuation API/outbox, the S5-08 MPA Session creation initialization fix, and the S5-11 execution-smoke Worker endpoint integration described below. Studio control wiring for deletion and lifecycle verification is captured in the Studio control-plane spec.
 
 ## CON-1: Identity and authorization
 
@@ -90,6 +90,8 @@ Execution configuration and event persistence serve only the mpa-agent business 
 | Session CRUD/SSE/events/MCP/health/readiness/console | reuse | Add scope, cursor, and correlation fields |
 
 New APIs use `error.code/message/requestId/retryable/currentState`. Existing clients retain their current envelope until a capability-version negotiation permits change. Old Runtime versions stay discoverable as read-only/unsupported; AgentKit P0 cannot disable authorization or fall back to browser/ArkClaw authority.
+
+Execution readiness uses the existing `POST /api/v1/readiness/execution-smoke` endpoint. In AgentKit mode it obtains a real Codex Worker endpoint through the Sandbox manager, verifies `/v1/codex-worker/ready`, creates an isolated Worker session, starts one smoke turn, polls `GET /v1/codex-worker/sessions/{sessionId}/turns/{turnId}` until a terminal state, then replays events with `follow=false`. The marker observation is diagnostic-only because Worker output can be summarized; readiness requires terminal state plus readable replay events. Errors stay stage-classified and sanitized.
 
 ## CON-8: Data model
 
@@ -177,6 +179,8 @@ The user confirmed on 2026-09-15 that an existing Session pins its creation-time
 2026-09-16: S5-07 delete preview and staged cleanup is also a Studio/VeADK orchestration slice and does not require a new `agentkit-mpa-agent` table or endpoint. Studio reuses Runtime `GET /api/v1/agents/{mpaInstanceId}/profile-status`, `GET /api/v1/sessions?include_a2a=true`, and `DELETE /api/v1/sessions/{sessionId}` before calling the AgentKit Runtime delete API. Studio treats `queued|running|pausing|paused|resuming` Sessions as active blockers and treats per-session delete `404` as already cleaned for retry safety. The current contract can only prove the sessions visible through the authorized target Runtime API; a future cross-user global active-session guarantee would require a separate Runtime/global admin API and is not claimed by S5-07.
 
 2026-09-17: Implemented the S5-08 MPA Session creation initialization fix. Runtime now creates the first `session_execution_configs` revision during `POST /api/v1/sessions` when Studio supplies `mpaInstanceId + profileRevision` and omits an explicit `executionConfigRevision`, then returns `executionConfigRevision=1` in the create response. Explicit caller-supplied revisions remain preserved for migration/recovery callers. Verification covered focused Runtime tests (186 passed), focused Ruff, and a released Runtime image `agentkit-platform-2112682748-cn-beijing.cr.volces.com/agentkit/mpa_agent:mpa-p0-sessioncfg-init-local-20260917` on Runtime `r-yeuujrrcowb21078p9jh` version 58. Live BFF/runtime checks showed native Session create returning revision 1, `/run` accepting `executionConfigVersion=1`, and `/sse` emitting final text plus `event: done`.
+
+2026-09-18: Implemented the S5-11 execution-smoke hardening used by live lifecycle validation. Runtime readiness now provisions the Worker endpoint through AgentKit Sandbox, supports OpenAPI tool authentication mode for AgentKit-created tools, skips shared mount lookup for smoke-only `local_ephemeral` sessions, polls Worker turn detail to terminal, replays final events with `follow=false`, preserves cleanup diagnostics, and surfaces structured `worker` failure detail from `/api/v1/readiness/execution-smoke`. This adds no database table or new public Runtime API; it extends readiness behavior and the internal Codex Worker client. Focused Runtime tests returned 106 passed, focused Runtime Ruff passed, and VeADK VC-21 live run `vc21-20260918-045` passed with zero residue.
 
 2026-09-17: Implemented schema version 8 and completed the durable Runtime operation/Profile CAS contract. SQL and in-memory operation stores now enforce the same 24-hour identity/replay policy, persist redacted safe results, and compare-and-swap state transitions. Profile apply uses the authenticated principal and full normalized payload hash, maps all P0 Profile resource categories, and performs ETag validation plus current-revision switching in one PostgreSQL transaction. A real two-connection contract proves that only one concurrent writer can consume a given ETag.
 

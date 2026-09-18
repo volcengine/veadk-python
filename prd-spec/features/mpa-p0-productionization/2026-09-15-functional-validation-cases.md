@@ -261,11 +261,12 @@ Commands/files marked "to add" below are deliverables of the corresponding slice
 ### VC-21: Runtime lifecycle, rollback, and deletion
 
 - Preconditions: VC-19 permits the target/rollback combination; live manifest contains current/target/rollback image digests; active-Session/shared-resource fixtures exist.
-- Command: `scripts/verify-mpa-p0-e2e.sh --manifest <redacted-json> --case VC-21` (to add).
+- Command: `VEADK_MPA_P0_LIVE=1 VEADK_MPA_P0_ASYNC_STAGE_TIMEOUT_SECONDS=900 scripts/verify-mpa-p0-e2e.sh --manifest <redacted-json> --case VC-21 --execute`.
 - Input: valid update/release, controlled failure, compatible rollback, incompatible downgrade, malformed compatibility manifest, delete preview with an active MPA operation, delete preview with an active Runtime Session, delete with idle visible Runtime Sessions, and final delete.
-- Expected: every step has an operation ID/request ID/version timeline; controlled failure is recoverable; incompatible downgrade or manifest fails before mutation; compatible rollback passes smoke; delete preview reports blockers and cleanup stages before mutation; active operations or active Sessions prevent deletion with `409`; idle visible Sessions are deleted through Runtime `DELETE /api/v1/sessions/{sessionId}` before AgentKit Runtime deletion; final deletion leaves no residue.
+- Expected: every step has an operation ID/request ID/version timeline; controlled failure is recoverable; incompatible downgrade or manifest fails before mutation; compatible rollback passes smoke. When the target Runtime already runs the approved target image and AgentKit would reject a duplicate `ReleaseRuntime` call in `Ready` state, the rollback check records `noRollbackNeeded=true` and still requires execution-ready smoke. Delete preview reports blockers and cleanup stages before mutation; true active operations or active Sessions prevent deletion with `409`, while a recovered `failed_retryable` operation with applied Profile does not permanently block cleanup. Idle visible Sessions are deleted through Runtime `DELETE /api/v1/sessions/{sessionId}` before AgentKit Runtime deletion; final deletion leaves no residue.
 - Evidence: version timeline, platform responses, smoke trace, and cleanup report under `evidence/live/<run-id>/VC-21/`.
 - Failure handling: any unsafe mutation, false success, or residual resource makes `AC-9=fail`.
+- Execution 2026-09-18: `vc21-20260918-045` passed all VC-21 stages with v29 image digest `sha256:078519c796b03b298a95ef7a6614f92121bc124513dbb472a7496c95821ee723`; the runner returned `{"case":"VC-21","residue":[],"status":"passed"}` and evidence is under `evidence/live/vc21-20260918-045/`.
 
 ### VC-22: CLI parity
 

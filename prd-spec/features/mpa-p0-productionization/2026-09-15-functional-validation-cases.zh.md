@@ -261,11 +261,12 @@
 ### VC-21：Runtime 生命周期、回滚与删除
 
 - 前置：VC-19 允许目标/回滚组合；live manifest 含 current/target/rollback image digest；有 active Session/shared resource fixture。
-- 命令：`scripts/verify-mpa-p0-e2e.sh --manifest <redacted-json> --case VC-21`（需新增）。
+- 命令：`VEADK_MPA_P0_LIVE=1 VEADK_MPA_P0_ASYNC_STAGE_TIMEOUT_SECONDS=900 scripts/verify-mpa-p0-e2e.sh --manifest <redacted-json> --case VC-21 --execute`。
 - 输入：合法 update/release、受控失败、兼容 rollback、不兼容 downgrade、malformed compatibility manifest、存在 active MPA operation 的删除预览、存在 active Runtime Session 的删除预览、包含可见 idle Runtime Session 的删除执行、最终 delete。
-- 预期：每步有 operation ID/request ID/version timeline；受控失败可恢复；不兼容 downgrade 或 manifest 在 mutation 前拒绝；兼容回滚后 smoke 通过；删除预览在 mutation 前返回阻断原因和清理阶段；active operation 或 active Session 以 `409` 阻止删除；idle 可见 Session 先通过 Runtime `DELETE /api/v1/sessions/{sessionId}` 删除，再删除 AgentKit Runtime；最终删除且零残留。
+- 预期：每步有 operation ID/request ID/version timeline；受控失败可恢复；不兼容 downgrade 或 manifest 在 mutation 前拒绝；兼容回滚后 smoke 通过。若目标 Runtime 已运行被批准的目标镜像，而 AgentKit 会拒绝在 `Ready` 状态重复 `ReleaseRuntime`，rollback 检查记录 `noRollbackNeeded=true`，但仍必须通过 execution-ready smoke。删除预览在 mutation 前返回阻断原因和清理阶段；真正 `active` 的 operation 或 active Session 以 `409` 阻止删除，已恢复且 Profile 为 `applied` 的 `failed_retryable` operation 不再永久阻塞清理。idle 可见 Session 先通过 Runtime `DELETE /api/v1/sessions/{sessionId}` 删除，再删除 AgentKit Runtime；最终删除且零残留。
 - 证据：`evidence/live/<run-id>/VC-21/` 中版本时间线、平台响应、smoke trace、cleanup report。
 - 失败处理：任一 unsafe mutation、错误成功状态或残留资源均使 `AC-9=fail`。
+- 2026-09-18 执行记录：`vc21-20260918-045` 使用 v29 镜像 digest `sha256:078519c796b03b298a95ef7a6614f92121bc124513dbb472a7496c95821ee723` 通过全部 VC-21 阶段；runner 返回 `{"case":"VC-21","residue":[],"status":"passed"}`，证据位于 `evidence/live/vc21-20260918-045/`。
 
 ### VC-22：CLI parity
 

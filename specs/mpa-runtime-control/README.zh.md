@@ -1,7 +1,7 @@
 # MPA Runtime 控制
 
 - Component ID：`mpa-runtime-control`
-- 状态：`draft`；S1、S2、S3、S4、S5-01、S5-01a、S5-04 与 S5-08 Session 创建修复已实现；S5-06 与 S5-07 no-impact 记录已补充；其余 S5 仍为目标契约
+- 状态：`draft`；S1、S2、S3、S4、S5-01、S5-01a、S5-04、S5-08 Session 创建修复与 S5-11 真实生命周期验证已实现或记录；S5-06 与 S5-07 no-impact 记录已补充；其余 S5 仍为目标契约
 - 修订日期：2026-09-18
 - English：[README.md](README.md)
 - PRD：[MPA AgentKit P0 功能迁移](../../prd-spec/features/mpa-p0-productionization/2026-09-15-mpa-p0-productionization-design.zh.md)
@@ -11,7 +11,7 @@
 
 AgentKit Studio 持有 MPA 创作入口以及 Skill、Tool、Environment、Vault 等平台资源。本期不使用 Managed Agent CRUD/version/Session。mpa-agent 持有不可变的可执行 Profile revision、会话执行配置版本、Turn 执行记录、参与方状态和诊断关联，不提供模板、专家、审核安装或独立发布服务。Studio/BFF 是客户端和编排层，不成为执行状态权威。
 
-代码基线 `2f5e039` 已有 Agent config revision、Session CRUD/run/SSE/events/MCP、A2A generation/lease 与 pause/resume、worker interrupt、health/readiness 和 Runtime Console，这些是复用点。当前 P0 分支已实现下文所述 S1 Profile/readiness/auth 基础、S2 Session execution-config/Profile-upgrade Runtime 子集、S3 Turn acceptance、dispatcher recovery 与刷新 cursor 子集、S4-01/S4-02 的 participant 数据模型和 pause-barrier 子集、S4-03 lease-aware resume 边界、S4-04 Runtime linked continuation API/outbox，以及 S5-08 MPA Session 创建初始化修复。Studio 控制接线和最终诊断仍是后续目标契约。
+代码基线 `2f5e039` 已有 Agent config revision、Session CRUD/run/SSE/events/MCP、A2A generation/lease 与 pause/resume、worker interrupt、health/readiness 和 Runtime Console，这些是复用点。当前 P0 分支已实现下文所述 S1 Profile/readiness/auth 基础、S2 Session execution-config/Profile-upgrade Runtime 子集、S3 Turn acceptance、dispatcher recovery 与刷新 cursor 子集、S4-01/S4-02 的 participant 数据模型和 pause-barrier 子集、S4-03 lease-aware resume 边界、S4-04 Runtime linked continuation API/outbox、S5-08 MPA Session 创建初始化修复，以及下文记录的 S5-11 execution-smoke Worker endpoint 接线。删除与生命周期验证的 Studio 控制接线记录在 Studio 控制面 spec 中。
 
 ## CON-1：身份与授权
 
@@ -90,6 +90,8 @@ Runtime Console/trace 复用现有存储，并提供 MPA instance、Profile revi
 | Session CRUD/SSE/events/MCP/health/readiness/console | 复用 | 补 scope、cursor 与关联字段 |
 
 新接口错误体为 `error.code/message/requestId/retryable/currentState`。旧客户端按 capability 版本保持现有 envelope；旧 Runtime 保持可发现并显示 read-only/unsupported，AgentKit P0 不允许关闭鉴权或退回浏览器/ArkClaw 权威。
+
+Execution readiness 复用现有 `POST /api/v1/readiness/execution-smoke` endpoint。AgentKit mode 下，它通过 Sandbox manager 获取真实 Codex Worker endpoint，先校验 `/v1/codex-worker/ready`，再创建隔离 Worker session、启动一次 smoke turn、轮询 `GET /v1/codex-worker/sessions/{sessionId}/turns/{turnId}` 到终态，并用 `follow=false` 回放最终 events。marker 命中只作为诊断字段，因为 Worker 可能汇总命令输出；readiness 要求 Worker Turn 终态和可读 replay events。错误继续按阶段分类并脱敏。
 
 ## CON-8：数据模型
 
@@ -177,6 +179,8 @@ uv run --group dev pytest \
 2026-09-16：S5-07 删除预览与分阶段清理同样是 Studio/VeADK 编排切片，不需要新增 `agentkit-mpa-agent` 表或 endpoint。Studio 复用 Runtime `GET /api/v1/agents/{mpaInstanceId}/profile-status`、`GET /api/v1/sessions?include_a2a=true` 和 `DELETE /api/v1/sessions/{sessionId}`，再调用 AgentKit Runtime delete API。Studio 将 `queued|running|pausing|paused|resuming` Session 视为 active blocker，并把单个 Session 删除时的 `404` 视为已清理以支持安全重试。当前契约只能证明已授权目标 Runtime API 可见的 session；若未来要保证跨用户全局 active-session 状态，需要另行新增 Runtime/global admin API，本次 S5-07 不声明该能力。
 
 2026-09-17：实现 S5-08 MPA Session 创建初始化修复。Runtime 现在会在 `POST /api/v1/sessions` 收到 Studio 传入的 `mpaInstanceId + profileRevision` 且未显式传入 `executionConfigRevision` 时，创建第一条 `session_execution_configs` revision，并在创建响应中返回 `executionConfigRevision=1`。恢复或迁移调用方显式传入的 revision 仍会原样保留。验证覆盖 Runtime focused tests（186 passed）、focused Ruff，以及已发布到 Runtime `r-yeuujrrcowb21078p9jh` version 58 的镜像 `agentkit-platform-2112682748-cn-beijing.cr.volces.com/agentkit/mpa_agent:mpa-p0-sessioncfg-init-local-20260917`。真实 BFF/runtime 检查显示 native Session create 返回 revision 1，`/run` 可接受 `executionConfigVersion=1`，`/sse` 输出最终文本并发送 `event: done`。
+
+2026-09-18：实现 S5-11 真实生命周期验证所需的 execution-smoke 加固。Runtime readiness 现在通过 AgentKit Sandbox 动态获取 Worker endpoint，支持 AgentKit 创建 Tool 使用 OpenAPI 鉴权模式，smoke-only 的 `local_ephemeral` session 不再读取 shared mount，Worker smoke 通过 turn detail 轮询到终态并用 `follow=false` 回放最终事件；cleanup 诊断会保留，`/api/v1/readiness/execution-smoke` 会返回结构化 `worker` 失败细节。本次不新增数据库表或新的公开 Runtime API，只扩展 readiness 行为和内部 Codex Worker client。Runtime 定向测试返回 106 passed，focused Runtime Ruff 通过，VeADK VC-21 live run `vc21-20260918-045` 以零残留通过。
 
 2026-09-17：实现 schema version 8，完成持久 Runtime operation/Profile CAS 合约。SQL 与 in-memory operation store 现在执行一致的 24 小时 identity/replay 策略、保存已脱敏安全结果，并以 compare-and-swap 推进状态。Profile apply 使用认证 principal 与完整规范化 payload hash，映射全部 P0 Profile 资源类别，并在同一个 PostgreSQL 事务中完成 ETag 校验与 current revision 切换。真实双连接合约证明同一 ETag 只能被一个并发 writer 消费。
 
