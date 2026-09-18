@@ -2550,25 +2550,29 @@ export function MigrationWorkspace({
                 <span>{t("confirmation.description")}</span>
               </div>
               <div className="migration-confirmation__grid">
-                <NewChatCompactSelect
-                  label={t("confirmation.framework")}
-                  value={framework}
-                  options={(capability?.frameworks ?? []).map((item) => ({
-                    value: item,
-                    label: frameworkLabel(item),
-                  }))}
-                  onChange={(value) => {
-                    const next = value as MigrationFramework;
-                    setFramework(next);
-                    const candidate = task.analysis?.entries.find(
-                      (item) => item.framework === next,
-                    );
-                    setEntry(candidate?.value || "");
-                  }}
-                  placeholder={t("confirmation.frameworkPlaceholder")}
-                  disabled={Boolean(action)}
-                />
-                <label className="migration-field">
+                <div className="migration-confirmation__row">
+                  <span>{t("confirmation.framework")}</span>
+                  <NewChatCompactSelect
+                    hideLabel
+                    label={t("confirmation.framework")}
+                    value={framework}
+                    options={(capability?.frameworks ?? []).map((item) => ({
+                      value: item,
+                      label: frameworkLabel(item),
+                    }))}
+                    onChange={(value) => {
+                      const next = value as MigrationFramework;
+                      setFramework(next);
+                      const candidate = task.analysis?.entries.find(
+                        (item) => item.framework === next,
+                      );
+                      setEntry(candidate?.value || "");
+                    }}
+                    placeholder={t("confirmation.frameworkPlaceholder")}
+                    disabled={Boolean(action)}
+                  />
+                </div>
+                <label className="migration-field migration-confirmation__row">
                   <span>
                     {t("confirmation.agentName")}<b aria-hidden="true">*</b>
                   </span>
@@ -2587,16 +2591,20 @@ export function MigrationWorkspace({
                 </label>
                 {STRUCTURED_FRAMEWORKS.has(framework) ? (
                   entryOptions.length > 0 ? (
-                    <NewChatCompactSelect
-                      label={t("confirmation.entry")}
-                      value={entry}
-                      options={entryOptions}
-                      onChange={setEntry}
-                      placeholder={t("confirmation.entryPlaceholder")}
-                      disabled={Boolean(action)}
-                    />
+                    <div className="migration-confirmation__row">
+                      <span>{t("confirmation.entry")}</span>
+                      <NewChatCompactSelect
+                        hideLabel
+                        label={t("confirmation.entry")}
+                        value={entry}
+                        options={entryOptions}
+                        onChange={setEntry}
+                        placeholder={t("confirmation.entryPlaceholder")}
+                        disabled={Boolean(action)}
+                      />
+                    </div>
                   ) : (
-                    <label className="migration-field">
+                    <label className="migration-field migration-confirmation__row">
                       <span>
                         {t("confirmation.entry")}<b aria-hidden="true">*</b>
                       </span>
@@ -2613,18 +2621,20 @@ export function MigrationWorkspace({
                   )
                 ) : null}
               </div>
-              <p className="migration-running-note">
-                {t("confirmation.consent")}
-              </p>
-              <div className="migration-confirmation__actions">
-                <button
-                  type="button"
-                  className="migration-primary-button"
-                  onClick={() => void confirmMigration()}
-                  disabled={!canConfirm}
-                >
-                  {action === "confirm" ? t("confirmation.starting") : t("confirmation.start")}
-                </button>
+              <div className="migration-confirmation__footer">
+                <p className="migration-confirmation__consent">
+                  {t("confirmation.consent")}
+                </p>
+                <div className="migration-confirmation__actions">
+                  <button
+                    type="button"
+                    className="migration-primary-button"
+                    onClick={() => void confirmMigration()}
+                    disabled={!canConfirm}
+                  >
+                    {action === "confirm" ? t("confirmation.starting") : t("confirmation.start")}
+                  </button>
+                </div>
               </div>
             </section>
           ) : null}
