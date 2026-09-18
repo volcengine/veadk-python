@@ -83,3 +83,21 @@
 用户进一步指定选项页脚为“创建者姓名（缺失显示未知创建者） | 相对创建时间”，不显示字段前缀，并要求恢复各选项中的地域和 Runtime ID。保留名称和描述行，其后依次显示简洁创建信息与地域／Runtime ID。复用 `formatRelativeTimeLabel`，缺失或非法时间显示破折号。此决定替代前文绝对时间方案。现有 metadata 字符串增加换行，共享样式保留该换行；未提供 metadata 的调用方不变。同步 FR-2／FR-5 与 CON-14。用户请求授权此展示细化；评审确认不影响 API、权限、状态或凭据。验证待完成。
 
 简洁页脚验证（2026-09-16）：先写回归时 2 失败／13 通过；最终渠道／自动化 64 项、前端全量 1207 项通过，国际化／构建／产物通过。浏览器确认“未知创建者 | 14 小时前”及单独一行的地域／Runtime ID。390×844 下 body 宽 390，两个选项 client/scroll 宽均为 292。缺失时间显示破折号，相对时间复用已有公共方法。临时预览文件、服务和标签页已清理。修改仍未提交。
+
+
+### 上游 rebase 与 PR 验证（2026-09-18）
+
+用户已授权将功能分支 rebase 到 `superops-team/veadk-python` 并向上游创建 PR。三个功能提交已基于 `main` 的 `34658d75` 重放，保留上游 MPA Runtime 过滤性能优化。原本地历史保存在 `backup/mpa-channels-before-upstream-rebase-20260918`。冲突仅涉及生成的 `veadk/webui` 资源；源码自动合并成功，最终应用及组件资源已从合并后的源码重新构建。本次 rebase 未改变组件契约。
+
+验证范围：重放后的 `63e6c9bd` 源码、重新生成的 WebUI 资源及本双语验证记录。检查执行日期为 2026-09-18：
+
+- **pass**：`npm --prefix frontend test`，1207 项测试通过。
+- **pass**：`./frontend/node_modules/.bin/vitest run --root frontend --environment jsdom tests/mpaChannelsAutomation.test.tsx tests/runtimeChannels.test.tsx src/adk/channels.test.ts --maxWorkers 1`，65 项测试通过。最初未指定浏览器环境时，API 测试因缺少 `window` 失败；显式使用 jsdom 后通过。
+- **pass**：`uv run --extra dev pytest tests/test_mpa_channel_proxy_policy.py tests/cli/test_frontend_runtime_proxy.py tests/integrations/test_mpa_provision_env.py -n 2`，89 项测试通过；使用两个 worker 执行受影响的代理和部署回归范围。首次调用使用了错误的部署测试文件名，未收集到测试；仅将修正路径后的结果计入验证。
+- **pass**：前端 i18n 一致性、生产应用及组件构建、`test:webui-assets`，104 个打包文件和 248 个内部引用通过验证。
+- **pass**：`uv run --extra dev pre-commit run --all-files`，Ruff 检查、格式检查及仓库密钥扫描通过。
+- **fail（上游基线）**：对 `veadk/cli/cli_frontend.py`、`veadk/integrations/mpa/channel_proxy.py`、`veadk/integrations/mpa/mpa_provision.py` 和 `tests/test_mpa_channel_proxy_policy.py` 执行 Pyright，报告 36 个错误，均位于 `cli_frontend.py`。上游 `34658d75` 版本的诊断严重度、规则和消息多重集完全相同：无新增或消除诊断。通过 `uv run --with pyright pyright --pythonpath .venv/bin/python` 临时提供检查器，未修改项目依赖或全局配置。
+- **pass**：隔离浏览器冒烟验证了精简创建者和相对时间、地域及 Runtime ID、中文搜索和键盘选择、默认极速配置、切换飞书手动凭据配置，以及 390×844 窄屏布局（文档宽度和滚动宽度均为 390）。API 使用虚构数据；临时页面文件、标签页、视口覆盖及服务已清理。
+- **not_run**：真实渠道和云端操作、Python 全仓回归；本次 rebase 保留生产源码行为，已运行受影响的代理和部署测试。此前完整交互覆盖记录仍见上文。
+
+剩余限制：上游 Python 类型检查基线存在错误，PR 必须披露，不能宣称 Pyright 通过。
