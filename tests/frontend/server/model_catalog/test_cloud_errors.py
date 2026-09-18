@@ -12,6 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import subprocess
+import sys
+from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
 
@@ -24,6 +27,23 @@ from frontend.server.model_catalog.client import PROVIDER_CONFIGS, ModelCatalogC
 from frontend.server.model_catalog.routes import mount_model_catalog_routes
 from frontend.server.model_catalog.service import ModelCatalogService
 from frontend.server.video.client import ArkHttpClient
+
+
+def test_model_catalog_routes_keep_network_clients_lazy():
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; import frontend.server.model_catalog.routes; "
+            "assert 'requests' not in sys.modules; "
+            "assert 'frontend.server.video.client' not in sys.modules; "
+            "assert 'veadk.utils.volcengine_sign' not in sys.modules",
+        ],
+        cwd=Path(__file__).resolve().parents[4],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
 
 
 @pytest.mark.asyncio

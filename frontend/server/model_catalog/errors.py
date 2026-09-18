@@ -18,13 +18,15 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import httpx
-import requests
 from fastapi.responses import JSONResponse, Response
 
 from .protocol import ModelCatalogError
+
+if TYPE_CHECKING:
+    import httpx
+    import requests
 
 
 def _redact_credentials(text: str, secrets: Sequence[str | None]) -> str:
@@ -56,6 +58,9 @@ def cloud_request_error(
     action: str,
     secrets: Sequence[str | None] = (),
 ) -> ModelCatalogError:
+    import httpx
+    import requests
+
     response = getattr(error, "response", None)
     # requests.Response is false for HTTP errors, so do not test its truthiness.
     if isinstance(response, (requests.Response, httpx.Response)):
@@ -81,6 +86,9 @@ def cloud_payload(
     action: str,
     secrets: Sequence[str | None] = (),
 ) -> Any:
+    import httpx
+    import requests
+
     response = (
         result if isinstance(result, (requests.Response, httpx.Response)) else None
     )
