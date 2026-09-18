@@ -29,4 +29,5 @@ def test_release_workflow_requires_committed_frozen_uv_lock() -> None:
     assert (repository / "uv.lock").is_file()
     assert "uv.lock" not in ignored
     assert "uv lock --check" in workflow
-    assert workflow.count("uv run --frozen --group dev python") == 2
+    assert workflow.count("uv run --frozen --group dev python") == 3
+    assert "tests/test_studio_release_cold_start.py" in workflow

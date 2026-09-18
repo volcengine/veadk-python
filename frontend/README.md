@@ -1101,6 +1101,14 @@ and `latest.json`. Configure only
 `STUDIO_RELEASE_SERVER_URL` and `STUDIO_RELEASE_SERVER_API_KEY` as GitHub
 Secrets; GitHub receives no TOS credentials.
 
+Release verification uses the Release Server publisher to build both full and
+thin bundles. Full bundles retain checked-hash bytecode for cold starts. Thin
+bundles keep upstream dependency wheels byte-for-byte identical to `uv.lock`;
+only the local VeADK wheel is precompiled. Each bundle has its own hash-pinned
+runtime lock. Public provenance and license checks run before any artifact is
+published. Changes to this build logic require deploying the Release Server
+before starting a new release; merging the source alone does not update it.
+
 The Release Server runtime and deployment assets are isolated from the public
 Python package under `frontend/service/studio_release_server`. After changing
 the service, deploy it from the repository root:
