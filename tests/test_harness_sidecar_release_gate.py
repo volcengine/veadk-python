@@ -71,6 +71,7 @@ def test_sidecar_release_gate_runs_backend_and_frontend_in_parallel() -> None:
         in (backend_run)
     )
     assert "test_release_server_agentkit_cli_pin_matches_veadk" in backend_run
+    assert "tests/cli/test_studio_update_cli_contract.py" in backend_run
     assert "test_smoke_gate_survives_platform_entrypoint_mode_normalization" in (
         backend_run
     )
