@@ -344,6 +344,13 @@ See [deployment and operation](service/studio_release_notifier/README.md).
   versions; any version can be restored into the intelligent-development flow
   for another intent-driven iteration after the temporary migration environment
   has ended.
+  The workspace is a single-column page without a side navigation: the home is
+  the upload entry followed by recent migrations (five by default, expandable
+  in place, with expired environments offered as view-only), “已迁移项目” is a
+  top-bar entry that opens the saved-project library, and returning home or
+  opening the project library never stops a running migration. Capability and
+  session-list failures are reported separately so the upload entry stays
+  usable and each failure offers its own retry.
   Pencil icons beside project and version names open the existing-style name
   dialog; the check icon saves and the close icon cancels. Names are normalized
   and trimmed, allow 1–128 Unicode characters, and reject control/invisible

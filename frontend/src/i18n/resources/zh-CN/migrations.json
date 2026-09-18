@@ -145,9 +145,11 @@
     "reselect": "重新选择",
     "selectZip": "选择 ZIP",
     "continue": "继续上传",
-    "start": "开始迁移",
+    "start": "上传并分析",
     "inputAria": "选择本地项目 ZIP",
-    "retention": "临时迁移环境从创建完成起保留 1 小时；保存成功的源码版本不受影响。"
+    "retention": "临时迁移环境从创建完成起保留 1 小时；保存成功的源码版本不受影响。",
+    "uploading": "上传中…",
+    "sizeHint": "支持项目 ZIP，最大 {{size}}"
   },
   "deployment": {
     "requiredPlaceholder": "请输入 {{key}}",
@@ -160,11 +162,21 @@
     "title": "从存量迁移",
     "newMigration": "新建迁移",
     "recent": "最近迁移",
-    "sessionsAria": "迁移会话",
     "loadingSessions": "正在读取迁移会话…",
     "noSessions": "暂无迁移会话",
     "heading": "迁移存量 Agent 项目",
-    "intro": "上传本地项目 ZIP，Codex 将先进行只读分析，再由你确认迁移方式。"
+    "intro": "上传本地项目 ZIP，Codex 将先进行只读分析，再由你确认迁移方式。",
+    "backToHome": "迁移首页",
+    "navigation": "迁移导航",
+    "showMore": "查看更多",
+    "showLess": "收起",
+    "projectName": "项目名称",
+    "status": "状态",
+    "createdAt": "创建时间",
+    "actions": "操作",
+    "openTask": "查看迁移 {{name}}",
+    "continueTask": "继续",
+    "viewTask": "查看"
   },
   "actions": {
     "stop": "终止迁移",
@@ -178,8 +190,6 @@
     "defaultReason": "Dev Sandbox 暂不可用，请联系管理员检查配置。"
   },
   "conversation": {
-    "requestZip": "请提供本地项目 ZIP。上传后我会识别框架、入口和迁移边界，并在执行实际迁移前请你确认迁移方式。",
-    "zipHint": "仅支持本地 ZIP，最大 {{size}}；迁移环境从创建起保留 1 小时。",
     "creatingSandbox": "正在创建 Dev Sandbox",
     "initializing": "正在初始化迁移工作目录，并检查 AgentKit CLI、Codex 和迁移能力。环境就绪后将自动上传项目。",
     "elapsed": "已等待 {{duration}}",
