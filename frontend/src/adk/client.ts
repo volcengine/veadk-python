@@ -50,17 +50,28 @@ export interface ModelOption {
   activationState: string;
   lifecycleStatus: string;
   available: boolean;
+  apiKeyAllowed?: boolean;
+  unavailableReason?: ModelApiKeyModelPermission["state"];
 }
 
 export interface ModelOptionsResponse {
   provider: CloudProvider;
   selectedApiKeyId?: string;
   models: ModelOption[];
+  apiKeyModelPermissions?: ModelApiKeyModelPermission[];
+}
+
+export interface ModelApiKeyModelPermission {
+  name: string;
+  modelId?: string;
+  state: "Available" | "Shutdown" | "VideoGeneration" | "Unsupported" | "NotActivated" | "Unknown";
 }
 
 export interface ModelApiKeyOption {
   id: string;
   name: string;
+  status?: string;
+  allowAll?: boolean;
 }
 
 export interface ModelApiKeysResponse {
@@ -460,6 +471,7 @@ async function apiFetch(
   };
 
   const requiresLogin = async (response: Response) => {
+    if (response.headers.get("X-Studio-Error-Source") === "upstream") return false;
     if (isAuthenticationRedirect(response)) return true;
     if (response.status !== 401) return false;
     try {
@@ -511,12 +523,26 @@ export async function httpErrorMessage(
   res: Response,
   fallback: string,
 ): Promise<string> {
-  const context = adkT("common.fallbackWithHttpStatus", { fallback, status: res.status });
+  const source = res.headers.get("X-Studio-Error-Source");
+  const status = source === "upstream"
+    ? res.headers.get("X-Studio-Upstream-Status") ?? res.status
+    : res.status;
+  const context = adkT("common.fallbackWithHttpStatus", { fallback, status });
   const text = await res.text().catch(() => "");
+  if (source === "upstream") {
+    return adkT("client.errorWithCloudResponse", {
+      context,
+      action: res.headers.get("X-Studio-Upstream-Action") ?? "",
+      response: text || adkT("client.emptyCloudResponse"),
+    });
+  }
   if (!text) return context;
   try {
     const data = JSON.parse(text) as { detail?: unknown; error?: unknown };
     const detail = formatErrorDetail(data.detail ?? data.error);
+    if (source === "transport" || source === "studio") {
+      return detail ? `${context}\n${detail}` : context;
+    }
     return detail
       ? adkT("client.errorWithDetailAndRawResponse", { context, detail, response: text })
       : adkT("client.errorWithRawResponse", { context, response: text });

@@ -1288,5 +1288,26 @@
     "directories_one": "{{count}} directory",
     "directories_other": "{{count}} directories",
     "separator": ", "
+  },
+  "modelApiKey": {
+    "enabled": "Enabled",
+    "disabled": "Disabled",
+    "unknownStatus": "Unknown status",
+    "allPermissions": "All permissions",
+    "customPermissions": "Custom permissions",
+    "unknownPermissions": "Unknown permissions",
+    "unnamed": "Unnamed API Key",
+    "search": "Search name, status or permissions",
+    "noMatches": "No matching API Keys",
+    "noModelPermission": "Not permitted by this API Key",
+    "modelAvailable": "Available",
+    "permissionState": {
+      "Available": "Available for chat",
+      "Shutdown": "Shut down",
+      "VideoGeneration": "Video generation model",
+      "Unsupported": "Not a chat model",
+      "NotActivated": "Not activated",
+      "Unknown": "Model status unavailable"
+    }
   }
 }

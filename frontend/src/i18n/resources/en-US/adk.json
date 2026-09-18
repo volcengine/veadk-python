@@ -368,8 +368,8 @@
     "loadSandboxVersionsFailed": "Failed to check sandbox versions",
     "updateSandboxFailed": "Failed to update sandbox",
     "invalidSandboxUpdate": "Invalid sandbox update response",
-    "errorWithDetailAndRawResponse": "{{context}}\n{{detail}}\nRaw response:\n{{response}}",
-    "errorWithRawResponse": "{{context}}\nRaw response:\n{{response}}",
+    "errorWithDetailAndRawResponse": "{{context}}\n{{detail}}\nResponse details:\n{{response}}",
+    "errorWithRawResponse": "{{context}}\nResponse details:\n{{response}}",
     "loadArkApiKeysFailed": "Failed to load Ark API keys",
     "loadModelsFailed": "Failed to load models",
     "runtimeAccessDenied": "This account cannot access the Runtime. Refresh the list or sign in again.",
@@ -525,7 +525,9 @@
     "loadDebugTraceFailed": "Failed to load the debug trace",
     "invalidDebugTrace": "Failed to load the debug trace: invalid response format",
     "debugRunFailed": "Debug run failed",
-    "cleanupDebugRunFailed": "Failed to clean up the debug run"
+    "cleanupDebugRunFailed": "Failed to clean up the debug run",
+    "errorWithCloudResponse": "{{context}}\nCloud API: {{action}}\nOriginal cloud response:\n{{response}}",
+    "emptyCloudResponse": "(empty response body)"
   },
   "newChatCapabilities": {
     "loadFailed": "Failed to load conversation mode capabilities (HTTP {{status}})",

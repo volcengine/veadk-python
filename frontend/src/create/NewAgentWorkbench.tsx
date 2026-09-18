@@ -48,6 +48,7 @@ import {
   sameProviderModelFallbacks,
 } from "./modelFallbacks";
 import { ModelFallbackFields } from "./ModelFallbackFields";
+import { modelApiKeyDescription, modelApiKeyMatches, modelOptionsWithPermissions } from "./modelApiKeyPresentation";
 import { isValidModelApiBaseUrl } from "./modelApiBase";
 import { STM_BACKENDS, type EnvVar } from "./veadkCatalog";
 import type {
@@ -242,7 +243,7 @@ function NativeModelPicker({
           response.keys.find((key) => key.id === apiKeyId) ??
           response.keys.find((key) => key.name === apiKeyName) ??
           response.keys.find((key) => key.id === response.defaultKeyId) ??
-          response.keys[0];
+          response.keys.find((key) => key.status !== "Restricted");
         if (selected && selected.id !== apiKeyId) onApiKeyChange(selected);
       })
       .catch((cause) => {
@@ -269,7 +270,13 @@ function NativeModelPicker({
     setError("");
     void listModelOptions({ apiKeyId, signal: controller.signal })
       .then((response) => {
-        if (!controller.signal.aborted) setModels(response.models);
+        if (controller.signal.aborted) return;
+        const nextModels = modelOptionsWithPermissions(response.models, response.apiKeyModelPermissions);
+        setModels(nextModels);
+        const denied = new Set(nextModels.filter((model) => model.apiKeyAllowed === false || model.unavailableReason).map((model) => model.id));
+        if (denied.has(value.trim())) onModelNameChange("");
+        const permittedFallbacks = fallbacks.filter((fallback) => typeof fallback !== "string" || !denied.has(fallback));
+        if (permittedFallbacks.length !== fallbacks.length) onModelFallbacksChange(permittedFallbacks);
       })
       .catch((cause) => {
         if (!controller.signal.aborted) {
@@ -316,7 +323,9 @@ function NativeModelPicker({
   ];
   const apiKeyOptions: Option[] = apiKeys.map((key) => ({
     value: key.id,
-    label: key.name,
+    label: key.name || t("modelApiKey.unnamed"),
+    description: modelApiKeyDescription(key, t),
+    disabled: key.status === "Restricted",
   }));
   if (apiKeyId && !apiKeyOptions.some((option) => option.value === apiKeyId)) {
     apiKeyOptions.unshift({
@@ -326,23 +335,26 @@ function NativeModelPicker({
   }
 
   const modelOptions = useMemo<ModelSelectOption[]>(() => {
-    const available: ModelSelectOption[] = models
-      .filter(
-        (model) => model.available || model.lifecycleStatus === "Retiring",
-      )
-      .map((model) => ({
+    const available: ModelSelectOption[] = models.map((model) => ({
         value: model.id,
         label: model.displayName || model.name || model.id,
-        metadata: model.vendorName
-          ? `${model.id} | ${model.vendorName}`
-          : model.id,
+        metadata: [model.id, model.vendorName, model.apiKeyAllowed === false
+          ? t("modelApiKey.noModelPermission")
+          : model.unavailableReason
+            ? t(`modelApiKey.permissionState.${model.unavailableReason}`)
+            : model.available || model.lifecycleStatus === "Retiring"
+            ? t("modelApiKey.modelAvailable")
+            : t("traditional.model.notActivated")].filter(Boolean).join(" · "),
+        disabled: model.apiKeyAllowed === false ||
+          !!model.unavailableReason ||
+          !(model.available || model.lifecycleStatus === "Retiring"),
         model,
       }));
     if (value && !available.some((option) => option.value === value)) {
       available.unshift({ value, label: value, metadata: value });
     }
     return available;
-  }, [models, value]);
+  }, [models, value, t]);
   const selectedFallbacks = useMemo(
     () =>
       new Set(
@@ -411,8 +423,13 @@ function NativeModelPicker({
                 loading={loadingKeys}
                 loadingPlaceholder={t("workbench.model.loadingApiKeys")}
                 placeholder={t("workbench.model.selectApiKey")}
-                searchPlaceholder={t("workbench.model.searchApiKeys")}
-                searchEmptyMessage={t("workbench.model.noApiKeys")}
+                searchPlaceholder={t("modelApiKey.search")}
+                searchEmptyMessage={t("modelApiKey.noMatches")}
+                searchPredicate={(option, query) => modelApiKeyMatches(
+                  query,
+                  option.label,
+                  typeof option.description === "string" ? option.description : "",
+                )}
                 size="xl"
                 triggerClassName="new-agent-workbench__select-trigger"
                 optionClassName={SELECT_OPTION_CLASS_NAME}

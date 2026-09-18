@@ -26,11 +26,26 @@ SignedRequest = Callable[..., Any]
 
 
 class ModelCatalogError(RuntimeError):
-    """A sanitized, retryable failure safe to return to a Studio client."""
+    """Catalog failure with the original cloud response when one was received."""
 
-    def __init__(self, message: str, *, status_code: int = 502) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int = 502,
+        upstream_body: str | None = None,
+        upstream_status: int | None = None,
+        upstream_request_id: str = "",
+        action: str = "",
+        source: Literal["studio", "transport", "upstream"] = "studio",
+    ) -> None:
         super().__init__(message)
         self.status_code = status_code
+        self.upstream_body = upstream_body
+        self.upstream_status = upstream_status
+        self.upstream_request_id = upstream_request_id
+        self.action = action
+        self.source = source
 
 
 __all__ = [
