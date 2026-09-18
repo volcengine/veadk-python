@@ -79,6 +79,7 @@ export interface MyAgentCardData {
     runtimeId: string;
     region: string;
     currentVersion?: number | null;
+    agentCategory?: "general" | "mpa";
     canDelete: boolean;
     canManage?: boolean;
     canPublish?: boolean;
@@ -231,7 +232,7 @@ export function formatSandboxRemainingTime(
   return t("myAgents.sandboxRemaining", { hours, minutes });
 }
 
-function runtimeToAgent(runtime: CloudRuntime, t: TFunction<"ui">): MyAgentCardData {
+function runtimeToAgent(runtime: CloudRuntime, t: TFunction<"ui">, agentCategory: RuntimeAgentType = "general"): MyAgentCardData {
   return {
     id: runtime.runtimeId,
     name: runtime.name,
@@ -241,6 +242,7 @@ function runtimeToAgent(runtime: CloudRuntime, t: TFunction<"ui">): MyAgentCardD
     specification: formatResourceCreator(runtime.author),
     isMine: runtime.isMine,
     runtime: {
+      agentCategory: runtime.agentCategory ?? agentCategory,
       runtimeId: runtime.runtimeId,
       region: runtime.region,
       currentVersion: runtime.currentVersion,
@@ -332,7 +334,7 @@ async function loadRuntimeAgents(
   const requestKey = `${agentCategory}:${runtimeScope}:${region}:${nextToken}`;
   const cached = runtimePageCache.get(requestKey);
   if (cached && cached.expiresAt > Date.now()) {
-    onList(cached.page.runtimes.map((runtime) => runtimeToAgent(runtime, t)));
+    onList(cached.page.runtimes.map((runtime) => runtimeToAgent(runtime, t, agentCategory)));
     return cached.page.nextToken;
   }
   if (cached) runtimePageCache.delete(requestKey);
@@ -357,7 +359,7 @@ async function loadRuntimeAgents(
     page,
     expiresAt: Date.now() + RUNTIME_PAGE_CACHE_TTL_MS,
   });
-  onList(page.runtimes.map((runtime) => runtimeToAgent(runtime, t)));
+  onList(page.runtimes.map((runtime) => runtimeToAgent(runtime, t, agentCategory)));
   return page.nextToken;
 }
 

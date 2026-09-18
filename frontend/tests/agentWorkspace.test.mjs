@@ -1219,3 +1219,18 @@ test("evaluation tab remains the PR 748 placeholder until the real feature lands
   assert.match(workspaceSource, /aw-evaluation-glass/);
   assert.match(workspaceSource, /t\("agentWorkspace\.comingSoon"\)/);
 });
+
+test("message channels moves from agent detail to its own automation", () => {
+  assert.doesNotMatch(workspaceSource, /<RuntimeChannels/);
+  assert.doesNotMatch(workspaceSource, /section === "channels"/);
+  assert.match(appSource, /applicationsView === "mpa-channels"/);
+  assert.match(appSource, /<MpaChannelsAutomation/);
+});
+
+test("runtime category reaches detail entries through both live and cached cards", () => {
+  const cards = readFileSync(new URL("../src/ui/MyAgents.tsx", import.meta.url), "utf8");
+  assert.match(cards, /agentCategory: runtime\.agentCategory \?\? agentCategory/);
+  assert.equal((cards.match(/runtimeToAgent\(runtime, t, agentCategory\)/g) || []).length, 2);
+  assert.match(appSource, /agentCategory: agentDetailTarget\.runtime\.agentCategory/);
+  assert.match(connectionsSource, /agentCategory\?: "general" \| "mpa"/);
+});

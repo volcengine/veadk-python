@@ -5240,3 +5240,30 @@ export async function updateSandboxTool(kind: SandboxToolKind): Promise<{
   if (typeof payload.updated !== "boolean") throw new Error(adkT("client.invalidSandboxUpdate"));
   return { updated: payload.updated, state: sandboxImageState(payload.state) };
 }
+
+
+export type ChannelScope = "group" | "group_sender" | "group_topic" | "group_topic_sender";
+export interface ChannelCapabilities { channels?: string[]; credentialBindingChannels?: string[]; serverSideBinding: boolean; bindingReady: boolean; bindingError?: string | null; }
+export interface FeishuBinding {
+  id: string;
+  status: "PENDING" | "SCANNED" | "AUTHORIZED" | "REGISTERING" | "BOUND" | "FAILED" | "EXPIRED";
+  loginUrl: string; qrCodeImage: string; expiresAt: string; pollAfterSeconds: number;
+  appId?: string | null; lastErrorCode?: string | null; lastErrorMessage?: string | null;
+}
+export interface ChannelDiagnostics {
+  configured: boolean; appId?: string | null; appName?: string | null;
+  gatewayConfigured: boolean; routeConfigured: boolean; missingConfiguration: string[];
+  deliveryHealth: string; lastInboundAt?: number | null; lastDeliveryAt?: number | null;
+}
+export interface ChannelPermission { channel: string; chatId: string; chatName?: string; groupSessionScope?: ChannelScope | null; }
+export class ChannelApiError extends Error {
+  constructor(public status: number) { super(`Channel request failed (${status})`); }
+}
+export async function channelRequest<T>(ep: AdkEndpoint, path: string, init: RequestInit = {}): Promise<T> {
+  const response = await apiFetch(`/api/v1/channels${path}`, {
+    ...init, headers: { "Content-Type": "application/json", ...init.headers },
+  }, ep);
+  // Do not surface arbitrary upstream error bodies: they may contain secrets.
+  if (!response.ok) throw new ChannelApiError(response.status);
+  return response.json() as Promise<T>;
+}

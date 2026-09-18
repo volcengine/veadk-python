@@ -31,6 +31,7 @@
     "@mdxeditor/editor": "^4.1.0",
     "@openai/apps-sdk-ui": "^0.2.2",
     "@uiw/react-codemirror": "^4.25.11",
+    "@wecom/wecom-aibot-sdk": "0.1.0",
     "@xyflow/react": "^12.11.0",
     "echarts": "6.1.0",
     "highlight.js": "^11.11.1",

@@ -123,6 +123,8 @@ import { ReviewCenter } from "./reviews/ReviewCenter";
 import { GitHubIntegration } from "./ui/GitHubIntegration";
 import { FeishuBotIntegration } from "./automations/feishu/FeishuBotIntegration";
 import { CodingAgentsIntegration } from "./automations/coding-agents/CodingAgentsIntegration";
+import type { AutomationCategoryId } from "./automations/types";
+import { MpaChannelsAutomation } from "./automations/mpa-channels/MpaChannelsAutomation";
 import { WebsiteIntegration } from "./automations/website-integration/WebsiteIntegration";
 import { SearchView } from "./ui/Search";
 import {
@@ -2188,6 +2190,7 @@ export default function App() {
       return current.filter((_, entryIndex) => entryIndex !== index);
     });
   }, []);
+  const [applicationsCategory, setApplicationsCategory] = useState<AutomationCategoryId>("development");
   const [applicationsView, setApplicationsView] =
     useState<"catalog" | ApplicationId | null>(null);
   const [cronJobsView, setCronJobsView] = useState(false);
@@ -6570,6 +6573,7 @@ export default function App() {
         app: agentDetailTarget.appName ?? agentDetailTarget.name,
         remote: true,
         runtimeApp: detailConnection?.apps[0],
+        agentCategory: agentDetailTarget.runtime.agentCategory,
         runtimeId: agentDetailTarget.runtime.runtimeId,
         region: agentDetailTarget.runtime.region,
         currentVersion: agentDetailTarget.runtime.currentVersion,
@@ -7239,6 +7243,12 @@ export default function App() {
               <FeishuBotIntegration
                 onBack={() => setApplicationsView("catalog")}
               />
+            ) : applicationsView === "mpa-channels" ? (
+              <MpaChannelsAutomation
+                role={access.role}
+                runtimeScope={access.capabilities.runtimeScope}
+                onBack={() => setApplicationsView("catalog")}
+              />
             ) : applicationsView === "website-integration" ? (
               <WebsiteIntegration
                 onBack={() => setApplicationsView("catalog")}
@@ -7253,7 +7263,7 @@ export default function App() {
                 }}
               />
             ) : applicationsView === "catalog" ? (
-              <Applications onOpen={setApplicationsView} />
+              <Applications onOpen={setApplicationsView} initialCategory={applicationsCategory} onCategoryChange={setApplicationsCategory} />
             ) : sandboxAgentWorkspace ? (
               <SandboxAgentWorkspace
                 workspace={sandboxAgentWorkspace}

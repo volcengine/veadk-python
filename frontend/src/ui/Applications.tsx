@@ -6,13 +6,17 @@ import {
   AUTOMATIONS,
   type AutomationId,
 } from "../automations/registry";
+import type { AutomationCategoryId } from "../automations/types";
 import { isCodingAgentsAutomationAvailable } from "../automations/codingAgents";
 import feishuLogo from "../assets/feishu-logo.svg";
+import { MpaChannelsIcon } from "../automations/mpa-channels/MpaChannelsIcon";
 import { GitHubLogo } from "./GitHubLogo";
 import "./Applications.css";
 
 interface ApplicationsProps {
   onOpen: (automation: AutomationId) => void;
+  initialCategory?: AutomationCategoryId;
+  onCategoryChange?: (category: AutomationCategoryId) => void;
 }
 
 export type ApplicationId = AutomationId;
@@ -50,9 +54,9 @@ function WebsiteIntegrationIcon(props: SVGProps<SVGSVGElement>) {
   );
 }
 
-export function Applications({ onOpen }: ApplicationsProps) {
+export function Applications({ onOpen, initialCategory = "development", onCategoryChange }: ApplicationsProps) {
   const { t } = useTranslation("automations");
-  const [activeCategory, setActiveCategory] = useState("development");
+  const [activeCategory, setActiveCategory] = useState<AutomationCategoryId>(initialCategory);
   const [query, setQuery] = useState("");
   const deferredQuery = useDeferredValue(query);
   const visibleApplications = useMemo(() => {
@@ -94,7 +98,7 @@ export function Applications({ onOpen }: ApplicationsProps) {
             key={category.id}
             className={activeCategory === category.id ? "is-active" : ""}
             aria-pressed={activeCategory === category.id}
-            onClick={() => setActiveCategory(category.id)}
+            onClick={() => { setActiveCategory(category.id); onCategoryChange?.(category.id); }}
           >
             {t(`categories.${category.id}`)}
           </button>
@@ -129,6 +133,8 @@ export function Applications({ onOpen }: ApplicationsProps) {
                         alt=""
                         aria-hidden="true"
                       />
+                    ) : application.icon === "mpa-channels" ? (
+                      <MpaChannelsIcon className="application-card-icon" />
                     ) : application.icon === "coding-agents" ? (
                       <CodingAgentsIcon className="application-card-icon" />
                     ) : application.icon === "website-integration" ? (

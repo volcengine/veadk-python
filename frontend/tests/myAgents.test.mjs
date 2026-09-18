@@ -463,7 +463,7 @@ test("loads Runtime pages by the selected ownership and region", () => {
   assert.match(pageSource, /region: runtime\.region/);
   assert.match(pageSource, /<AgentCard[\s\S]*?key=\{agent\.id\}/);
   assert.match(pageSource, /const RUNTIME_PAGE_SIZE = 24/);
-  assert.match(pageSource, /onList\(page\.runtimes\.map\(\(runtime\) => runtimeToAgent\(runtime, t\)\)\)/);
+  assert.match(pageSource, /onList\(page\.runtimes\.map\(\(runtime\) => runtimeToAgent\(runtime, t, agentCategory\)\)\)/);
   assert.match(pageSource, /runtimeRequestRef\.current !== requestId/);
   assert.match(pageSource, /const runtimePageRequests = new Map/);
   assert.match(pageSource, /const requestKey = `\$\{agentCategory\}:\$\{runtimeScope\}:\$\{region\}:\$\{nextToken\}`/);
