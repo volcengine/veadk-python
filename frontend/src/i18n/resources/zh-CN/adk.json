@@ -368,8 +368,8 @@
     "loadSandboxVersionsFailed": "查询沙箱版本失败",
     "updateSandboxFailed": "更新 Sandbox 失败",
     "invalidSandboxUpdate": "沙箱更新响应格式无效",
-    "errorWithDetailAndRawResponse": "{{context}}\n{{detail}}\n原始响应：\n{{response}}",
-    "errorWithRawResponse": "{{context}}\n原始响应：\n{{response}}",
+    "errorWithDetailAndRawResponse": "{{context}}\n{{detail}}\n响应详情：\n{{response}}",
+    "errorWithRawResponse": "{{context}}\n响应详情：\n{{response}}",
     "loadArkApiKeysFailed": "加载 Ark API Key 失败",
     "loadModelsFailed": "加载模型列表失败",
     "runtimeAccessDenied": "当前账号无权访问该 Runtime，请刷新列表或重新登录后重试。",
@@ -525,7 +525,9 @@
     "loadDebugTraceFailed": "加载调试调用链路失败",
     "invalidDebugTrace": "加载调试调用链路失败：返回格式无效",
     "debugRunFailed": "调试运行失败",
-    "cleanupDebugRunFailed": "清理调试运行失败"
+    "cleanupDebugRunFailed": "清理调试运行失败",
+    "errorWithCloudResponse": "{{context}}\n云接口：{{action}}\n云服务原始响应：\n{{response}}",
+    "emptyCloudResponse": "（响应正文为空）"
   },
   "newChatCapabilities": {
     "loadFailed": "读取会话模式能力失败（HTTP {{status}}）",

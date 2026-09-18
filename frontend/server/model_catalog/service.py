@@ -25,10 +25,12 @@ from veadk.utils.logger import get_logger
 
 from .client import ModelApiKeyClient, ModelCatalogClient
 from .models import (
+    ModelApiKeyModelPermission,
     ModelApiKeyOption,
     ModelApiKeysResponse,
     ModelOption,
     ModelOptionsResponse,
+    ModelPermissionState,
 )
 from .protocol import ModelCatalogError, Provider
 
@@ -56,6 +58,9 @@ class ModelCatalogService:
         self._clock = clock
         self._cached: dict[str, tuple[ModelOptionsResponse, float]] = {}
         self._lock = asyncio.Lock()
+        self._pending_options: dict[
+            tuple[str | None, bool], asyncio.Task[ModelOptionsResponse]
+        ] = {}
 
     async def list_api_keys(
         self, *, force_refresh: bool = False
@@ -86,7 +91,30 @@ class ModelCatalogService:
         api_key_id: str | None = None,
         force_refresh: bool = False,
     ) -> ModelOptionsResponse:
+        request_key = (api_key_id, force_refresh)
+        pending = self._pending_options.get(request_key)
+        if pending is None:
+            pending = asyncio.create_task(
+                self._list_options(api_key_id=api_key_id, force_refresh=force_refresh)
+            )
+            self._pending_options[request_key] = pending
+
+            def finished(task: asyncio.Task[ModelOptionsResponse]) -> None:
+                if self._pending_options.get(request_key) is task:
+                    del self._pending_options[request_key]
+
+            pending.add_done_callback(finished)
+        # One browser cancelling its request must not cancel other callers.
+        return await asyncio.shield(pending)
+
+    async def _list_options(
+        self,
+        *,
+        api_key_id: str | None = None,
+        force_refresh: bool = False,
+    ) -> ModelOptionsResponse:
         selected_key_id = api_key_id
+        selected_key: ModelApiKeyOption | None = None
         api_key: str | None = None
         if self._api_keys is not None:
             key_catalog = await self._api_keys.list_keys(force_refresh=force_refresh)
@@ -101,16 +129,19 @@ class ModelCatalogService:
                 force_refresh=force_refresh,
                 known_keys=key_catalog,
             )
+            selected_key = next(
+                key for key in key_catalog.keys if key.id == selected_key_id
+            )
         cache_key = selected_key_id or "__legacy_default__"
         now = self._clock()
         cached = self._cached.get(cache_key)
         if not force_refresh and cached is not None and now < cached[1]:
-            return cached[0]
+            return apply_api_key_permissions(cached[0], selected_key)
         async with self._lock:
             now = self._clock()
             cached = self._cached.get(cache_key)
             if not force_refresh and cached is not None and now < cached[1]:
-                return cached[0]
+                return apply_api_key_permissions(cached[0], selected_key)
             try:
                 list_models = (
                     self._client.list_models()
@@ -125,9 +156,12 @@ class ModelCatalogService:
                     provider=self._provider,
                     selected_api_key_id=selected_key_id,
                     models=join_model_options(activations, models),
+                    model_permission_catalog=build_model_permission_catalog(
+                        activations, models
+                    ),
                 )
             except ModelCatalogError:
-                if cached is None:
+                if cached is None or force_refresh:
                     raise
                 logger.warning(
                     "Refreshing the Studio model catalog failed; serving cached data."
@@ -136,16 +170,16 @@ class ModelCatalogService:
                     cached[0],
                     self._clock() + self._ttl_seconds,
                 )
-                return cached[0]
+                return apply_api_key_permissions(cached[0], selected_key)
             self._cached[cache_key] = (
                 refreshed,
                 self._clock() + self._ttl_seconds,
             )
-            return refreshed
+            return apply_api_key_permissions(refreshed, selected_key)
 
 
 class ModelApiKeyService:
-    """Cache safe key metadata and raw values separately."""
+    """Read key metadata live; cache raw values only on the server."""
 
     def __init__(
         self,
@@ -161,45 +195,40 @@ class ModelApiKeyService:
         self._default_key_name = (default_key_name or "").strip()
         self._ttl_seconds = ttl_seconds
         self._clock = clock
-        self._cached_keys: ModelApiKeysResponse | None = None
-        self._keys_expire_at = 0.0
         self._raw_keys: dict[str, tuple[str, float]] = {}
-        self._lock = asyncio.Lock()
+        self._pending_keys: asyncio.Task[ModelApiKeysResponse] | None = None
 
     async def list_keys(self, *, force_refresh: bool = False) -> ModelApiKeysResponse:
-        now = self._clock()
-        if (
-            not force_refresh
-            and self._cached_keys is not None
-            and now < self._keys_expire_at
-        ):
-            return self._cached_keys
-        async with self._lock:
-            now = self._clock()
-            if (
-                not force_refresh
-                and self._cached_keys is not None
-                and now < self._keys_expire_at
-            ):
-                return self._cached_keys
-            raw_items = await self._client.list_keys()
-            keys = [ModelApiKeyOption(**item) for item in raw_items]
-            default_key_id = next(
-                (
-                    item.id
-                    for item in keys
-                    if self._default_key_name and item.name == self._default_key_name
-                ),
-                keys[0].id if keys else None,
-            )
-            response = ModelApiKeysResponse(
-                provider=self._provider,
-                keys=keys,
-                default_key_id=default_key_id,
-            )
-            self._cached_keys = response
-            self._keys_expire_at = self._clock() + self._ttl_seconds
-            return response
+        """Share overlapping reads only; subsequent reads still fetch live data."""
+        pending = self._pending_keys
+        if pending is None:
+            pending = asyncio.create_task(self._read_keys())
+            self._pending_keys = pending
+
+            def finished(task: asyncio.Task[ModelApiKeysResponse]) -> None:
+                if self._pending_keys is task:
+                    self._pending_keys = None
+
+            pending.add_done_callback(finished)
+        return await asyncio.shield(pending)
+
+    async def _read_keys(self) -> ModelApiKeysResponse:
+        raw_items = await self._client.list_keys()
+        keys = [ModelApiKeyOption(**item) for item in raw_items]
+        selectable = [item for item in keys if item.status != "Restricted"]
+        default_key_id = next(
+            (
+                item.id
+                for item in selectable
+                if self._default_key_name and item.name == self._default_key_name
+            ),
+            selectable[0].id if selectable else None,
+        )
+        return ModelApiKeysResponse(
+            provider=self._provider,
+            keys=keys,
+            default_key_id=default_key_id,
+        )
 
     async def resolve_raw_key(
         self,
@@ -214,6 +243,13 @@ class ModelApiKeyService:
                 "所选 API Key 不存在或已被删除，请刷新后重新选择。",
                 status_code=404,
             )
+        if any(
+            item.id == key_id and item.status == "Restricted" for item in catalog.keys
+        ):
+            raise ModelCatalogError(
+                "所选 API Key 已禁用，请在控制台启用或选择其他 API Key",
+                status_code=400,
+            )
         now = self._clock()
         cached = self._raw_keys.get(key_id)
         if not force_refresh and cached is not None and now < cached[1]:
@@ -224,6 +260,91 @@ class ModelApiKeyService:
             self._clock() + self._ttl_seconds,
         )
         return raw_key
+
+
+def apply_api_key_permissions(
+    response: ModelOptionsResponse,
+    key: ModelApiKeyOption | None,
+) -> ModelOptionsResponse:
+    if key is None or key.allow_all is None:
+        return response
+    permissions = None
+    rule = key.model_access
+    if not key.allow_all and rule and rule.effect == "allow" and not rule.all_models:
+        permissions = [
+            response.model_permission_catalog.get(
+                name, ModelApiKeyModelPermission(name=name, state="Unknown")
+            )
+            for name in dict.fromkeys(rule.model_ids)
+        ]
+    models = []
+    for model in response.models:
+        allowed = key.allow_all
+        if not allowed and key.model_access is not None:
+            rule = key.model_access
+            matches = rule.all_models or bool(
+                {model.name, model.id}.intersection(rule.model_ids)
+            )
+            allowed = matches if rule.effect == "allow" else not matches
+        models.append(
+            model.model_copy(
+                update={
+                    "api_key_allowed": allowed,
+                    "available": model.available and allowed,
+                }
+            )
+        )
+    return response.model_copy(
+        update={
+            "api_key_model_permissions": permissions,
+            "models": sorted(
+                models,
+                key=lambda model: (
+                    model.api_key_allowed is False,
+                    not model.available,
+                    model.display_name.casefold(),
+                    model.id,
+                ),
+            ),
+        }
+    )
+
+
+def build_model_permission_catalog(
+    activations: list[dict[str, Any]], models: list[dict[str, Any]]
+) -> dict[str, ModelApiKeyModelPermission]:
+    """Explain every explicitly granted model, including non-agent and retired models."""
+    activated = {
+        _text(item, "FoundationModelName")
+        for item in activations
+        if _text(item, "State") == "Available"
+    }
+    catalog: dict[str, ModelApiKeyModelPermission] = {}
+    priority = {
+        "Available": 0,
+        "NotActivated": 1,
+        "VideoGeneration": 2,
+        "Unsupported": 3,
+        "Shutdown": 4,
+    }
+    for model in models:
+        name = _text(model, "name")
+        state: ModelPermissionState
+        if _text(model, "status") == "Shutdown":
+            state = "Shutdown"
+        elif _text(model, "domain") == "VideoGeneration":
+            state = "VideoGeneration"
+        elif not _supports_agent(model):
+            state = "Unsupported"
+        else:
+            state = "Available" if name in activated else "NotActivated"
+        for identifier in {name, _text(model, "id")} - {""}:
+            current = catalog.get(identifier)
+            if current is None or priority[state] < priority[current.state]:
+                catalog[identifier] = ModelApiKeyModelPermission(
+                    name=identifier, state=state, model_id=_text(model, "id") or None
+                )
+    return catalog
 
 
 def join_model_options(

@@ -1288,5 +1288,26 @@
     "directories_one": "{{count}} 个目录",
     "directories_other": "{{count}} 个目录",
     "separator": "，"
+  },
+  "modelApiKey": {
+    "enabled": "已启用",
+    "disabled": "已禁用",
+    "unknownStatus": "状态未知",
+    "allPermissions": "全部权限",
+    "customPermissions": "自定义权限",
+    "unknownPermissions": "权限未知",
+    "unnamed": "未命名 API Key",
+    "search": "搜索名称、状态或权限",
+    "noMatches": "没有匹配的 API Key",
+    "noModelPermission": "当前 API Key 无权限",
+    "modelAvailable": "可用",
+    "permissionState": {
+      "Available": "可用于对话",
+      "Shutdown": "已下线",
+      "VideoGeneration": "视频生成模型",
+      "Unsupported": "不支持作为对话模型",
+      "NotActivated": "尚未开通",
+      "Unknown": "未获取到模型状态"
+    }
   }
 }

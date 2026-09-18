@@ -39,7 +39,33 @@ const result = await build({
 const moduleUrl = `data:text/javascript;base64,${Buffer.from(
   result.outputFiles[0].contents,
 ).toString("base64")}`;
-const { revealModelApiKey } = await import(moduleUrl);
+const { revealModelApiKey, listModelApiKeys, httpErrorMessage } = await import(moduleUrl);
+
+test("model errors display the original cloud body and status", async () => {
+  const body = '{"ResponseMetadata":{"RequestId":"cloud-request-id","Error":{"Code":"AccessDenied","Message":"original cloud message"}}}';
+  const message = await httpErrorMessage(new Response(body, { status: 403, headers: {
+    "X-Studio-Error-Source": "upstream",
+    "X-Studio-Upstream-Status": "403",
+    "X-Studio-Upstream-Action": "ListModelActivations",
+  } }), "load models failed");
+  assert.ok(message.includes(body));
+  assert.ok(message.includes("403"));
+  assert.ok(message.includes("ListModelActivations"));
+});
+
+test("each API key list read requests a fresh complete list", async (t) => {
+  const previousFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = previousFetch; });
+  const requests = [];
+  globalThis.fetch = async (url, init = {}) => {
+    requests.push({ url: String(url), init });
+    return Response.json({ provider: "volcengine", keys: Array.from({ length: requests.length }, (_, index) => ({ id: String(index), name: `Key ${index}` })) });
+  };
+  assert.equal((await listModelApiKeys()).keys.length, 1);
+  assert.equal((await listModelApiKeys()).keys.length, 2);
+  assert.equal(requests.length, 2);
+  assert.ok(requests.every((request) => request.url === "/web/model-api-keys" && request.init.cache === "no-store"));
+});
 
 test("reveals a selected ModelArk API key through an explicit uncached POST", async (t) => {
   const previousFetch = globalThis.fetch;

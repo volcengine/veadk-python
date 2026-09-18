@@ -61,7 +61,8 @@ const PREPARATION_MESSAGE_KEYS: Record<IntelligentPreparationStage, string> = {
 };
 
 function isSelectableModel(model: ModelOption): boolean {
-  return model.available || model.lifecycleStatus === "Retiring";
+  return model.apiKeyAllowed !== false &&
+    (model.available || model.lifecycleStatus === "Retiring");
 }
 
 interface IntelligentModelSelectProps {

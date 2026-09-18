@@ -93,6 +93,7 @@ import {
   isOrchestratorType,
 } from "./agentTypeMeta";
 import { localPickerMatches } from "./localPickerSearch";
+import { modelApiKeyDescription, modelApiKeyMatches, modelOptionsWithPermissions } from "./modelApiKeyPresentation";
 import { draftToYaml } from "./configYaml";
 import {
   deploymentMcpSecretValues,
@@ -738,6 +739,8 @@ function vikingMemoryDisplayName(item: VikingMemoryRef, fallback = createT("trad
 }
 
 function modelAvailabilityKey(model: ModelOption): string {
+  if (model.apiKeyAllowed === false) return "modelApiKey.noModelPermission";
+  if (model.unavailableReason) return `modelApiKey.permissionState.${model.unavailableReason}`;
   if (model.available) return "traditional.model.available";
   if (model.lifecycleStatus === "Retiring") return "traditional.model.retiring";
   if (model.activationState && model.activationState !== "Available") {
@@ -747,7 +750,9 @@ function modelAvailabilityKey(model: ModelOption): string {
 }
 
 function isModelSelectable(model: ModelOption): boolean {
-  return model.available || model.lifecycleStatus === "Retiring";
+  return model.apiKeyAllowed !== false &&
+    !model.unavailableReason &&
+    (model.available || model.lifecycleStatus === "Retiring");
 }
 
 interface ModelMenuPosition {
@@ -1020,7 +1025,7 @@ function ModelOptionSelect({
           response.keys.find((key) => key.id === apiKeyId) ??
           response.keys.find((key) => key.name === apiKeyName) ??
           response.keys.find((key) => key.id === response.defaultKeyId) ??
-          response.keys[0];
+          response.keys.find((key) => key.status !== "Restricted");
         if (selected) onApiKeyChange(selected);
       })
       .catch((err) => {
@@ -1052,8 +1057,13 @@ function ModelOptionSelect({
     })
       .then((response) => {
         if (!controller.signal.aborted) {
-          setModels(response.models);
+          const nextModels = modelOptionsWithPermissions(response.models, response.apiKeyModelPermissions);
+          setModels(nextModels);
           setModelsApiKeyId(apiKeyId);
+          const denied = new Set(nextModels.filter((model) => model.apiKeyAllowed === false || model.unavailableReason).map((model) => model.id));
+          if (denied.has(value.trim())) onChange("");
+          const permittedFallbacks = fallbacks.filter((fallback) => typeof fallback !== "string" || !denied.has(fallback));
+          if (permittedFallbacks.length !== fallbacks.length) onFallbacksChange(permittedFallbacks);
         }
       })
       .catch((err) => {
@@ -1072,7 +1082,7 @@ function ModelOptionSelect({
   const visibleModels = modelsAreCurrent ? models : [];
   const selectedApiKey = apiKeys.find((key) => key.id === apiKeyId);
   const selectedApiKeyLabel = selectedApiKey
-    ? selectedApiKey.name
+    ? selectedApiKey.name || t("modelApiKey.unnamed")
     : apiKeyId
       ? t("traditional.model.currentApiKey")
       : keysLoading
@@ -1083,9 +1093,9 @@ function ModelOptionSelect({
   const filteredApiKeys = useMemo(
     () =>
       apiKeys.filter((key) =>
-        localPickerMatches(apiKeySearchQuery, [key.name]),
+        modelApiKeyMatches(apiKeySearchQuery, key.name, modelApiKeyDescription(key, t)),
       ),
-    [apiKeySearchQuery, apiKeys],
+    [apiKeySearchQuery, apiKeys, t],
   );
   const selectedModel = visibleModels.find(
     (model) => model.id === normalizedValue,
@@ -1168,7 +1178,7 @@ function ModelOptionSelect({
             menuAriaLabel={t("traditional.model.apiKeyList")}
             searchAriaLabel={t("traditional.model.searchApiKey")}
             searchValue={apiKeySearchQuery}
-            searchPlaceholder={t("traditional.model.searchApiKeyName")}
+            searchPlaceholder={t("modelApiKey.search")}
             onSearchChange={setApiKeySearchQuery}
             empty={filteredApiKeys.length === 0}
             emptyLabel={t("traditional.model.noMatchingApiKey")}
@@ -1176,23 +1186,28 @@ function ModelOptionSelect({
             renderOptions={(closeMenu) =>
               filteredApiKeys.map((key) => {
                 const selected = key.id === apiKeyId;
+                const description = modelApiKeyDescription(key, t);
                 return (
                   <button
                     key={key.id}
                     type="button"
                     role="option"
                     aria-selected={selected}
+                    disabled={key.status === "Restricted"}
                     className={`cw-a2a-space-option cw-model-key-option ${
                       selected ? "is-selected" : ""
                     }`}
-                    title={key.name}
+                    title={`${key.name || t("modelApiKey.unnamed")} · ${description}`}
                     onClick={() => {
                       setKeySelectionRevision((revision) => revision + 1);
                       onApiKeyChange(key);
                       closeMenu();
                     }}
                   >
-                    <span>{key.name}</span>
+                    <span className="cw-model-option-copy">
+                      <strong>{key.name || t("modelApiKey.unnamed")}</strong>
+                      <small>{description}</small>
+                    </span>
                   </button>
                 );
               })
@@ -1242,7 +1257,7 @@ function ModelOptionSelect({
                     const selected = model.id === normalizedValue;
                     const selectable = isModelSelectable(model);
                     const activationRequired =
-                      !selectable && model.activationState !== "Available";
+                      model.apiKeyAllowed !== false && !model.unavailableReason && !selectable && model.activationState !== "Available";
                     if (activationRequired) {
                       return (
                         <button
@@ -1299,11 +1314,13 @@ function ModelOptionSelect({
                         </span>
                         <span
                           className={`cw-model-status ${
-                            model.available
-                              ? "is-available"
-                              : model.lifecycleStatus === "Retiring"
-                                ? "is-retiring"
-                                : "is-unavailable"
+                            model.apiKeyAllowed === false || model.unavailableReason
+                              ? "is-unavailable"
+                              : model.available
+                                ? "is-available"
+                                : model.lifecycleStatus === "Retiring"
+                                  ? "is-retiring"
+                                  : "is-unavailable"
                           }`}
                         >
                           {t(modelAvailabilityKey(model))}
@@ -1402,7 +1419,7 @@ function ModelOptionSelect({
                         const selected = model.id === fallbackValue.trim();
                         const selectable = isModelSelectable(model);
                         const activationRequired =
-                          !selectable && model.activationState !== "Available";
+                          model.apiKeyAllowed !== false && !model.unavailableReason && !selectable && model.activationState !== "Available";
                         if (activationRequired) {
                           return (
                             <button
@@ -1462,11 +1479,13 @@ function ModelOptionSelect({
                             </span>
                             <span
                               className={`cw-model-status ${
-                                model.available
-                                  ? "is-available"
-                                  : model.lifecycleStatus === "Retiring"
-                                    ? "is-retiring"
-                                    : "is-unavailable"
+                                model.apiKeyAllowed === false || model.unavailableReason
+                                  ? "is-unavailable"
+                                  : model.available
+                                    ? "is-available"
+                                    : model.lifecycleStatus === "Retiring"
+                                      ? "is-retiring"
+                                      : "is-unavailable"
                               }`}
                             >
                               {t(modelAvailabilityKey(model))}
@@ -1487,12 +1506,7 @@ function ModelOptionSelect({
           <Info className="cw-i" />
           <span>{error}</span>
         </div>
-      ) : loading ? (
-        <span className="cw-help cw-a2a-space-status" aria-live="polite">
-          <Loader2 className="cw-i cw-i-sm cw-spin" />
-          {t("traditional.model.loading")}
-        </span>
-      ) : visibleModels.length === 0 ? (
+      ) : loading ? null : visibleModels.length === 0 ? (
         <span className="cw-help">{t("traditional.model.empty")}</span>
       ) : (
         <span className="cw-help">
@@ -3067,6 +3081,8 @@ function shouldUseProviderDefaultModel(
   previousProvider: CloudProvider,
   nextProvider: CloudProvider,
 ): boolean {
+  // Keep an explicitly cleared selection when its API Key loses permission.
+  if (modelName === "" && previousProvider === nextProvider) return false;
   const trimmed = (modelName ?? "").trim();
   if (!trimmed) return true;
   if (trimmed === defaultModelName(previousProvider)) return true;

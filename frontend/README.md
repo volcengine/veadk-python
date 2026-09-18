@@ -12,6 +12,21 @@ See [deployment and operation](service/studio_release_notifier/README.md).
 
 ## Features
 
+- **Ark API Keys**: Each page load reads the current API Key list directly from
+  the cloud provider. Enabled, disabled, all-permission and custom-permission
+  keys are listed with their status and permission scope beneath the name.
+  Disabled keys remain visible but cannot be selected. Search matches names,
+  statuses and permission scopes; pagination preserves distinct keys with the
+  same name. Model options combine account activation with the selected key's
+  model permissions. Models outside that scope remain visible but disabled,
+  and changing keys clears model selections that are no longer permitted.
+  Explicitly granted video and shut-down models appear in the searchable model
+  dropdown with their status and remain disabled, without expanding the form.
+  Current permissions are re-applied even when model metadata is cached.
+  Overlapping identical requests share one in-flight cloud query, including
+  failures; later API Key list reads still fetch the latest cloud data.
+  This behavior applies to both Volcengine and BytePlus
+
 - **Agent publication review**: Developers deploy privately and apply from an
   Agent card. The review center's Agent tab lets administrators inspect the
   submitted Runtime metadata, approve with an optional comment, or return with

@@ -33,6 +33,7 @@ from .models import (
     ModelApiKeyValueResponse,
     ModelOptionsResponse,
 )
+from .errors import model_catalog_error_response
 from .protocol import (
     CredentialResolver,
     ModelCatalogError,
@@ -218,16 +219,15 @@ def mount_model_catalog_routes(
     )
     async def model_api_keys(
         request: Request,
+        response: Response,
         refresh: bool = Query(default=False),
-    ) -> ModelApiKeysResponse:
+    ) -> ModelApiKeysResponse | Response:
         authorize(request)
+        response.headers.update(_NO_STORE_HEADERS)
         try:
             return await service.list_api_keys(force_refresh=refresh)
         except ModelCatalogError as error:
-            raise HTTPException(
-                status_code=error.status_code,
-                detail=str(error),
-            ) from error
+            return model_catalog_error_response(error)
 
     @app.post(
         "/web/model-api-keys/{api_key_id}/value",
@@ -239,7 +239,7 @@ def mount_model_catalog_routes(
         api_key_id: str,
         request: Request,
         response: Response,
-    ) -> ModelApiKeyValueResponse:
+    ) -> ModelApiKeyValueResponse | Response:
         try:
             authorize(request)
         except HTTPException as error:
@@ -252,11 +252,7 @@ def mount_model_catalog_routes(
         try:
             value = await service.resolve_raw_key(api_key_id)
         except ModelCatalogError as error:
-            raise HTTPException(
-                status_code=error.status_code,
-                detail=str(error),
-                headers=_NO_STORE_HEADERS,
-            ) from None
+            return model_catalog_error_response(error)
         except Exception:  # noqa: BLE001 - never expose unexpected upstream details
             raise HTTPException(
                 status_code=502,
@@ -276,7 +272,7 @@ def mount_model_catalog_routes(
         api_key_id: str | None = Query(default=None, alias="apiKeyId"),
         refresh: bool = Query(default=False),
         scope: Literal["development"] | None = Query(default=None),
-    ) -> ModelOptionsResponse:
+    ) -> ModelOptionsResponse | Response:
         authorize(request)
         try:
             if api_key_id is None and not refresh:
@@ -300,10 +296,7 @@ def mount_model_catalog_routes(
                 }
             )
         except ModelCatalogError as error:
-            raise HTTPException(
-                status_code=error.status_code,
-                detail=str(error),
-            ) from error
+            return model_catalog_error_response(error)
 
 
 __all__ = ["build_model_catalog_service", "mount_model_catalog_routes"]

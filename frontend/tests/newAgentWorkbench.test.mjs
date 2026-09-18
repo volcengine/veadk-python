@@ -295,8 +295,9 @@ test("workbench keeps the main-branch model fields and skill dialog on the first
     workbenchSource,
     /searchPredicate=\{modelSelectSearchPredicate\}/,
   );
-  assert.match(workbenchSource, /metadata: model\.vendorName/);
-  assert.match(workbenchSource, /`\$\{model\.id\} \| \$\{model\.vendorName\}`/);
+  assert.match(workbenchSource, /metadata: \[model\.id, model\.vendorName/);
+  assert.match(workbenchSource, /t\("modelApiKey\.noModelPermission"\)/);
+  assert.match(workbenchSource, /disabled: model\.apiKeyAllowed === false/);
   assert.doesNotMatch(
     workbenchSource,
     /agentKitLogo|byteplusLogo|model-option-logo/,
