@@ -1,7 +1,7 @@
 # MPA AgentKit P0 Functional Verification Cases
 
 - Change ID: `mpa-p0-productionization`
-- Status: `designed`; Step 2 upfront design, not executed
+- Status: `designed`; execution in progress through the S5-10 compatibility preflight
 - Date: 2026-09-15
 - Chinese: [2026-09-15-functional-validation-cases.zh.md](2026-09-15-functional-validation-cases.zh.md)
 - PRD: [MPA AgentKit P0 Functional Migration](2026-09-15-mpa-p0-productionization-design.md)
@@ -238,6 +238,7 @@ Commands/files marked "to add" below are deliverables of the corresponding slice
 - Expected: matrix results match; MPA update/release/rollback write routes reject incompatible manifests before mutation; Runtime coverage >=95%; no regressions; performance report includes p50/p95/max/error rate.
 - Evidence: `evidence/contract/<run-id>/VC-19.json` and test/build/coverage/benchmark output.
 - Failure handling: a permitted combination failure or exceeded target blocks S5; a requirement outside the matrix returns to Step 1 first.
+- Execution 2026-09-18: the S5-10 preflight passed with pinned VeADK `486dc06e429573ce43d6462b6dc960be4bc34ab6`, Runtime `eecc6e3115685e5cb86dcfbff4fb7c6ac7a10dee`, and deployed v62 image digest `sha256:6ac6a2712ecd1c7950125dc9afc6467373a08142fbd6c3577aba12f126079bef`. The live Runtime was `Ready` at version 62 and registry inspection matched the pinned digest. The real manifest matched `p0-codex-rest-v1`; negative fixtures returned the expected `worker_protocol_incompatible` and `invalid_runtime_image_digest` results. Evidence: `evidence/contract/s5-10-v62-20260918/`. This does not mark the post-VC-21 full regression/performance portion complete; that remains S5-13.
 
 ### VC-20A: S1 live creation to first chat
 

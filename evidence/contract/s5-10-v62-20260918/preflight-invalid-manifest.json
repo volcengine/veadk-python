@@ -1,0 +1,5 @@
+{
+  "errorCode": "invalid_runtime_image_digest",
+  "status": "invalid_manifest",
+  "exitCode": 2
+}

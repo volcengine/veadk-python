@@ -1,7 +1,7 @@
 # MPA AgentKit P0 功能验证 Case
 
 - Change ID：`mpa-p0-productionization`
-- 状态：`designed`；Step 2 前置设计，尚未执行
+- 状态：`designed`；已执行至 S5-10 兼容性预检，其余 Case 继续推进
 - 日期：2026-09-15
 - English：[2026-09-15-functional-validation-cases.md](2026-09-15-functional-validation-cases.md)
 - PRD：[MPA AgentKit P0 功能迁移](2026-09-15-mpa-p0-productionization-design.zh.md)
@@ -238,6 +238,7 @@
 - 预期：矩阵结果吻合；MPA update/release/rollback 写路由在副作用前拒绝不兼容 manifest；Runtime coverage ≥95%；无回归；性能报告含 p50/p95/max/error rate。
 - 证据：`evidence/contract/<run-id>/VC-19.json`、测试/build/coverage/benchmark 输出。
 - 失败处理：允许组合失败或指标超限阻断 S5；矩阵外需求先回 Step 1。
+- 2026-09-18 执行记录：S5-10 使用固定 VeADK `486dc06e429573ce43d6462b6dc960be4bc34ab6`、Runtime `eecc6e3115685e5cb86dcfbff4fb7c6ac7a10dee` 和已部署 v62 镜像 digest `sha256:6ac6a2712ecd1c7950125dc9afc6467373a08142fbd6c3577aba12f126079bef` 完成预检。实时 Runtime 为 version 62、状态 `Ready`，registry 查询结果与固定 digest 一致。真实 manifest 命中 `p0-codex-rest-v1`；负向 fixture 按预期返回 `worker_protocol_incompatible` 和 `invalid_runtime_image_digest`。证据位于 `evidence/contract/s5-10-v62-20260918/`。这不代表 VC-21 后的最终全量回归/性能部分已完成；该部分仍属于 S5-13。
 
 ### VC-20A：S1 live 创建至首轮对话
 

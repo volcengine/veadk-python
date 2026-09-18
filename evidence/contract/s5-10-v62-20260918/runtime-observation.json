@@ -1,0 +1,10 @@
+{
+  "runtimeId": "r-yeuujrrcowb21078p9jh",
+  "runtimeName": "mi-jap8l3qdi9wk",
+  "region": "cn-beijing",
+  "status": "Ready",
+  "currentVersionNumber": 62,
+  "artifactUrl": "agentkit-platform-2112682748-cn-beijing.cr.volces.com/agentkit/mpa_agent:mpa-p0-adk-auth-eecc6e3-20260917",
+  "registryDigest": "sha256:6ac6a2712ecd1c7950125dc9afc6467373a08142fbd6c3577aba12f126079bef",
+  "observedAt": "2026-09-18T03:42:40Z"
+}

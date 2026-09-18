@@ -1,0 +1,52 @@
+{
+  "caseId": "VC-19",
+  "phase": "S5-10 compatibility preflight",
+  "timestamp": "2026-09-18T03:42:40Z",
+  "repositorySHA": {
+    "veadk-python": "486dc06e429573ce43d6462b6dc960be4bc34ab6",
+    "agentkit-mpa-agent": "eecc6e3115685e5cb86dcfbff4fb7c6ac7a10dee"
+  },
+  "runtimeId": "r-yeuujrrcowb21078p9jh",
+  "runtimeVersion": 62,
+  "runtimeImageDigest": "sha256:6ac6a2712ecd1c7950125dc9afc6467373a08142fbd6c3577aba12f126079bef",
+  "agentkitOpenAPIVersion": "not_exposed_by_runtime_detail",
+  "agentkitSdkVersion": "0.8.5",
+  "workerProtocol": "codex",
+  "environment": "Volcengine cn-beijing, deployed Runtime v62",
+  "command": "scripts/verify-mpa-p0-contract.sh --manifest evidence/contract/s5-10-v62-20260918/manifest.json --matrix contracts/mpa-p0/compatibility-matrix.json",
+  "status": "pass",
+  "expected": "The pinned deployed combination matches p0-codex-rest-v1; an unlisted worker protocol and a malformed digest are rejected before mutation.",
+  "actual": {
+    "deployedCombination": {
+      "exitCode": 0,
+      "status": "compatible",
+      "matrixRule": "p0-codex-rest-v1"
+    },
+    "unlistedWorkerProtocol": {
+      "exitCode": 3,
+      "status": "incompatible",
+      "errorCode": "worker_protocol_incompatible"
+    },
+    "invalidImageDigest": {
+      "exitCode": 2,
+      "status": "invalid_manifest",
+      "errorCode": "invalid_runtime_image_digest"
+    },
+    "manifestContractTests": "4 passed",
+    "studioMutationFenceTests": "8 passed",
+    "secretRedactionTests": "91 passed",
+    "runtimeObservation": "Ready, version 62, artifact tag and registry digest matched the pinned manifest"
+  },
+  "artifactPaths": [
+    "evidence/contract/s5-10-v62-20260918/manifest.json",
+    "evidence/contract/s5-10-v62-20260918/incompatible-worker.json",
+    "evidence/contract/s5-10-v62-20260918/invalid-manifest.json",
+    "evidence/contract/s5-10-v62-20260918/preflight-compatible.json",
+    "evidence/contract/s5-10-v62-20260918/preflight-incompatible-worker.json",
+    "evidence/contract/s5-10-v62-20260918/preflight-invalid-manifest.json",
+    "evidence/contract/s5-10-v62-20260918/runtime-observation.json",
+    "evidence/contract/s5-10-v62-20260918/VC-15.xml"
+  ],
+  "cleanupResult": "not_applicable_read_only_preflight",
+  "finalRegressionPerformanceStatus": "not_run_owned_by_S5-13_after_VC-21"
+}
