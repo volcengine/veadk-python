@@ -7962,6 +7962,7 @@ export default function App() {
                     title: t("addAgent.intelligent.title"),
                     desc: t("addAgent.intelligent.description"),
                     onClick: () => {
+                      setIntelligentDeployment(null);
                       setAddMenu(false);
                       setImportedDraft(null);
                       setRuntimeUpdateTarget(null);
