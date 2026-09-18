@@ -354,7 +354,14 @@ class VeFaaS:
 
         return res
 
-    def _create_function(self, function_name: str, path: str):
+    def _create_function(
+        self,
+        function_name: str,
+        path: str,
+        *,
+        cpu_milli: int | None = None,
+        memory_mb: int | None = None,
+    ):
         # Read envs
         envs = []
         for key, value in veadk.config.veadk_environments.items():
@@ -373,7 +380,8 @@ class VeFaaS:
                 runtime="native-python3.12/v1",
                 request_timeout=1800,
                 envs=envs,
-                memory_mb=2048,
+                cpu_milli=cpu_milli,
+                memory_mb=memory_mb if memory_mb is not None else 2048,
                 role=getenv("IAM_ROLE", None, allow_false_values=True),
                 project_name=self.project_name,
             )
@@ -590,13 +598,15 @@ class VeFaaS:
         environment_overrides: dict[str, str] | None = None,
         disable_gateway_cors: bool = False,
         normalize_studio_entrypoint: bool = False,
+        cpu_milli: int | None = None,
+        memory_mb: int | None = None,
+        max_instance: int | None = None,
     ) -> str:
         """Replace an application's function bundle and release it.
 
-        Existing function settings are left untouched except that the minimum
-        instance count is set to one. When environment overrides are provided,
-        they are merged with the complete current environment before updating the
-        function.
+        Existing resource settings are preserved unless explicitly overridden;
+        the minimum instance count is set to one. Environment overrides are merged
+        with the complete current environment before updating the function.
 
         Args:
             application_id: Existing VeFaaS Application ID.
@@ -608,6 +618,9 @@ class VeFaaS:
                 command with ``bash ./run.sh`` so platform archive mode
                 normalization cannot prevent Studio from starting. Custom
                 commands are preserved.
+            cpu_milli: Explicit function CPU override in millicores.
+            memory_mb: Explicit function memory override in MB.
+            max_instance: Explicit maximum instance count override.
 
         Returns:
             The existing Application URL after the new revision is released.
@@ -617,9 +630,11 @@ class VeFaaS:
             path=path,
             environment_overrides=environment_overrides,
             normalize_studio_entrypoint=normalize_studio_entrypoint,
+            cpu_milli=cpu_milli,
+            memory_mb=memory_mb,
         )
         url = self._release_application(application_id)
-        self._set_function_min_instance(function_id)
+        self._set_function_min_instance(function_id, max_instance=max_instance)
         if disable_gateway_cors:
             self.ensure_application_route_methods(
                 application_id,
@@ -661,9 +676,15 @@ class VeFaaS:
         environment_overrides: dict[str, str] | None,
         request_timeout: int | None = None,
         normalize_studio_entrypoint: bool = False,
+        cpu_milli: int | None = None,
+        memory_mb: int | None = None,
     ) -> None:
         """Upload a bundle and update the Function without releasing it."""
         request_options: dict[str, Any] = {"id": function_id}
+        if cpu_milli is not None:
+            request_options["cpu_milli"] = cpu_milli
+        if memory_mb is not None:
+            request_options["memory_mb"] = memory_mb
         if request_timeout is not None:
             request_options["request_timeout"] = request_timeout
         function: Any | None = None
@@ -694,12 +715,15 @@ class VeFaaS:
             volcenginesdkvefaas.UpdateFunctionRequest(**request_options)
         )
 
-    def _set_function_min_instance(self, function_id: str) -> None:
-        """Set only a Function's minimum instance count to one."""
+    def _set_function_min_instance(
+        self, function_id: str, *, max_instance: int | None = None
+    ) -> None:
+        """Keep one warm instance and optionally set the maximum instance count"""
         self.client.update_function_resource(
             volcenginesdkvefaas.UpdateFunctionResourceRequest(
                 function_id=function_id,
                 min_instance=1,
+                max_instance=max_instance,
             )
         )
 
@@ -1016,6 +1040,9 @@ class VeFaaS:
         enable_mcp_session: bool = True,
         keep_failed_deploy: bool = False,
         disable_gateway_cors: bool = False,
+        cpu_milli: int | None = None,
+        memory_mb: int | None = None,
+        max_instance: int | None = None,
     ) -> tuple[str, str, str]:
         """Deploy an agent project to VeFaaS service.
 
@@ -1027,6 +1054,9 @@ class VeFaaS:
             gateway_upstream_name (str, optional): Gateway upstream name. Defaults to "".
             enable_key_auth (bool, optional): Enable key auth. Defaults to False.
             disable_gateway_cors (bool, optional): Disable route-wide APIG CORS.
+            cpu_milli: Function CPU override in millicores.
+            memory_mb: Function memory override in MB; new functions default to 2048.
+            max_instance: Maximum instance override; omitted to preserve cloud settings.
 
         Returns:
             tuple[str, str, str]: (url, app_id, function_id)
@@ -1068,6 +1098,9 @@ class VeFaaS:
                 },
                 disable_gateway_cors=disable_gateway_cors,
                 normalize_studio_entrypoint=True,
+                cpu_milli=cpu_milli,
+                memory_mb=memory_mb,
+                max_instance=max_instance,
             )
             logger.info(
                 f"VeFaaS application {name} with ID {existing_app_id} updated on {url}."
@@ -1103,7 +1136,9 @@ class VeFaaS:
             f"Start to create VeFaaS function {function_name} with path {path}. Gateway: {gateway_name}, Gateway Service: {gateway_service_name}, Gateway Upstream: {gateway_upstream_name}."
         )
         try:
-            function_name, function_id = self._create_function(function_name, path)
+            function_name, function_id = self._create_function(
+                function_name, path, cpu_milli=cpu_milli, memory_mb=memory_mb
+            )
             logger.info(
                 f"VeFaaS function {function_name} with ID {function_id} created."
             )
@@ -1122,7 +1157,7 @@ class VeFaaS:
             logger.info(f"VeFaaS application {name} with ID {app_id} created.")
             logger.info(f"Start to release VeFaaS application {app_id}.")
             url = self._release_application(app_id)
-            self._set_function_min_instance(function_id)
+            self._set_function_min_instance(function_id, max_instance=max_instance)
             self.ensure_application_route_methods(
                 app_id,
                 disable_cors=disable_gateway_cors,

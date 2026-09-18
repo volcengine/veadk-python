@@ -823,6 +823,13 @@ run `npm ci` from `frontend/` to synchronize dependencies with the lockfile
 before rebuilding. Reusing another checkout's `node_modules` can retain older
 dependencies even when the current `package.json` already declares them
 
+### Studio deployment resources
+
+`veadk studio deploy` configures the Studio function with 8 vCPU, 16 GB memory,
+and both minimum and maximum instance counts set to 1 on Volcengine and BytePlus
+These settings apply to new deployments and redeployments of an existing Studio
+Ordinary Agent deployments retain their existing resource defaults
+
 ### Identity-backed user management
 
 Deploy with `--super-admin <existing-user-email-or-uid>` to select the first

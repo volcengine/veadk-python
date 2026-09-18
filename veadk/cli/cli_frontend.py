@@ -16538,6 +16538,11 @@ def frontend_deploy(
 
         # 3) Deploy the function + a plain public APIG trigger on the serverless
         #    gateway (auth_method="none" — no gateway SSO plugin / domain upstream).
+        from frontend.server.studio_deployment import (
+            STUDIO_CPU_MILLI,
+            STUDIO_MAX_INSTANCE,
+            STUDIO_MEMORY_MB,
+        )
         from veadk.cloud.cloud_agent_engine import CloudAgentEngine
 
         engine = CloudAgentEngine(
@@ -16564,6 +16569,9 @@ def frontend_deploy(
             enable_mcp_session=False,
             keep_failed_deploy=keep_failed_deploy,
             disable_gateway_cors=True,
+            cpu_milli=STUDIO_CPU_MILLI,
+            memory_mb=STUDIO_MEMORY_MB,
+            max_instance=STUDIO_MAX_INSTANCE,
         )
         url = (app.vefaas_endpoint or "").rstrip("/")
         redirect_uri = f"{url}/oauth2/callback"

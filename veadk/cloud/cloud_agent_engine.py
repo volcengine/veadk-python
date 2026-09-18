@@ -254,6 +254,9 @@ class CloudAgentEngine(BaseModel):
         enable_mcp_session: bool = True,
         keep_failed_deploy: bool = False,
         disable_gateway_cors: bool = False,
+        cpu_milli: int | None = None,
+        memory_mb: int | None = None,
+        max_instance: int | None = None,
     ) -> CloudApp:
         """Deploys a local agent project to Volcengine FaaS, creating necessary resources.
 
@@ -271,6 +274,9 @@ class CloudAgentEngine(BaseModel):
             identity_client_name (str, optional): Custom client name. Defaults to timestamped.
             local_test (bool): Perform FastAPI server test before deploy. Defaults to False.
             disable_gateway_cors (bool): Disable route-wide APIG CORS. Defaults to False.
+            cpu_milli: Function CPU in millicores; omitted to use platform defaults.
+            memory_mb: Function memory in MB; omitted to preserve existing settings.
+            max_instance: Maximum function instances; omitted to preserve cloud settings.
 
         Returns:
             CloudApp: Deployed application with endpoint, name, and ID.
@@ -334,6 +340,9 @@ class CloudAgentEngine(BaseModel):
                 enable_mcp_session=enable_mcp_session,
                 keep_failed_deploy=keep_failed_deploy,
                 disable_gateway_cors=disable_gateway_cors,
+                cpu_milli=cpu_milli,
+                memory_mb=memory_mb,
+                max_instance=max_instance,
             )
             _ = function_id  # for future use
 
