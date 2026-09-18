@@ -145,9 +145,11 @@
     "reselect": "Select again",
     "selectZip": "Select ZIP",
     "continue": "Continue upload",
-    "start": "Start migration",
+    "start": "Upload and analyze",
     "inputAria": "Select a local project ZIP",
-    "retention": "The temporary migration environment is retained for 1 hour after creation. Successfully saved source versions are unaffected."
+    "retention": "The temporary migration environment is retained for 1 hour after creation. Successfully saved source versions are unaffected.",
+    "uploading": "Uploading…",
+    "sizeHint": "Project ZIP, up to {{size}}"
   },
   "deployment": {
     "requiredPlaceholder": "Enter {{key}}",
@@ -160,11 +162,21 @@
     "title": "Migrate existing project",
     "newMigration": "New migration",
     "recent": "Recent migrations",
-    "sessionsAria": "Migration sessions",
     "loadingSessions": "Loading migration sessions…",
     "noSessions": "No migration sessions",
     "heading": "Migrate an existing Agent project",
-    "intro": "Upload a local project ZIP. Codex will first perform a read-only analysis, then ask you to confirm the migration method."
+    "intro": "Upload a local project ZIP. Codex will first perform a read-only analysis, then ask you to confirm the migration method.",
+    "backToHome": "Migration home",
+    "navigation": "Migration navigation",
+    "showMore": "Show more",
+    "showLess": "Show less",
+    "projectName": "Project name",
+    "status": "Status",
+    "createdAt": "Created",
+    "actions": "Actions",
+    "openTask": "Open migration {{name}}",
+    "continueTask": "Continue",
+    "viewTask": "View"
   },
   "actions": {
     "stop": "Stop migration",
@@ -178,8 +190,6 @@
     "defaultReason": "Dev Sandbox is currently unavailable. Contact your administrator to check the configuration."
   },
   "conversation": {
-    "requestZip": "Provide a local project ZIP. After upload, I’ll identify the framework, entry point, and migration boundaries, then ask you to confirm the migration method before making changes.",
-    "zipHint": "Only local ZIP files are supported, up to {{size}}. The migration environment is retained for 1 hour after creation.",
     "creatingSandbox": "Creating Dev Sandbox",
     "initializing": "Initializing the migration workspace and checking AgentKit CLI, Codex, and migration capabilities. The project will upload automatically when the environment is ready.",
     "elapsed": "Elapsed: {{duration}}",
