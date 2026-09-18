@@ -162,6 +162,10 @@ class MpaAgentOperationService:
     async def list_active(self, owner_id: str) -> list[MpaLifecycleOperation]:
         return await self._repository.list_active_operations(owner_id)
 
+    async def get(self, owner_id: str, operation_id: str) -> MpaLifecycleOperation:
+        stored = await self._repository.get_operation(owner_id, operation_id)
+        return stored.value
+
     async def _advance(
         self,
         stored: Stored[MpaLifecycleOperation],

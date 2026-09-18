@@ -22,6 +22,10 @@ from frontend.server.mpa.service import (
     MpaAgentOperationService,
 )
 from frontend.server.mpa.operations import MpaOperationConflict
+from frontend.server.mpa.operations import MpaOperationNotFound
+from veadk.integrations.mpa.control_plane_client import (
+    MpaAgentOperationRequest as MpaAgentOperationBody,
+)
 
 RuntimeAuthorizer = Callable[[Request, str, str], Any]
 RuntimeConnectionResolver = Callable[
@@ -49,20 +53,6 @@ class MpaProfileApplyBody(BaseModel):
     profile: MpaProfile
     create: bool = False
     runtime_revision: str = Field(default="", alias="runtimeRevision")
-
-
-class MpaAgentOperationBody(BaseModel):
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
-
-    operation_kind: str | None = Field(default=None, alias="operationKind")
-    runtime_id: str = Field(alias="runtimeId", min_length=1)
-    region: str = "cn-beijing"
-    mpa_instance_id: str = Field(default="", alias="mpaInstanceId")
-    source_profile_id: str = Field(alias="sourceProfileId", min_length=1)
-    profile: MpaProfile
-    target_key: str = Field(default="", alias="targetKey")
-    runtime_revision: str = Field(default="", alias="runtimeRevision")
-    create: bool | None = None
 
 
 class MpaRuntimeSessionBody(BaseModel):
@@ -210,6 +200,26 @@ def mount_mpa_profile_routes(
         return {
             "operations": [_operation_payload(operation) for operation in operations]
         }
+
+    @app.get("/web/mpa/agent-operations/{operation_id}")
+    async def get_agent_operation(
+        operation_id: str, request: Request
+    ) -> dict[str, Any]:
+        if operation_service is None:
+            raise HTTPException(
+                status_code=503, detail="mpa_operation_service_unavailable"
+            )
+        try:
+            operation = await operation_service.get(owner_id(request), operation_id)
+        except MpaOperationNotFound as error:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "code": "mpa_operation_not_found",
+                    "message": "mpa_operation_not_found",
+                },
+            ) from error
+        return _operation_payload(operation)
 
     @app.get("/web/mpa/agents/{mpa_instance_id}/view")
     async def mpa_agent_view(

@@ -138,10 +138,12 @@ class OrphanRuntimeClient(FakeRuntimeClient):
 
 
 class FakeOperationService:
-    def __init__(self, *, fail: bool = False) -> None:
+    def __init__(self, *, fail: bool = False, get_missing: bool = False) -> None:
         self.fail = fail
+        self.get_missing = get_missing
         self.started: list[tuple[Any, str]] = []
         self.retried: list[tuple[Any, str]] = []
+        self.gotten: list[tuple[str, str]] = []
         self.listed: list[str] = []
 
     async def start(self, request, *, idempotency_key: str) -> MpaLifecycleOperation:
@@ -155,6 +157,14 @@ class FakeOperationService:
         return _operation(
             operationId=operation_id, ownerId=request.owner_id, retryCount=1
         )
+
+    async def get(self, owner_id: str, operation_id: str) -> MpaLifecycleOperation:
+        if self.get_missing:
+            from frontend.server.mpa.operations import MpaOperationNotFound
+
+            raise MpaOperationNotFound("missing")
+        self.gotten.append((owner_id, operation_id))
+        return _operation(operationId=operation_id, ownerId=owner_id)
 
     async def list_active(self, owner_id: str) -> list[MpaLifecycleOperation]:
         self.listed.append(owner_id)
@@ -763,6 +773,30 @@ def test_mpa_agent_operations_route_lists_active_for_owner():
     assert response.status_code == 200
     assert response.json()["operations"][0]["operationId"] == "mpaop-1"
     assert operation_service.listed == ["owner-1"]
+
+
+def test_mpa_agent_operation_route_gets_completed_operation_for_owner():
+    operation_service = FakeOperationService()
+    client = _app(FakeRuntimeClient(), operation_service=operation_service)
+
+    response = client.get("/web/mpa/agent-operations/mpaop-1")
+
+    assert response.status_code == 200
+    assert response.json()["operationId"] == "mpaop-1"
+    assert operation_service.gotten == [("owner-1", "mpaop-1")]
+
+
+def test_mpa_agent_operation_route_maps_missing_operation():
+    operation_service = FakeOperationService(get_missing=True)
+    client = _app(FakeRuntimeClient(), operation_service=operation_service)
+
+    response = client.get("/web/mpa/agent-operations/missing")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == {
+        "code": "mpa_operation_not_found",
+        "message": "mpa_operation_not_found",
+    }
 
 
 def test_mpa_agent_operation_retry_route_resumes_from_request_body():

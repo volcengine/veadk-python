@@ -11,3 +11,33 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+"""Public MPA integration helpers."""
+
+from veadk.integrations.mpa.control_plane_client import (
+    MpaAgentDeletePreview,
+    MpaAgentCapabilities,
+    MpaAgentOperation,
+    MpaAgentOperationRequest,
+    MpaAgentView,
+    MpaControlPlaneClient,
+    MpaControlPlaneError,
+    MpaExecutionConfigChange,
+    MpaProfile,
+    MpaProfileStatus,
+    MpaSessionExecutionConfig,
+)
+
+__all__ = [
+    "MpaAgentDeletePreview",
+    "MpaAgentCapabilities",
+    "MpaAgentOperation",
+    "MpaAgentOperationRequest",
+    "MpaAgentView",
+    "MpaControlPlaneClient",
+    "MpaControlPlaneError",
+    "MpaExecutionConfigChange",
+    "MpaProfile",
+    "MpaProfileStatus",
+    "MpaSessionExecutionConfig",
+]

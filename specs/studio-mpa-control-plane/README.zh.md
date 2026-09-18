@@ -1,8 +1,8 @@
 # Studio MPA 控制面
 
 - Component ID：`studio-mpa-control-plane`
-- 状态：剩余 P0 修订为 `draft`；基线第一期、第二期部分能力以及 P0 S1/S2 Studio 切片至 S2-08、S4-05/S4-07、S5-02 BFF view model、S5-03 前端消费、S5-05 diagnostics 消费、S5-06 compatibility preflight、S5-07 删除预览/分阶段清理和 S5-08 Profile 管理入口已实现
-- 修订日期：2026-09-17
+- 状态：剩余 P0 修订为 `draft`；基线第一期、第二期部分能力以及 P0 S1/S2 Studio 切片至 S2-08、S4-05/S4-07、S5-02 BFF view model、S5-03 前端消费、S5-05 diagnostics 消费、S5-06 compatibility preflight、S5-07 删除预览/分阶段清理和 S5-08 Profile 管理/共享 Python client 已实现
+- 修订日期：2026-09-18
 - English：[README.md](README.md)
 - PRD：[MPA Studio Turn 控制与资源工作台](../../prd-spec/features/mpa-studio-control-plane/2026-09-13-mpa-studio-control-plane-design.zh.md)
 
@@ -81,7 +81,7 @@ Studio MPA 创建和 `veadk mpa provision` 由 [Studio MPA 创建](../studio-mpa
 - `CON-20a`：浏览器只调用 VeADK BFF 的 `/web/mpa/agents`。BFF 校验现有 Studio Agent draft 并调用类型化 mpa-agent Profile API。本期不调用 Managed Agent CRUD/version API，也不使用服务端 arkcli 子进程。create/update operation 使用 Studio TOS 的 `forbid_overwrite` + ETag 持久化；两个写入口均要求客户端先持久化 `Idempotency-Key` 并返回 `202 + operationId`。相同 principal/operation/target/key/hash 返回同一 operation；刷新通过 operation ID 或 `GET /web/mpa/agent-operations?status=active` 恢复，retry 从最后安全阶段继续。
 - `CON-20b`：本地 Studio 开发态可在 `veadk studio --dev` 且未配置 Studio TOS 时使用进程内 MPA operation repository。它必须保持 UI 所需的 operation ID、request-hash 幂等和 ETag compare-and-swap 语义，但不具备持久化能力，也不能作为发布证据。非 dev 部署缺少 Studio TOS 时，Profile 写路由继续返回 `mpa_operation_service_unavailable`。
 - `CON-21`: 本期交互/Debug 执行委托 runtime service，保证授权与隔离。渠道/job 管理及资源库全局产物/adapter 延后，保留既有行为。
-- `CON-22`：BFF/CLI 共用 `MpaControlPlaneClient` 的 schema/auth/error/capability 协商，CLI 不导入 server route。区分 normal/loading/empty/error/denied/stale/retry；继续遵循模型锁定、IME/键盘和窄屏规则。Runtime capability 不支持时明确 read-only/unsupported，不做不安全 fallback。
+- `CON-22`：BFF/CLI 共用公开异步 `veadk.integrations.mpa.MpaControlPlaneClient` 的 schema/auth/error/capability 协商，CLI 不导入 server route。client 只调用 Studio BFF API，不接收 Runtime Secret；统一注入 bearer、保留响应 ETag；写操作要求调用方稳定的 `Idempotency-Key`，CAS 更新要求 `If-Match`；HTTP/timeout 失败统一映射为脱敏的 `MpaControlPlaneError`，包含 `code`、`status_code`、`request_id`、`retryable` 和可选 `current_state`。只有长度受限、机器可读的响应 code 可以写入 `code`；自由文本 detail 统一降级为 `http_<status>` 且不对外暴露。生命周期恢复使用 active-list，并通过按 owner 授权的 `GET /web/mpa/agent-operations/{operationId}` 获取终态结果；retry 复用原请求身份，不生成新 key。区分 normal/loading/empty/error/denied/stale/retry；继续遵循模型锁定、IME/键盘和窄屏规则。Runtime capability 不支持时明确 read-only/unsupported，不做不安全 fallback。
 
 仍要求新平台数据/版本兼容，仅排除历史 ArkClaw 迁移。`CON-16` 至 `CON-22` 映射 PRD `AC-1`、`AC-2`、`AC-4`、`AC-5`、`AC-7`、`AC-8`、`AC-10`，覆盖 unit/BFF、真实浏览器和隔离云 E2E。状态：S1 创建/进度、S2 execution-config BFF/UI、S3 run/cursor 刷新恢复、S4-05 Studio continuation 接线、S4-06 Runtime 授权/副作用前复核，以及 S4-07 浏览器生命周期门禁已实现并完成本地验证；S2 浏览器并发已通过 loopback scenario fixture 的 BC-04/05，S3 刷新恢复已通过 BC-06，S4 pause/resume/continue 已通过 BC-09。真实云和完整 Debug/Trace 收口仍待完成。前后端与构建门禁仍遵循 [frontend/SPEC.md](../../frontend/SPEC.md)。
 
@@ -105,6 +105,8 @@ PRD 第 6 节记录实际 `frontend/src/App.tsx` 与 `frontend/src/ui/MyAgents.t
 - `CON-28`：应用/开发者/全局管理页保留非 MPA 语义。限制不兼容 MPA target，不隐藏所有通用功能。MPA runtime admin 不等于平台用户管理 admin。Trace/log/usage/feedback、CLI 示例保持 runtime/worker/Session/Turn 关联与脱敏，不将不支持的 coding/GitHub 自动化改名成 MPA。
 
 实现说明：`CON-23`、`CON-23a`/`CON-24` 的 S2 子集、S4-05 continuation client path、S4-06 Runtime authorization recheck path、S4-07 生命周期浏览器 fixture、S5-02/S5-03/S5-08 的 `CON-25`/`CON-25a` view-model 与 Profile 管理路径、`CON-20b` 的开发态本地 store、S5-05 diagnostics 消费路径、S5-06 `CON-29` compatibility preflight 和 S5-07 `CON-30` 删除预览/分阶段清理已实现，覆盖 MPA category 传递、MPA 创建入口、当前 Runtime/当前 Session 作用域、execution-config BFF/UI 调用、浏览器双客户端 CAS 处理、Runtime-owned continuation streaming、本地化检查点续跑状态展示、把 Runtime `403 runtime_action_forbidden` 作为控制面拒绝信号消费、由 BFF 返回 `runtime_missing|bound|binding_ambiguous|orphan_runtime` 的 MPA 详情状态、允许唯一可写 orphan Runtime 执行首次 Profile apply，同时继续阻止 Session 配置/诊断、在 MPA-only Diagnostics section 中展示 Runtime Console run/trace correlation、在 MPA update/release/rollback 副作用前拒绝不兼容请求，以及在 active operation 或 active session 存在时阻止 MPA Runtime 删除。
+
+2026-09-18：`CON-22` 共享 client 提取已实现。公开 Python integration 统一持有跨消费者的 Profile、operation、capability、execution-config、delete-preview、结构化错误、ETag 与幂等契约；Studio Runtime transport 改为导入共享的 Profile/execution-config schema，不再各自定义副本。BFF 在 active-list/retry 之外新增按 owner 授权的 operation 查询，使 CLI 轮询可以恢复终态 operation，无需依赖 FastAPI route module，也不必只扫描 active 状态。本切片只改变 Studio/VeADK 边界，不新增 Runtime endpoint 或持久数据模型。
 
 验证：以 P0 PRD `AC-1` 至 `AC-12` 为准，覆盖 Studio AgentDraft 规范化、MPA Profile revision 应用、会话配置 CAS、对话/worker、控制/续跑、历史、Debug/Trace、真实身份/Profile apply 和 PostgreSQL 并发。浏览器覆盖刷新恢复、双客户端 CAS、loading/empty/error/denied/stale/retry；IME/窄屏保留真实浏览器证据。资源库、搜索、定时任务、飞书、网站集成延后。S2 本地验证：BFF pytest 返回 28 passed，前端 source-contract 子集返回 95 passed，完整前端测试返回 1209 passed，i18n 检查通过，前端 build 通过，Runtime S2 focused tests 返回 46 passed，Runtime `make test-postgres` 返回 5 passed，两仓 `git diff --check` 通过。浏览器 BC-04/05 已使用 system Google Chrome via Playwright 访问 `http://127.0.0.1:18174` loopback fixture 验证通过，证据位于 `evidence/browser/mpa-s2-1789491400/`。`uv run --extra dev pyright ...` 本地为 `blocked`，因为当前环境没有 `pyright` 可执行文件或项目脚本。
 S4-05 本地验证：覆盖 `runSSE`、`continueTurnSSE` 和 Composer lifecycle routing 的 frontend source-contract tests 返回 37 passed；`npm --prefix frontend run check:i18n` 通过；`npm --prefix frontend run build` 通过，生成的 `veadk/webui` 产物已清理。

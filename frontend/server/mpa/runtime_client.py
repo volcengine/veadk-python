@@ -7,42 +7,13 @@ import json
 from typing import Any
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 
-_SECRET_KEY_PARTS = ("apikey", "secret", "token", "password", "cookie")
-
-
-def _contains_secret_field(value: Any) -> bool:
-    if isinstance(value, dict):
-        for key, item in value.items():
-            normalized = str(key).replace("_", "").replace("-", "").casefold()
-            if any(part in normalized for part in _SECRET_KEY_PARTS):
-                return True
-            if _contains_secret_field(item):
-                return True
-    if isinstance(value, list):
-        return any(_contains_secret_field(item) for item in value)
-    return False
-
-
-class MpaProfile(BaseModel):
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
-
-    name: str = Field(min_length=1)
-    description: str = ""
-    system: str = Field(min_length=1)
-    model: dict[str, Any]
-    tools: list[dict[str, Any]] = Field(default_factory=list)
-    skills: list[dict[str, Any]] = Field(default_factory=list)
-    mcp_servers: list[dict[str, Any]] = Field(default_factory=list, alias="mcpServers")
-    multiagent: dict[str, Any] | None = None
-    metadata: dict[str, Any] = Field(default_factory=dict)
-
-    @model_validator(mode="after")
-    def reject_embedded_secrets(self) -> "MpaProfile":
-        if _contains_secret_field(self.model_dump(by_alias=True)):
-            raise ValueError("secret values must be represented by references")
-        return self
+from veadk.integrations.mpa.control_plane_client import (
+    MpaExecutionConfigChange,
+    MpaProfile,
+    MpaSessionExecutionConfig,
+)
 
 
 class MpaProfileApplyRequest(BaseModel):
@@ -75,34 +46,6 @@ class MpaProfileResult(BaseModel):
     operation_id: str = Field(alias="operationId")
     status: str
     etag: str = ""
-
-
-class MpaExecutionConfigChange(BaseModel):
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
-
-    category: str = Field(min_length=1)
-    mode: str = Field(min_length=1)
-    value: Any | None = None
-
-
-class MpaSessionExecutionConfig(BaseModel):
-    model_config = ConfigDict(populate_by_name=True, extra="allow")
-
-    app_name: str = Field(alias="appName")
-    session_id: str = Field(alias="sessionId")
-    revision: int
-    etag: str = ""
-    mpa_instance_id: str = Field(alias="mpaInstanceId")
-    profile_revision: int = Field(alias="profileRevision")
-    profile_default_revision: int = Field(alias="profileDefaultRevision")
-    overrides: dict[str, Any] = Field(default_factory=dict)
-    effective_refs: dict[str, Any] = Field(default_factory=dict, alias="effectiveRefs")
-    invalid_refs: list[dict[str, Any]] = Field(
-        default_factory=list, alias="invalidRefs"
-    )
-    updated_by: str = Field(default="", alias="updatedBy")
-    created_at: str = Field(default="", alias="createdAt")
-    updated_at: str = Field(default="", alias="updatedAt")
 
 
 class MpaRuntimeSessionSummary(BaseModel):
