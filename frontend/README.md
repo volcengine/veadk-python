@@ -1334,6 +1334,17 @@ schedule without waiting for Runtime execution. A separate asynchronous worker
 drains ready entries, invokes Runtime, and writes terminal results. The scanner,
 worker, and Studio BFF can therefore restart independently without losing work.
 
+Deployment output identifies the scanner and worker separately, including each
+Function name, ID, console link, dependency installation status, cloud build log,
+release status, revision, and minute timer ID. Build logs are printed as they
+become available, with repeated lines suppressed. Release failures include the
+status message and failed-instance logs returned by VeFaaS. During quiet periods,
+a progress message reports the current stage and elapsed time about every 15
+seconds, including while an SDK request is pending. Optional log retrieval uses
+short timeouts and does not interrupt deployment; credentials and signed URL
+queries are redacted. Volcengine uses Chinese progress messages and BytePlus uses
+English messages
+
 Duplicate timer deliveries are deduplicated with immutable run IDs and TOS
 conditional writes; an ETag lock prevents concurrent executions of the same
 task across Studio replicas or worker instances. Ready entries are deleted only

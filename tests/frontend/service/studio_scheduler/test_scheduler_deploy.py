@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 from hashlib import sha256
+from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -65,6 +66,8 @@ class _Client:
 
 class _Service:
     def __init__(self) -> None:
+        self.provider = "volcengine"
+        self.region = "cn-beijing"
         self.client = _Client()
         self.created_bundle: Path | None = None
 
@@ -183,6 +186,113 @@ def test_deploy_extends_vefaas_sdk_request_timeout(tmp_path: Path) -> None:
     assert service.client.timeouts
     assert set(service.client.timeouts) == {600}
     assert service.client.list_functions == original_list_functions
+
+
+@pytest.mark.parametrize("provider", ["volcengine", "byteplus"])
+@pytest.mark.parametrize("existing", [False, True])
+def test_scheduler_deploy_prints_both_functions_and_cloud_logs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str,
+    existing: bool,
+) -> None:
+    (tmp_path / "requirements.txt").write_text("veadk-python\n", encoding="utf-8")
+    service = _Service()
+    service.provider = provider
+    service.region = "cn-beijing" if provider == "volcengine" else "ap-southeast-1"
+    counters: dict[str, int] = {}
+    messages: list[str] = []
+    monkeypatch.setattr(
+        "frontend.service.studio_scheduler.deploy_progress.logger.info",
+        lambda message, *args: messages.append(message % args if args else message),
+    )
+    if existing:
+        monkeypatch.setattr(
+            service.client,
+            "list_functions",
+            lambda _: SimpleNamespace(
+                total=2,
+                items=[
+                    SimpleNamespace(name="studio-test-cronjobs", id="function-1"),
+                    SimpleNamespace(
+                        name="studio-test-cronjobs-worker", id="worker-function-1"
+                    ),
+                ],
+            ),
+        )
+        monkeypatch.setattr(
+            service.client,
+            "get_function",
+            lambda _: SimpleNamespace(
+                async_task_config=SimpleNamespace(enable_async_task=True),
+            ),
+            raising=False,
+        )
+        monkeypatch.setattr(
+            service, "_replace_application_code_bundle", lambda **_: None, raising=False
+        )
+
+    def install_status(request: Any) -> Any:
+        key = request.function_id
+        counters[key] = counters.get(key, 0) + 1
+        return SimpleNamespace(status="Running" if counters[key] == 1 else "Success")
+
+    monkeypatch.setattr(
+        service.client, "get_dependency_install_task_status", install_status
+    )
+    monkeypatch.setattr(
+        service.client,
+        "get_dependency_install_task_log_download_uri",
+        lambda request: SimpleNamespace(
+            download_url=f"https://logs.example/{request.function_id}.log?signature=private-signature"
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        service.client,
+        "get_release_status",
+        lambda _: SimpleNamespace(
+            status="Success",
+            status_message="Health check passed",
+            new_revision_number=2,
+        ),
+    )
+
+    class LogResponse(BytesIO):
+        headers: dict[str, str] = {}
+
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda *_args, **_kwargs: LogResponse(
+            b"Collecting scheduler-dependency\nInstalling collected packages\n"
+        ),
+    )
+    monkeypatch.setattr(
+        "frontend.service.studio_scheduler.deploy.time.sleep", lambda _: None
+    )
+    deploy_scheduler(
+        service,
+        studio_application_name="studio_test",
+        package_root=tmp_path,
+        role_trn="trn:iam::role/studio",
+        environment={"VEADK_STUDIO_TOS_BUCKET": "studio"},
+    )
+
+    output = "\n".join(messages)
+    assert "studio-test-cronjobs" in output
+    assert "studio-test-cronjobs-worker" in output
+    assert "function-1" in output
+    assert "worker-function-1" in output
+    assert output.count("Collecting scheduler-dependency") == 2
+    assert output.count("Installing collected packages") == 2
+    assert "Health check passed" in output
+    assert "timer-1" in output and "timer-2" in output
+    assert "private-signature" not in output
+    assert (
+        ("Scanner" in output and "Worker" in output)
+        if provider == "byteplus"
+        else ("定时扫描器" in output and "任务执行器" in output)
+    )
 
 
 def test_stage_package_preserves_offline_runtime_dependencies(
