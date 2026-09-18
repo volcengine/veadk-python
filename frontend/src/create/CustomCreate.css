@@ -2830,8 +2830,13 @@
   scrollbar-gutter: stable;
 }
 .cw-model-key-option {
+  min-height: 48px;
   justify-content: space-between;
   gap: 12px;
+}
+.cw-model-key-option:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
 }
 .cw-model-key-option > span {
   min-width: 0;

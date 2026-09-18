@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 def _to_camel(value: str) -> str:
@@ -42,11 +42,21 @@ class ModelOption(ApiModel):
     activation_state: str
     lifecycle_status: str
     available: bool
+    api_key_allowed: bool | None = None
+
+
+class ModelApiKeyModelAccess(ApiModel):
+    effect: Literal["allow", "deny"]
+    all_models: bool
+    model_ids: list[str]
 
 
 class ModelApiKeyOption(ApiModel):
     id: str
     name: str
+    status: str | None = None
+    allow_all: bool | None = None
+    model_access: ModelApiKeyModelAccess | None = Field(default=None, exclude=True)
 
 
 class ModelApiKeysResponse(ApiModel):
@@ -59,10 +69,25 @@ class ModelApiKeyValueResponse(ApiModel):
     value: str
 
 
+ModelPermissionState = Literal[
+    "Available", "Shutdown", "VideoGeneration", "Unsupported", "NotActivated", "Unknown"
+]
+
+
+class ModelApiKeyModelPermission(ApiModel):
+    name: str
+    state: ModelPermissionState
+    model_id: str | None = None
+
+
 class ModelOptionsResponse(ApiModel):
     provider: Literal["volcengine", "byteplus"]
     selected_api_key_id: str | None = None
     models: list[ModelOption]
+    api_key_model_permissions: list[ModelApiKeyModelPermission] | None = None
+    model_permission_catalog: dict[str, ModelApiKeyModelPermission] = Field(
+        default_factory=dict, exclude=True
+    )
 
 
 __all__ = [

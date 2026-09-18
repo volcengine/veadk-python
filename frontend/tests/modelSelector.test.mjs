@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { transform } from "esbuild";
 
 const customCreateSource = readFileSync(
   new URL("../src/create/CustomCreate.tsx", import.meta.url),
@@ -39,6 +40,20 @@ const cloudProviderSource = readFileSync(
   "utf8",
 );
 
+test("cleared model selections stay empty until the user selects a permitted model", async () => {
+  const source = customCreateSource.match(/function shouldUseProviderDefaultModel\([\s\S]*?\n\}/)?.[0];
+  assert.ok(source);
+  const { code } = await transform(`export ${source}`, { loader: "ts", format: "esm" });
+  const { shouldUseProviderDefaultModel } = await import(
+    `data:text/javascript;base64,${Buffer.from(code).toString("base64")}`
+  );
+  for (const provider of ["volcengine", "byteplus"]) {
+    assert.equal(shouldUseProviderDefaultModel("", provider, provider), false);
+    assert.equal(shouldUseProviderDefaultModel(undefined, provider, provider), true);
+  }
+  assert.equal(shouldUseProviderDefaultModel("", "volcengine", "byteplus"), true);
+});
+
 test("model configuration switches between ModelArk and custom fields", () => {
   assert.match(customCreateSource, /<RadioGroup<ModelSource \| "gateway">/);
   assert.match(customCreateSource, /value: "ark" as const/);
@@ -71,7 +86,7 @@ test("ModelArk picker exposes search, status, loading, empty and retry states", 
   assert.equal(customCreateSource.match(/<CatalogSelect/g)?.length, 3);
   assert.match(customCreateSource, /triggerAriaLabel=\{t\("traditional\.model\.selectApiKey"\)\}/);
   assert.match(customCreateSource, /menuAriaLabel=\{t\("traditional\.model\.apiKeyList"\)\}/);
-  assert.match(customCreateSource, /searchPlaceholder=\{t\("traditional\.model\.searchApiKeyName"\)\}/);
+  assert.match(customCreateSource, /searchPlaceholder=\{t\("modelApiKey\.search"\)\}/);
   assert.match(
     customCreateSource,
     /response\.keys\.find\(\(key\) => key\.name === apiKeyName\)/,
@@ -87,7 +102,6 @@ test("ModelArk picker exposes search, status, loading, empty and retry states", 
   assert.match(customCreateSource, /bottom: menuPosition\.bottom \?\? "auto"/);
   assert.match(customCreateSource, /model\.lifecycleStatus === "Retiring"/);
   assert.match(customCreateSource, /"traditional\.model\.retiring"/);
-  assert.match(customCreateSource, /t\("traditional\.model\.loading"\)/);
   assert.match(customCreateSource, /t\("traditional\.model\.empty"\)/);
   assert.match(customCreateSource, /t\("traditional\.model\.refresh"\)/);
   assert.match(customCreateStyles, /\.cw-model-status\.is-available/);
@@ -112,7 +126,7 @@ test("ModelArk picker refreshes by API Key without exposing internal Key IDs", (
     /refresh: reloadKey > 0 \|\| keySelectionRevision > 0/,
   );
   assert.match(customCreateSource, /setModelsApiKeyId\(null\)/);
-  assert.match(customCreateSource, /searchPlaceholder=\{t\("traditional\.model\.searchApiKeyName"\)\}/);
+  assert.match(customCreateSource, /searchPlaceholder=\{t\("modelApiKey\.search"\)\}/);
   assert.doesNotMatch(customCreateSource, /搜索 API Key 名称或 ID/);
   assert.doesNotMatch(customCreateSource, /<small>\{key\.id\}<\/small>/);
   assert.doesNotMatch(

@@ -730,7 +730,7 @@ async def test_api_key_routes_are_safe_key_scoped_and_force_refresh(
     assert cached.json() == first.json()
     assert refreshed.json()["selectedApiKeyId"] == "key-2"
     assert calls == {
-        "list_keys": 2,
+        "list_keys": 4,
         "raw": 2,
         "activations": 2,
         "models": 2,

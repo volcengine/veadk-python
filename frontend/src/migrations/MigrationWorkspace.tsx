@@ -322,6 +322,7 @@ function isSelectableMigrationModel(
   unsupportedModelIds: ReadonlySet<string>,
 ): boolean {
   return (
+    model.apiKeyAllowed !== false &&
     !unsupportedModelIds.has(model.id) &&
     (model.available || model.lifecycleStatus === "Retiring")
   );
