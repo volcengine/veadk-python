@@ -160,6 +160,66 @@ it("keeps tool input and output independently collapsible and makes closed regio
   expect(io[1].querySelector("button")?.getAttribute("aria-expanded")).toBe("true");
 });
 
+it("animates only newly added steps and preserves existing disclosure state across streamed updates", async () => {
+  const matchMedia = window.matchMedia;
+  window.matchMedia = vi.fn(query => ({ ...matchMedia(query), matches: false }));
+  const first = { id: "first", type: "tool" as const, title: "读取数据", status: "complete" as const, input: "{}" };
+  const second = { id: "second", type: "tool" as const, title: "分析数据", status: "running" as const };
+  try {
+    await render([{ id: "a", role: "assistant", status: "running", blocks: [first] }]);
+    const existing = host.querySelector('[data-step-id="first"]')!;
+    const disclosure = existing.querySelector("button")!;
+    expect(existing.hasAttribute("data-entering")).toBe(false);
+    await click(disclosure);
+    await render([{ id: "a", role: "assistant", status: "running", blocks: [first, second] }]);
+    const added = host.querySelector('[data-step-id="second"]')!;
+    expect(added.hasAttribute("data-entering")).toBe(true);
+    expect(host.querySelector('[data-step-id="first"]')).toBe(existing);
+    expect(disclosure.getAttribute("aria-expanded")).toBe("true");
+
+    const animationEnd = new Event("animationend", { bubbles: true });
+    Object.defineProperty(animationEnd, "animationName", { value: "studio-conversation-step-content-in" });
+    await act(async () => added.firstElementChild!.dispatchEvent(animationEnd));
+    await render([
+      { id: "a", role: "assistant", status: "complete", blocks: [first, { ...second, status: "complete" }] },
+      { id: "b", role: "assistant", status: "running", steps: [first] },
+    ]);
+    expect(host.querySelector('[data-step-id="second"]')).toBe(added);
+    expect(added.hasAttribute("data-entering")).toBe(false);
+    const sameIdInNewMessage = host.querySelectorAll('[data-step-id="first"]')[1];
+    expect(sameIdInNewMessage.hasAttribute("data-entering")).toBe(true);
+    await act(async () => sameIdInNewMessage.querySelector<HTMLButtonElement>("button")!.focus());
+    expect(sameIdInNewMessage.hasAttribute("data-entering")).toBe(false);
+
+    await render([{ id: "a", role: "assistant", status: "running", blocks: [first] }]);
+    await render([{ id: "a", role: "assistant", status: "running", blocks: [first, second] }]);
+    const retried = host.querySelector('[data-step-id="second"]')!;
+    expect(retried).not.toBe(added);
+    expect(retried.hasAttribute("data-entering")).toBe(true);
+    expect(host.querySelector('[data-step-id="first"]')).toBe(existing);
+    expect(disclosure.getAttribute("aria-expanded")).toBe("true");
+  } finally {
+    window.matchMedia = matchMedia;
+  }
+});
+
+it("shows new steps immediately with reduced motion and does not replay existing collapsed handoff steps", async () => {
+  const matchMedia = window.matchMedia;
+  window.matchMedia = vi.fn(query => ({ ...matchMedia(query), matches: false }));
+  const child = { id: "nested", type: "tool" as const, title: "汇总数据", status: "complete" as const };
+  const handoff = { id: "handoff", type: "handoff" as const, title: "交给分析智能体", toAgent: "分析智能体", status: "complete" as const, steps: [child] };
+  try {
+    await render([{ id: "a", role: "assistant", blocks: [handoff] }]);
+    await click(host.querySelector('[data-step-id="handoff"] button'));
+    expect(host.querySelector('[data-step-id="nested"]')?.hasAttribute("data-entering")).toBe(false);
+    window.matchMedia = matchMedia;
+    await render([{ id: "a", role: "assistant", blocks: [handoff, { ...child, id: "new" }] }]);
+    expect(host.querySelector('[data-step-id="new"]')?.hasAttribute("data-entering")).toBe(false);
+  } finally {
+    window.matchMedia = matchMedia;
+  }
+});
+
 it("dispatches authorization and cancellation callbacks and follows the supplied state", async () => {
   const onAuthorize = vi.fn();
   const onCancel = vi.fn();

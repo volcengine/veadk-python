@@ -73,7 +73,6 @@
   line-height: 22px;
   opacity: 1;
 }
-.studio-conversation-rich-visual .studio-info-card__actions .studio-button svg { width: 14px; height: 14px; }
 .studio-conversation-rich-visual__body.studio-info-card__body { gap: 0; font-family: inherit; }
 .studio-conversation-rich-visual__panel { min-width: 0; padding-top: 12px; }
 .studio-conversation-rich-visual__panel > .studio-code-block { width: 100%; min-width: 0; margin: 0; }
@@ -98,7 +97,6 @@
 .studio-conversation-rich-visual__mermaid > svg { width: 100%; max-width: none !important; height: auto; }
 .studio-conversation-rich-visual__zoom { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 8px; }
 .studio-conversation-rich-visual__zoom > span { min-width: 36px; color: var(--studio-text-secondary); font-size: 12px; text-align: center; font-variant-numeric: tabular-nums; }
-.studio-conversation-rich-visual__zoom svg { width: 14px; height: 14px; }
 .studio-conversation-rich-visual__modal.studio-modal-layout { width: min(1040px, calc(100vw - 48px)); height: auto; padding-bottom: 24px; }
 .studio-conversation-rich-visual__modal .studio-modal-layout__footer { display: none; }
 .studio-conversation-rich-visual__modal .studio-modal-layout__body { min-height: 0; }

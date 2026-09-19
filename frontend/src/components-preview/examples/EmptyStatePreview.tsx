@@ -1,6 +1,6 @@
 import { Button } from "../../components/primitives/Button";
 import { EmptyState } from "../../components/primitives/EmptyState";
-import { ComponentApi } from "../api/ComponentApi";
+
 import "./EmptyStatePreview.css";
 
 function SearchEmptyIcon() {
@@ -14,11 +14,10 @@ function SearchEmptyIcon() {
 
 export function EmptyStatePreview() {
   return (
-    <section aria-labelledby="empty-state-preview-title">
-      <h2 id="empty-state-preview-title" className="component-preview-title">Empty State</h2>
+    <section aria-labelledby="component-page-title">
       <div className="empty-state-preview__examples">
         <section aria-labelledby="empty-state-resources-title">
-          <h3 id="empty-state-resources-title" className="empty-state-preview__subtitle">基础空状态</h3>
+          <h2 data-preview-heading tabIndex={-1} id="empty-state-resources-title" className="empty-state-preview__subtitle">基础空状态</h2>
           <div className="empty-state-preview__frame">
             <EmptyState
               title="暂无资源"
@@ -28,7 +27,7 @@ export function EmptyStatePreview() {
           </div>
         </section>
         <section aria-labelledby="empty-state-search-title">
-          <h3 id="empty-state-search-title" className="empty-state-preview__subtitle">自定义图标</h3>
+          <h2 data-preview-heading tabIndex={-1} id="empty-state-search-title" className="empty-state-preview__subtitle">自定义图标</h2>
           <div className="empty-state-preview__frame">
             <EmptyState
               icon={<SearchEmptyIcon />}
@@ -39,7 +38,6 @@ export function EmptyStatePreview() {
           </div>
         </section>
       </div>
-      <ComponentApi names={["EmptyState"]} />
     </section>
   );
 }

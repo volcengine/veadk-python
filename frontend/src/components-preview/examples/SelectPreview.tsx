@@ -1,4 +1,3 @@
-import { ComponentApi } from "../api/ComponentApi";
 import { Select, type SelectOption } from "../../components/primitives/Select";
 import doubao from "../../components/primitives/Select/assets/doubao.svg";
 import "./SelectPreview.css";
@@ -15,7 +14,7 @@ const describedModels: readonly SelectOption[] = [
 
 export function SelectPreview() {
   return <section aria-labelledby="select-preview-title">
-    <h2 id="select-preview-title" className="component-preview-title">Select</h2>
+    <h2 data-preview-heading tabIndex={-1} id="select-preview-title" className="component-preview-title">Default</h2>
     <Select aria-label="Model" options={[
       { value: "doubao-seed-2.0-pro", label: "Doubao-Seed-2.0-pro", icon: <img src={doubao} alt="" style={{ width: 13.008, height: 14.6672 }} /> },
       ...[
@@ -31,9 +30,8 @@ export function SelectPreview() {
       ].map(label => ({ value: label.toLowerCase(), label, icon: <img src={doubao} alt="" style={{ width: 13.008, height: 14.6672 }} /> })),
     ]} />
     <section className="select-preview-description" aria-labelledby="select-description-title">
-      <h3 id="select-description-title">With description</h3>
+      <h2 data-preview-heading tabIndex={-1} id="select-description-title">With description</h2>
       <Select aria-label="Model with description" options={describedModels} />
     </section>
-  <ComponentApi names={["Select"]} />
     </section>;
 }

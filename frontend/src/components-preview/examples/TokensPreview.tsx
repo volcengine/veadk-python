@@ -21,13 +21,12 @@ function TokenVisual({ token }: { token: StudioToken }) {
 export function TokensPreview() {
   const [motionActive, setMotionActive] = useState(false);
   return (
-    <section className="tokens-preview" aria-labelledby="tokens-preview-title">
-      <h2 id="tokens-preview-title" className="component-preview-title">Tokens</h2>
+    <section className="tokens-preview" aria-labelledby="component-page-title">
       <p className="tokens-preview-intro">统一管理组件的视觉参数，切换主题查看深浅模式</p>
       {studioTokenGroups.map((group) => (
         <section key={group.category} className="tokens-preview-group" aria-labelledby={`tokens-${group.category}`}>
           <div className="tokens-preview-group-heading">
-            <h3 id={`tokens-${group.category}`}>{group.label}</h3>
+            <h2 data-preview-heading tabIndex={-1} id={`tokens-${group.category}`}>{group.label}</h2>
             <p>{group.description}</p>
           </div>
           {group.category === "motion" ? <button className="tokens-preview-replay" type="button" onClick={() => setMotionActive((active) => !active)}>预览动效</button> : null}
@@ -42,7 +41,7 @@ export function TokensPreview() {
                     style={token.name.includes("duration") ? { transitionDuration: `var(${token.name})` } : { transitionTimingFunction: `var(${token.name})` }}
                   /></div> : null}
                 </div>
-                <h4>{token.label}</h4>
+                <h3>{token.label}</h3>
                 <p className="tokens-preview-name">{token.name}</p>
                 {token.category === "color" ? <dl className="tokens-preview-values"><div><dt>Dark</dt><dd>{token.dark}</dd></div><div><dt>Light</dt><dd>{token.light}</dd></div></dl> : <p className="tokens-preview-value">{token.value}</p>}
               </article>

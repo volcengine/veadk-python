@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Drawer } from "../../components/composites/Drawer";
 import { Button } from "../../components/primitives/Button";
-import { ComponentApi } from "../api/ComponentApi";
+
 import "./DrawerPreview.css";
 
 const sections = [
@@ -17,7 +17,7 @@ export function DrawerPreview() {
   const [open, setOpen] = useState(false);
   return (
     <section aria-labelledby="drawer-preview-title">
-      <h2 id="drawer-preview-title" className="component-preview-title">Drawer</h2>
+      <h2 data-preview-heading tabIndex={-1} id="drawer-preview-title" className="component-preview-title">Default</h2>
       <Drawer
         open={open}
         onOpenChange={setOpen}
@@ -40,7 +40,6 @@ export function DrawerPreview() {
           ))}
         </div>
       </Drawer>
-      <ComponentApi names={["Drawer"]} />
     </section>
   );
 }

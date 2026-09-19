@@ -12,7 +12,7 @@
   margin-bottom: 24px;
 }
 
-.conversation-flow-preview__panel { padding-top: 24px; min-width: 0; }
+.conversation-flow-preview__panel { min-width: 0; }
 
 .conversation-flow-preview__choice {
   margin: 8px 0 0;

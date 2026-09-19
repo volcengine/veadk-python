@@ -1,9 +1,8 @@
 import { useState } from "react";
 import { LongRunningState, type LongRunningStep } from "../../components/composites/LongRunningState";
 import { Button } from "../../components/primitives/Button";
-import { UnderlineTabs } from "../../components/primitives/UnderlineTabs";
 import { CodeBlock } from "../../components/composites/CodeBlock";
-import { ComponentApi } from "../api/ComponentApi";
+
 import "./LongRunningStatePreview.css";
 
 const steps: LongRunningStep[] = [
@@ -84,7 +83,7 @@ const completedDetails: Record<string, string> = {
   understand: "已确认分析范围：对照产品文档与知识库，整理调用趋势、并发峰值和配额建议，输出分析摘要",
   research: "已完成检索，共匹配 12 条相关内容，合并重复来源并保留引用位置，供后续分析核对",
   analyze: "已核对统计周期、合并重复信息，并为调用趋势、峰值变化和后续建议整理了对应依据",
-  write: "分析摘要已生成，引用与结论检查完成，所有步骤的详情与执行日志均可回看",
+  write: "分析摘要已生成，引用与结论检查完成",
 };
 
 const completedLogs: Record<string, string> = {
@@ -94,14 +93,8 @@ const completedLogs: Record<string, string> = {
   write: "10:42:12 [SUCCESS] 分析摘要已生成\n  status: completed\n  validation: passed",
 };
 
-const detailModes = [
-  { value: "text", label: "正文", id: "long-running-text-tab", panelId: "long-running-details-panel" },
-  { value: "code", label: "代码", id: "long-running-code-tab", panelId: "long-running-details-panel" },
-];
-
-export function LongRunningStatePreview() {
+function LongRunningStateExample({ mode }: { mode: "text" | "code" }) {
   const [stepIndex, setStepIndex] = useState(1);
-  const [mode, setMode] = useState("code");
   const completedIds = steps.slice(0, stepIndex).map(step => step.id);
   const previewSteps = steps.map((step, index) => {
     const completed = index < stepIndex;
@@ -116,22 +109,31 @@ export function LongRunningStatePreview() {
     };
   });
   return (
-    <section aria-labelledby="long-running-state-preview-title">
-      <h2 id="long-running-state-preview-title" className="component-preview-title">Long-running State</h2>
-      <div className="long-running-state-preview__example">
-        <UnderlineTabs className="long-running-state-preview__tabs" items={detailModes} value={mode} onValueChange={setMode} aria-label="详情展示形式" />
-        <div className="long-running-state-preview__frame" id="long-running-details-panel" role="tabpanel" aria-labelledby={`long-running-${mode}-tab`}>
-          <LongRunningState heading="调用趋势分析" steps={previewSteps} currentStep={steps[stepIndex]?.id ?? null} completedSteps={completedIds} aria-label="任务执行进度" />
-        </div>
-        <div className="long-running-state-preview__controls">
-          <span className="long-running-state-preview__position">点击已完成步骤可查看历史记录</span>
-          <div className="long-running-state-preview__buttons">
-            <Button variant="secondary" disabled={stepIndex === 0} onClick={() => setStepIndex(0)}>重新开始</Button>
-            <Button disabled={stepIndex === steps.length} onClick={() => setStepIndex(index => Math.min(index + 1, steps.length))}>{stepIndex === steps.length ? "任务已完成" : stepIndex === steps.length - 1 ? "完成任务" : "完成当前步骤"}</Button>
-          </div>
+    <div className="long-running-state-preview__example">
+      <div className="long-running-state-preview__frame">
+        <LongRunningState steps={previewSteps} currentStep={steps[stepIndex]?.id ?? null} completedSteps={completedIds} aria-label="调用趋势分析" />
+      </div>
+      <div className="long-running-state-preview__controls">
+        <div className="long-running-state-preview__buttons">
+          <Button variant="secondary" disabled={stepIndex === 0} onClick={() => setStepIndex(0)}>重新开始</Button>
+          <Button disabled={stepIndex === steps.length} onClick={() => setStepIndex(index => Math.min(index + 1, steps.length))}>{stepIndex === steps.length ? "任务已完成" : stepIndex === steps.length - 1 ? "完成任务" : "完成当前步骤"}</Button>
         </div>
       </div>
-      <ComponentApi names={["LongRunningState"]} />
+    </div>
+  );
+}
+
+export function LongRunningStatePreview() {
+  return (
+    <section className="components-preview-variants" aria-labelledby="component-page-title">
+      <section aria-labelledby="long-running-state-preview-title">
+        <h2 data-preview-heading tabIndex={-1} id="long-running-state-preview-title" className="component-preview-title">Text</h2>
+        <LongRunningStateExample mode="text" />
+      </section>
+      <section aria-labelledby="long-running-state-preview-code">
+        <h2 data-preview-heading tabIndex={-1} id="long-running-state-preview-code" className="component-preview-title">Code</h2>
+        <LongRunningStateExample mode="code" />
+      </section>
     </section>
   );
 }

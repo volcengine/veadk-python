@@ -1,4 +1,3 @@
-import { ComponentApi } from "../api/ComponentApi";
 import { useId, useState } from "react";
 import { FormField } from "../../components/composites/FormField";
 import { InputWithTailIcon } from "../../components/primitives/InputWithTailIcon";
@@ -31,7 +30,7 @@ export function FormFieldPreview() {
 
   return (
     <section aria-labelledby="form-field-preview-title">
-      <h2 id="form-field-preview-title" className="component-preview-title">Form field</h2>
+      <h2 data-preview-heading tabIndex={-1} id="form-field-preview-title" className="component-preview-title">Default</h2>
       <FormField label="Endpoint" htmlFor={endpointId}>
         <InputWithTailIcon
           id={endpointId}
@@ -44,12 +43,13 @@ export function FormFieldPreview() {
           tailIconLabel="Copy endpoint URL"
         />
       </FormField>
-      <FormField style={{ marginTop: 32 }} label="Description" htmlFor={descriptionId} required>
+      <h2 data-preview-heading tabIndex={-1} id="form-field-required-title" className="form-field-preview-required-title">Required</h2>
+      <FormField label="Description" htmlFor={descriptionId} required>
         <Textarea id={descriptionId} required />
       </FormField>
       <span className="form-field-preview-status" role="status">{copyStatus}</span>
       <section className="form-field-preview-with-tip" aria-labelledby="form-field-with-tip-title">
-        <h3 id="form-field-with-tip-title" className="component-preview-title">With tip</h3>
+        <h2 data-preview-heading tabIndex={-1} id="form-field-with-tip-title" className="component-preview-title">With Tip and Validation</h2>
         <form className="form-field-preview-validation" noValidate onSubmit={event => {
           event.preventDefault();
           setShowValidation(true);
@@ -70,7 +70,6 @@ export function FormFieldPreview() {
           </div>
         </form>
       </section>
-    <ComponentApi names={["FormField"]} />
     </section>
   );
 }
