@@ -1,9 +1,9 @@
-import { ComponentApi } from "../api/ComponentApi";
 import { useEffect, useState } from "react";
 import { ResourcePageLayout } from "../../components/layouts/ResourcePageLayout";
 import { ResourceCard } from "../../components/composites/ResourceCard";
 import { FilterTabs } from "../../components/primitives/FilterTabs";
 import { Button } from "../../components/primitives/Button";
+import { ScrollArea } from "../../components/primitives/ScrollArea";
 import imgImage1636404790 from "../../components/layouts/ResourcePageLayout/assets/imgImage1636404790.png";
 import imgImage1636404101 from "../../components/layouts/ResourcePageLayout/assets/imgImage1636404101.png";
 import imgImage1636404793 from "../../components/layouts/ResourcePageLayout/assets/imgImage1636404793.png";
@@ -49,7 +49,7 @@ function ResourceBanner() {
       <div className="resource-page-preview-banner__copy">
         <h3>Create Codex Agent</h3>
         <p>Code generation, bug fixing, logic analysis, and productivity</p>
-        <Button className="resource-page-preview-banner__button" startIcon={<img src={imgAdd} alt="" />}>Create Now</Button>
+        <Button variant="outline" size="default" className="resource-page-preview-banner__button" startIcon={<img src={imgAdd} alt="" />}>Create Now</Button>
       </div>
       <img className="resource-page-preview-banner__agent" src={imgFrame2147240405} alt="" />
       <span className="resource-page-preview-banner__agent-label">Codex Agent</span>
@@ -72,9 +72,11 @@ export function ResourcePageLayoutPreview() {
   const matchingResources = resources.filter((resource) => `${resource.title} ${resource.description}`.toLowerCase().includes(query.toLowerCase()));
   return (
     <div>
+    <h2 data-preview-heading tabIndex={-1} id="resource-page-layout-default-title">Default</h2>
     <div className="resource-page-preview-controls">
       <Button variant="secondary" disabled={loading} onClick={() => setLoading(true)}>重新演示加载</Button>
     </div>
+    <ScrollArea className="resource-page-preview-viewport" orientation="horizontal" role="region" aria-label="Resource Page Layout 预览，可横向滚动" tabIndex={0}>
     <ResourcePageLayout
       title="Agents"
       loading={loading}
@@ -82,7 +84,7 @@ export function ResourcePageLayoutPreview() {
       filters={<FilterTabs aria-label="Resource owner" options={[{ value: "all", label: "All" }, { value: "mine", label: "Created by me" }]} value={filter} onValueChange={setFilter} />}
       actions={<>
         <label className="resource-page-preview-search"><img src={imgSearchNormal} alt="" /><input aria-label="Search agents" placeholder="Search" value={query} onChange={(event) => setQuery(event.target.value)} /></label>
-        <Button className="resource-page-preview-create" startIcon={<img src={imgIconPlus} alt="" />}>Create agent</Button>
+        <Button variant="primary" size="default" className="resource-page-preview-create" startIcon={<img src={imgIconPlus} alt="" />}>Create agent</Button>
       </>}
     >
       {matchingResources.map((resource) => (
@@ -96,7 +98,7 @@ export function ResourcePageLayoutPreview() {
         </div>
       ))}
     </ResourcePageLayout>
-    <ComponentApi names={["ResourcePageLayout"]} />
+    </ScrollArea>
     </div>
   );
 }

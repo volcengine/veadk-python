@@ -12,7 +12,7 @@ import { Item } from "../../components/composites/Item";
 import { PromptInput } from "../../components/ai-app/PromptInput";
 import blocksIcon from "../../components/layouts/IndexLayout/assets/blocks.svg";
 import codepenIcon from "../../components/layouts/IndexLayout/assets/codepen.svg";
-import { ComponentApi } from "../api/ComponentApi";
+
 import { promptPlaceholders } from "./promptInputExamples";
 import { useSidebarPreviewState } from "./sidebarPreviewState";
 import "./AppLayoutPreview.css";
@@ -27,7 +27,7 @@ function AppLayoutExample({ fullscreen = false }: { fullscreen?: boolean }) {
 
   return <section className="app-layout-preview" data-fullscreen={fullscreen || undefined} aria-label="完整侧栏预览">
     <div className="app-layout-preview__toolbar">
-      <h2>App layout</h2>
+      {fullscreen ? <h1>App Layout</h1> : <h2 data-preview-heading tabIndex={-1} id="app-layout-default-title">Default</h2>}
       <div className="app-layout-preview__controls">
         <Menu label={provider === "volcengine" ? "火山引擎" : "BytePlus"} items={[{ type: "radio-group", id: "provider", value: provider, onValueChange: setProvider,
           items: [{ id: "volcengine", label: "火山引擎" }, { id: "byteplus", label: "BytePlus" }] }]} />
@@ -53,7 +53,6 @@ function AppLayoutExample({ fullscreen = false }: { fullscreen?: boolean }) {
         </>} />
     </AppLayout>
     <Drawer open={notifications} onOpenChange={setNotifications} title="通知"><EmptyState title="暂无新通知" description="新的通知会显示在这里" /></Drawer>
-    {!fullscreen && <ComponentApi names={["AppLayout"]} />}
   </section>;
 }
 

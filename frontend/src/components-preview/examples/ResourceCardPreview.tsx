@@ -1,13 +1,11 @@
-import { ComponentApi } from "../api/ComponentApi";
-import { useId } from "react";
 import { ResourceCard } from "../../components/composites/ResourceCard";
 import "./ResourceCardPreview.css";
 
 export function ResourceCardPreview() {
-  const id = useId();
+  const id = "preview-resource-card";
   return (
     <section aria-labelledby={`${id}-title`}>
-      <h2 id={`${id}-title`} className="component-preview-title">Resource card</h2>
+      <h2 data-preview-heading tabIndex={-1} id={`${id}-title`} className="component-preview-title">Resource Card</h2>
       <div className="resource-card-preview-example">
         <ResourceCard
           title="AutoAgent"
@@ -16,7 +14,6 @@ export function ResourceCardPreview() {
           updatedLabel="Updated 08-12"
         />
       </div>
-    <ComponentApi names={["ResourceCard"]} />
     </section>
   );
 }

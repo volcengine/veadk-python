@@ -1,10 +1,9 @@
-import { ComponentApi } from "../api/ComponentApi";
-import { useId, useState } from "react";
+import { useState } from "react";
 import { PillTabs } from "../../components/primitives/PillTabs";
 import "./PillTabsPreview.css";
 
 export function PillTabsPreview() {
-  const id = useId();
+  const id = "preview-pill-tabs";
   const [value, setValue] = useState("open-api");
   const items = [
     { value: "open-api", label: "Open API", panelId: `${id}-panel-0` },
@@ -14,7 +13,7 @@ export function PillTabsPreview() {
 
   return (
     <section aria-labelledby={`${id}-title`}>
-      <h2 id={`${id}-title`} className="component-preview-title">Pill tab</h2>
+      <h2 data-preview-heading tabIndex={-1} id={`${id}-title`} className="component-preview-title">Pill</h2>
       <PillTabs
         id={id}
         className="pill-tabs-preview-specimen"
@@ -26,7 +25,6 @@ export function PillTabsPreview() {
       {items.map((item, index) => (
         <div key={item.value} id={item.panelId} role="tabpanel" aria-labelledby={`${id}-tab-${index}`} hidden={value !== item.value} />
       ))}
-    <ComponentApi names={["PillTabs"]} />
     </section>
   );
 }

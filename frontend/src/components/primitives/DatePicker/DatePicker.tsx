@@ -81,7 +81,7 @@ function TimeControls({ locale, hourCycle, timeZone, placeholder, minimum, maxim
     </div>
     <div className="studio-date-picker__footer-actions">
       <span className="studio-date-picker__timezone" title={timeZone}>{timeZone}</span>
-      <Button className="studio-date-picker__done" disabled={!candidate || Boolean(outsideBounds) || state.isInvalid} onClick={() => state.setOpen(false)}>{chinese ? "完成" : "Done"}</Button>
+      <Button variant="primary" disabled={!candidate || Boolean(outsideBounds) || state.isInvalid} onClick={() => state.setOpen(false)}>{chinese ? "完成" : "Done"}</Button>
     </div>
   </div>;
 }

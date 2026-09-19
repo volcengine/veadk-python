@@ -17,7 +17,7 @@ export function InputWithTailIconPreview() {
 
   return (
     <section aria-labelledby="input-with-tail-icon-preview-title">
-      <h2 id="input-with-tail-icon-preview-title" className="component-preview-title">Input with tail icon</h2>
+      <h2 data-preview-heading tabIndex={-1} id="input-with-tail-icon-preview-title" className="component-preview-title">Trailing Icon</h2>
       <InputWithTailIcon
         aria-label="Endpoint URL"
         value={value}

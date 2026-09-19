@@ -1,8 +1,6 @@
 .loading-preview-examples {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start;
-  gap: 48px;
+  display: grid;
+  gap: 32px;
 }
 
-.loading-preview-examples > section { min-width: 120px; }
+.loading-preview-examples > section { min-width: 0; }

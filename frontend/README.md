@@ -1473,20 +1473,27 @@ AI APP 新增 [ConversationFlow](src/components/ai-app/ConversationFlow/README.m
 共享组件目录见 [组件库说明](src/components/README.md)，预览目录见
 [Components Preview](src/components-preview/README.md)
 
-运行 `npm run dev:components` 打开独立组件预览页，按基础组件、复合组件、布局、节点组件和 AI APP 分组浏览 Figma 组件
+运行 `npm run dev:components` 打开独立组件预览页，按 Foundation、Base、Block、AI App、Node、Layout 分组，组内按组件名称排序
+Foundation 下的 Specification 展示用户确认的前端开发规则，支持复制规范；内容与 AI 可读取的 [Specification.md](src/components-preview/foundation/Specification.md) 保持同一来源
+组件名称使用一级标题，变种使用二级标题；Input 的前后图标变种合并展示，参数表统一在底部，可通过页内目录直接跳转
+Form Label Row 和 Glass Icon Button Group 独立归入 Block，Card Layout 归入 Layout，原有页面与小节链接继续可用
+Progress 对应 LongRunningState，Text 和 Code 两种详情形式分别在二级标题下展示，支持 `#progress` 与原有 `#long-running-state` 链接
+窄屏提供可展开的组件目录和本页目录，原有组件链接继续可用
 预览包含可复用控件、完整 Radio 卡片、表格、页面布局和 Prompt Input，提供持久化明暗主题、语义 Token 展示及从 TypeScript 接口生成的参数表
 主次按钮默认等高，Select 支持选项副标题，Prompt Input 支持提示词列表轮播；组件交互与使用约定见预览说明
 Menu 提供文字与箭头触发的面板菜单，支持分组、多级子菜单及可选图标，预览中可查看交互示例与参数表
 Toast 提供四种状态和自定义操作，通过 ToastProvider 与 useToast 管理堆叠、自动关闭及悬停暂停，继承明暗主题
-Loading 提供无限路径与圆环两种加载图形，ScrollArea 和卡片触底加载复用无限路径，支持明暗主题与减少动态效果偏好
+Loading 提供无限路径（默认 32 × 16px）与圆环（默认 20 × 20px）两种加载图形，ScrollArea 和卡片触底加载复用无限路径，支持明暗主题与减少动态效果偏好
 EmptyState 支持圆形背景内的 24px 图标、标题与详细说明，以及复用 Button 的横排操作组；ErrorState 使用相同尺寸的红色断链图标且无按钮，两者均可在基础组件预览中查看
+Button 各样式并排展示 Compact、Default、Large，按钮底端对齐，尺寸说明在下方；文字按钮高度为 28 / 32 / 36px、字号为 12 / 14 / 16px，图标随字号缩放，Pill 使用同一套尺寸
 Button 支持 loading，加载时自动禁用且只显示 Ring 图标，保留按钮尺寸与无障碍名称
-LongRunningState 使用居中的双栏工作区，左侧展示任务进度与可回看的已完成步骤，右侧复用 Drawer 的明暗主题玻璃材质与 ScrollArea 展示详情；查看历史不会改变执行进度，可返回当前步骤继续跟随，详情即时替换并短暂淡入，代码日志复用 CodeBlock 高亮并支持隐藏行号
+LongRunningState 整体左对齐，依次展示正常字号的当前进度名称、快速循环滑动的加载条和无背景 ScrollArea；名称切换时向上渐隐再滑入下一名称，完成后停止动画并保留结果，支持减少动态效果偏好
+ConversationFlow 新增步骤先展开空间再渐显内容，状态更新不重复进场，减少动态效果时直接显示
 资源页首次加载统一复用 Infinity Path，详情布局不包含 Sidebar
 ModalButton 复用 ModalLayout 并提供遮罩和进出动效；Drawer 以留有屏幕边距的浮动卡片打开；FileExplorer 组合文件树、CodeBlock 与 ScrollArea 展示文件内容
 FileExplorer 按文件名显示常用文件图标并选择高亮语言，file.language 可覆盖，支持自动格式化、折行及可选编辑保存；CodeBlock 支持自动语法高亮、手动颜色 token 和纯文本，复制保留传入文本
 Drawer 默认提供毛玻璃背景；FileUpload 复用 DashedZone 并提供文件选择与校验，Slider 支持原生拖动和键盘调整
-DatePicker 在基础组件中展示日期与日期时间选择；IndexLayout 在布局分组中展示首页；侧边栏会话示例位于复合组件的 Sidebar / 会话
+DatePicker 在基础组件中展示日期与日期时间选择；IndexLayout 在布局分组中展示首页；侧边栏会话示例位于 Block 分组的 Sidebar
 
 
 ### 组件库侧栏预览
