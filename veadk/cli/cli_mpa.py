@@ -29,18 +29,25 @@ from typing import Any
 
 import click
 
+from veadk.integrations.mpa.mpa_identity import (
+    MpaIdentityError,
+    ensure_studio_workload_identity,
+)
 from veadk.integrations.mpa.mpa_meta_seed import (
     MpaMetaSeedError,
     overwrite_mpa_meta,
     seed_mpa_meta,
 )
 from veadk.integrations.mpa.mpa_provision import (
+    STUDIO_WORKLOAD_POOL_NAME,
     MpaProvisionParams,
     build_runtime_env,
     derive_claw_space_id,
     generate_mpa_agent_id,
     redact_env_for_display,
     tool_name_for_agent,
+    validate_mpa_agent_id,
+    workload_identity_name,
 )
 from veadk.integrations.mpa.mpa_runtime import provision_runtime
 from veadk.integrations.mpa.mpa_skill_space import ensure_skill_space
@@ -82,7 +89,6 @@ def _deploy_image(
     frontend's two-phase deploy for ``OAUTH2_REDIRECT_URI``.
     """
     import veadk.config
-
     from veadk.integrations.ve_faas.ve_faas import VeFaaS
     from veadk.utils.misc import getenv
 
@@ -154,6 +160,15 @@ def _runtime_client(region: str):
 
     ak, sk, token = _ve_credentials()
     return AgentkitRuntimeClient(
+        access_key=ak, secret_key=sk, region=region, session_token=token
+    )
+
+
+def _identity_client(region: str):
+    from veadk.integrations.ve_identity.identity_client import IdentityClient
+
+    ak, sk, token = _ve_credentials()
+    return IdentityClient(
         access_key=ak, secret_key=sk, region=region, session_token=token
     )
 
@@ -449,7 +464,7 @@ def _load_config_default_map(
     default=False,
     help="Resolve and print the plan with masked secrets; no cloud or DB writes.",
 )
-def create(  # noqa: PLR0913 - explicit CLI options are clearer than a config blob
+def create(
     image: str,
     registry_name: str,
     mpa_agent_id: str,
@@ -494,8 +509,9 @@ def create(  # noqa: PLR0913 - explicit CLI options are clearer than a config bl
 ) -> None:
     """Provision one mpa-agent instance from a prebuilt image and wire it up.
 
-    Orchestration (reference-aligned): ensure Skill Space -> ensure Tool ->
-    pre-seed mpa_meta -> compute plane -> validate/finalize bindings -> verify.
+    Orchestration (reference-aligned): ensure workload identity -> ensure Skill
+    Space -> ensure Tool -> pre-seed mpa_meta -> compute plane ->
+    validate/finalize bindings -> verify.
     """
     # Interactive, optional Feishu secret (FR-8): prompt hidden when id given.
     if feishu_app_id and not feishu_app_secret:
@@ -505,7 +521,12 @@ def create(  # noqa: PLR0913 - explicit CLI options are clearer than a config bl
 
     # Auto-generate a globally-unique mi-* id when not supplied, so each agent
     # gets its own instance id (follows arkclaw-team's id strategy).
-    mpa_agent_id = (mpa_agent_id or "").strip() or generate_mpa_agent_id()
+    try:
+        mpa_agent_id = validate_mpa_agent_id(
+            (mpa_agent_id or "").strip() or generate_mpa_agent_id()
+        )
+    except ValueError as exc:
+        raise click.UsageError(str(exc)) from exc
     click.echo(f"mpa-agent-id: {mpa_agent_id}")
 
     # Runtime agents require a sandbox Tool. Validate before SkillSpace, Tool,
@@ -561,6 +582,8 @@ def create(  # noqa: PLR0913 - explicit CLI options are clearer than a config bl
         click.echo(f"  image              : {image}")
         click.echo(f"  region             : {region}")
         click.echo(f"  CLAW_SPACE_ID      : {space_id}")
+        click.echo(f"  workload_pool      : {STUDIO_WORKLOAD_POOL_NAME}")
+        click.echo(f"  workload_identity  : {workload_identity_name(mpa_agent_id)}")
         if skill_space_name:
             click.echo(f"  skill_space (name) : {skill_space_name} (create/select)")
         elif skill_space_id:
@@ -591,6 +614,17 @@ def create(  # noqa: PLR0913 - explicit CLI options are clearer than a config bl
             click.echo(f"    - {field}")
         click.echo("Dry run only: no cloud or database changes were made.")
         return
+
+    try:
+        identity = ensure_studio_workload_identity(
+            _identity_client(identity_region), mpa_agent_id
+        )
+    except MpaIdentityError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(
+        "Workload identity ready: "
+        f"{identity.workload_pool_name}/{identity.workload_identity_name}"
+    )
 
     # 1) Ensure Skill Space (FR-14) -> SKILL_SPACE_ID.
     resolved_skill_space_id = skill_space_id

@@ -22,6 +22,7 @@ modules so this part stays trivially testable.
 
 from __future__ import annotations
 
+import re
 import secrets
 from dataclasses import dataclass, field
 
@@ -88,6 +89,8 @@ def derive_claw_space_id(claw_space_id: str | None, *, account_id: str) -> str:
 # Mirror arkclaw-team GenerateTemplateID: lowercase alnum, fixed-length suffix.
 _ID_CHARSET = "abcdefghijklmnopqrstuvwxyz0123456789"
 _ID_SUFFIX_LENGTH = 12
+_MPA_AGENT_ID_RE = re.compile(r"^mi-[a-z0-9]{12}$")
+STUDIO_WORKLOAD_POOL_NAME = "agentkit-studio-workload"
 
 
 def generate_mpa_agent_id() -> str:
@@ -98,6 +101,19 @@ def generate_mpa_agent_id() -> str:
     """
     suffix = "".join(secrets.choice(_ID_CHARSET) for _ in range(_ID_SUFFIX_LENGTH))
     return f"mi-{suffix}"
+
+
+def validate_mpa_agent_id(value: str) -> str:
+    """Return a canonical MPA id or reject it before provisioning side effects."""
+    agent_id = (value or "").strip()
+    if not _MPA_AGENT_ID_RE.fullmatch(agent_id):
+        raise ValueError("MPA_AGENT_ID must match mi-[0-9a-z]{12}")
+    return agent_id
+
+
+def workload_identity_name(mpa_agent_id: str) -> str:
+    """Return the Studio workload identity associated with an MPA instance."""
+    return f"{validate_mpa_agent_id(mpa_agent_id)}-studio"
 
 
 def tool_name_for_agent(mpa_agent_id: str) -> str:
@@ -182,6 +198,8 @@ def build_runtime_env(
         "A2A_TIP_VERIFY_ENABLED": "false",
         "CLAW_SPACE_ID": claw_space_id,
         "MPA_AGENT_ID": params.mpa_agent_id,
+        "MPA_WORKLOAD_POOL_NAME": STUDIO_WORKLOAD_POOL_NAME,
+        "MPA_WORKLOAD_IDENTITY_NAME": workload_identity_name(params.mpa_agent_id),
         "IDENTITY_REGION": params.identity_region,
         # AgentKit sandbox tool
         "AGENTKIT_TOOL_ID": params.agentkit_tool_id,
