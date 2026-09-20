@@ -196,6 +196,18 @@ class EvaluationRunner(Protocol):
     ) -> None: ...
 
 
+class EvaluationJudgeDriver(Protocol):
+    """Answers the judge requests the Sandbox runner writes for one attempt."""
+
+    def drive(
+        self,
+        session: MigrationSandboxSession,
+        *,
+        evaluation_root: str,
+        attempt: int,
+    ) -> None: ...
+
+
 class MigrationEvaluationService:
     def __init__(
         self,
@@ -204,12 +216,14 @@ class MigrationEvaluationService:
         *,
         repository: EvaluationAssetRepository | None,
         runner: EvaluationRunner | None,
+        judge_driver: EvaluationJudgeDriver | None = None,
         clock: Callable[[], float] = time.time,
     ) -> None:
         self._migration = migration
         self._gateway = gateway
         self._repository = repository
         self._runner = runner
+        self._judge_driver = judge_driver
         self._clock = clock
 
     @property
@@ -545,6 +559,7 @@ class MigrationEvaluationService:
             )
             return
         if state in _ACTIVE_EVALUATION_STATES:
+            self._drive_judge_channel(session, task_id, status)
             self._reconcile_active_runner(session, task_id, status)
             return
         if state in {
@@ -1031,6 +1046,36 @@ class MigrationEvaluationService:
             message="迁移效果评测已完成",
             report_asset=metadata.public(),
         )
+
+    def _drive_judge_channel(
+        self,
+        session: MigrationSandboxSession,
+        task_id: str,
+        status: _EvaluationStatus | None,
+    ) -> None:
+        """Let Studio answer a pending Sandbox judge request.
+
+        A cheap read that never raises, so it runs before the exit-code check: a request
+        on disk means the runner is waiting for a verdict, and the turn itself runs on a
+        driver-owned worker instead of blocking the watcher tick.
+        """
+        if status is None or self._judge_driver is None:
+            return
+        attempt = int(status.get("attempt") or 0)
+        if attempt < 1:
+            return
+        try:
+            self._judge_driver.drive(
+                session,
+                evaluation_root=EVALUATION_ROOT,
+                attempt=attempt,
+            )
+        except Exception:  # noqa: BLE001 - a channel hiccup must not stop the watcher
+            logger.exception(
+                "Migration evaluation judge channel drive failed task_id=%s attempt=%s",
+                task_id,
+                attempt,
+            )
 
     def _reconcile_active_runner(
         self,
@@ -1611,6 +1656,7 @@ __all__ = [
     "EVALUATION_DATASET_PATH",
     "EVALUATION_REPORT_PATH",
     "EVALUATION_ROOT",
+    "EvaluationJudgeDriver",
     "EVALUATION_RUNNER_DIAGNOSTICS_ROOT",
     "EVALUATION_SECRET_PATH",
     "EVALUATION_STATUS_PATH",

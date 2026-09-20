@@ -26,12 +26,9 @@ from __future__ import annotations
 from collections.abc import Callable
 import os
 
-from veadk.cli.codex_app_server import (
-    CodexAppServerError,
-    CodexAppServerSession,
-    CodexDynamicToolResult,
-)
+from veadk.cli.codex_app_server import CodexDynamicToolResult
 
+from .codex_tool_turn import ToolTurnUnavailable, run_tool_turn
 from .contracts import MigrationContractError, validate_analysis_result
 
 ROUTE_TOOL_NAME = "reportRoute"
@@ -104,36 +101,22 @@ async def run_route_analysis(
 ) -> dict[str, object] | None:
     """Run one analysis turn and return the validated route contract, if any."""
     recorder = RouteRecorder(attempt=attempt, input_sha256=input_sha256)
-    session = CodexAppServerSession(endpoint)
-    session.cwd = cwd
-    if model:
-        session.model = model
-    session.register_dynamic_tool(
-        ROUTE_TOOL_NAME,
-        ROUTE_TOOL_DESCRIPTION,
-        schema,
-        recorder.submit,
-    )
     try:
-        await session.connect()
-    except CodexAppServerError as error:
-        raise MigrationAnalysisUnavailable(str(error)) from error
-    try:
-        async for event in session.stream_turn(
-            prompt,
+        await run_tool_turn(
+            endpoint=endpoint,
+            prompt=prompt,
+            cwd=cwd,
+            tool_name=ROUTE_TOOL_NAME,
+            tool_description=ROUTE_TOOL_DESCRIPTION,
+            tool_schema=schema,
+            handler=recorder.submit,
+            has_result=lambda: recorder.result is not None,
+            model=model,
             timeout_seconds=timeout_seconds,
-        ):
-            if event_sink is not None:
-                event_sink(event)
-            if recorder.result is not None:
-                # 结果已经到手：终止本轮，避免继续消耗 token 和沙箱时间。
-                await session.interrupt()
-                break
-    except CodexAppServerError as error:
-        if recorder.result is None:
-            raise MigrationAnalysisUnavailable(str(error)) from error
-    finally:
-        await session.close()
+            event_sink=event_sink,
+        )
+    except ToolTurnUnavailable as error:
+        raise MigrationAnalysisUnavailable(str(error)) from error
     return recorder.result
 
 
