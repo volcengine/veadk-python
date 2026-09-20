@@ -68,6 +68,10 @@ class RouteService:
     def get_task(self, task_id: str, owner_id: str) -> dict[str, object]:
         return self.record("get_task", task_id, owner_id)
 
+    def recover_stalled_analysis(self, task_id: str, owner_id: str) -> bool:
+        self.calls.append(("recover_stalled_analysis", (task_id, owner_id)))
+        return False
+
     def submit_answers(
         self,
         task_id: str,
@@ -272,6 +276,8 @@ def test_all_migration_routes_delegate_with_owner_and_return_artifacts() -> None
         "create_task",
         "upload_source",
         "get_task",
+        # 每次读取任务都会顺带检查是否要接管停滞的后台分析。
+        "recover_stalled_analysis",
         "submit_answers",
         "confirm",
         "stop",
@@ -471,6 +477,7 @@ def test_evaluation_failures_do_not_hide_task_stop_or_artifact(
     assert stopped.json()["evaluation"]["error"]["code"] == expected_code
     assert [name for name, _ in service.calls] == [
         "get_task",
+        "recover_stalled_analysis",
         "get_task",
         "stop",
         "artifact",

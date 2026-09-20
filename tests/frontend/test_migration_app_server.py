@@ -1,0 +1,348 @@
+# Copyright (c) 2025 Beijing Volcano Engine Technology Co., Ltd. and/or its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Checks for the optional Codex app-server route-analysis path."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import threading
+import time
+
+import pytest
+
+from frontend.server.migration import service as migration_service
+from frontend.server.migration.app_server import (
+    MigrationAnalysisUnavailable,
+    RouteRecorder,
+    app_server_analysis_enabled,
+)
+from frontend.server.migration.gateway import MigrationSandboxSession
+from frontend.server.migration.service import MigrationService
+
+
+def _session() -> MigrationSandboxSession:
+    return MigrationSandboxSession(
+        tool_id="tool-dev",
+        session_id="session-1",
+        task_id="migration-v1-" + "c" * 32,
+        endpoint="https://sandbox.invalid",
+        region="cn-beijing",
+        status="Ready",
+        created_at="2099-01-01T00:00:00Z",
+        expire_at="2099-01-01T01:00:00Z",
+        owner_id="owner",
+    )
+
+
+def _contract(status: str = "recommendation_ready") -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        "status": status,
+        "attempt": 1,
+        "input_sha256": "a" * 64,
+        "summary": "摘要",
+        "frameworks": [],
+        "recommended": (
+            None
+            if status == "unsupported"
+            else {"framework": "dify", "entry": None, "reason": "理由"}
+        ),
+        "entries": [],
+        "boundary": {"include": [], "exclude": []},
+        "assumptions": [],
+        "questions": [],
+        "warnings": [],
+    }
+
+
+class _Recorder:
+    """Minimal service-side recorder for the app-server path."""
+
+    def __init__(self) -> None:
+        self.written: dict[str, object] = {}
+        self.commands: list[str] = []
+
+    def put_file(self, session, path, content, *, media_type):
+        self.written[path] = json.loads(content)
+
+
+class _Service(MigrationService):
+    def __init__(self, recorder: _Recorder, *, marker: dict[str, object] | None = None):
+        self._recorder = recorder
+        self._analysis_drivers = {}
+        self._marker = marker
+        self._session_marker = marker
+
+    def _put(self, session, path, content, *, media_type):
+        self._recorder.put_file(session, path, content, media_type=media_type)
+
+    def _execute(self, session, command, *, operation, timeout_seconds=120):
+        self._recorder.commands.append(command)
+        return {}
+
+    def _session(self, task_id, owner_id):
+        return _session()
+
+    def _read_json(self, session, path, *, optional=False):
+        return self._session_marker
+
+
+def _wait_for_driver(service: MigrationService, *, timeout: float = 10.0) -> None:
+    deadline = time.monotonic() + timeout
+    while service._analysis_drivers and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert not service._analysis_drivers, "分析后台驱动没有结束"
+
+
+def test_app_server_analysis_is_enabled_by_default_and_can_be_pinned_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("AGENTKIT_MIGRATION_APP_SERVER", raising=False)
+    assert app_server_analysis_enabled() is True
+
+    monkeypatch.setenv("AGENTKIT_MIGRATION_APP_SERVER", "0")
+    assert app_server_analysis_enabled() is False
+
+    recorder = _Recorder()
+    service = _Service(recorder)
+    assert (
+        service._start_app_server_analysis(
+            _session(),
+            prompt="分析",
+            attempt=1,
+            input_sha256="a" * 64,
+        )
+        is False
+    )
+    assert recorder.written == {}
+    assert service._analysis_drivers == {}
+
+
+def test_app_server_analysis_runs_on_a_background_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("AGENTKIT_MIGRATION_APP_SERVER", raising=False)
+    recorded: dict[str, object] = {}
+    release = threading.Event()
+
+    async def _run(**kwargs: object) -> dict[str, object]:
+        recorded.update(kwargs)
+        await asyncio.to_thread(release.wait, 5)
+        return _contract()
+
+    monkeypatch.setattr(migration_service, "run_route_analysis", _run)
+
+    recorder = _Recorder()
+    service = _Service(recorder)
+    session = _session()
+
+    assert (
+        service._start_app_server_analysis(
+            session,
+            prompt="分析",
+            attempt=1,
+            input_sha256="a" * 64,
+            model_id="doubao-test",
+        )
+        is True
+    )
+
+    # 上传请求立刻返回：此刻只有「正在分析」和租约，结果还没写。
+    assert recorder.written[migration_service._ANALYSIS_STATUS_PATH] == {
+        "schema_version": 1,
+        "attempt": 1,
+        "state": "analyzing",
+        "message": "正在分析项目框架、入口与迁移边界",
+    }
+    lease = recorder.written[migration_service._ANALYSIS_DRIVER_PATH]
+    assert lease["driver"] == "app-server"
+    assert lease["state"] == "running"
+    assert lease["attempt"] == 1
+    assert migration_service._ANALYSIS_RESULT_PATH not in recorder.written
+
+    release.set()
+    _wait_for_driver(service)
+
+    assert recorded["attempt"] == 1
+    assert recorded["model"] == "doubao-test"
+    assert recorded["cwd"] == migration_service._PROJECT_PATH
+    assert recorded["schema"] == migration_service._analysis_schema()
+    assert recorder.written[migration_service._ANALYSIS_RESULT_PATH]["status"] == (
+        "recommendation_ready"
+    )
+    assert recorder.written[migration_service._ANALYSIS_STATUS_PATH] == {
+        "schema_version": 1,
+        "attempt": 1,
+        "state": "ready",
+        "message": "项目分析完成，请确认迁移方式",
+    }
+    assert recorder.written[migration_service._ANALYSIS_DRIVER_PATH]["state"] == "done"
+
+
+def test_app_server_analysis_persists_an_unsupported_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("AGENTKIT_MIGRATION_APP_SERVER", raising=False)
+
+    async def _run(**_kwargs: object) -> dict[str, object]:
+        return _contract("unsupported")
+
+    monkeypatch.setattr(migration_service, "run_route_analysis", _run)
+
+    recorder = _Recorder()
+    service = _Service(recorder)
+
+    assert service._start_app_server_analysis(
+        _session(), prompt="分析", attempt=1, input_sha256="a" * 64
+    )
+    _wait_for_driver(service)
+
+    assert recorder.written[migration_service._ANALYSIS_STATUS_PATH] == {
+        "schema_version": 1,
+        "attempt": 1,
+        "state": "failed",
+        "message": "当前项目不适用于已支持的迁移方式",
+        "error": {
+            "code": "MIGRATION_ANALYSIS_UNSUPPORTED",
+            "message": "项目分析未找到可执行的迁移方式。",
+            "retryable": False,
+        },
+    }
+
+
+def test_app_server_analysis_falls_back_to_the_scripted_driver(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("AGENTKIT_MIGRATION_APP_SERVER", raising=False)
+
+    async def _run(**_kwargs: object) -> dict[str, object]:
+        raise MigrationAnalysisUnavailable(
+            "无法连接 AgentKit Session 中的 Codex 服务。"
+        )
+
+    monkeypatch.setattr(migration_service, "run_route_analysis", _run)
+
+    recorder = _Recorder()
+    service = _Service(recorder)
+    session = _session()
+
+    assert service._start_app_server_analysis(
+        session, prompt="分析", attempt=1, input_sha256="a" * 64
+    )
+    _wait_for_driver(service)
+
+    assert recorder.commands[0] == migration_service._clear_analysis_status_command()
+    assert "ANALYSIS_STARTED_V1" in recorder.commands[1]
+    assert recorder.written[migration_service._ANALYSIS_DRIVER_PATH]["driver"] == (
+        "codex-exec"
+    )
+
+
+@pytest.mark.parametrize(
+    "marker",
+    [
+        {"driver": "codex-exec", "state": "running", "attempt": 1, "heartbeat_at": 0.0},
+        {"driver": "app-server", "state": "done", "attempt": 1, "heartbeat_at": 0.0},
+    ],
+)
+def test_analysis_recovery_ignores_turns_that_are_not_a_stalled_app_server(
+    marker: dict[str, object],
+) -> None:
+    recorder = _Recorder()
+    service = _Service(recorder, marker=marker)
+
+    assert (
+        service.recover_stalled_analysis("migration-v1-" + "c" * 32, "owner") is False
+    )
+    assert recorder.commands == []
+
+
+def test_analysis_recovery_waits_for_a_fresh_lease() -> None:
+    recorder = _Recorder()
+    service = _Service(
+        recorder,
+        marker={
+            "driver": "app-server",
+            "state": "running",
+            "attempt": 1,
+            "heartbeat_at": time.time(),
+        },
+    )
+
+    assert (
+        service.recover_stalled_analysis("migration-v1-" + "c" * 32, "owner") is False
+    )
+    assert recorder.commands == []
+
+
+def test_a_stalled_app_server_analysis_is_handed_back_to_the_script() -> None:
+    recorder = _Recorder()
+    service = _Service(
+        recorder,
+        marker={
+            "driver": "app-server",
+            "state": "running",
+            "attempt": 1,
+            "heartbeat_at": time.time() - 10_000,
+        },
+    )
+
+    assert service.recover_stalled_analysis("migration-v1-" + "c" * 32, "owner") is True
+    assert recorder.commands[0] == migration_service._clear_analysis_status_command()
+    assert "ANALYSIS_STARTED_V1" in recorder.commands[1]
+
+
+def test_a_live_in_process_worker_blocks_analysis_recovery() -> None:
+    class _Alive:
+        @staticmethod
+        def is_alive() -> bool:
+            return True
+
+    recorder = _Recorder()
+    service = _Service(
+        recorder,
+        marker={
+            "driver": "app-server",
+            "state": "running",
+            "attempt": 1,
+            "heartbeat_at": time.time() - 10_000,
+        },
+    )
+    session = _session()
+    service._analysis_drivers[(session.session_id, 1)] = _Alive()
+
+    assert (
+        service.recover_stalled_analysis("migration-v1-" + "c" * 32, "owner") is False
+    )
+    assert recorder.commands == []
+
+
+def test_route_recorder_rejects_an_invalid_contract_then_accepts_a_correction() -> None:
+    recorder = RouteRecorder(attempt=1, input_sha256="a" * 64)
+
+    rejected = recorder.submit({"schema_version": 1, "status": "recommendation_ready"})
+
+    assert rejected.success is False
+    assert "reportRoute" in rejected.text
+    assert recorder.result is None
+    assert recorder.rejections
+
+    accepted = recorder.submit(_contract())
+
+    assert accepted.success is True
+    assert recorder.result is not None
+    assert recorder.result["attempt"] == 1
+    assert recorder.result["input_sha256"] == "a" * 64

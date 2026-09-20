@@ -503,6 +503,13 @@ def mount_migration_routes(
             lambda: service.get_task(task_id, owner_id),
             task_id=task_id,
         )
+        # A background app-server analysis dies with the Studio process; while a
+        # client keeps polling, hand its attempt back to the in-Sandbox script.
+        await invoke(
+            "recover_stalled_analysis",
+            lambda: service.recover_stalled_analysis(task_id, owner_id),
+            task_id=task_id,
+        )
         decorated = await with_evaluation(task, owner_id)
         evaluation = decorated.get("evaluation")
         if isinstance(evaluation, dict) and evaluation.get("enabled") is True:

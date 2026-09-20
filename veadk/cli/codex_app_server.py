@@ -24,6 +24,8 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import inspect
+import random
 import hashlib
 import json
 import logging
@@ -71,6 +73,9 @@ _IMPORTED_HISTORY_IMAGE_MIME_TYPES = frozenset(
 )
 _GATEWAY_WEBSOCKET_MAX_LIFETIME_SECONDS = 30 * 60
 _GATEWAY_WEBSOCKET_REFRESH_MARGIN_SECONDS = 30
+_OVERLOAD_ERROR_CODE = -32001
+_OVERLOAD_RETRY_ATTEMPTS = 3
+_OVERLOAD_RETRY_BASE_SECONDS = 0.5
 _TURN_FINAL_READ_ATTEMPTS = 4
 _TURN_FINAL_READ_RETRY_SECONDS = 0.1
 _ACTIVE_TURN_TRANSPORT_RECOVERY_ATTEMPTS = 2
@@ -99,6 +104,10 @@ class CodexAppServerTurnInterruptedError(CodexAppServerError):
 
 class CodexAppServerTurnTimeoutError(CodexAppServerError):
     """A Codex turn exceeded its configured inactivity timeout."""
+
+
+class CodexAppServerOverloadError(CodexAppServerRequestError):
+    """The app-server inbound queue is full; the request is safe to retry."""
 
 
 def _app_server_error_detail(error: object) -> str:
@@ -427,6 +436,20 @@ class CodexAppServerEvent:
     duration_ms: int | None = None
 
 
+@dataclass(frozen=True)
+class CodexDynamicToolResult:
+    """One dynamic tool outcome returned to Codex for a ``item/tool/call`` request."""
+
+    success: bool
+    text: str
+
+
+DynamicToolHandler = Callable[
+    [dict[str, object]],
+    "CodexDynamicToolResult | Awaitable[CodexDynamicToolResult]",
+]
+
+
 class CodexAppServerSession:
     """Persistent JSON-RPC connection for one AgentKit cloud Session."""
 
@@ -459,6 +482,8 @@ class CodexAppServerSession:
         self._turn_final_item_id = ""
         self._reasoning_delta_text: dict[str, dict[int, str]] = {}
         self._item_phases: dict[str, str] = {}
+        self._dynamic_tool_specs: list[dict[str, object]] = []
+        self._dynamic_tool_handlers: dict[str, DynamicToolHandler] = {}
         self._skills_by_id: dict[str, _CodexPrivateSkill] = {}
         self._skills_cwd = ""
         self._skills_loaded = False
@@ -559,7 +584,9 @@ class CodexAppServerSession:
                 else:
                     snapshot = await self._request(
                         "thread/start",
-                        self._thread_start_options() if self.dynamic_tools else {},
+                        self._thread_start_options()
+                        if self._announced_dynamic_tools()
+                        else {},
                     )
                     self._apply_thread_snapshot(snapshot)
             except Exception:
@@ -724,21 +751,30 @@ class CodexAppServerSession:
             raise CodexAppServerError("Codex app-server 尚未连接。")
         request_id = self._next_request_id
         self._next_request_id += 1
-        future = asyncio.get_running_loop().create_future()
-        self._pending_requests[request_id] = future
-        try:
-            await self._send(
-                {
-                    "id": request_id,
-                    "method": method,
-                    **({"params": params} if params is not None else {}),
-                }
-            )
-            return await asyncio.wait_for(future, timeout=timeout)
-        except TimeoutError as error:
-            raise CodexAppServerError(f"Codex 操作 {method} 响应超时。") from error
-        finally:
-            self._pending_requests.pop(request_id, None)
+        message = {
+            "id": request_id,
+            "method": method,
+            **({"params": params} if params is not None else {}),
+        }
+        overloads = 0
+        while True:
+            future = asyncio.get_running_loop().create_future()
+            self._pending_requests[request_id] = future
+            try:
+                await self._send(message)
+                return await asyncio.wait_for(future, timeout=timeout)
+            except CodexAppServerOverloadError:
+                # 服务端入站队列满时返回 -32001，属于可重试过载：按指数退避加抖动
+                # 重试同一个请求，而不是把过载当成业务失败抛给用户。
+                if overloads >= _OVERLOAD_RETRY_ATTEMPTS:
+                    raise
+                delay = _OVERLOAD_RETRY_BASE_SECONDS * (2**overloads)
+                await asyncio.sleep(delay + random.uniform(0, delay))
+                overloads += 1
+            except TimeoutError as error:
+                raise CodexAppServerError(f"Codex 操作 {method} 响应超时。") from error
+            finally:
+                self._pending_requests.pop(request_id, None)
 
     async def notify(
         self, method: str, params: dict[str, object] | None = None
@@ -1939,6 +1975,9 @@ class CodexAppServerSession:
             return
         error = message.get("error")
         if error is not None:
+            if isinstance(error, dict) and error.get("code") == _OVERLOAD_ERROR_CODE:
+                future.set_exception(CodexAppServerOverloadError(error))
+                return
             future.set_exception(CodexAppServerRequestError(error))
             return
         result = message.get("result")
@@ -2120,11 +2159,20 @@ class CodexAppServerSession:
                 )
                 return
             message = params.get("message")
-            if (
-                isinstance(message, str)
-                and self._turn_completion is not None
-                and not self._turn_completion.done()
-            ):
+            if not isinstance(message, str):
+                return
+            if params.get("willRetry") is True:
+                # 服务端仍会重试这一轮：只向前端报告可恢复的告警，不终止本轮。
+                self._emit(
+                    CodexAppServerEvent(
+                        kind="warning",
+                        item_id=_string(params.get("turnId"), 200),
+                        status="running",
+                        text=message,
+                    )
+                )
+                return
+            if self._turn_completion is not None and not self._turn_completion.done():
                 self._turn_completion.set_exception(CodexAppServerError(message))
         if method == "thread/status/changed":
             status = params.get("status")
@@ -2280,10 +2328,16 @@ class CodexAppServerSession:
             )
         )
 
+    def _announced_dynamic_tools(self) -> tuple[dict[str, object], ...]:
+        """Every tool spec announced to Codex on ``thread/start``."""
+        return (*self.dynamic_tools, *self._dynamic_tool_specs)
+
     async def _handle_dynamic_tool(
         self, request_id: object, params: dict[str, object]
     ) -> None:
         websocket = self._websocket
+        tool = params.get("tool")
+        handler = self._dynamic_tool_handlers.get(tool if isinstance(tool, str) else "")
         valid = (
             params.get("threadId") == self.thread_id
             and all(
@@ -2292,17 +2346,26 @@ class CodexAppServerSession:
             )
             and params.get("namespace") is None
             and any(
-                tool.get("name") == params.get("tool") for tool in self.dynamic_tools
+                spec.get("name") == tool for spec in self._announced_dynamic_tools()
             )
-            and self.dynamic_tool_handler is not None
+            and (handler is not None or self.dynamic_tool_handler is not None)
         )
         result: dict[str, object]
         if not valid:
             result = self._tool_failure("Tool is unavailable for this thread.")
         else:
             try:
-                assert self.dynamic_tool_handler is not None
-                result = await asyncio.wait_for(self.dynamic_tool_handler(params), 15)
+                if handler is not None:
+                    arguments = params.get("arguments")
+                    outcome = handler(arguments if isinstance(arguments, dict) else {})
+                    if inspect.isawaitable(outcome):
+                        outcome = await outcome
+                    result = self._tool_result(outcome)
+                else:
+                    assert self.dynamic_tool_handler is not None
+                    result = await asyncio.wait_for(
+                        self.dynamic_tool_handler(params), 15
+                    )
             except Exception as error:
                 # Never expose callback exceptions (which may contain credentials).
                 logger.warning(
@@ -2324,6 +2387,20 @@ class CodexAppServerSession:
                 )
             except (CodexAppServerTransportError, TimeoutError):
                 logger.info("Codex dynamic tool reply pending reconnect")
+
+    @staticmethod
+    def _tool_result(outcome: object) -> dict[str, object]:
+        """Normalise one registered tool outcome into a JSON-RPC tool result."""
+        if isinstance(outcome, CodexDynamicToolResult):
+            return {
+                "success": outcome.success,
+                "contentItems": [{"type": "inputText", "text": outcome.text}],
+            }
+        if isinstance(outcome, dict) and "contentItems" in outcome:
+            return outcome
+        return CodexAppServerSession._tool_failure(
+            "Tool returned an unsupported result."
+        )
 
     @staticmethod
     def _tool_failure(message: str) -> dict[str, object]:
@@ -2477,6 +2554,46 @@ class CodexAppServerSession:
         if not self.thread_id:
             raise CodexAppServerError("Codex Thread 尚未初始化。")
 
+    def register_dynamic_tool(
+        self,
+        name: str,
+        description: str,
+        input_schema: dict[str, object],
+        handler: DynamicToolHandler,
+    ) -> None:
+        """Register one client-side tool that Codex may call during a turn.
+
+        The tool is announced through the experimental ``dynamicTools`` field of
+        ``thread/start``, so registration only reaches a thread that has not been
+        started yet.  Handlers run in Studio and return a typed result, which keeps
+        structured outcomes out of the model's free-form text.
+        """
+        if not name or not description:
+            raise CodexAppServerError("动态工具必须提供名称与说明。")
+        if not isinstance(input_schema, dict):
+            raise CodexAppServerError("动态工具必须提供 JSON Schema 参数定义。")
+        if self.thread_id and not self.workspace_locked:
+            raise CodexAppServerError("动态工具必须在 Codex Thread 开始前注册。")
+        if name in self._dynamic_tool_handlers:
+            raise CodexAppServerError(f"动态工具 {name} 已注册。")
+        self._dynamic_tool_handlers[name] = handler
+        self._dynamic_tool_specs.append(
+            {
+                "type": "function",
+                "name": name,
+                "description": description,
+                "inputSchema": input_schema,
+            }
+        )
+
+    @property
+    def dynamic_tool_names(self) -> tuple[str, ...]:
+        return tuple(
+            str(spec["name"])
+            for spec in self._dynamic_tool_specs
+            if isinstance(spec.get("name"), str)
+        )
+
     def _thread_options(self) -> dict[str, object]:
         return {
             **({"cwd": self.cwd} if self.cwd else {}),
@@ -2485,7 +2602,8 @@ class CodexAppServerSession:
         }
 
     def _thread_start_options(self) -> dict[str, object]:
-        if self.dynamic_tools:
+        announced = self._announced_dynamic_tools()
+        if announced:
             # thread/start uses sandbox (a mode), turn/start uses sandboxPolicy.
             return {
                 **({"cwd": self.cwd} if self.cwd else {}),
@@ -2493,7 +2611,7 @@ class CodexAppServerSession:
                 "approvalPolicy": self.permissions.approval_policy,
                 "approvalsReviewer": self.permissions.approvals_reviewer,
                 "sandbox": self.permissions.sandbox_mode,
-                "dynamicTools": list(self.dynamic_tools),
+                "dynamicTools": list(announced),
             }
         return self._thread_options()
 

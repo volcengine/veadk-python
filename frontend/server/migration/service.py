@@ -16,14 +16,16 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import hashlib
 import io
 import json
-import logging
 import mimetypes
 import re
 import shlex
 import stat
+import threading
 import time
 import uuid
 import zipfile
@@ -37,6 +39,7 @@ from dotenv import dotenv_values
 from veadk.cli.studio_model_catalog import (
     provider_allows_studio_development_model,
 )
+from veadk.utils.logger import get_logger
 
 from frontend.server.deployment_source import (
     DeploymentSourceError,
@@ -67,6 +70,11 @@ from .gateway import (
     MigrationGatewayError,
     MigrationRemoteFileNotFound,
     MigrationSandboxSession,
+)
+from .app_server import (
+    MigrationAnalysisUnavailable,
+    app_server_analysis_enabled,
+    run_route_analysis,
 )
 from .models import (
     MIGRATION_FRAMEWORKS,
@@ -120,8 +128,43 @@ _CAPABILITIES_PATH = f"{MIGRATION_ROOT}/control/capabilities.json"
 _ANALYSIS_STATUS_PATH = f"{MIGRATION_ROOT}/control/task-status.json"
 _ANALYSIS_RESULT_PATH = f"{MIGRATION_ROOT}/analysis/route.json"
 _ANALYSIS_PROMPT_PATH = f"{MIGRATION_ROOT}/analysis/prompt.md"
+_ANALYSIS_RETRY_PROMPT_PATH = f"{MIGRATION_ROOT}/analysis/retry-prompt.md"
 _ANALYSIS_SCHEMA_PATH = f"{MIGRATION_ROOT}/analysis/route-schema.json"
 _ANALYSIS_PROCESS_EXIT_PATH = f"{MIGRATION_ROOT}/diagnostics/analysis/process-exit.json"
+_ANALYSIS_EXTRACTION_DIAGNOSTICS_PATH = (
+    f"{MIGRATION_ROOT}/diagnostics/analysis/result-extraction.json"
+)
+_ANALYSIS_CONTRACT_KEYS = (
+    "schema_version",
+    "status",
+    "attempt",
+    "input_sha256",
+    "summary",
+    "frameworks",
+    "recommended",
+    "entries",
+    "boundary",
+    "assumptions",
+    "questions",
+    "warnings",
+)
+_ANALYSIS_CONTRACT_STATUSES = ("needs_input", "recommendation_ready", "unsupported")
+_ANALYSIS_TURN_TIMEOUT_SECONDS = 600.0
+_ANALYSIS_DRIVER_PATH = f"{MIGRATION_ROOT}/control/analysis-driver.json"
+_ANALYSIS_DRIVER_APP_SERVER = "app-server"
+_ANALYSIS_DRIVER_SCRIPT = "codex-exec"
+_ANALYSIS_DRIVER_RUNNING = "running"
+_ANALYSIS_DRIVER_DONE = "done"
+# 后台驱动的租约：心跳过期说明持有它的 Studio 进程已经不在了。
+_ANALYSIS_DRIVER_HEARTBEAT_SECONDS = 20.0
+_ANALYSIS_DRIVER_STALE_SECONDS = 90.0
+# 标识写入租约的后台驱动属于哪个 Studio 进程，便于诊断跨进程接管。
+_STUDIO_PROCESS_ID = uuid.uuid4().hex
+_ANALYSIS_STATUS_MESSAGES = {
+    "ready": "项目分析完成，请确认迁移方式",
+    "needs_input": "需要补充少量信息后继续分析",
+}
+_ANALYSIS_UNSUPPORTED_MESSAGE = "当前项目不适用于已支持的迁移方式"
 _CONFIRMATION_PATH = f"{MIGRATION_ROOT}/control/route-selection.json"
 _INSTRUCTION_PATH = f"{MIGRATION_ROOT}/control/instruction.txt"
 _STOPPED_PATH = f"{MIGRATION_ROOT}/control/stopped.json"
@@ -173,7 +216,10 @@ _SENSITIVE_ENV_KEY_RE = re.compile(
 )
 _ENV_REFERENCE_RE = re.compile(r"\$\{|\$\(|`")
 
-logger = logging.getLogger(__name__)
+# Anchor the analysis diagnostics under the veadk logger: the Studio entrypoint
+# pins the root logger to ERROR, so a plain module logger would hide a silent
+# fallback from the app-server path to the scripted one.
+logger = get_logger(__name__)
 
 
 def _public_environment_defaults(
@@ -1331,8 +1377,17 @@ def _analysis_prompt(
     input_sha256: str,
     previous_analysis: dict[str, object] | None = None,
     answers: dict[str, str] | None = None,
+    protocol_retry: bool = False,
 ) -> str:
     instruction = str(request.get("instruction") or "").strip()
+    retry_context = (
+        "\n## 协议重试\n"
+        "上一次回复无法作为分析结果读取：其中没有符合输出协议的 JSON 对象。"
+        "请基于已经完成的分析重新给出结论，并且只输出那一个 JSON 对象，"
+        "不要输出 Markdown 围栏、进度说明、步骤清单或任何额外文字。\n"
+        if protocol_retry
+        else ""
+    )
     previous_context = (
         "\n".join(
             [
@@ -1480,6 +1535,7 @@ def _analysis_prompt(
 - 最终响应必须严格符合提供的 JSON Schema，只输出一个 JSON 对象，不要输出
   Markdown 围栏、解释或额外文字。
 
+{retry_context}
 ## 用户补充要求
 
 {instruction or "用户未补充额外要求。"}
@@ -1630,39 +1686,174 @@ finally:
     return "set -euo pipefail\npython3 - <<'PY'\n" + script.strip() + "\nPY"
 
 
-def _codex_event_extractor() -> str:
-    return (
-        "import json,sys\n"
-        "message = None\n"
-        "with open(sys.argv[1], encoding='utf-8') as events:\n"
-        "    for line in events:\n"
-        "        try:\n"
-        "            event = json.loads(line)\n"
-        "        except (TypeError, ValueError):\n"
-        "            continue\n"
-        "        item = event.get('item')\n"
-        "        if (\n"
-        "            event.get('type') == 'item.completed'\n"
-        "            and isinstance(item, dict)\n"
-        "            and item.get('type') == 'agent_message'\n"
-        "            and isinstance(item.get('text'), str)\n"
-        "            and item['text'].strip()\n"
-        "        ):\n"
-        "            message = item['text']\n"
-        "if message is None:\n"
-        "    raise SystemExit('Codex agent_message event is missing')\n"
-        "with open(sys.argv[2], 'w', encoding='utf-8') as output:\n"
-        "    output.write(message)\n"
+def _analysis_result_extractor_script() -> str:
+    """Return the in-Sandbox script that recovers one analysis result object.
+
+    Codex interleaves progress updates with its final answer, may deliver that answer as
+    commentary, and may wrap it in Markdown.  Selecting the last agent message blindly
+    therefore fails whenever a progress update arrives last, which is exactly what the
+    analysis protocol asks Codex to emit.  This script instead scans every agent message
+    from newest to oldest and keeps the first JSON object that satisfies the analysis
+    contract, so non-contract progress text is skipped instead of being fatal.
+    """
+    return f"""
+import json
+import sys
+
+_CONTRACT_KEYS = {list(_ANALYSIS_CONTRACT_KEYS)!r}
+_CONTRACT_STATUSES = {list(_ANALYSIS_CONTRACT_STATUSES)!r}
+_NEWLINE = chr(10)
+
+
+def _objects(text):
+    stripped = text.strip()
+    try:
+        value = json.loads(stripped)
+    except ValueError:
+        pass
+    else:
+        if isinstance(value, dict):
+            yield value
+    for block in stripped.split("```")[1::2]:
+        body = block.split(_NEWLINE, 1)[1] if _NEWLINE in block else ""
+        try:
+            value = json.loads(body.strip())
+        except ValueError:
+            continue
+        if isinstance(value, dict):
+            yield value
+    decoder = json.JSONDecoder()
+    for index, character in enumerate(stripped):
+        if character != "{{":
+            continue
+        try:
+            value, _ = decoder.raw_decode(stripped[index:])
+        except ValueError:
+            continue
+        if isinstance(value, dict):
+            yield value
+
+
+def _contract(value):
+    if not isinstance(value, dict):
+        return None
+    if value.get("schema_version") != 1:
+        return None
+    if value.get("status") not in _CONTRACT_STATUSES:
+        return None
+    if any(key not in value for key in _CONTRACT_KEYS):
+        return None
+    return value
+
+
+def main(argv):
+    if len(argv) < 3:
+        raise SystemExit("usage: extractor <events> <result> [diagnostics]")
+    answers = []
+    commentary = []
+    with open(argv[1], encoding="utf-8") as events:
+        for line in events:
+            try:
+                event = json.loads(line)
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(event, dict) or event.get("type") != "item.completed":
+                continue
+            item = event.get("item")
+            if not isinstance(item, dict) or item.get("type") != "agent_message":
+                continue
+            text = item.get("text")
+            if not isinstance(text, str) or not text.strip():
+                continue
+            if item.get("phase") == "commentary":
+                commentary.append(text)
+            else:
+                answers.append(text)
+    reason = (
+        "no_agent_message"
+        if not answers and not commentary
+        else "no_contract_object"
     )
+    found = None
+    for text in list(reversed(answers)) + list(reversed(commentary)):
+        for value in _objects(text):
+            contract = _contract(value)
+            if contract is not None:
+                found = contract
+                break
+        if found is not None:
+            break
+    if found is not None:
+        reason = "extracted"
+    if len(argv) > 3:
+        with open(argv[3], "w", encoding="utf-8") as diagnostics:
+            json.dump(
+                {{
+                    "reason": reason,
+                    "answer_messages": len(answers),
+                    "commentary_messages": len(commentary),
+                }},
+                diagnostics,
+                ensure_ascii=False,
+            )
+    if found is None:
+        raise SystemExit("Codex analysis result is unavailable: " + reason)
+    with open(argv[2], "w", encoding="utf-8") as output:
+        json.dump(found, output, ensure_ascii=False)
 
 
-def _start_analysis_command(task_id: str, attempt: int) -> str:
-    running_status = {
+if __name__ == "__main__":
+    main(sys.argv)
+"""
+
+
+def _analysis_running_status(attempt: int) -> dict[str, object]:
+    """The analysis status while Codex works, shared by both analysis drivers."""
+    return {
         "schema_version": 1,
         "attempt": attempt,
         "state": "analyzing",
         "message": "正在分析项目框架、入口与迁移边界",
     }
+
+
+def _clear_analysis_status_command() -> str:
+    """Return the command that drops driver state before a takeover start."""
+    return "\n".join(
+        [
+            "set -euo pipefail",
+            f"rm -f {shlex.quote(_ANALYSIS_STATUS_PATH)}",
+            f"rm -f {shlex.quote(_ANALYSIS_DRIVER_PATH)}",
+        ]
+    )
+
+
+def _analysis_driver_marker(
+    *,
+    driver: str,
+    attempt: int,
+    input_sha256: str = "",
+    started_at: float | None = None,
+    heartbeat_at: float | None = None,
+    owner_process: str = "",
+    state: str = _ANALYSIS_DRIVER_RUNNING,
+) -> dict[str, object]:
+    """Describe which driver owns the analysis attempt currently in flight."""
+    started = time.time() if started_at is None else started_at
+    return {
+        "schema_version": 1,
+        "driver": driver,
+        "state": state,
+        "attempt": attempt,
+        "input_sha256": input_sha256,
+        "started_at": started,
+        "heartbeat_at": started if heartbeat_at is None else heartbeat_at,
+        "owner_process": owner_process,
+    }
+
+
+def _start_analysis_command(task_id: str, attempt: int) -> str:
+    running_status = _analysis_running_status(attempt)
     ready_status = {
         "schema_version": 1,
         "attempt": attempt,
@@ -1684,6 +1875,17 @@ def _start_analysis_command(task_id: str, attempt: int) -> str:
             "code": "MIGRATION_ANALYSIS_FAILED",
             "message": "Codex 未能完成只读项目分析。",
             "retryable": False,
+        },
+    }
+    protocol_failed_status = {
+        "schema_version": 1,
+        "attempt": attempt,
+        "state": "failed",
+        "message": "Codex 未返回可解析的分析结果，请重试",
+        "error": {
+            "code": "MIGRATION_ANALYSIS_RESULT_MISSING",
+            "message": "Codex 未产出符合分析协议的 JSON 结果。",
+            "retryable": True,
         },
     }
     start_failed_status = {
@@ -1723,22 +1925,49 @@ def _start_analysis_command(task_id: str, attempt: int) -> str:
         "import json,sys; "
         f"raise SystemExit(0 if json.load(open(sys.argv[1])).get('attempt') == {attempt} else 1)"
     )
-    extract_agent_message = shlex.quote(_codex_event_extractor())
+    extract_analysis_result = shlex.quote(_analysis_result_extractor_script())
+    retry_log_path = (
+        f"{MIGRATION_ROOT}/diagnostics/analysis/attempt-{attempt}-retry.log"
+    )
+    extraction_diagnostics = f"{_ANALYSIS_EXTRACTION_DIAGNOSTICS_PATH}.{attempt}"
     inner = "\n".join(
         [
             "set +e",
+            "run_analysis() {",
             (
-                "codex exec --json --sandbox read-only --skip-git-repo-check "
+                "  codex exec --json --sandbox read-only --skip-git-repo-check "
                 f"--cd {shlex.quote(_PROJECT_PATH)} "
                 f"--output-schema {shlex.quote(_ANALYSIS_SCHEMA_PATH)} "
-                f"- < {shlex.quote(_ANALYSIS_PROMPT_PATH)} "
-                f"> {shlex.quote(log_path)} 2>&1"
+                '- < "$1" > "$2" 2>&1'
+            ),
+            "}",
+            (
+                f"run_analysis {shlex.quote(_ANALYSIS_PROMPT_PATH)} "
+                f"{shlex.quote(log_path)}"
             ),
             "code=$?",
+            "extracted=0",
             (
-                f"if python3 -c {extract_agent_message} "
-                f"{shlex.quote(log_path)} {shlex.quote(result_tmp)} && "
-                f"python3 -c {validate_json} "
+                f"if python3 -c {extract_analysis_result} "
+                f"{shlex.quote(log_path)} {shlex.quote(result_tmp)} "
+                f"{shlex.quote(extraction_diagnostics)}; then extracted=1; fi"
+            ),
+            # 协议重试：上一轮回复无法作为分析结果读取时，在同一项目内再要一次纯
+            # JSON 结论，避免一次格式偏差就让整个迁移任务失败。
+            'if [ "$extracted" -ne 1 ]; then',
+            (
+                f"  run_analysis {shlex.quote(_ANALYSIS_RETRY_PROMPT_PATH)} "
+                f"{shlex.quote(retry_log_path)}"
+            ),
+            "  code=$?",
+            (
+                f"  if python3 -c {extract_analysis_result} "
+                f"{shlex.quote(retry_log_path)} {shlex.quote(result_tmp)} "
+                f"{shlex.quote(extraction_diagnostics)}; then extracted=1; fi"
+            ),
+            "fi",
+            (
+                f'if [ "$extracted" -eq 1 ] && python3 -c {validate_json} '
                 f"{shlex.quote(result_tmp)}; then"
             ),
             (
@@ -1760,7 +1989,11 @@ def _start_analysis_command(task_id: str, attempt: int) -> str:
             "else",
             '  if [ "$code" -eq 0 ]; then code=1; fi',
             f"  rm -f {shlex.quote(result_tmp)}",
-            f"  {_atomic_json_command(_ANALYSIS_STATUS_PATH, failed_status)}",
+            '  if [ "$extracted" -eq 1 ]; then',
+            f"    {_atomic_json_command(_ANALYSIS_STATUS_PATH, failed_status)}",
+            "  else",
+            f"    {_atomic_json_command(_ANALYSIS_STATUS_PATH, protocol_failed_status)}",
+            "  fi",
             "fi",
             "finished_at=$(python3 -c 'import time; print(int(time.time()))')",
             (
@@ -2143,6 +2376,8 @@ class MigrationService:
     ) -> None:
         self._gateway = gateway
         self._clock = clock
+        # 进程内的后台分析驱动，键为 (session_id, attempt)，避免重复起同一轮分析。
+        self._analysis_drivers: dict[tuple[str, int], threading.Thread] = {}
 
     @staticmethod
     def _translate(error: MigrationGatewayError) -> MigrationError:
@@ -2715,13 +2950,377 @@ class MigrationService:
             ).encode("utf-8"),
             media_type="text/markdown",
         )
+        self._put(
+            session,
+            _ANALYSIS_RETRY_PROMPT_PATH,
+            _analysis_prompt(
+                request,
+                attempt=1,
+                input_sha256=digest,
+                protocol_retry=True,
+            ).encode("utf-8"),
+            media_type="text/markdown",
+        )
+        if self._start_app_server_analysis(
+            session,
+            prompt=_analysis_prompt(
+                request,
+                attempt=1,
+                input_sha256=digest,
+            ),
+            attempt=1,
+            input_sha256=digest,
+            model_id=str(request.get("model_id") or ""),
+        ):
+            return self.get_task(task_id, owner_id)
+        self._start_scripted_analysis(session, task_id=task_id, attempt=1)
+        return self.get_task(task_id, owner_id)
+
+    def _start_scripted_analysis(
+        self,
+        session: MigrationSandboxSession,
+        *,
+        task_id: str,
+        attempt: int,
+        clear_status: bool = False,
+    ) -> None:
+        """Run the analysis inside the Sandbox with ``codex exec``.
+
+        The generated script owns its own background process, so Studio only launches
+        it.  A takeover start (``clear_status``) first drops the state left by the
+        previous driver, because the script refuses to start when a status for the
+        same attempt already exists.
+        """
+        if clear_status:
+            self._execute(
+                session,
+                _clear_analysis_status_command(),
+                operation="clear_analysis",
+                timeout_seconds=30,
+            )
+        self._put(
+            session,
+            _ANALYSIS_DRIVER_PATH,
+            _json_bytes(
+                _analysis_driver_marker(
+                    driver=_ANALYSIS_DRIVER_SCRIPT,
+                    attempt=attempt,
+                    owner_process=_STUDIO_PROCESS_ID,
+                )
+            ),
+            media_type="application/json",
+        )
         self._execute(
             session,
-            _start_analysis_command(task_id, 1),
+            _start_analysis_command(task_id, attempt),
             operation="start_analysis",
             timeout_seconds=30,
         )
-        return self.get_task(task_id, owner_id)
+
+    def _start_app_server_analysis(
+        self,
+        session: MigrationSandboxSession,
+        *,
+        prompt: str,
+        attempt: int,
+        input_sha256: str,
+        model_id: str = "",
+        timeout_seconds: float = _ANALYSIS_TURN_TIMEOUT_SECONDS,
+    ) -> bool:
+        """Analyse through the Sandbox app-server on a Studio background worker.
+
+        The turn must not run inside the HTTP request: an upload that waits for Codex
+        would be cut off by the gateway on a long analysis.  The worker keeps the same
+        file contract as the scripted path, so ``get_task`` reads both drivers alike.
+        Returns ``False`` when the caller must start the scripted path instead.
+        """
+        if not app_server_analysis_enabled():
+            return False
+        key = (session.session_id, attempt)
+        running = self._analysis_drivers.get(key)
+        if running is not None and running.is_alive():
+            return True
+        started_at = time.time()
+        self._put(
+            session,
+            _ANALYSIS_DRIVER_PATH,
+            _json_bytes(
+                _analysis_driver_marker(
+                    driver=_ANALYSIS_DRIVER_APP_SERVER,
+                    attempt=attempt,
+                    input_sha256=input_sha256,
+                    started_at=started_at,
+                    owner_process=_STUDIO_PROCESS_ID,
+                )
+            ),
+            media_type="application/json",
+        )
+        self._put(
+            session,
+            _ANALYSIS_STATUS_PATH,
+            _json_bytes(_analysis_running_status(attempt)),
+            media_type="application/json",
+        )
+        worker = threading.Thread(
+            target=self._app_server_analysis_worker,
+            args=(session, attempt, input_sha256, prompt, model_id, timeout_seconds),
+            name=f"migration-analysis-{attempt}",
+            daemon=True,
+        )
+        self._analysis_drivers[key] = worker
+        try:
+            worker.start()
+        except Exception:  # noqa: BLE001 - a failed start must fall back to the script
+            self._analysis_drivers.pop(key, None)
+            logger.exception(
+                "Studio migration analysis worker could not start task_id=%s",
+                session.task_id,
+            )
+            return False
+        return True
+
+    def _app_server_analysis_worker(
+        self,
+        session: MigrationSandboxSession,
+        attempt: int,
+        input_sha256: str,
+        prompt: str,
+        model_id: str,
+        timeout_seconds: float,
+    ) -> None:
+        """Run one app-server turn and persist it, or hand over to the script."""
+        key = (session.session_id, attempt)
+        try:
+            try:
+                analysis = asyncio.run(
+                    self._run_app_server_turn(
+                        session,
+                        attempt=attempt,
+                        input_sha256=input_sha256,
+                        prompt=prompt,
+                        model_id=model_id,
+                        timeout_seconds=timeout_seconds,
+                    )
+                )
+            except MigrationAnalysisUnavailable as error:
+                logger.warning(
+                    "Studio migration app-server analysis unavailable task_id=%s "
+                    "attempt=%s error_type=%s",
+                    session.task_id,
+                    attempt,
+                    type(error).__name__,
+                )
+                analysis = None
+            if analysis is None:
+                self._start_scripted_analysis(
+                    session,
+                    task_id=session.task_id,
+                    attempt=attempt,
+                    clear_status=True,
+                )
+                return
+            self._persist_app_server_analysis(
+                session,
+                attempt=attempt,
+                analysis=analysis,
+            )
+        except Exception:  # noqa: BLE001 - the worker must never kill the process
+            logger.exception(
+                "Studio migration app-server analysis worker failed task_id=%s "
+                "attempt=%s",
+                session.task_id,
+                attempt,
+            )
+        finally:
+            if self._analysis_drivers.get(key) is threading.current_thread():
+                self._analysis_drivers.pop(key, None)
+
+    async def _run_app_server_turn(
+        self,
+        session: MigrationSandboxSession,
+        *,
+        attempt: int,
+        input_sha256: str,
+        prompt: str,
+        model_id: str,
+        timeout_seconds: float,
+    ) -> dict[str, object] | None:
+        """Run the app-server turn while refreshing the background driver lease."""
+
+        async def beat() -> None:
+            warned = False
+            while True:
+                await asyncio.sleep(_ANALYSIS_DRIVER_HEARTBEAT_SECONDS)
+                try:
+                    await asyncio.to_thread(
+                        self._put,
+                        session,
+                        _ANALYSIS_DRIVER_PATH,
+                        _json_bytes(
+                            _analysis_driver_marker(
+                                driver=_ANALYSIS_DRIVER_APP_SERVER,
+                                attempt=attempt,
+                                input_sha256=input_sha256,
+                                owner_process=_STUDIO_PROCESS_ID,
+                            )
+                        ),
+                        media_type="application/json",
+                    )
+                except Exception as error:  # noqa: BLE001 - lease refresh is advisory
+                    if not warned:
+                        warned = True
+                        logger.warning(
+                            "Studio migration analysis lease refresh failed "
+                            "task_id=%s error_type=%s",
+                            session.task_id,
+                            type(error).__name__,
+                        )
+
+        heartbeat = asyncio.create_task(beat())
+        try:
+            return await run_route_analysis(
+                endpoint=session.endpoint,
+                prompt=prompt,
+                schema=_analysis_schema(),
+                cwd=_PROJECT_PATH,
+                attempt=attempt,
+                input_sha256=input_sha256,
+                model=model_id,
+                timeout_seconds=timeout_seconds,
+            )
+        finally:
+            heartbeat.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await heartbeat
+
+    def _persist_app_server_analysis(
+        self,
+        session: MigrationSandboxSession,
+        *,
+        attempt: int,
+        analysis: dict[str, object],
+    ) -> None:
+        """Store the contract delivered by the dynamic tool and close the lease."""
+        status = str(analysis.get("status") or "")
+        if status == "unsupported":
+            payload: dict[str, object] = {
+                "schema_version": 1,
+                "attempt": attempt,
+                "state": "failed",
+                "message": _ANALYSIS_UNSUPPORTED_MESSAGE,
+                "error": {
+                    "code": "MIGRATION_ANALYSIS_UNSUPPORTED",
+                    "message": "项目分析未找到可执行的迁移方式。",
+                    "retryable": False,
+                },
+            }
+        else:
+            payload = {
+                "schema_version": 1,
+                "attempt": attempt,
+                "state": "ready" if status == "recommendation_ready" else status,
+                "message": _ANALYSIS_STATUS_MESSAGES.get(
+                    "ready" if status == "recommendation_ready" else status,
+                    "项目分析已更新",
+                ),
+            }
+        self._put(
+            session,
+            _ANALYSIS_RESULT_PATH,
+            _json_bytes(analysis),
+            media_type="application/json",
+        )
+        self._put(
+            session,
+            _ANALYSIS_STATUS_PATH,
+            _json_bytes(payload),
+            media_type="application/json",
+        )
+        self._put(
+            session,
+            _ANALYSIS_DRIVER_PATH,
+            _json_bytes(
+                _analysis_driver_marker(
+                    driver=_ANALYSIS_DRIVER_APP_SERVER,
+                    attempt=attempt,
+                    owner_process=_STUDIO_PROCESS_ID,
+                    state=_ANALYSIS_DRIVER_DONE,
+                )
+            ),
+            media_type="application/json",
+        )
+        logger.info(
+            "Studio migration app-server analysis completed task_id=%s "
+            "attempt=%s status=%s",
+            session.task_id,
+            attempt,
+            status,
+        )
+
+    def recover_stalled_analysis(self, task_id: str, owner_id: str) -> bool:
+        """Hand a stalled app-server analysis back to the scripted driver.
+
+        A Studio restart drops the worker that owned the turn while the task still
+        reads as analysing.  The lease written by the worker says who owns it and how
+        fresh it is, so a request may take over once that lease goes stale.
+        """
+        try:
+            session = self._session(task_id, owner_id)
+            marker = self._read_json(
+                session,
+                _ANALYSIS_DRIVER_PATH,
+                optional=True,
+            )
+        except Exception as error:  # noqa: BLE001 - recovery must never fail a read
+            logger.warning(
+                "Studio migration analysis recovery skipped task_id=%s error_type=%s",
+                task_id,
+                type(error).__name__,
+            )
+            return False
+        if not isinstance(marker, dict):
+            return False
+        if str(marker.get("driver") or "") != _ANALYSIS_DRIVER_APP_SERVER:
+            return False
+        if str(marker.get("state") or _ANALYSIS_DRIVER_RUNNING) != (
+            _ANALYSIS_DRIVER_RUNNING
+        ):
+            return False
+        attempt = marker.get("attempt")
+        if not isinstance(attempt, int) or attempt < 1:
+            return False
+        running = self._analysis_drivers.get((session.session_id, attempt))
+        if running is not None and running.is_alive():
+            return False
+        heartbeat = marker.get("heartbeat_at")
+        age = (
+            time.time() - float(heartbeat)
+            if isinstance(heartbeat, (int, float))
+            else _ANALYSIS_DRIVER_STALE_SECONDS
+        )
+        if age < _ANALYSIS_DRIVER_STALE_SECONDS:
+            return False
+        logger.warning(
+            "Studio migration app-server analysis lease expired; restarting the "
+            "scripted driver task_id=%s attempt=%s",
+            task_id,
+            attempt,
+        )
+        try:
+            self._start_scripted_analysis(
+                session,
+                task_id=task_id,
+                attempt=attempt,
+                clear_status=True,
+            )
+        except Exception as error:  # noqa: BLE001 - recovery must never fail a read
+            logger.warning(
+                "Studio migration analysis recovery failed task_id=%s error_type=%s",
+                task_id,
+                type(error).__name__,
+            )
+            return False
+        return True
 
     def list_tasks(self, owner_id: str) -> dict[str, list[dict[str, object]]]:
         try:
@@ -3323,12 +3922,34 @@ class MigrationService:
             ).encode("utf-8"),
             media_type="text/markdown",
         )
-        self._execute(
+        self._put(
             session,
-            _start_analysis_command(task_id, next_attempt),
-            operation="start_analysis",
-            timeout_seconds=30,
+            _ANALYSIS_RETRY_PROMPT_PATH,
+            _analysis_prompt(
+                request,
+                attempt=next_attempt,
+                input_sha256=str(source["sha256"]),
+                previous_analysis=analysis,
+                answers=body.answers,
+                protocol_retry=True,
+            ).encode("utf-8"),
+            media_type="text/markdown",
         )
+        if self._start_app_server_analysis(
+            session,
+            prompt=_analysis_prompt(
+                request,
+                attempt=next_attempt,
+                input_sha256=str(source["sha256"]),
+                previous_analysis=analysis,
+                answers=body.answers,
+            ),
+            attempt=next_attempt,
+            input_sha256=str(source["sha256"]),
+            model_id=str(request.get("model_id") or ""),
+        ):
+            return self.get_task(task_id, owner_id)
+        self._start_scripted_analysis(session, task_id=task_id, attempt=next_attempt)
         return self.get_task(task_id, owner_id)
 
     def confirm(
