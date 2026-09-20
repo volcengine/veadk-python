@@ -1420,3 +1420,14 @@ DatePicker 在基础组件中展示日期与日期时间选择；IndexLayout 在
 飞书群聊权限列表不再提供“编辑”；每行右侧的 × 按钮用于移除该群权限。
 
 配置方式不跨页面或 Runtime 保存。切换方式会清空未提交凭据、隐藏二维码并停止前端轮询或企微授权等待；注册提交进行中禁止切换。已绑定机器人也可以通过手动配置替换，失败保留现有绑定。飞书与钉钉手动配置须由 Runtime 的 `credentialBindingChannels` 声明支持；旧镜像显示升级提示。
+
+
+### MPA conversation information rail / MPA 会话信息侧栏
+
+Only MPA Runtimes show the right conversation rail. AGENTS.md displays the actual Runtime document through the authenticated Studio metadata endpoint. Upgrade the MPA Runtime image to expose `/api/v1/studio/agent-info`; Studio alone cannot add the endpoint to deployed agents. Runtime credentials stay server-side.
+
+Skills show only the bound Skill Spaces, with pagination. Temporary mounting has been removed, and old temporary selections are excluded from MPA messages. Click a skill name to view its latest SKILL.md. Authorized owners/admins can save a new version to that space; shared/review spaces remain read-only. Saving preserves other files, rejects stale versions and changes to the frontmatter name, and can affect other agents bound to the same space. Running sessions may need a cache refresh or a new session. Use **Refresh information** to reload the rail; environment controls remain available.
+
+右侧会话信息栏仅对 MPA Runtime 展示。AGENTS.md 通过受认证的 Studio 元信息接口显示真实正文。需要更新 MPA Runtime 镜像以提供 `/api/v1/studio/agent-info`；单独更新 Studio 无法给已部署智能体增加此接口。Runtime 凭据仅保留在服务端。
+
+技能仅展示绑定空间的内容并支持分页。已取消临时挂载，旧的临时技能选择不会再发送给 MPA。点击技能名称查看最新 SKILL.md；有权限的所有者/管理员可保存新版本到该空间，共享/审核空间保持只读。保存保留其他文件，拒绝过期版本及 frontmatter 名称变化，可能影响绑定同一空间的其他智能体。运行中的会话可能需要等待缓存刷新或新建会话后生效。点击“刷新信息”重新加载侧栏；环境操作保持可用。

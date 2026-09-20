@@ -20,9 +20,15 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from fastapi import Query, Request
+from pydantic import BaseModel, Field
 
 from .models import SkillIdentity
 from .versions import SkillVersionRepository
+
+
+class SkillDocumentBody(BaseModel):
+    baseVersion: str = Field(min_length=1, max_length=64)
+    content: str = Field(min_length=1, max_length=262144)
 
 
 def mount_skill_version_routes(
@@ -32,6 +38,40 @@ def mount_skill_version_routes(
     invoke: Callable[[Callable[[], Any]], Awaitable[Any]],
     read_archive: Callable[[Request], Awaitable[bytes]],
 ) -> None:
+    @app.get("/web/skill-management/spaces/{space_id}/skills/{skill_id}/document")
+    async def get_document(
+        request: Request,
+        space_id: str,
+        skill_id: str,
+        region: str = Query(..., min_length=1, max_length=64),
+    ) -> Any:
+        identity = identity_resolver(request)
+        return await invoke(
+            lambda: versions.document(
+                identity, region=region, space_id=space_id, skill_id=skill_id
+            )
+        )
+
+    @app.put("/web/skill-management/spaces/{space_id}/skills/{skill_id}/document")
+    async def put_document(
+        request: Request,
+        space_id: str,
+        skill_id: str,
+        body: SkillDocumentBody,
+        region: str = Query(..., min_length=1, max_length=64),
+    ) -> Any:
+        identity = identity_resolver(request)
+        return await invoke(
+            lambda: versions.save_document(
+                identity,
+                region=region,
+                space_id=space_id,
+                skill_id=skill_id,
+                base_version=body.baseVersion,
+                document=body.content,
+            )
+        )
+
     @app.get("/web/skill-management/spaces/{space_id}/skills/{skill_id}/versions")
     async def list_versions(
         request: Request,

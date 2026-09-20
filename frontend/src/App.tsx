@@ -102,7 +102,7 @@ import {
 import { i18n } from "./i18n";
 import { buildTranscriptRows } from "./transcriptRows";
 import { Sidebar, type SidebarPage } from "./ui/Sidebar";
-import { AgentInfoPanel } from "./ui/AgentTopology";
+import { MpaAgentInfoRail } from "./ui/mpa-agent-info/MpaAgentInfoRail";
 import type { SkillCenterWorkspaceLaunch } from "./ui/SkillCenter";
 import { LibraryView, type LibraryTab } from "./ui/LibraryView";
 import { AddAgentKitView } from "./ui/AddAgentKit";
@@ -1505,7 +1505,7 @@ export default function App() {
     name: string;
     region: string;
   } | null>(null);
-  const [sessionSkillsBySession, setSessionSkillsBySession] = useState<
+  const [sessionSkillsBySession] = useState<
     Record<string, SelectedSkill[]>
   >(() => loadStoredSessionSkills());
   useEffect(() => persistSessionSkills(sessionSkillsBySession), [sessionSkillsBySession]);
@@ -1543,6 +1543,7 @@ export default function App() {
     Record<string, string>
   >({});
   const [agentInfoRefreshKey, setAgentInfoRefreshKey] = useState(0);
+  const agentInfoSelectionRef = useRef("");
   const [capabilitiesLoading, setCapabilitiesLoading] = useState(false);
   const removedAttachmentIdsRef = useRef<Set<string>>(new Set());
   // Streaming state is PER SESSION so multiple sessions can stream at once
@@ -3418,29 +3419,36 @@ export default function App() {
       preparedSelection?.agentId === appName &&
       preparedSelection.userId === userId
     ) {
+      agentInfoSelectionRef.current = appName;
       setCapabilitiesLoading(false);
       return;
     }
     let cancelled = false;
-    setAgentInfo(null);
+    const controller = new AbortController();
+    if (agentInfoSelectionRef.current !== appName) setAgentInfo(null);
+    agentInfoSelectionRef.current = appName;
     setInvocation(emptyInvocation());
     if (authStatus !== "authenticated" || myAgents || agentDetailTarget || !appName) {
       setCapabilitiesLoading(false);
       return;
     }
     setCapabilitiesLoading(true);
-    getAgentInfo(appName)
+    getAgentInfo(appName, controller.signal)
       .then((info) => {
         if (!cancelled) setAgentInfo(info);
       })
       .catch(() => {
-        if (!cancelled) setAgentInfo(null);
+        if (!cancelled) setAgentInfo(current => current?.agentCategory === "mpa" ? {
+          ...current,
+          mpa: {agentsMd: null, agentsMdStatus: "error", skillSpaces: [], skillSpacesStatus: "error"},
+        } : null);
       })
       .finally(() => {
         if (!cancelled) setCapabilitiesLoading(false);
       });
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [agentDetailTarget, appName, agentInfoRefreshKey, authStatus, myAgents]);
   useEffect(() => {
@@ -5202,7 +5210,7 @@ export default function App() {
       ...selectedInvocation,
       skills: [
         ...selectedInvocation.skills,
-        ...selectedSessionSkills.map((skill) => ({
+        ...(agentInfo?.agentCategory === "mpa" ? [] : selectedSessionSkills).map((skill) => ({
           name: skill.name,
           description: skill.description ?? "",
           skillSpaceId: skill.skillSpaceId,
@@ -5936,13 +5944,6 @@ export default function App() {
   const selectedEnvironmentWorkspaceIds = sessionId
     ? environmentWorkspaceIdsBySession[activeStudioToolSelectionKey] ?? []
     : [];
-  const updateSelectedSessionSkills = (skills: SelectedSkill[]) => {
-    if (!sessionId) return;
-    setSessionSkillsBySession((current) => ({
-      ...current,
-      [activeStudioToolSelectionKey]: skills,
-    }));
-  };
   const updateSelectedEnvironments = async (
     selections: SessionEnvironmentMountSelection[],
     workspaceIds: string[] = [],
@@ -6270,6 +6271,7 @@ export default function App() {
     setConnections(nextConnections);
     setNewChatCapabilities(capabilities);
     commitHydratedSessions(id, hydratedSessions);
+    agentInfoSelectionRef.current = id;
     setAgentInfo(nextAgentInfo);
     setCapabilitiesLoading(false);
     setEvaluatingSids(new Set(
@@ -8181,12 +8183,15 @@ export default function App() {
             return renderTurn(row.turnIndexes[0]);
           })}
                 </div>
-                {!sandboxSession && (
-                  <AgentInfoPanel
+                {!sandboxSession && agentInfoSelectionRef.current === appName && agentInfo?.agentCategory === "mpa" && (
+                  <MpaAgentInfoRail
+                    key={`${userId}:${appName}`}
                     info={agentInfo}
+                    onRefresh={() => {
+                      preparedAgentSelectionRef.current = null;
+                      setAgentInfoRefreshKey(key => key + 1);
+                    }}
                     loading={capabilitiesLoading}
-                    selectedSessionSkills={selectedSessionSkills}
-                    onSessionSkillsChange={sessionId ? updateSelectedSessionSkills : undefined}
                     environments={sessionEnvironments}
                     workspaces={sessionWorkspaces}
                     selectedEnvironments={selectedEnvironmentMounts}

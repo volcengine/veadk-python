@@ -1480,8 +1480,18 @@ export interface SessionSkillSelection extends AgentSkill {
   version?: string;
 }
 
+export type MpaReadStatus = "ready" | "unsupported" | "forbidden" | "error";
+export interface MpaAgentMetadata {
+  agentsMd: string | null;
+  agentsMdStatus: MpaReadStatus;
+  skillSpacesStatus: MpaReadStatus;
+  skillSpaces: Array<{ id: string; region: string }>;
+}
+
 /** Introspected metadata for an agent app, served locally or by Agent Server. */
 export interface AgentInfo {
+  agentCategory?: "general" | "mpa";
+  mpa?: MpaAgentMetadata;
   /** Real ADK app id used in runtime proxy paths; display names may differ. */
   appName?: string;
   name: string;
@@ -1510,8 +1520,9 @@ async function fetchAgentInfo(
   app: string,
   ep: AdkEndpoint,
   loadDraft = true,
+  signal?: AbortSignal,
 ): Promise<AgentInfo> {
-  const res = await apiFetch(`/web/agent-info/${app}`, {}, ep);
+  const res = await apiFetch(`/web/agent-info/${app}`, { signal }, ep);
   if (!res.ok) throw new Error(`agent-info failed: ${res.status}`);
   const info = (await res.json()) as Partial<AgentInfo>;
   if (loadDraft && !info.draft) {
@@ -1527,6 +1538,8 @@ async function fetchAgentInfo(
   }
   return {
     appName: app,
+    agentCategory: info.agentCategory,
+    mpa: info.mpa,
     name: info.name ?? app,
     description: info.description ?? "",
     type: info.type,
@@ -1621,9 +1634,9 @@ export async function controlTurn(
   return res.json();
 }
 
-export async function getAgentInfo(appName: string): Promise<AgentInfo> {
+export async function getAgentInfo(appName: string, signal?: AbortSignal): Promise<AgentInfo> {
   const { app, ep } = resolve(appName);
-  return fetchAgentInfo(app, ep, false);
+  return fetchAgentInfo(app, ep, false, signal);
 }
 
 /** Read Agent metadata for a Runtime without connecting or persisting it. */

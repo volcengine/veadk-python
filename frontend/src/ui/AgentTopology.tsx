@@ -13,6 +13,7 @@ import type { SelectedSkill } from "../create/skills/types";
 import { modelNameFromRuntime } from "../create/runtimeModelName";
 import { TextShimmer } from "./text-shimmer/TextShimmer";
 import { SessionEnvironmentPicker } from "./SessionEnvironmentPicker";
+import type { BoundSkillState } from "./mpa-agent-info/MpaAgentInfoRail";
 
 function uniqueSkills(skills: AgentInfo["skills"]): AgentInfo["skills"] {
   return [
@@ -46,7 +47,10 @@ function ModuleTitle({ title, count }: ModuleTitleProps) {
   );
 }
 
-interface AgentInfoPanelProps {
+export interface AgentInfoPanelProps {
+  boundSkills?: BoundSkillState;
+  onRefresh?: () => void;
+  onOpenSkill?: (index: number) => void;
   info: AgentInfo | null;
   loading: boolean;
   variant?: "rail" | "drawer";
@@ -72,6 +76,9 @@ interface AgentInfoPanelProps {
 export function AgentInfoPanel({
   info,
   loading,
+  boundSkills,
+  onRefresh,
+  onOpenSkill,
   variant = "rail",
   selectedSessionSkills = [],
   onSessionSkillsChange,
@@ -102,18 +109,19 @@ export function AgentInfoPanel({
   }
   if (!info) return null;
   const modelName = modelNameFromRuntime(info.model);
-  const agentsInstruction = (
-    info.graph?.instruction ??
-    info.draft?.instruction ??
-    ""
-  ).trim();
-  const skills = uniqueSkills([
+  const isMpa = info.agentCategory === "mpa";
+  const documentStatus = info.mpa?.agentsMdStatus ?? "unsupported";
+  const agentsInstruction = isMpa
+    ? info.mpa?.agentsMd ?? ""
+    : info.graph?.instruction ?? info.draft?.instruction ?? "";
+  const skills = isMpa ? boundSkills?.skills ?? [] : uniqueSkills([
     ...info.skills,
-    ...selectedSessionSkills.map((skill) => ({
-      name: skill.name,
-      description: skill.description ?? "",
-    })),
+    ...selectedSessionSkills.map((skill) => ({ name: skill.name, description: skill.description ?? "" })),
   ]);
+  const skillError = boundSkills?.error;
+  const errorKey = skillError === "forbidden" ? "accessDenied"
+    : skillError === "unsupported" ? "skillsUnsupported"
+    : skillError === "degraded" ? "skillsDegraded" : "loadFailed";
 
   return (
     <>
@@ -133,6 +141,12 @@ export function AgentInfoPanel({
             {info.description}
           </p>
         )}
+        {onRefresh && (
+          <button type="button" className="topo-refresh" onClick={onRefresh}
+            disabled={loading || boundSkills?.loading}>
+            {t("agentTopology.refresh")}
+          </button>
+        )}
       </section>
 
       <div className="topo-module-stack">
@@ -144,7 +158,11 @@ export function AgentInfoPanel({
             aria-label={t("agentTopology.agentsMd")}
             tabIndex={0}
           >
-            {agentsInstruction ? (
+            {isMpa && documentStatus !== "ready" ? (
+              <div className="topo-data-error" role="status">
+                {t(`agentTopology.${documentStatus === "forbidden" ? "accessDenied" : documentStatus === "unsupported" ? "documentUnsupported" : "loadFailed"}`)}
+              </div>
+            ) : agentsInstruction.trim() ? (
               <pre className="topo-agents-md-content">{agentsInstruction}</pre>
             ) : (
               <div className="topo-empty">{t("agentTopology.notConfigured")}</div>
@@ -155,7 +173,7 @@ export function AgentInfoPanel({
         <section className="topo-module-card topo-skills-card" aria-label={t("agentTopology.skills")}>
           <ModuleTitle
             title={t("agentTopology.skills")}
-            count={info.skillsPreviewSupported ? skills.length : undefined}
+            count={isMpa ? boundSkills?.complete ? skills.length : undefined : info.skillsPreviewSupported ? skills.length : undefined}
           />
           <div
             className="topo-module-scroll topo-skills-scroll"
@@ -163,18 +181,22 @@ export function AgentInfoPanel({
             aria-label={t("agentTopology.skillList")}
             tabIndex={0}
           >
-            {!info.skillsPreviewSupported ? (
+            {isMpa && boundSkills?.loading && !skills.length ? (
+              <TextShimmer as="span">{t("agentTopology.loadingSkills")}</TextShimmer>
+            ) : !isMpa && !info.skillsPreviewSupported ? (
               <div className="topo-empty">{t("agentTopology.previewUnsupported")}</div>
             ) : skills.length > 0 ? (
               <div className="topo-skill-list">
-                {skills.map((skill) => (
+                {skills.map((skill, index) => (
                   <div
-                    key={`${skill.name}:${skill.description}`}
+                    key={`${skill.name}:${skill.description}:${index}`}
                     className="topo-skill"
                     title={skill.description || skill.name}
                   >
                     <div className="topo-skill-title">
-                      <span className="topo-skill-name">{skill.name}</span>
+                      {isMpa && onOpenSkill && boundSkills?.skills[index]?.skillId && !boundSkills.skills[index].lookupByName ? (
+                      <button type="button" className="topo-skill-name topo-skill-open" onClick={() => onOpenSkill(index)}>{skill.name}</button>
+                    ) : <span className="topo-skill-name">{skill.name}</span>}
                     </div>
                     {skill.description && (
                       <span className="topo-skill-description">
@@ -184,11 +206,13 @@ export function AgentInfoPanel({
                   </div>
                 ))}
               </div>
-            ) : (
-              <div className="topo-empty">{t("agentTopology.notConfigured")}</div>
-            )}
+            ) : !skillError ? (
+              <div className="topo-empty">{t(isMpa ? info.mpa?.skillSpaces.length ? "agentTopology.noBoundSkills" : "agentTopology.noBoundSpace" : "agentTopology.notConfigured")}</div>
+            ) : null}
+            {skillError && <div className="topo-data-error" role="status">{t(`agentTopology.${errorKey}`)}</div>}
+            {isMpa && boundSkills?.loading && skills.length > 0 && <span role="status">{t("agentTopology.loadingSkills")}</span>}
           </div>
-          {onSessionSkillsChange && (
+          {!isMpa && onSessionSkillsChange && (
             <div className="topo-capability-add-dock">
               <button
                 type="button"
