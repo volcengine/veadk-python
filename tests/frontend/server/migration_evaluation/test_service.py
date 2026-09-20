@@ -28,6 +28,7 @@ from frontend.server.migration.evaluation.models import (
 from frontend.server.migration.evaluation.repository import EvaluationAssetMetadata
 from frontend.server.migration.evaluation.service import (
     EVALUATION_DATASET_MANIFEST_PATH,
+    EVALUATION_ROOT,
     EVALUATION_REPORT_PATH,
     EVALUATION_RUNNER_DIAGNOSTICS_ROOT,
     EVALUATION_SECRET_PATH,
@@ -233,7 +234,29 @@ class FakeRunner:
         self.stops.append(attempt)
 
 
-def _service(*, remaining: int = 3600):
+class FakeJudgeDriver:
+    def __init__(self, *, error: Exception | None = None) -> None:
+        self.calls: list[tuple[str, int]] = []
+        self.error = error
+
+    def drive(
+        self,
+        session: MigrationSandboxSession,
+        *,
+        evaluation_root: str,
+        attempt: int,
+    ) -> None:
+        assert session.task_id == TASK_ID
+        self.calls.append((evaluation_root, attempt))
+        if self.error is not None:
+            raise self.error
+
+
+def _service(
+    *,
+    remaining: int = 3600,
+    judge_driver: FakeJudgeDriver | None = None,
+):
     migration = FakeMigration()
     gateway = FakeGateway(remaining=remaining)
     repository = FakeRepository()
@@ -243,6 +266,7 @@ def _service(*, remaining: int = 3600):
         gateway,  # type: ignore[arg-type]
         repository=repository,
         runner=runner,
+        judge_driver=judge_driver,  # type: ignore[arg-type]
         clock=lambda: NOW,
     )
     return service, migration, gateway, repository, runner
@@ -465,6 +489,43 @@ def test_new_remote_writes_are_blocked_below_twenty_minutes() -> None:
     assert snapshot["error"]["code"] == "MIGRATION_EVALUATION_TTL_INSUFFICIENT"  # type: ignore[index]
     assert snapshot["canRetry"] is False
     assert runner.starts == []
+
+
+def test_active_evaluation_drives_the_judge_channel_every_tick() -> None:
+    driver = FakeJudgeDriver()
+    service, migration, _gateway, _repository, _runner = _service(judge_driver=driver)
+    service.put_dataset(TASK_ID, "owner", _body())
+    _ready(migration)
+
+    service.advance(TASK_ID, "owner")
+    assert driver.calls == []
+
+    service.advance(TASK_ID, "owner")
+    service.advance(TASK_ID, "owner")
+
+    assert driver.calls == [(EVALUATION_ROOT, 1), (EVALUATION_ROOT, 1)]
+
+
+def test_judge_channel_failure_never_stops_the_watcher_tick() -> None:
+    driver = FakeJudgeDriver(error=RuntimeError("app-server is down"))
+    service, migration, gateway, _repository, _runner = _service(judge_driver=driver)
+    service.put_dataset(TASK_ID, "owner", _body())
+    _ready(migration)
+    service.advance(TASK_ID, "owner")
+
+    service.advance(TASK_ID, "owner")
+    gateway.files[f"{EVALUATION_RUNNER_DIAGNOSTICS_ROOT}/runner-1-exit.json"] = (
+        json.dumps(
+            {"schema_version": 1, "exit_code": 17, "finished_at": int(NOW)}
+        ).encode()
+    )
+    service.advance(TASK_ID, "owner")
+
+    # 每一次活跃 tick 都会尝试接管，包括随后判定 runner 退出的那一次。
+    assert driver.calls == [(EVALUATION_ROOT, 1), (EVALUATION_ROOT, 1)]
+    snapshot = service.snapshot(TASK_ID, "owner")
+    assert snapshot["state"] == "failed"
+    assert snapshot["error"]["code"] == "MIGRATION_EVALUATION_RUNNER_EXITED"  # type: ignore[index]
 
 
 def test_finished_runner_cannot_leave_an_active_evaluation_stuck() -> None:

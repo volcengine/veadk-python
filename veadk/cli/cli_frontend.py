@@ -3483,10 +3483,14 @@ def _run_frontend_server(
         return _request_role(request).is_admin
 
     from frontend.server.migration.gateway import MigrationSandboxGateway
+    from frontend.server.migration.evaluation.judge_driver import (
+        SandboxJudgeDriver,
+    )
     from frontend.server.migration.evaluation.repository import (
         TosMigrationEvaluationRepository,
     )
     from frontend.server.migration.evaluation.runner import (
+        EVALUATION_PROJECT_PATH,
         SandboxMigrationEvaluationRunner,
     )
     from frontend.server.migration.evaluation.service import (
@@ -3546,6 +3550,10 @@ def _run_frontend_server(
             migration_gateway,
             resolve_credentials=_resolve_ve_credentials,
             provider=provider,
+        ),
+        judge_driver=SandboxJudgeDriver(
+            migration_gateway,
+            cwd=EVALUATION_PROJECT_PATH,
         ),
     )
     if not is_vestack_deployment:
