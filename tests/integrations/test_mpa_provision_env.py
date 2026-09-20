@@ -166,3 +166,27 @@ def test_mask_secret_hides_middle() -> None:
     # Very short secrets are fully masked.
     assert set(mask_secret("ab")) == {"*"}
     assert "CODEX_MCP_RUNTIME_API_KEY" in SECRET_ENV_KEYS
+
+
+def test_runtime_jwt_default_and_explicit_override() -> None:
+    env = build_runtime_env(_params(), public_endpoint="https://runtime.example.com")
+    assert env["DISABLE_JWT_AUTH"] == "true"
+    overrides = {"DISABLE_JWT_AUTH": "false"}
+    env = build_runtime_env(
+        _params(extra_env=overrides), public_endpoint="https://runtime.example.com"
+    )
+    assert env["DISABLE_JWT_AUTH"] == "false"
+    assert overrides == {"DISABLE_JWT_AUTH": "false"}
+
+
+def test_database_instrumentation_default_and_explicit_override() -> None:
+    key = "OTEL_PYTHON_DISABLED_INSTRUMENTATIONS"
+    env = build_runtime_env(_params(), public_endpoint="https://app.example.com")
+    assert env[key] == "sqlalchemy,asyncpg,psycopg,psycopg2,dbapi"
+    for override in ("", "sqlalchemy"):
+        env = build_runtime_env(
+            _params(extra_env={key: override}),
+            public_endpoint="https://app.example.com",
+        )
+        assert env[key] == override
+        assert env["FORCE_APMPLUS_EXPORTER_REGISTRATION"] == "true"

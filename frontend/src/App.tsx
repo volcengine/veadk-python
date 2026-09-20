@@ -1,4 +1,5 @@
 import { UserManagement } from "./users/UserManagement";
+import { SandboxFileContext } from "./ui/SandboxFileLink";
 import {
   useCallback,
   useEffect,
@@ -1499,6 +1500,10 @@ export default function App() {
   const [studioToolCapabilities, setStudioToolCapabilities] =
     useState<RuntimeStudioToolCapabilities | null>(null);
   const [studioToolsLoading, setStudioToolsLoading] = useState(false);
+  const [selectedCronRuntime, setSelectedCronRuntime] = useState<{
+    runtimeId: string; name: string; region: string;
+  } | undefined>();
+  useEffect(() => setSelectedCronRuntime(undefined), [appName]);
   const [draftStudioRuntime, setDraftStudioRuntime] = useState<{
     appName: string;
     runtimeId: string;
@@ -6352,6 +6357,10 @@ export default function App() {
     } = {},
   ) => {
     if (!agent.runtime) return;
+    // Task reads do not depend on the Runtime's chat/session protocol.
+    setSelectedCronRuntime({
+      runtimeId: agent.runtime.runtimeId, name: agent.name, region: agent.runtime.region,
+    });
     try {
       const agentId = await connectRuntimeForUser(
         agent,
@@ -7234,7 +7243,7 @@ export default function App() {
                 setCreateView("workspace");
               } : undefined} />
             ) : cronJobsView ? (
-              <CronJobs cloudProvider={cloudProvider} />
+              <CronJobs cloudProvider={cloudProvider} selectedRuntime={selectedCronRuntime ?? currentRuntime ?? selectedDraftStudioRuntime} />
             ) : applicationsView === "coding-agents" ? (
               <CodingAgentsIntegration
                 onBack={() => setApplicationsView("catalog")}
@@ -8020,35 +8029,37 @@ export default function App() {
                   </>
                 )}
                 {pending ? (
-                  turnIsStreaming ? <ThinkingPlaceholder /> : null
+                  turnIsStreaming ? <ThinkingPlaceholder a2aStatus={turn.meta?.a2aStatus} /> : null
                 ) : (
                   <>
-                    <Blocks
-                      appName={appName}
-                      blocks={turn.blocks}
-                      streaming={turnIsStreaming}
-                      onStreamFrame={turnIsStreaming ? followConversationStreamFrame : undefined}
-                      onStreamComplete={
-                        isLast && !activeConversationBusy && presentingStream
-                          ? () => completeStreamPresentation(sessionId)
-                          : undefined
-                      }
-                      onAction={onAction}
-                      onAuth={onAuth}
-                      onArtifactDownload={(filename, version) =>
-                        downloadArtifact(appName, userId, sessionId, filename, version)
-                      }
-                      onArtifactPreview={(filename, version) =>
-                        previewArtifact(appName, userId, sessionId, filename, version)
-                      }
-                      onResolveDelivery={resolveIntelligentDelivery}
-                      onResolveDeliveryComparison={resolveIntelligentDeliveryComparison}
-                      onDownloadDelivery={downloadIntelligentDelivery}
-                      onDeployDelivery={setIntelligentDeployment}
-                      onBranchSelect={(branch) => {
-                        setInput(t("conversation.continueBranch", { branch: branch.label }));
-                      }}
-                    />
+                    <SandboxFileContext.Provider value={{ appName, sessionId }}>
+                      <Blocks
+                        appName={appName}
+                        blocks={turn.blocks}
+                        streaming={turnIsStreaming}
+                        onStreamFrame={turnIsStreaming ? followConversationStreamFrame : undefined}
+                        onStreamComplete={
+                          isLast && !activeConversationBusy && presentingStream
+                            ? () => completeStreamPresentation(sessionId)
+                            : undefined
+                        }
+                        onAction={onAction}
+                        onAuth={onAuth}
+                        onArtifactDownload={(filename, version) =>
+                          downloadArtifact(appName, userId, sessionId, filename, version)
+                        }
+                        onArtifactPreview={(filename, version) =>
+                          previewArtifact(appName, userId, sessionId, filename, version)
+                        }
+                        onResolveDelivery={resolveIntelligentDelivery}
+                        onResolveDeliveryComparison={resolveIntelligentDeliveryComparison}
+                        onDownloadDelivery={downloadIntelligentDelivery}
+                        onDeployDelivery={setIntelligentDeployment}
+                        onBranchSelect={(branch) => {
+                          setInput(t("conversation.continueBranch", { branch: branch.label }));
+                        }}
+                      />
+                    </SandboxFileContext.Provider>
                     {/* Finalized turn that produced no visible answer (e.g. only
                         thinking + an empty A2UI surface) — show a fallback note. */}
                     {!turnIsStreaming && !turnHasVisibleContent(turn) && (
