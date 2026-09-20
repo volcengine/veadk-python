@@ -980,6 +980,11 @@ Each image version exposes a read-only Manifest at
 environment card opens the same version-bound contract as YAML for inspection
 and copying.
 
+Build logs and the initial provisioning state are saved before the Sandbox Tool
+task starts. Delayed status polls recheck the saved state before provisioning,
+so a completed task is not repeated when an earlier poll returns late. This
+applies to both Volcengine and BytePlus
+
 When an environment is mounted to an Agent conversation, Studio assigns a new
 `mount_instance_id`. Sandbox Tool Sessions are reused only while the Agent
 session, mount instance, environment version, Tool ID, image, provider, and
