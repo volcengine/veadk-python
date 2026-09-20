@@ -1,0 +1,162 @@
+# Studio MPA creation with prerequisite provisioning
+
+[中文版](2026-09-20-studio-mpa-creation.zh.md)
+
+- Change ID: `studio-mpa-creation`
+- Created/revised: 2026-09-20
+- Status: implemented
+- Baseline: VeADK `314d43c8`; inspected MPA deployment implementation `0368873`.
+- Related contracts: [MPA provisioning](../../../specs/mpa-runtime-provisioning/README.md), [Studio MPA control plane](../../../specs/studio-mpa-control-plane/README.md).
+- Contract extension: [Studio MPA creation](../../../specs/studio-mpa-creation/README.md).
+
+## Background and evidence
+
+`frontend/src/ui/MyAgents.tsx` exposes a create card for general agents and sandbox agents, but not the MPA filter. `veadk/cli/cli_mpa.py` accepts the existing example YAML and uses the older placeholder-metadata provisioning flow. That flow does not provision a shared account network or a persistent per-agent database, and cannot infer a customer IM gateway from an AgentKit shared endpoint.
+
+The separately maintained `agentkit-mpa-agent` repository now owns `app.deployment.runtime.AgentRuntimeDeployer`, account network provisioning, per-agent databases, Skill Space registration, and account-shared APIG/IM Gateway services. Its `docs/agent-runtime-deployment.md` and `docs/account-shared-apig.md` explicitly require external Studio creation to enter this orchestration. The current task retrieval returned empty turn contents; conclusions here come from the inspected source and documentation, not an assumed transcript.
+
+## Goals and non-goals
+
+Create a usable MPA agent from the MPA directory, using the same prerequisite configuration as the CLI. Make missing configuration, progress, failures, and resumable creation visible. Preserve the existing legacy CLI path.
+
+Do not provision a PostgreSQL cloud instance, PostgreSQL login role, IAM role/policies, model service, cross-VPC connectivity, or database allowlists. Those prerequisites must be supplied and checked. Do not clone another agent's channels or Skill Space implicitly. Do not commit credentials or execute a real cloud deployment during implementation without separate authorization.
+
+## Scenarios and requirements
+
+- **FR-1:** With agent-management permission and the MPA filter selected, show a `Create MPA agent` card, including an empty directory on Volcengine. Other filters retain their existing creation behavior.
+- **FR-2:** Opening creation loads a safe server-side profile summary for the selected region. Missing or incompatible deployment configuration blocks submission and identifies the unmet prerequisite. No password, token, raw environment, executable path, or private YAML is returned to the browser.
+- **FR-3:** The operator supplies a stable agent ID and description. A generated ID is retained across retries. The server chooses the allowed profile, execution environment, credentials, and resource account; browser-supplied account IDs cannot select an account. Show the resources to create/reuse before submission.
+- **FR-4:** Extend `mpa-create.config.example.yaml` with a versioned managed-deployment section: region, PostgreSQL administrator/registry secret references, Runtime template or reference Runtime, network selection/default CIDR and zone, APIG reuse/adoption policy, worker configuration, and timeouts. CLI and Studio share parsing and validation. Explicit legacy options retain their existing precedence and behavior.
+- **FR-5:** Validate dependencies and configuration before cloud mutations. Prepare/reuse the account network, verify/create the shared APIG and IM Gateway, then ensure the business database and Skill Space and deploy the Runtime. Reuse the MPA registry and account/region lock; do not add an unrelated registry or pick an arbitrary gateway. Never hold that lock while waiting for application readiness.
+- **FR-6:** Use the current managed metadata initialization rather than seeding placeholder endpoints. Enable public/private networks, KeyAuth, MPA classification, metadata/IM initialization, and a bound worker. Do not inherit a reference agent's identity, channel credentials, Skill Space, or worker identity inadvertently.
+- **FR-7:** Return success only after platform readiness and application `/readiness`. Return safe Runtime/Skill Space/APIG identifiers and refresh the MPA list in the original region. Do not represent a local dependency check as proof of cloud permissions or connectivity.
+- **FR-8:** Prevent duplicate submissions, scope tasks to the authenticated owner, and persist enough nonsecret identity to resume after restart or a lost response. Same identity/configuration resumes registered resources; conflicting pending configuration fails explicitly. Reuse native durable creation intent/client tokens.
+- **FR-9:** Support cancellation, deadlines, process cleanup, and stale-response suppression. Cancellation stops orchestration but is not a rollback of shared/persistent resources. Identify retained resources for recovery. Only newly created temporary resources may be deleted; never automatically remove the registered business database, Skill Space, shared APIG/network, or an existing Runtime.
+- **FR-10:** Use localized text, existing create-card and modal components, semantic colors, keyboard focus/IME handling, loading/empty/error/retry states, and a narrow-window layout.
+
+## Design and alternatives
+
+Approved decision (2026-09-20): the user selected “迁入 VeADK”. Migrate the network, database, Skill Space, Runtime and shared APIG orchestration into `veadk/integrations/mpa/managed/`, preserving the native registry schema, ownership markers and locking semantics. VeADK owns the migrated implementation and its tests. No external checkout, provider Python environment or subprocess command supplied by the user is required. Run each Studio job in a child of the current VeADK Python interpreter for reliable cancellation of blocking SDK calls. Retain the legacy CLI path unchanged.
+
+Direct design review: the migration is feasible using existing AgentKit/Volcengine, SQLAlchemy and asyncpg dependencies. Only deployment-related APIG operations migrate; bot routing and application startup remain in the MPA image. The image must support shared-registry metadata bootstrap. The same credential resolver is used for Runtime, network and APIG to prevent cross-account preparation; rotating STS and existing deployment AK/SK are supported. No IAM policy mutation is introduced. Tests and ownership checks address lost cloud responses and multi-user retries before UI integration.
+
+The adapter must compose account-network preparation and `SharedAPIGService.ensure` before Runtime creation, outside nested account locks. APIG adoption requires an explicit ID and matching account/region/VPC. Deployment credentials and Runtime credentials are separate: the migrated deployment APIG client uses the same refreshed and account-verified credential source as Runtime/network calls. The MPA image still uses its mounted STS source after startup. Missing prerequisites are reported before provisioning. The runtime role still needs its own mounted IAM credentials and cloud permissions.
+
+Reference Runtime mode reuses deployment settings only; explicit template mode supports a fresh account. PostgreSQL instance and shared registry already exist. New account networks cannot prove reachability to a private PostgreSQL instance; an explicit compatible VPC is required where appropriate. The adapter must preserve the existing managed names and ownership markers and provision a dedicated worker or validate an explicitly configured reusable worker.
+
+### Approved integration decisions
+
+The compatible CLI entry point is `veadk mpa provision --config /secure/mpa-create.config.yaml --agent-id customer-service`. It reads the same YAML file, with a new `managed` section; `veadk mpa create` retains its current flat-option semantics. `provision --dry-run` validates the profile and prints only a safe plan, without importing cloud credentials or querying/writing cloud/database resources. Studio locates the same profile through the server-only `VEADK_MPA_CREATE_CONFIG` setting.
+
+`managed` keys: `version: 1`; `database-admin-url-env` and `shared-database-url-env` as environment variable names; `credential-file` as an optional rotating deployment STS file; mutually exclusive `from-runtime`/`template-file`; `network` containing `vpc-id`, `subnet-ids`, `vpc-cidr`, `subnet-prefix` and `zone`; `apig.adopt-id` for explicit adoption; `worker` containing an explicit reusable ID or image/reference configuration; and `timeout-seconds`. Environment names are references, not literal database URLs. Relative template paths resolve against the YAML directory. An absent region profile is a configuration error, not a fallback to another region.
+
+The final flat model/image/PG fields remain usable to construct a fresh Runtime template when neither source selector is set. Managed mode derives the business database name from native agent identity; it does not reuse the legacy `pg-database` as a shared business database. A legacy `account-id` can only be an expected-account assertion checked against the authenticated cloud account, never the source of authority.
+
+### Interfaces
+
+- CLI: `veadk mpa provision` reads the managed section of the existing YAML; legacy `veadk mpa create` remains supported.
+- `GET /web/mpa-creation/config?region=...`: safe profile summary and unmet requirements.
+- `POST /web/mpa-creation/tasks`: validated identity, description, region and request ID; returns task ID.
+- `GET /web/mpa-creation/tasks/{id}`: owner-scoped stage, state, safe result and error code.
+- `POST /web/mpa-creation/tasks/{id}/cancel`: idempotent cancellation after UI confirmation.
+- States: `running -> succeeded` or `running -> cancelling -> cancelled`; failures terminate as `failed`. Stages report `queued`, `checking`, `network`, `gateway`, `worker`, `database`, `skills`, `deploying`, `verifying`. Unknown remote outcomes are resumable, never success or a blind fresh create.
+
+Use structured process messages with a size bound and an allowlist of fields. Never forward raw deployment stdout/stderr, database URLs, environment dumps, SDK exceptions or raw Pydantic validation input to the client. Kill/reap the provider on cancellation/timeout/server shutdown. Close polling requests on dialog unmount; the server task remains queryable in SQLite; no automatic task-history expiration is implemented.
+
+## Implementation tasks and affected files
+
+| Task | Scope | Requirements |
+| --- | --- | --- |
+| T-1 | Review bilingual design/contract and confirm migration ownership | FR-1–FR-10 |
+| T-2 | Shared managed YAML schema and safe prerequisite planner under `veadk/integrations/mpa/`; example YAML and CLI integration | FR-2–FR-6 |
+| T-3 | VeADK deployment adapter, protocol, resource preparation and recovery tests | FR-5–FR-9 |
+| T-4 | `frontend/server/` task routes and registration in `veadk/cli/cli_frontend.py`; authorization, bounded lifecycle | FR-2, FR-3, FR-7–FR-9 |
+| T-5 | `frontend/src/ui/MyAgents.tsx`, MPA dialog/client, paired locale updates | FR-1–FR-3, FR-7–FR-10 |
+| T-6 | Regression/contract tests, browser checks, production web assets, bilingual evidence reconciliation | FR-1–FR-10 |
+
+## Verification and acceptance
+
+Write failing regression/contract tests before production changes. All cloud/database effects use fakes or isolated test storage by default.
+
+| Acceptance | Evidence required |
+| --- | --- |
+| AC-1: creation reachable only in the intended MPA context and permissions | Component tests plus real browser normal/empty/narrow/keyboard/IME flows |
+| AC-2: missing profile/PG/registry/network/worker/STS inputs block with safe errors | YAML/CLI and server contract tests; dry-run creates nothing |
+| AC-3: ordered preparation yields one agent with independent database/skills and shared account resources | Fake-cloud integration tests asserting calls, payloads and ownership; native registry/payload compatibility checks |
+| AC-4: double-submit, restart, response loss, conflict, timeout/cancel and region changes are safe | Lifecycle and recovery tests, late-response and process-reaping checks |
+| AC-5: credentials do not reach output, task persistence or generated assets | Negative redaction tests and secret scan of the final diff/assets |
+| AC-6: legacy provisioning behavior remains compatible | `uv run --extra dev pytest tests/cli/test_cli_mpa.py tests/integrations/` scoped to affected MPA tests |
+| AC-7: release checks complete and honestly recorded | Targeted Python tests; changed-file Ruff/Pyright; `npm --prefix frontend test`; `npm --prefix frontend run build`; `npm --prefix frontend run test:webui-assets`; real browser evidence |
+
+Broaden Python regression for shared API/lifecycle changes using `uv run --extra dev pytest -n 2 -m "not codex_smoke and not piagent_smoke"`. Before any authorized commit, synchronize with the intended remote base, run `uv run --extra dev pre-commit run --all-files` and unit tests. A live deployment smoke is a separate authorized check and is not implied by fake-cloud tests.
+
+## Risks, review and delivery record
+
+- Migration approved by the user on 2026-09-20. Deployment implementation and compatibility tests now belong to VeADK; shared data contracts remain interoperable with the MPA image.
+- Native cancellation preserves durable resources. This feature must reconcile the Studio temporary-Runtime cleanup rule with registered persistent agents; no automatic destructive rollback is proposed.
+- Native template inheritance can carry a worker belonging to another agent; explicitly validate/provision the worker.
+- SDK response schemas and resource readiness are checked at each step. Local configuration checks cannot prove all live IAM permissions before mutation.
+- PostgreSQL session advisory locks require direct/session pooling, not transaction pooling.
+- Direct review on 2026-09-20 identified two additional implementation blockers and assigned their remedies to T-3/T-4:
+  - Native `deploy_runtime` prepares networks before creating Runtime, but APIG creation normally happens during Runtime startup. Calling that CLI alone does not satisfy FR-5. The adapter must prepare the account network, release the lock, call `SharedAPIGService.ensure`, and then call `AgentRuntimeDeployer` with the resolved network. Verify matching accounts for both cloud clients before writes; avoid nested locks.
+  - The existing `ensure_codex_worker_tool` helper reuses by name and generates a fresh ClientToken for creation. It does not establish ownership or recover a lost CreateTool response safely. Managed creation must persist worker intent/token and verified ownership in the native agent deployment record, or validate an explicitly configured external worker. It cannot claim durable retry safety by calling the old helper unchanged.
+- Authorization review: use `_require_agent_management` for all four routes. For authenticated multi-user Studio, bind generated agent identity to the owner and keep ownership in durable server state; a second manager guessing an agent ID must not overwrite another owner's deployment. The local unauthenticated development mode remains explicitly scoped to the existing `local` principal behavior.
+- `frontend-design`, `ui-ux-pro-max`, and `review-spec` were not found in the repository or available local skill roots. Apply the checked-in frontend standard and perform the design review directly.
+- 2026-09-20 implementation review: resolved account-lock ordering and durable worker intent; added universal-SDK raw-response parsing regression, pre-mutation database permission checks, response-loss input locking, task-store connection cleanup and child reaping. Shared `ModalLayout` gains an optional footer slot (default behavior unchanged) so the dialog does not hide component internals with CSS. User migration approval covers T-1; T-2–T-5 are implemented. Verification for T-6 follows below.
+- No SDK agent execution, harness/sidecar protocol, or documentation-site contract changes. Existing control-plane and legacy provisioning specs link to the new owner rather than duplicate the contract. [Operator guide](../../../veadk/integrations/mpa/managed/README.md) describes prerequisites and recovery.
+
+
+### Verification record (2026-09-20)
+
+Scope: working-tree change over `314d43c8`; no commit, push or cloud deployment. The approved migration is implemented; release acceptance is qualified by the existing type-check baseline and the explicit live-cloud exclusion below.
+
+| Check | Result | Evidence / limits |
+| --- | --- | --- |
+| Targeted Python | pass | `uv run --extra dev pytest tests/integrations/mpa_managed tests/cli/test_cli_mpa.py -q`: 162 passed. Includes final duplicate-cancel/shutdown regression, which failed before shielding cleanup. |
+| Frontend suite | pass | `npm --prefix frontend test`: 1208 Node tests and 22 Vitest tests passed. Missing config, double submit, late configuration, lost POST response, and default/custom modal footer covered. |
+| Production assets | pass | `npm --prefix frontend run build`; `npm --prefix frontend run test:webui-assets`: 104 files and 248 references verified. Build emits existing large-chunk warnings. |
+| Localization | pass | `npm --prefix frontend run check:i18n`: 2 locales, 21 namespaces consistent. |
+| Ruff | pass | `uv run --extra dev --with 'ruff==0.11.12' ruff check veadk/integrations/mpa/managed frontend/server/mpa_creation.py tests/integrations/mpa_managed veadk/cli/cli_mpa.py veadk/cli/cli_frontend.py`; formatting checked for new Python and CLI additions. |
+| Pyright, new modules | pass | `uv run --extra dev --with pyright pyright veadk/integrations/mpa/managed frontend/server/mpa_creation.py`: 17 files, zero errors. |
+| Pyright, complete changed Python scope | fail | Adding `veadk/cli/cli_mpa.py` and `veadk/cli/cli_frontend.py` reports 37 errors. Running the same tool on their unmodified HEAD sources gives the identical 37 diagnostic signatures; no new errors. Existing unrelated errors were not suppressed or changed. |
+| Real browser, isolated API | pass | Actual MyAgents/dialog under local Vite: empty MPA create card; missing config and retry; Chinese multiline text, Tab/Enter submit, Escape close/focus return; APIG progress; success IDs; failure/retry; cancellation confirmation/terminal/retry; close/reopen recovery; light/dark at 390×844 and desktop. Mock APIs only. Temporary fixtures/server/tab removed; viewport reset. Native OS IME candidate-window interaction was not automated. |
+| Repository secret rules | pass | Gitleaks scan of changed/new-file snapshot with `.gitleaks.toml`; no findings. A public RFC 1918 range literal was removed from production source while preserving range validation, with boundary regression coverage. No scanner rules or hooks disabled. |
+| Additional generated-assets scan | fail (reviewed false positive) | Default Gitleaks rules over all `veadk/webui` scanned 19.17 MB and flagged one minified editor expression involving `anchor.key` / `focus.key`, not credential data. Repository rules intentionally exclude vendor bundles; the independent finding was manually inspected, with no sensitive value found. |
+| Documentation and whitespace | pass | Bilingual files, FR/CON/AC/task identifiers, relative links and localization keys checked; `git diff --check` clean. |
+| Live cloud / Codex / piagent smoke | not_run | Live cloud allocation not authorized; Codex/piagent runtimes are unaffected and excluded from regression. Fake-cloud and browser results do not prove IAM/image/network/real PostgreSQL interoperability. |
+| Pre-commit all files / remote sync | not_run | No commit authorized or performed; these gates must run after remote synchronization before an authorized commit. |
+
+Initial broad regression `uv run --extra dev pytest -n 2 -m "not codex_smoke and not piagent_smoke"` used two workers: 4687 passed, 6 failed, 2 collection errors, 11 skipped, 2 xfailed. Failures were missing optional `anthropic`/LlamaIndex packages; after loading temporary optional packages, the remaining Harness configuration test required synthetic model keys rather than live IAM discovery. The isolated rerun used `MODEL_AGENT_API_KEY=test-only MODEL_EMBEDDING_API_KEY=test-only` and `--with anthropic --with 'llama-index-embeddings-openai-like>=0.2.2' --with 'llama-index-llms-openai-like>=0.5.1'`; no dependency file or machine-global configuration changed. Final broad result is recorded below. Subsequent scoped fixes are covered by the final 162-test targeted run.
+
+Final broad regression: **pass**, 4711 passed, 7 skipped, 2 xfailed, 91 warnings in 293.20 seconds using two workers and the temporary optional-dependency environment above. The skipped/xfail cases are not claimed as verified. T-1–T-6 are complete for the approved implementation scope; real cloud validation and existing baseline type errors remain explicit limitations.
+
+
+### Follow-up: actionable local configuration errors (2026-09-20)
+
+The user reported the generic configuration-load error. Reproduction: the Studio process runs from the VeADK root and the default `mpa-create.config.yaml` is absent; loading this path produces the reported message. This is within approved FR-2/CON-1/CON-8: configuration errors must identify the missing prerequisite without disclosing secrets. Keep the configured/default path contract; do not create cloud resources or auto-select another deployment account. Distinguish missing/unreadable configuration, malformed YAML, and missing/malformed Runtime templates with safe messages. Add negative tests before changing the loader, preserve secret redaction, and run affected config/routes/CLI tests plus Ruff/Pyright. Existing resource reuse is a separate operator choice pending the user's answer. Direct design review: no HTTP schema or deployment behavior change; existing localization displays the safe server detail, and private paths/raw parser exceptions remain hidden.
+
+Follow-up verification: **pass**, `uv run --extra dev pytest tests/integrations/mpa_managed tests/cli/test_cli_mpa.py -q` (167 passed); changed-loader/tests Ruff and loader Pyright pass; `git diff --check` pass. The five new negative cases failed before the loader fix. No frontend behavior or asset changes in this follow-up, so frontend rebuild/browser gates are not applicable. The user selected reuse of existing Beijing resources. Actual local credential transfer remains blocked pending explicit confirmation after automatic approval review rejected process-credential reading and cross-repository database-secret copying; no credentials or cloud resources were changed.
+
+Local setup resolution (2026-09-20): after the credential scope was explained, the user instructed “帮我加上试试”, authorizing reuse in the local private configuration. The existing Beijing account, reference Runtime and worker were verified using read-only cloud calls. Created Git-ignored `.env` and `mpa-create.config.yaml` with mode 0600; deployment AK/SK were used only in memory and were not written into these files. After checking that no creation tasks were active, restarted local Studio with its existing launch environment. The live configuration endpoint returned HTTP 200 and `configured: true`, region `cn-beijing`, source `reference`, with `requiresLiveChecks: true`. No cloud resources were created and no deployment was executed. This resolves the previous local-setup approval blocker; it is configuration verification, not a live deployment smoke.
+
+### Follow-up: worker discovery pagination (2026-09-20)
+
+Evidence from read-only inspection of the user-started creation: the task remains at `worker`, and its native record contains only `studio_owner`, before any worker creation intent. `ListTools(PageNumber=1, PageSize=100)` and page 2 return identical tool IDs. The response exposes `NextToken`; following it returns the remaining 27 tools. A request takes under one second, while the old discovery can repeat 1,000 calls. This is a correctness defect within approved FR-5–FR-9/T-3, not evidence of slow worker startup.
+
+Plan/design review: use `MaxResults=100` and `NextToken`, terminate only when no continuation token remains, reject repeated tokens and retain the existing 1,000-page safety bound. Deduplicate matching ToolIds across overlapping pages, retaining distinct same-name resources for ownership collision checks. Propagate provider errors rather than interpreting incomplete discovery as absence. No credential handling, ownership, create request, cancellation, task identity, API or UI changes. Maintain CON-2/CON-3; record the pagination invariant in both component specs. The user's approved migration and request to investigate its running creation cover this implementation correction; restarting or retrying the live task remains a separate operational action.
+
+Tasks: add failing regression cases for short intermediate pages, full final pages, overlapping matches, distinct collisions, repeated cursors and page-limit failure; fix `WorkerCloud.find`; run the managed/CLI suites and changed-file Ruff/Pyright. Acceptance: discovery visits every cursor page once and cannot silently create after partial/failed enumeration. Review found no schema migration, new dependency, breaking consumer contract, or frontend asset impact. Verification pending; live inspection was read-only and did not cancel or restart creation.
+
+Pagination verification (2026-09-20, working tree over `314d43c8`, worker implementation/tests and paired design/spec only): **pass**. All six new regression cases failed before the fix; `uv run --extra dev pytest tests/integrations/mpa_managed tests/cli/test_cli_mpa.py -q` now reports 173 passed. Changed-file Ruff 0.11.12 check/format, worker Pyright and `git diff --check` pass. A read-only cloud check using the corrected `WorkerCloud.find` enumerated both pages in 1.05 seconds with two ListTools calls and no match. The original task is now failed at `worker`; its registry still contains only `studio_owner`. Its persisted error is generic, so the exact terminal exception was not retained; repeated first-page enumeration was independently proven. No task retry or cloud write performed. Frontend/build/browser checks are **not_applicable** to this Python-only follow-up; broader regression is **not_run** again because the scoped managed/CLI suite covers this isolated change and the preceding full-suite evidence remains recorded above. Retrying the same task starts a fresh runner process that imports the corrected source; no Studio restart is required. A complete live creation remains **not_run** by this diagnostic follow-up.
+
+Observed live creation (2026-09-20): following the user's new creation in Studio, read-only checks observed worker Ready, an isolated database and Skill Space registered, Runtime Creating → Releasing → Ready, and the task reaching `succeeded`. The native deployment record is `state=ready`, `pending=false`; an independent authenticated `/readiness` check returned HTTP 200. The older task remains failed at `worker`; these are distinct agent/task identities. This supplies **pass** evidence for one real Beijing creation with the selected local reference profile, not all configurations, IAM boundaries, or cloud failure/recovery scenarios. This follow-up did not start another creation, cancel tasks, change cloud resources, or commit/push code; it observed the user-started deployment.
+
+### Follow-up: readable Runtime names (2026-09-20)
+
+User approval: after proposing to use `MPA_AGENT_ID` as the new Runtime name, the user requested implementation (“帮我改下”). FR-11/T-7/AC-8: newly created managed Runtimes use the stable agent ID directly as `Name`; resource IDs, database/worker/Skill Space naming and ownership remain unchanged. Background: generated `mpa-agent-<account-region-agent hash>` names obscure the ID entered in Studio. This affects both Studio and managed CLI through `AgentRuntimeDeployer`.
+
+Design and direct review: retain the name returned by an existing registered Runtime. For an unfinished legacy create whose response was lost, accept the old hashed name only when the entire legacy request hash exactly matches the persisted intent; reuse the original token and complete payload. Other changed inputs still fail. Fresh deployments use the agent ID, including a reference template with another name. Current SDK `UpdateRuntimeRequest` and the [official UpdateRuntime contract](https://www.volcengine.com/docs/86681/1923461) do not expose `Name`; do not claim existing instances can be renamed or silently replace them. Existing cloud rename is therefore unimplemented, and no cloud write is part of this code change. No frontend API, task lifecycle, IAM, credential, database schema or telemetry identity changes for existing resources. Paired CON-3 and operator docs must describe this compatibility rule.
+
+Tasks/tests: first add failing tests for direct new names, preservation of existing legacy names, recovery of legacy lost-create responses with exactly the old payload/token, and rejection of changed legacy inputs. Implement only the Runtime name selection and request-hash compatibility path. Acceptance: all naming/recovery cases plus managed/CLI regression pass; changed-file Ruff/Pyright and whitespace checks pass. No frontend asset regeneration applies. Risks: cloud name conflicts still surface as provider failures, without adopting another resource; older binaries cannot resume new pending request hashes. Status: approved, verification pending. The unavailable `review-spec` skill is replaced by this direct boundary/compatibility/bilingual review.
+
+FR-11 verification (2026-09-20, working tree over `314d43c8`): **pass**, `uv run --extra dev pytest tests/integrations/mpa_managed tests/cli/test_cli_mpa.py -q` reports 176 passed. Before implementation the direct-name regression failed (1 failed, 19 passed); legacy compatibility cases establish that prior requests remain resumable. Changed Runtime/tests Ruff 0.11.12 check/format, Runtime Pyright and `git diff --check` pass. Direct implementation review confirms the fallback requires the full legacy request hash and absence of a registered Runtime ID; it cannot ignore arbitrary input changes or allocate a replacement for an existing Runtime. Paired PRD, CON-3 and operator docs synchronized. FR-11/T-7/AC-8 are implemented for new creation and compatibility. Browser/build gates are **not_applicable** (no UI or assets changed); another full Python regression is **not_run** (isolated naming change covered by the managed/CLI suite). Live new-name creation is **not_run** to avoid allocating another agent; existing cloud rename is **blocked** because the supported update contract exposes no Name parameter. No existing resources changed, and no commit/push performed.

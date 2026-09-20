@@ -60,3 +60,7 @@ Runtime 代理为带有 `veadk:agent-type=mpa` 标签的 Runtime 处理 `GET /we
 `AgentInfo.mpa` 包含 `agentsMd: string | null`、`agentsMdStatus`、`skillSpacesStatus` 和 `skillSpaces: {id: string, region: string}[]`。状态值为 `ready`、`unsupported`、`forbidden`、`error`。正文读取的网络超时为 10 秒，连接超时为 4 秒；401/403 为无权限，404/405/501 为不支持。Studio 使用服务端解析的 Runtime key，通过专用 `X-MPA-Studio-Key` 调用新只读元信息接口。404/405 时可尝试旧 `/api/v1/agents` JWT 接口，但不转发专用头；此时认证失败表示 Runtime 需要升级。不得将 API key 当作 JWT。非法响应和传输失败为错误。上游详情仅允许透传正文、name、description、model 字符串。空间发现与正文读取失败相互独立。
 
 空间 ID 来自 `urn:veadk:mpa:resource-topology:v1` 中通过 `mounts` 边与 `agent` 节点连接且已配置的 `skill-space` 节点。缺失拓扑表示不支持，不能视为空绑定成功。空间列表复用已授权的 `/web/skill-spaces/{id}/skills` 路由，每页请求 100 项；无进展或超过 100 页时标记为不完整错误。各请求保留现有 30 秒客户端超时并支持取消。仅完整列表显示数量；降级结果和部分失败保留可读内容并提示，无权限则清除已有技能。不修改 Runtime 凭据、绑定或部署。绑定技能名称可打开按权限控制的[技能正文编辑器](../studio-skill-document/README.zh.md)。
+
+## 托管创建边界
+
+Studio MPA 创建和 `veadk mpa provision` 由 [Studio MPA 创建](../studio-mpa-creation/README.zh.md)负责。该路径准备账号资源并通过真实 Runtime 元数据初始化。本文原有职责和旧入口保持不变。

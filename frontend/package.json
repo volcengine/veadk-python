@@ -8,7 +8,7 @@
     "dev": "vite",
     "build": "node scripts/build.mjs",
     "test": "node --test tests/*.test.mjs && npm run test:mpa-agent-info",
-    "test:mpa-agent-info": "vitest run tests/mpaAgentInfoRail.test.tsx tests/skillDocumentEditor.test.tsx",
+    "test:mpa-agent-info": "vitest run tests/mpaAgentInfoRail.test.tsx tests/skillDocumentEditor.test.tsx tests/mpaCreation.test.tsx",
     "check:i18n": "node scripts/check-i18n.mjs",
     "test:sandbox-download-coverage": "vitest run --coverage -c vitest.sandbox-download.config.ts",
     "test:mpa-cron-coverage": "vitest run --coverage -c vitest.mpa-cron.config.ts",

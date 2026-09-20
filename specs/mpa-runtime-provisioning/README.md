@@ -46,3 +46,7 @@ Missing endpoint, key, Runtime ID, or APIG ID blocks metadata finalization. Runt
 VeADK MPA provisioning defaults DISABLE_JWT_AUTH to true. Explicit extra_env values override this default, including false. Gateway authentication and other deployment paths are unchanged.
 
 MPA provisioning defaults `OTEL_PYTHON_DISABLED_INSTRUMENTATIONS` to `sqlalchemy,asyncpg,psycopg,psycopg2,dbapi`, suppressing database auto-instrumentation while preserving business tracing. Explicit `extra_env` overrides win, including an empty string to re-enable instrumentation. This applies to newly provisioned or explicitly redeployed resources, not existing running instances.
+
+## Managed creation boundary
+
+Studio MPA creation and `veadk mpa provision` are owned by [Studio MPA creation](../studio-mpa-creation/README.md). That path prepares account resources and uses real Runtime metadata bootstrap. The existing responsibilities and legacy entry points described here remain unchanged.
