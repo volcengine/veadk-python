@@ -42,3 +42,7 @@ Missing endpoint, key, Runtime ID, or APIG ID blocks metadata finalization. Runt
 | `CON-1`, `CON-2`, `CON-5` | `uv run --extra dev pytest tests/integrations/test_mpa_provision_env.py tests/cli/test_cli_mpa.py` |
 | `CON-2`, `CON-3`, `CON-4`, `CON-6` | `uv run --extra dev pytest tests/integrations/test_mpa_runtime.py` |
 | End-to-end | Create/reuse an isolated Runtime, inspect metadata without printing keys, invoke A2A and built-in MCP, and observe two MCP-cache intervals |
+
+## Managed creation boundary
+
+Studio MPA creation and `veadk mpa provision` are owned by [Studio MPA creation](../studio-mpa-creation/README.md). That path prepares account resources and uses real Runtime metadata bootstrap. The existing responsibilities and legacy entry points described here remain unchanged.

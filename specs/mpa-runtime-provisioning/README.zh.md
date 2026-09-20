@@ -42,3 +42,7 @@
 | `CON-1`、`CON-2`、`CON-5` | `uv run --extra dev pytest tests/integrations/test_mpa_provision_env.py tests/cli/test_cli_mpa.py` |
 | `CON-2`、`CON-3`、`CON-4`、`CON-6` | `uv run --extra dev pytest tests/integrations/test_mpa_runtime.py` |
 | 端到端 | 创建/复用隔离 Runtime，不打印 Key 地检查 metadata，调用 A2A 和内置 MCP，并观察两个 MCP 缓存周期 |
+
+## 托管创建边界
+
+Studio MPA 创建和 `veadk mpa provision` 由 [Studio MPA 创建](../studio-mpa-creation/README.zh.md)负责。该路径准备账号资源并通过真实 Runtime 元数据初始化。本文原有职责和旧入口保持不变。

@@ -62,6 +62,7 @@ import {
 } from "./ResourceCollection";
 import { formatResourceCreator } from "./resourceMetadata";
 import { StudioConfirmDialog } from "./StudioConfirmDialog";
+import { MpaCreateDialog } from "./mpa-create/MpaCreateDialog";
 import { formatRelativeTimeLabel } from "./relativeTime";
 import "./MyAgents.css";
 
@@ -704,6 +705,7 @@ export function MyAgents({
     runtimeScope === "mine" ? "mine" : "all",
   );
   const [region, setRegion] = useState(configuredRegion);
+  const [mpaCreateRegion, setMpaCreateRegion] = useState<string | null>(null);
   const [runtimeAgents, setRuntimeAgents] = useState<MyAgentCardData[]>([]);
   const [runtimeNextToken, setRuntimeNextToken] = useState("");
   const [loadingRuntimes, setLoadingRuntimes] = useState(true);
@@ -1202,6 +1204,8 @@ export function MyAgents({
   let createAgent: (() => void) | undefined;
   if (activeType === "general" && canCreateRuntimeAgents) {
     createAgent = () => onCreateAgent(region);
+  } else if (activeType === "mpa" && canCreateRuntimeAgents && cloudProvider === "volcengine") {
+    createAgent = () => setMpaCreateRegion(region);
   } else if (isSandboxMyAgentType(activeType) && canCreatePersonalAgents) {
     createAgent = () => onCreateSandboxAgent(activeType);
   }
@@ -1336,7 +1340,7 @@ export function MyAgents({
                   onClick={createAgent}
                   icon={<AddIcon />}
                 >
-                  {t("myAgents.createAgent")}
+                  {activeType === "mpa" ? t("myAgents.mpaCreate.title") : t("myAgents.createAgent")}
                 </ResourceCreateCard>
               ) : null}
               {visibleAgents.map((agent) => {
@@ -1393,6 +1397,13 @@ export function MyAgents({
           </div>
         )}
       </ResourceResults>
+      {mpaCreateRegion && <MpaCreateDialog key={mpaCreateRegion} region={mpaCreateRegion}
+        onClose={() => setMpaCreateRegion(null)}
+        onCreated={() => {
+          invalidateRuntimeAgentCache();
+          if (region === mpaCreateRegion && activeType === "mpa") void fetchRuntimePage("", true);
+        }}
+      />}
       {reviewTarget?.runtime ? <AgentReviewDialog
         key={`${reviewTarget.runtime.region}:${reviewTarget.runtime.runtimeId}`}
         runtimeId={reviewTarget.runtime.runtimeId} region={reviewTarget.runtime.region}

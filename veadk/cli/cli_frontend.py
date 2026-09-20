@@ -2744,6 +2744,12 @@ def _run_frontend_server(
         principal = _require_agent_management(request)
         return principal.owner_id if principal is not None else "local"
 
+    from frontend.server.mpa_creation import mount_mpa_creation_routes
+
+    mount_mpa_creation_routes(
+        app, owner=_feishu_setup_owner, supported=provider == "volcengine"
+    )
+
     mount_feishu_bot_setup_routes(
         app,
         create_feishu_bot_setup_service(),

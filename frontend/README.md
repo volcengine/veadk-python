@@ -1431,3 +1431,9 @@ Skills show only the bound Skill Spaces, with pagination. Temporary mounting has
 右侧会话信息栏仅对 MPA Runtime 展示。AGENTS.md 通过受认证的 Studio 元信息接口显示真实正文。需要更新 MPA Runtime 镜像以提供 `/api/v1/studio/agent-info`；单独更新 Studio 无法给已部署智能体增加此接口。Runtime 凭据仅保留在服务端。
 
 技能仅展示绑定空间的内容并支持分页。已取消临时挂载，旧的临时技能选择不会再发送给 MPA。点击技能名称查看最新 SKILL.md；有权限的所有者/管理员可保存新版本到该空间，共享/审核空间保持只读。保存保留其他文件，拒绝过期版本及 frontmatter 名称变化，可能影响绑定同一空间的其他智能体。运行中的会话可能需要等待缓存刷新或新建会话后生效。点击“刷新信息”重新加载侧栏；环境操作保持可用。
+
+### Production component themes
+
+The production entry loads both component token stylesheets before rendering. When the host does not set `data-theme` on `<html>`, Studio uses `light` to match its existing page; an explicit `light` or `dark` value is preserved. This keeps portalled dialogs, their text, inputs and buttons on the same palette. Component-preview defaults are unchanged.
+
+生产入口在渲染前加载两份组件主题样式。宿主未在 `<html>` 上设置 `data-theme` 时沿用浅色页面；显式浅色或深色设置保持不变，确保弹窗、文字、输入框和按钮配色一致。组件预览的默认主题不变。
