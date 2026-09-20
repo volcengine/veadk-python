@@ -9,11 +9,13 @@ export interface DropdownProps {
   defaultOpen?: boolean;
   onOpenChange?: (open: boolean) => void;
   disabled?: boolean;
+  /** 填满父容器，较长标题自动换行 */
+  fullWidth?: boolean;
   className?: string;
   style?: CSSProperties;
 }
 
-export function Dropdown({ label, children, open, defaultOpen = false, onOpenChange, disabled = false, className = "", style }: DropdownProps) {
+export function Dropdown({ label, children, open, defaultOpen = false, onOpenChange, disabled = false, fullWidth = false, className = "", style }: DropdownProps) {
   const id = useId();
   const [internalOpen, setInternalOpen] = useState(defaultOpen);
   const expanded = open ?? internalOpen;
@@ -21,7 +23,7 @@ export function Dropdown({ label, children, open, defaultOpen = false, onOpenCha
     if (open === undefined) setInternalOpen(!expanded);
     onOpenChange?.(!expanded);
   }
-  return <div className={`studio-dropdown ${className}`} style={style} data-open={expanded}>
+  return <div className={`studio-dropdown ${className}`} style={style} data-open={expanded} data-full-width={fullWidth || undefined}>
     <button id={`${id}-trigger`} type="button" className="studio-dropdown__trigger" aria-expanded={expanded} aria-controls={`${id}-content`} onClick={toggle} disabled={disabled}>
       <span>{label}</span>
       <svg className="studio-dropdown__arrow" width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">

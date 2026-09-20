@@ -1468,6 +1468,7 @@ export interface AgentNode {
   model: string;
   tools: string[];
   skills: AgentSkill[];
+  components?: AgentComponent[];
   path: string[];
   mentionable: boolean;
   children: AgentNode[];
@@ -1515,6 +1516,7 @@ export interface AgentInfo {
   subAgents: string[];
   /** Optional for compatibility with Agent Servers released before this field. */
   components?: AgentComponent[];
+  componentsPreviewSupported?: boolean;
   /** Search sources that are actually mounted on this Agent. */
   searchSources?: AgentSearchCapability[];
   /** Recursive typed tree; only the local server provides it. */
@@ -1553,15 +1555,16 @@ async function fetchAgentInfo(
     skills: info.skills ?? [],
     subAgents: info.subAgents ?? [],
     components: info.components ?? [],
+    componentsPreviewSupported: Array.isArray(info.components),
     searchSources: info.searchSources ?? [],
     graph: info.graph,
     draft: info.draft,
   };
 }
 
-export async function getAgentInfo(appName: string): Promise<AgentInfo> {
+export async function getAgentInfo(appName: string, options: { loadDraft?: boolean } = {}): Promise<AgentInfo> {
   const { app, ep } = resolve(appName);
-  return fetchAgentInfo(app, ep, false);
+  return fetchAgentInfo(app, ep, options.loadDraft ?? false);
 }
 
 /** Read Agent metadata for a Runtime without connecting or persisting it. */

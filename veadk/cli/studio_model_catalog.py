@@ -26,6 +26,9 @@ SUPPORTED_CLOUD_PROVIDERS = frozenset({"volcengine", "byteplus"})
 VOLCENGINE_STUDIO_AGENT_MODEL_NAME = "doubao-seed-2-1-pro-260628"
 BYTEPLUS_STUDIO_AGENT_MODEL_NAME = "dola-seed-2-1-turbo-260628"
 
+VOLCENGINE_STUDIO_PLANNER_MODEL_NAME = "doubao-seed-2-0-lite-260428"
+BYTEPLUS_STUDIO_PLANNER_MODEL_NAME = "seed-2-0-lite-260228"
+
 VOLCENGINE_GENERATED_AGENT_MODEL_NAME = "doubao-seed-1-6-250615"
 BYTEPLUS_GENERATED_AGENT_MODEL_NAME = BYTEPLUS_STUDIO_AGENT_MODEL_NAME
 
@@ -112,6 +115,15 @@ def studio_agent_model_name(provider: str) -> str:
         BYTEPLUS_STUDIO_AGENT_MODEL_NAME
         if _provider_id(provider) == "byteplus"
         else VOLCENGINE_STUDIO_AGENT_MODEL_NAME
+    )
+
+
+def studio_planner_model_name(provider: str) -> str:
+    """Shared model for Studio Agent forms and quality generation."""
+    return (
+        BYTEPLUS_STUDIO_PLANNER_MODEL_NAME
+        if _provider_id(provider) == "byteplus"
+        else VOLCENGINE_STUDIO_PLANNER_MODEL_NAME
     )
 
 

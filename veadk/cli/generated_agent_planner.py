@@ -23,14 +23,11 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from veadk.cli.generated_agent_codegen import AgentDraft, CustomTool, MemoryConfig
+from veadk.cli.studio_model_catalog import studio_planner_model_name
 from veadk.consts import DEFAULT_MODEL_AGENT_NAME
 from veadk.utils.cloud_provider import cloud_provider_from_env
 
-PLANNER_MODEL_NAME = (
-    "seed-2-0-lite-260228"
-    if cloud_provider_from_env() == "byteplus"
-    else "doubao-seed-2-0-lite-260428"
-)
+PLANNER_MODEL_NAME = studio_planner_model_name(cloud_provider_from_env())
 DEFAULT_GENERATED_MODEL_NAME = DEFAULT_MODEL_AGENT_NAME
 
 

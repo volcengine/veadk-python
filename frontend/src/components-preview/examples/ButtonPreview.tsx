@@ -138,6 +138,10 @@ export function ButtonPreview() {
             <h3 id="button-loading-icon-title">Icon button</h3>
             <Button iconOnly variant="secondary" startIcon={<PlayIcon />} loading aria-label="Run" />
           </section>
+          <section aria-labelledby="button-loading-label-title">
+            <h3 id="button-loading-label-title">加载文案</h3>
+            <Button loading loadingLabel="生成中">生成评估器</Button>
+          </section>
           <section aria-labelledby="button-loading-interactive-title">
             <h3 id="button-loading-interactive-title">点击体验</h3>
             <Button

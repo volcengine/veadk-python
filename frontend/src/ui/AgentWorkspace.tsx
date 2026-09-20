@@ -77,6 +77,7 @@ import type { AgentDraft } from "../create/types";
 import type { WorkspaceAgentDraft } from "../create/agentDraftStorage";
 import { BUILTIN_TOOLS } from "../create/veadkCatalog";
 import { localeCompatibleBackendText } from "../i18n/locales";
+import { AgentQualityManagement } from "../quality/AgentQualityManagement";
 import type { DeploymentTaskUpdate } from "./ProjectPreview";
 import { Markdown } from "./Markdown";
 import { ResourceDetailLayout } from "./ResourceCollection";
@@ -85,7 +86,7 @@ import { TextShimmer } from "./text-shimmer/TextShimmer";
 import "./AgentWorkspace.css";
 
 type WorkspaceView = "library" | "evaluation";
-type AgentSection = "basic" | "usage" | "evaluations" | "optimizations" | "integrations" | "versions";
+type AgentSection = "basic" | "usage" | "evaluations" | "quality" | "optimizations" | "integrations" | "versions";
 type IntegrationProtocol = "api-server" | "a2a";
 type EvaluationSection = "config" | "history";
 type CaseKind = "good" | "bad";
@@ -285,6 +286,7 @@ const AGENT_SECTIONS: AgentSection[] = [
   "basic",
   "usage",
   "evaluations",
+  "quality",
   "optimizations",
   "integrations",
   "versions",
@@ -3579,6 +3581,18 @@ export function AgentWorkspace({
                     </div>
                   )}
                 </div>
+              )}
+
+              {section === "quality" && (
+                <AgentQualityManagement
+                  key={selectedAgent?.id ?? activeDraftId}
+                  runtimeId={selectedAgent?.runtimeId}
+                  region={selectedAgent?.region}
+                  appName={selectedAgent?.runtimeId ? selectedAgent.runtimeApp ?? "" : selectedAgentAppName}
+                  info={selectedAgentInfo}
+                  infoLoading={Boolean(selectedAgent && (detailOnly ? !detailAgentInfoResolved : loadingAgentInfo))}
+                  draft={draft}
+                />
               )}
 
               {section === "evaluations" && (
