@@ -1224,12 +1224,21 @@ class TestHarnessConfig:
         tool_names = [getattr(tool, "__name__", "") for tool in cloned.tools]
         assert tool_names == ["custom_tool", "link_reader"]
 
-    def test_spawn_replaces_skills(self, monkeypatch):
+    def test_spawn_merges_skills_into_single_toolset(self, monkeypatch):
         from veadk.cloud.harness_app import utils
 
+        class FakeSkill:
+            def __init__(self, name):
+                self.name = name
+
         class FakeSkillToolset:
-            def __init__(self, names):
-                self.names = names
+            def __init__(self, names=None, skills=None, code_executor=None):
+                self.names = names or [skill.name for skill in skills or []]
+                self._skills = [FakeSkill(name) for name in self.names]
+                self._code_executor = code_executor
+
+            def _list_skills(self):
+                return self._skills
 
         old_skill_toolset = FakeSkillToolset(["old"])
 
@@ -1258,7 +1267,7 @@ class TestHarnessConfig:
         ]
         assert old_skill_toolset not in cloned.tools
         assert len(skill_toolsets) == 1
-        assert skill_toolsets[0].names == ["team/new-skill"]
+        assert skill_toolsets[0].names == ["old", "team/new-skill"]
 
     def test_spawn_clears_builtin_tools_and_skills_with_empty_overrides(
         self, monkeypatch

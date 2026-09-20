@@ -152,7 +152,7 @@ def test_build_skill_toolset_loads_skills_center_space(monkeypatch, tmp_path):
     assert isinstance(toolset._code_executor, UnsafeLocalCodeExecutor)
 
 
-def test_replace_skills_replaces_existing_skill_toolset(monkeypatch, tmp_path):
+def test_replace_skills_merges_into_single_skill_toolset(monkeypatch, tmp_path):
     existing_dir = tmp_path / "existing"
     incoming_dir = tmp_path / "incoming"
     _write_adk_skill(existing_dir, name="existing")
@@ -183,8 +183,15 @@ def test_replace_skills_replaces_existing_skill_toolset(monkeypatch, tmp_path):
     utils._replace_skills(agent, ["incoming"], download_dir=tmp_path)
 
     assert calls == [(["incoming"], tmp_path)]
-    assert agent.tools == [marker_tool, incoming_toolset]
-    assert [skill.name for skill in incoming_toolset._list_skills()] == ["incoming"]
+    assert marker_tool in agent.tools
+    skill_toolsets = [tool for tool in agent.tools if isinstance(tool, SkillToolset)]
+    assert len(skill_toolsets) == 1
+    merged_toolset = skill_toolsets[0]
+    assert [skill.name for skill in merged_toolset._list_skills()] == [
+        "existing",
+        "incoming",
+    ]
+    assert merged_toolset._code_executor is existing_toolset._code_executor
 
 
 @pytest.mark.asyncio

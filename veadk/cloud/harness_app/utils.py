@@ -20,8 +20,9 @@ Two factory functions cover the two creation paths:
   :class:`HarnessConfig` and builds the long-lived agent, downloading its skills
   from the skill hub and mounting them as an ADK skill toolset.
 * :func:`spawn_harness_agent` — temporary, one-off creation that clones the base
-  agent and applies a per-request override (configured tools/skills replace the
-  base harness selection).
+  agent and applies a per-request override (configured tools replace the base
+  harness selection; configured skills are merged into a single ADK skill
+  toolset).
 * :func:`spawn_harness_run_agent` — per-turn clone that also attaches dynamic
   registry-discovered remote A2A tools for the current user message.
 """
@@ -1097,12 +1098,51 @@ def _is_harness_builtin_tool(tool: Any) -> bool:
 def _replace_skills(
     agent: Agent, skill_ids: list[str], download_dir: Path | None = None
 ) -> None:
-    """Replace the harness-selected skill toolset with ``skill_ids``."""
+    """Merge ``skill_ids`` into the agent's existing skills as one toolset.
 
+    ADK ``SkillToolset`` exposes fixed management tools (``list_skills``,
+    ``load_skill``, ``load_skill_resource``, ``run_skill_script``). Mounting two
+    toolsets therefore produces duplicate model tool names, so per-invoke skills
+    must be folded into one replacement toolset instead of appended separately.
+    """
+
+    existing_toolsets = [tool for tool in agent.tools if isinstance(tool, SkillToolset)]
     agent.tools = [tool for tool in agent.tools if not isinstance(tool, SkillToolset)]
+    if not skill_ids:
+        return
+
+    existing_skills = [
+        skill for toolset in existing_toolsets for skill in toolset._list_skills()
+    ]
     toolset = build_skill_toolset(skill_ids, download_dir=download_dir)
-    if toolset is not None:
-        agent.tools.append(toolset)
+    incoming_skills = toolset._list_skills() if toolset is not None else []
+
+    merged_skills = []
+    seen_skill_names = set()
+    for skill in [*existing_skills, *incoming_skills]:
+        if skill.name in seen_skill_names:
+            continue
+        merged_skills.append(skill)
+        seen_skill_names.add(skill.name)
+    if not merged_skills:
+        return
+
+    code_executor = next(
+        (
+            existing_toolset._code_executor
+            for existing_toolset in existing_toolsets
+            if existing_toolset._code_executor is not None
+        ),
+        None,
+    )
+    if code_executor is None and toolset is not None:
+        code_executor = toolset._code_executor
+    agent.tools.append(
+        SkillToolset(
+            skills=merged_skills,
+            code_executor=code_executor,
+        )
+    )
 
 
 def _remove_a2a_registry_tools(agent: Agent) -> None:
