@@ -1433,3 +1433,14 @@ Run `npm run test:mpa-cron-coverage` and `python -m pytest tests/frontend/server
 ### Sandbox file downloads
 
 Assistant Markdown links under `/data/output/` or `/data/workspace/` appear as download buttons in conversation history and streaming messages. Studio uses the current Runtime and session through its authenticated proxy; files remain available only while that Sandbox and file exist. Legacy `<file-card>` and `<personal-drive-enable-card>` payloads are hidden in conversation rendering. A failed download can be retried by clicking the button again. Run `npm run test:sandbox-download-coverage` for the focused regression suite.
+
+
+### MPA conversation information rail / MPA 会话信息侧栏
+
+Only MPA Runtimes show the right conversation rail. AGENTS.md displays the actual Runtime document through the authenticated Studio metadata endpoint. Upgrade the MPA Runtime image to expose `/api/v1/studio/agent-info`; Studio alone cannot add the endpoint to deployed agents. Runtime credentials stay server-side.
+
+Skills show only the bound Skill Spaces, with pagination. Temporary mounting has been removed, and old temporary selections are excluded from MPA messages. Click a skill name to view its latest SKILL.md. Authorized owners/admins can save a new version to that space; shared/review spaces remain read-only. Saving preserves other files, rejects stale versions and changes to the frontmatter name, and can affect other agents bound to the same space. Running sessions may need a cache refresh or a new session. Use **Refresh information** to reload the rail; environment controls remain available.
+
+右侧会话信息栏仅对 MPA Runtime 展示。AGENTS.md 通过受认证的 Studio 元信息接口显示真实正文。需要更新 MPA Runtime 镜像以提供 `/api/v1/studio/agent-info`；单独更新 Studio 无法给已部署智能体增加此接口。Runtime 凭据仅保留在服务端。
+
+技能仅展示绑定空间的内容并支持分页。已取消临时挂载，旧的临时技能选择不会再发送给 MPA。点击技能名称查看最新 SKILL.md；有权限的所有者/管理员可保存新版本到该空间，共享/审核空间保持只读。保存保留其他文件，拒绝过期版本及 frontmatter 名称变化，可能影响绑定同一空间的其他智能体。运行中的会话可能需要等待缓存刷新或新建会话后生效。点击“刷新信息”重新加载侧栏；环境操作保持可用。

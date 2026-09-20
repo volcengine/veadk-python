@@ -55,10 +55,12 @@ test("Agent information omits generic BFF tool selection and Composer stays unch
   assert.doesNotMatch(composerSource, /StudioToolPicker|StudioToolChips|studioTools/);
 });
 
-test("Session Skill Space mounting augments static Agent skills", () => {
-  assert.match(railSource, /const skills = uniqueSkills\(\[/);
+test("MPA excludes temporary skills while generic Agent skills remain compatible", () => {
+  assert.match(railSource, /const skills = isMpa \? boundSkills\?\.skills \?\? \[\] : uniqueSkills\(\[/);
   assert.match(railSource, /selectedSessionSkills\.map/);
-  assert.match(railSource, /<SkillSpacePicker/);
+  assert.match(railSource, /!isMpa && onSessionSkillsChange/);
+  assert.doesNotMatch(railSource, /topo-session-skills/);
+  assert.match(appSource, /agentInfo\?\.agentCategory === "mpa" \? \[\] : selectedSessionSkills/);
   assert.doesNotMatch(railSource, /SkillCapabilityDialog|onAddCapability/);
   assert.doesNotMatch(clientSource, /SessionCapabilities|addSessionCapability/);
   assert.doesNotMatch(appSource, /requiresSessionCapabilityRunner/);

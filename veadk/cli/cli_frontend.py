@@ -1395,6 +1395,7 @@ def _build_agentkit_proxy_headers(
         "x-agentkit-base",
         "x-agentkit-key",
         "x-mpa-channel-key",
+        "x-mpa-studio-key",
         # Local VeADK/SSO credentials must not leak to the remote runtime.
         "authorization",
         "cookie",
@@ -11526,12 +11527,21 @@ def _run_frontend_server(
         # already-disconnected browser request after the control-plane lookup;
         # detail/list navigation deliberately cancels stale probes.
         body = b"" if upstream_method in {"GET", "HEAD"} else await request.body()
-        if (
-            upstream_method == "GET"
-            and path == f"web/agent-info/{_RUNTIME_A2A_VIRTUAL_APP}"
+        is_mpa = _runtime_agent_category(runtime, _runtime_tags(runtime)) == "mpa"
+        if upstream_method == "GET" and (
+            path == f"web/agent-info/{_RUNTIME_A2A_VIRTUAL_APP}"
+            or (is_mpa and path.startswith("web/agent-info/") and path.count("/") == 2)
         ):
             a2a_card = await _runtime_a2a_agent_card(endpoint, headers)
-            if a2a_card is not None:
+            if a2a_card is not None or is_mpa:
+                mpa_info = None
+                if is_mpa:
+                    from frontend.server.mpa_agent_info import load_mpa_agent_info
+
+                    mpa_info = await load_mpa_agent_info(
+                        endpoint, headers, a2a_card, region, runtime_api_key=apikey
+                    )
+                a2a_card = a2a_card or {}
                 capabilities = a2a_card.get("capabilities")
                 extensions = (
                     capabilities.get("extensions")
@@ -11597,10 +11607,16 @@ def _run_frontend_server(
                     selectable_models.insert(0, default_model)
                 return JSONResponse(
                     {
-                        "name": a2a_card.get("name") or _RUNTIME_A2A_VIRTUAL_APP,
-                        "description": a2a_card.get("description") or "",
+                        "name": (mpa_info or {}).get("name")
+                        or a2a_card.get("name")
+                        or _RUNTIME_A2A_VIRTUAL_APP,
+                        "description": (mpa_info or {}).get("description")
+                        or a2a_card.get("description")
+                        or "",
+                        "agentCategory": "mpa" if is_mpa else "general",
+                        **({"mpa": mpa_info} if mpa_info is not None else {}),
                         "type": "a2a",
-                        "model": default_model,
+                        "model": default_model or (mpa_info or {}).get("model", ""),
                         "selectableModels": selectable_models,
                         "turnLifecycleControl": lifecycle_config,
                         "resourceTopology": topology_config,

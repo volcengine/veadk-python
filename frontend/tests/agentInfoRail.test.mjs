@@ -23,9 +23,14 @@ const railStyles = stylesSource.slice(
   stylesSource.indexOf("/* ---------- quick create"),
 );
 
+test("limits the conversation rail to server-classified MPA agents", () => {
+  assert.match(appSource, /!sandboxSession && agentInfoSelectionRef\.current === appName && agentInfo\?\.agentCategory === "mpa"/);
+  assert.match(railSource, /info\.mpa\?\.agentsMd/);
+});
+
 test("reuses loaded Agent metadata for the conversation information rail", () => {
-  assert.match(appSource, /<AgentInfoPanel[\s\S]*?info=\{agentInfo\}/);
-  assert.match(appSource, /<AgentInfoPanel[\s\S]*?loading=\{capabilitiesLoading\}/);
+  assert.match(appSource, /<MpaAgentInfoRail[\s\S]*?info=\{agentInfo\}/);
+  assert.match(appSource, /<MpaAgentInfoRail[\s\S]*?loading=\{capabilitiesLoading\}/);
   assert.match(railSource, /info: AgentInfo \| null/);
   assert.doesNotMatch(railSource, /getAgentInfo/);
 });
@@ -78,8 +83,8 @@ test("keeps Agent information out of the new-session empty state", () => {
     appSource.indexOf(": turns.length === 0 ? ("),
     appSource.indexOf("className={`transcript"),
   );
-  assert.doesNotMatch(emptyState, /<AgentInfoPanel/);
-  assert.match(appSource, /: turns\.length === 0 \? \([\s\S]*?<AgentInfoPanel/);
+  assert.doesNotMatch(emptyState, /<MpaAgentInfoRail/);
+  assert.match(appSource, /: turns\.length === 0 \? \([\s\S]*?<MpaAgentInfoRail/);
   assert.doesNotMatch(appSource, /className="agent-info-trigger"/);
   assert.doesNotMatch(appSource, /<AgentInfoDrawer\b/);
 });
@@ -136,7 +141,7 @@ test("keeps Agent information in the conversation rail without a title trigger",
   assert.match(navbarSource, /\{titleLeading\}/);
   assert.doesNotMatch(appSource, /className="agent-info-trigger"/);
   assert.doesNotMatch(appSource, /<AgentInfoDrawer\b/);
-  assert.match(appSource, /<AgentInfoPanel[\s\S]*?info=\{agentInfo\}/);
+  assert.match(appSource, /<MpaAgentInfoRail[\s\S]*?info=\{agentInfo\}/);
   assert.match(railSource, /export function AgentInfoDrawer/);
   assert.match(railSource, /event\.key === "Escape"/);
   assert.match(railSource, /returnFocusRef\.current\?\.focus\(\)/);
@@ -178,7 +183,7 @@ test("offers Session-level Skill Space controls in the information rail", () => 
     /dialog === "skill"[\s\S]*?className="studio-tool-dialog-head is-iconless"/,
   );
   assert.doesNotMatch(railSource, /<SkillCapabilityDialog/);
-  assert.doesNotMatch(appSource, /<AgentInfoPanel[\s\S]*?onStudioToolsChange=/);
+  assert.doesNotMatch(appSource, /<MpaAgentInfoRail[\s\S]*?onStudioToolsChange=/);
   assert.doesNotMatch(appSource, /<AgentInfoDrawer\b/);
   assert.match(
     railStyles,

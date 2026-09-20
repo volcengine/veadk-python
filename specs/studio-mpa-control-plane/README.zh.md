@@ -47,3 +47,16 @@
 
 契约测试覆盖状态转换、幂等、竞态、模型快照、已提交挂载、拓扑、鉴权、脱敏和 Runtime 分类过滤。浏览器测试覆盖响应式布局、唯一动态主按钮、模型筛选、MPA 分类选择、Skill Space 发现和终态控制清理。真实 Runtime 测试已证明模型目录、不可变请求模型、生命周期状态/控制路径、配置态 Agent 到 Sandbox 拓扑及真实 Skill Space 发现。主 Agent/worker Skill 传递由目标契约测试覆盖。完整的真实 worker pause/resume、五分钟增量续跑、刷新恢复及失效资源执行门禁仍需后续验证。
 会话投影测试还覆盖 status/artifact 重放、合法重复措辞、reasoning/thought 语义区分、嵌套工具 payload、大型脱敏值、已知/未知工具标签，以及可搜索模型的键盘行为。
+
+## MPA 信息侧栏（2026-09-18 已实现）
+
+- CON-16：会话侧栏仅向服务端识别的 MPA Runtime 展示。AGENTS.md 来自当前 Runtime 已认证 `/api/v1/studio/agent-info` 的 `agentsMd`，明确区分空、不支持、无权限和失败状态，不使用通用 instruction 替代。
+- CON-17：绑定技能来自 Agent Card 中已配置的技能空间节点及 Runtime 地域内已授权的分页 SkillSpace API。取消 Session 临时技能挂载，已保存的临时技能选择不再发送给 MPA。刷新和取消不能混淆 Runtime 身份，不能将列表失败视为空成功。
+
+设计：[MPA 信息侧栏](../../prd-spec/features/mpa-agent-info-rail/2026-09-18-mpa-agent-info-rail.zh.md)。
+
+Runtime 代理为带有 `veadk:agent-type=mpa` 标签的 Runtime 处理 `GET /web/agent-info/{app}`，支持原生 app ID 和 `a2a-default`。新增的 `AgentInfo.agentCategory` 为 `mpa`；通用合成 A2A 响应为 `general`。其他既有响应可以不包含该字段，此时隐藏侧栏。
+
+`AgentInfo.mpa` 包含 `agentsMd: string | null`、`agentsMdStatus`、`skillSpacesStatus` 和 `skillSpaces: {id: string, region: string}[]`。状态值为 `ready`、`unsupported`、`forbidden`、`error`。正文读取的网络超时为 10 秒，连接超时为 4 秒；401/403 为无权限，404/405/501 为不支持。Studio 使用服务端解析的 Runtime key，通过专用 `X-MPA-Studio-Key` 调用新只读元信息接口。404/405 时可尝试旧 `/api/v1/agents` JWT 接口，但不转发专用头；此时认证失败表示 Runtime 需要升级。不得将 API key 当作 JWT。非法响应和传输失败为错误。上游详情仅允许透传正文、name、description、model 字符串。空间发现与正文读取失败相互独立。
+
+空间 ID 来自 `urn:veadk:mpa:resource-topology:v1` 中通过 `mounts` 边与 `agent` 节点连接且已配置的 `skill-space` 节点。缺失拓扑表示不支持，不能视为空绑定成功。空间列表复用已授权的 `/web/skill-spaces/{id}/skills` 路由，每页请求 100 项；无进展或超过 100 页时标记为不完整错误。各请求保留现有 30 秒客户端超时并支持取消。仅完整列表显示数量；降级结果和部分失败保留可读内容并提示，无权限则清除已有技能。不修改 Runtime 凭据、绑定或部署。绑定技能名称可打开按权限控制的[技能正文编辑器](../studio-skill-document/README.zh.md)。
