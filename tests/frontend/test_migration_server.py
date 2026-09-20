@@ -14,11 +14,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import io
 import json
 import stat
 import subprocess
+import threading
+import time
 import zipfile
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -40,6 +43,7 @@ from frontend.server.migration.models import (
     CreateMigrationTaskBody,
     SubmitAnalysisAnswersBody,
 )
+from frontend.server.migration import service as migration_service
 from frontend.server.migration.routes import mount_migration_routes
 from frontend.server.migration.service import (
     EVALUATION_SESSION_TTL_SECONDS,
@@ -53,12 +57,22 @@ from frontend.server.migration.service import (
     _activity_secret_values,
     _analysis_result_message,
     _start_analysis_command,
-    _codex_event_extractor,
+    _analysis_result_extractor_script,
     _parse_activity_log,
     _public_environment_defaults,
     validate_source_archive,
 )
 from veadk.cli.frontend_skill_creator import _sandbox_model_config
+
+
+@pytest.fixture(autouse=True)
+def _pin_scripted_analysis(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These suites cover the in-Sandbox ``codex exec`` driver.
+
+    The app-server driver has its own suite and its own background-worker test; pin
+    the scripted driver here so every command assertion stays deterministic.
+    """
+    monkeypatch.setenv("AGENTKIT_MIGRATION_APP_SERVER", "0")
 
 
 def source_zip(
@@ -2758,6 +2772,127 @@ def test_source_archive_validation_accepts_projects_and_rejects_unsafe_entries()
         validate_source_archive(b"not-a-zip")
 
 
+def test_upload_starts_the_app_server_analysis_on_a_background_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """默认走 App Server：上传立刻返回，分析在后台线程完成后落盘。"""
+    monkeypatch.delenv("AGENTKIT_MIGRATION_APP_SERVER", raising=False)
+    release = threading.Event()
+    source = source_zip()
+    digest = hashlib.sha256(source).hexdigest()
+
+    async def _run(**_kwargs: object) -> dict[str, object]:
+        await asyncio.to_thread(release.wait, 10)
+        return {
+            "schema_version": 1,
+            "status": "recommendation_ready",
+            "attempt": 1,
+            "input_sha256": digest,
+            "summary": "这是一个 LangChain 客服智能体。",
+            "frameworks": [
+                {
+                    "id": "langchain",
+                    "confidence": "high",
+                    "evidence": [
+                        {"path": "agent.py", "line": 1, "reason": "导入 Runnables。"}
+                    ],
+                }
+            ],
+            "recommended": {
+                "framework": "langchain",
+                "entry": None,
+                "reason": "入口为模块级 Agent 对象。",
+            },
+            "entries": [],
+            "boundary": {"include": ["agent.py"], "exclude": []},
+            "assumptions": [],
+            "questions": [],
+            "warnings": [],
+        }
+
+    monkeypatch.setattr(migration_service, "run_route_analysis", _run)
+
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway)
+
+    created = service.create_task(
+        CreateMigrationTaskBody(
+            sourceFileName="support-agent.zip",
+            instruction="请保留客服流程，并使用中文输出迁移报告。",
+        ),
+        "owner-1",
+        "Owner",
+    )
+    task_id = str(created["id"])
+    uploaded = service.upload_source(task_id, "owner-1", source)
+
+    # 请求没有被 Codex 阻塞：仍然在读「正在分析」，由后台线程去完成这一轮。
+    assert uploaded["state"] == "analyzing"
+    assert [operation for _, operation, _ in gateway.commands] == [
+        "accept_request",
+        "preflight",
+        "prepare_source",
+    ]
+    status = json.loads(
+        gateway.files[(task_id, f"{MIGRATION_ROOT}/control/task-status.json")]
+    )
+    assert status == {
+        "schema_version": 1,
+        "attempt": 1,
+        "state": "analyzing",
+        "message": "正在分析项目框架、入口与迁移边界",
+    }
+    lease = json.loads(
+        gateway.files[(task_id, f"{MIGRATION_ROOT}/control/analysis-driver.json")]
+    )
+    assert lease["driver"] == "app-server"
+    assert lease["state"] == "running"
+    assert f"{MIGRATION_ROOT}/analysis/route.json" not in dict(gateway.files)
+
+    release.set()
+    deadline = time.monotonic() + 10
+    while service._analysis_drivers and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert not service._analysis_drivers
+
+    task = service.get_task(task_id, "owner-1")
+    assert task["state"] == "analysis_ready"
+    assert task["analysis"]["status"] == "recommendation_ready"
+    assert task["analysis"]["frameworks"][0]["id"] == "langchain"
+
+
+def test_a_stalled_app_server_analysis_is_recovered_on_the_next_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Studio 重启后租约过期：下一次读取任务时交回沙箱内的脚本继续分析。"""
+    monkeypatch.delenv("AGENTKIT_MIGRATION_APP_SERVER", raising=False)
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway)
+    task_id, _uploaded = create_uploaded_task(service)
+    service._analysis_drivers.clear()
+
+    gateway.files[(task_id, f"{MIGRATION_ROOT}/control/analysis-driver.json")] = (
+        json.dumps(
+            {
+                "schema_version": 1,
+                "driver": "app-server",
+                "state": "running",
+                "attempt": 1,
+                "input_sha256": hashlib.sha256(source_zip()).hexdigest(),
+                "started_at": 1.0,
+                "heartbeat_at": 1.0,
+                "owner_process": "gone",
+            }
+        ).encode("utf-8")
+    )
+
+    assert service.recover_stalled_analysis(task_id, "owner-1") is True
+    operations = [operation for _, operation, _ in gateway.commands]
+    assert operations[-2:] == ["clear_analysis", "start_analysis"]
+    assert "codex exec" in gateway.commands[-1][2]
+    assert service.recover_stalled_analysis(task_id, "owner-1") is False
+
+
 def test_upload_starts_read_only_codex_analysis_without_cli_inspection() -> None:
     gateway = FakeMigrationGateway()
     service = MigrationService(gateway)
@@ -2890,11 +3025,26 @@ def test_upload_starts_read_only_codex_analysis_without_cli_inspection() -> None
     assert schema["properties"]["warnings"]["maxItems"] == 100
 
 
-def test_codex_analysis_uses_the_last_completed_agent_message(
+def test_codex_analysis_selects_the_result_that_matches_the_contract(
     tmp_path: Path,
 ) -> None:
     events = tmp_path / "events.jsonl"
     result = tmp_path / "result.json"
+    diagnostics = tmp_path / "diagnostics.json"
+    contract = {
+        "schema_version": 1,
+        "status": "recommendation_ready",
+        "attempt": 1,
+        "input_sha256": "a" * 64,
+        "summary": "摘要",
+        "frameworks": [],
+        "recommended": {"framework": "dify", "entry": None, "reason": "理由"},
+        "entries": [],
+        "boundary": {"include": [], "exclude": []},
+        "assumptions": [],
+        "questions": [],
+        "warnings": [],
+    }
     events.write_text(
         "\n".join(
             [
@@ -2905,16 +3055,34 @@ def test_codex_analysis_uses_the_last_completed_agent_message(
                         "item": {"type": "reasoning", "text": "ignored"},
                     }
                 ),
+                # 进度更新不是结果，必须被跳过而不是当成结果。
                 json.dumps(
                     {
                         "type": "item.completed",
-                        "item": {"type": "agent_message", "text": '{"attempt": 1}'},
+                        "item": {
+                            "type": "agent_message",
+                            "phase": "commentary",
+                            "text": "已完成步骤 1：扫描项目结构",
+                        },
                     }
                 ),
                 json.dumps(
                     {
                         "type": "item.completed",
-                        "item": {"type": "agent_message", "text": '{"attempt": 2}'},
+                        "item": {
+                            "type": "agent_message",
+                            "text": json.dumps(contract, ensure_ascii=False),
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "item.completed",
+                        "item": {
+                            "type": "agent_message",
+                            "phase": "commentary",
+                            "text": "已完成步骤 2：确认迁移边界",
+                        },
                     }
                 ),
             ]
@@ -2923,14 +3091,28 @@ def test_codex_analysis_uses_the_last_completed_agent_message(
     )
 
     extracted = subprocess.run(
-        ["python3", "-c", _codex_event_extractor(), str(events), str(result)],
+        [
+            "python3",
+            "-c",
+            _analysis_result_extractor_script(),
+            str(events),
+            str(result),
+            str(diagnostics),
+        ],
         capture_output=True,
         check=False,
         text=True,
     )
 
     assert extracted.returncode == 0, extracted.stderr
-    assert json.loads(result.read_text(encoding="utf-8")) == {"attempt": 2}
+    assert json.loads(result.read_text(encoding="utf-8"))["status"] == (
+        "recommendation_ready"
+    )
+    assert json.loads(diagnostics.read_text(encoding="utf-8")) == {
+        "reason": "extracted",
+        "answer_messages": 1,
+        "commentary_messages": 2,
+    }
 
 
 def test_codex_analysis_accepts_a_valid_final_message_after_nonzero_cli_exit() -> None:
@@ -2947,6 +3129,7 @@ def test_codex_analysis_rejects_an_event_stream_without_an_agent_message(
 ) -> None:
     events = tmp_path / "events.jsonl"
     result = tmp_path / "result.json"
+    diagnostics = tmp_path / "diagnostics.json"
     events.write_text(
         json.dumps(
             {
@@ -2958,15 +3141,25 @@ def test_codex_analysis_rejects_an_event_stream_without_an_agent_message(
     )
 
     extracted = subprocess.run(
-        ["python3", "-c", _codex_event_extractor(), str(events), str(result)],
+        [
+            "python3",
+            "-c",
+            _analysis_result_extractor_script(),
+            str(events),
+            str(result),
+            str(diagnostics),
+        ],
         capture_output=True,
         check=False,
         text=True,
     )
 
     assert extracted.returncode != 0
-    assert "agent_message event is missing" in extracted.stderr
+    assert "no_agent_message" in extracted.stderr
     assert not result.exists()
+    assert json.loads(diagnostics.read_text(encoding="utf-8"))["reason"] == (
+        "no_agent_message"
+    )
 
 
 def test_upload_can_resume_analysis_start_after_source_was_accepted() -> None:

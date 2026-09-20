@@ -28,6 +28,7 @@ from websockets.asyncio.server import ServerConnection, serve
 from veadk.cli import codex_app_server
 from veadk.cli.codex_app_server import (
     CodexAppServerError,
+    CodexAppServerOverloadError,
     CodexAppServerSession,
     CodexAppServerTransportError,
     CodexAppServerTurnTimeoutError,
@@ -1305,6 +1306,32 @@ async def test_workspace_directory_browsing_and_user_approval() -> None:
     )
     assert response["result"] == {"decision": "acceptForSession"}
     await session.close()
+
+
+@pytest.mark.parametrize(
+    "method", ["mcpServer/elicitation/request", "item/tool/requestUserInput"]
+)
+@pytest.mark.asyncio
+async def test_unimplemented_input_protocols_fail_closed(method: str) -> None:
+    """Characterize the current integration gap before implementing the feature."""
+    websocket = _FakeWebSocket()
+    session = CodexAppServerSession(
+        "https://sandbox.example",
+        websocket_factory=lambda _url: _ready(websocket),
+    )
+    await session.connect()
+    try:
+        await session._handle_server_request(
+            "input-probe", method, {"threadId": "thread-1"}
+        )
+        response = next(m for m in websocket.messages if m.get("id") == "input-probe")
+        assert response["error"] == {
+            "code": -32601,
+            "message": f"unsupported server request: {method}",
+        }
+        assert "result" not in response
+    finally:
+        await session.close()
 
 
 @pytest.mark.asyncio
@@ -2782,3 +2809,267 @@ async def test_dynamic_tools_register_only_on_start_and_survive_resume():
         assert session.dynamic_tools == (tool,)
     finally:
         await session.close()
+
+
+class _DynamicToolWebSocket(_FakeWebSocket):
+    """Issue one ``item/tool/call`` server request while a turn is running."""
+
+    def __init__(self, *, tool: str = "reportRoute") -> None:
+        super().__init__()
+        self.tool = tool
+        self.tool_result: dict[str, object] | None = None
+        self.tool_error: dict[str, object] | None = None
+
+    async def send(self, raw: str) -> None:
+        message = json.loads(raw)
+        if message.get("id") == "server-tool-call":
+            if "result" in message:
+                self.tool_result = message["result"]
+            else:
+                self.tool_error = message["error"]
+            await self._notification(
+                "turn/completed",
+                {"turn": {"id": "turn-1", "status": "completed"}},
+            )
+            return
+        await super().send(raw)
+        if message.get("method") == "turn/start":
+            await self.queue.put(
+                json.dumps(
+                    {
+                        "id": "server-tool-call",
+                        "method": "item/tool/call",
+                        "params": {
+                            "threadId": "thread-1",
+                            "turnId": "turn-1",
+                            "callId": "call-1",
+                            "tool": self.tool,
+                            "arguments": {"status": "recommendation_ready"},
+                        },
+                    }
+                )
+            )
+
+
+class _OverloadedWebSocket(_FakeWebSocket):
+    """Reject the first ``failures`` requests with the queue-overload code."""
+
+    def __init__(self, *, failures: int) -> None:
+        super().__init__()
+        self.remaining_failures = failures
+        self.overload_count = 0
+
+    async def send(self, raw: str) -> None:
+        message = json.loads(raw)
+        request_id = message.get("id")
+        if (
+            isinstance(request_id, int)
+            and message.get("method") not in {None, "initialize"}
+            and self.remaining_failures > 0
+        ):
+            self.remaining_failures -= 1
+            self.overload_count += 1
+            self.messages.append(message)
+            await self.queue.put(
+                json.dumps(
+                    {
+                        "id": request_id,
+                        "error": {
+                            "code": -32001,
+                            "message": "Server overloaded; retry later.",
+                        },
+                    }
+                )
+            )
+            return
+        await super().send(raw)
+
+
+def test_dynamic_tools_are_announced_only_when_a_thread_starts() -> None:
+    session = CodexAppServerSession("https://sandbox.example?Authorization=secret")
+
+    session.register_dynamic_tool(
+        "reportRoute",
+        "提交项目分析结果",
+        {"type": "object"},
+        lambda _arguments: codex_app_server.CodexDynamicToolResult(True, "已接收"),
+    )
+
+    assert session.dynamic_tool_names == ("reportRoute",)
+    assert session._thread_start_options()["dynamicTools"] == [
+        {
+            "type": "function",
+            "name": "reportRoute",
+            "description": "提交项目分析结果",
+            "inputSchema": {"type": "object"},
+        }
+    ]
+    # thread/resume 不接受 dynamicTools，只有 thread/start 携带。
+    assert "dynamicTools" not in session._thread_options()
+
+
+def test_dynamic_tool_registration_rejects_duplicates_and_missing_fields() -> None:
+    session = CodexAppServerSession("https://sandbox.example?Authorization=secret")
+
+    def handler(
+        _arguments: dict[str, object],
+    ) -> codex_app_server.CodexDynamicToolResult:
+        return codex_app_server.CodexDynamicToolResult(True, "ok")
+
+    with pytest.raises(CodexAppServerError, match="必须提供名称与说明"):
+        session.register_dynamic_tool("", "说明", {}, handler)
+    with pytest.raises(CodexAppServerError, match="JSON Schema"):
+        session.register_dynamic_tool("a", "说明", "not-a-schema", handler)  # type: ignore[arg-type]
+
+    session.register_dynamic_tool("reportRoute", "说明", {"type": "object"}, handler)
+    with pytest.raises(CodexAppServerError, match="已注册"):
+        session.register_dynamic_tool(
+            "reportRoute", "说明", {"type": "object"}, handler
+        )
+
+
+@pytest.mark.asyncio
+async def test_dynamic_tool_call_returns_a_typed_result() -> None:
+    websocket = _DynamicToolWebSocket()
+    seen: list[dict[str, object]] = []
+    session = CodexAppServerSession(
+        "https://sandbox.example?Authorization=secret",
+        websocket_factory=lambda _url: _ready(websocket),
+    )
+    session.register_dynamic_tool(
+        "reportRoute",
+        "提交项目分析结果",
+        {"type": "object"},
+        lambda arguments: (
+            seen.append(arguments)
+            or codex_app_server.CodexDynamicToolResult(True, "分析结果已接收")
+        ),
+    )
+    await session.connect()
+
+    events = [event async for event in session.stream_turn("analyze")]
+
+    assert seen == [{"status": "recommendation_ready"}]
+    assert websocket.tool_result == {
+        "contentItems": [{"type": "inputText", "text": "分析结果已接收"}],
+        "success": True,
+    }
+    assert [event.text for event in events if event.text] == ["完成"]
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_dynamic_tool_failure_is_reported_to_codex_without_aborting_the_turn() -> (
+    None
+):
+    websocket = _DynamicToolWebSocket()
+    session = CodexAppServerSession(
+        "https://sandbox.example?Authorization=secret",
+        websocket_factory=lambda _url: _ready(websocket),
+    )
+    session.register_dynamic_tool(
+        "reportRoute",
+        "提交项目分析结果",
+        {"type": "object"},
+        lambda _arguments: codex_app_server.CodexDynamicToolResult(
+            False, "frameworks[0].evidence[2].line 必须为大于 0 的整数"
+        ),
+    )
+    await session.connect()
+
+    async for _event in session.stream_turn("analyze"):
+        pass
+
+    assert websocket.tool_result is not None
+    assert websocket.tool_result["success"] is False
+    assert "evidence" in websocket.tool_result["contentItems"][0]["text"]
+    assert websocket.tool_result["contentItems"][0]["text"].startswith("frameworks")
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_an_unregistered_dynamic_tool_is_refused() -> None:
+    websocket = _DynamicToolWebSocket(tool="unknownTool")
+    session = CodexAppServerSession(
+        "https://sandbox.example?Authorization=secret",
+        websocket_factory=lambda _url: _ready(websocket),
+    )
+    await session.connect()
+
+    async for _event in session.stream_turn("analyze"):
+        pass
+
+    assert websocket.tool_error is None
+    assert websocket.tool_result == {
+        "success": False,
+        "contentItems": [
+            {"type": "inputText", "text": "Tool is unavailable for this thread."}
+        ],
+    }
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_a_handler_exception_becomes_a_failed_tool_result() -> None:
+    websocket = _DynamicToolWebSocket()
+    session = CodexAppServerSession(
+        "https://sandbox.example?Authorization=secret",
+        websocket_factory=lambda _url: _ready(websocket),
+    )
+
+    def _explode(_arguments: dict[str, object]) -> object:
+        raise RuntimeError("handler blew up")
+
+    session.register_dynamic_tool(
+        "reportRoute", "提交项目分析结果", {"type": "object"}, _explode
+    )
+    await session.connect()
+
+    async for _event in session.stream_turn("analyze"):
+        pass
+
+    assert websocket.tool_result is not None
+    assert websocket.tool_result["success"] is False
+    text = websocket.tool_result["contentItems"][0]["text"]
+    assert "RuntimeError" not in text
+    assert "handler blew up" not in text
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_queue_overload_is_retried_with_backoff(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(codex_app_server, "_OVERLOAD_RETRY_BASE_SECONDS", 0.0)
+    websocket = _OverloadedWebSocket(failures=2)
+    session = CodexAppServerSession(
+        "https://sandbox.example?Authorization=secret",
+        websocket_factory=lambda _url: _ready(websocket),
+    )
+    await session.connect()
+
+    result = await session.request("thread/read", {"threadId": "thread-1"})
+
+    assert websocket.overload_count == 2
+    assert "thread" in result
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_queue_overload_gives_up_after_the_retry_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(codex_app_server, "_OVERLOAD_RETRY_BASE_SECONDS", 0.0)
+    websocket = _OverloadedWebSocket(failures=0)
+    session = CodexAppServerSession(
+        "https://sandbox.example?Authorization=secret",
+        websocket_factory=lambda _url: _ready(websocket),
+    )
+    await session.connect()
+    websocket.remaining_failures = 99
+
+    with pytest.raises(CodexAppServerOverloadError):
+        await session.request("thread/read", {"threadId": "thread-1"})
+
+    assert websocket.overload_count == codex_app_server._OVERLOAD_RETRY_ATTEMPTS + 1
+    await session.close()
