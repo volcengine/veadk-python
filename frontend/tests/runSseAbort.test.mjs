@@ -340,3 +340,27 @@ test("runSSE preserves a partial event and reports an unexpected stream failure"
     return true;
   });
 });
+
+test("A2A connecting status keeps a delayed response open beyond 30 seconds", async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let streamController;
+  let requestSignal;
+  globalThis.fetch = async (_url, init) => {
+    requestSignal = init.signal;
+    return new Response(new ReadableStream({start(controller) {
+      streamController = controller;
+      controller.enqueue(new TextEncoder().encode('data: {"partial":true,"customMetadata":{"a2aStatus":"connecting"},"content":{"parts":[]}}\n\n'));
+    }}), {headers: {"Content-Type": "text/event-stream"}});
+  };
+  const events = runSSE({appName: "a2a-default", userId: "user", sessionId: "session", text: "hello"});
+  assert.equal((await events.next()).value.customMetadata.a2aStatus, "connecting");
+  const next = events.next();
+  t.mock.timers.tick(120_000);
+  assert.equal(requestSignal.aborted, false);
+  streamController.enqueue(new TextEncoder().encode('data: {"partial":false,"content":{"parts":[{"text":"done"}]}}\n\n'));
+  streamController.close();
+  assert.equal((await next).value.content.parts[0].text, "done");
+  assert.equal((await events.next()).done, true);
+});

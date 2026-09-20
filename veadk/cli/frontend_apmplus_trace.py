@@ -52,6 +52,7 @@ _A2A_CONTEXT_TAGS = ("a2a.context_id",)
 _QUERY_WINDOW_MS = 2 * 60 * 60 * 1000
 _PAGE_SIZE = 200
 _MAX_PAGES = 5
+_MAX_TRACE_PAGES = 50
 _TRACE_CANDIDATE_WINDOW_MS = 2 * 60 * 1000
 _TRACE_END_BUFFER_MS = 60 * 1000
 _MAX_TRACE_CANDIDATES = 20
@@ -297,7 +298,81 @@ def load_apmplus_trace(
 
         return min(traces.values(), key=distance)
 
+    def load_tagged_trace() -> list[dict[str, Any]]:
+        # Locate the session before expanding its trace: the root may be older
+        # than hundreds of untagged HTTP/DB child spans.
+        for tag in ("mpa.session.id", "gen_ai.session.id"):
+            tagged = _list_spans(
+                api,
+                ListSpanRequest(
+                    project_name=project_name or "default",
+                    start_time=api_time(end_time_ms - _QUERY_WINDOW_MS),
+                    end_time=api_time(query_end_time_ms),
+                    limit=_PAGE_SIZE,
+                    offset=0,
+                    min_call_cost_millisecond=0,
+                    max_call_cost_millisecond=86_400_000,
+                    order="desc",
+                    order_by="start_time",
+                    filters=[
+                        FilterForListSpanInput(
+                            key=f"tags.{tag}", op="in", values=[session_id]
+                        )
+                    ],
+                ),
+            )
+            roots = [
+                span
+                for span in matching_spans(tagged)
+                if str(_span_tags(span).get(tag) or "") == session_id
+                and (
+                    not invocation_id
+                    or _matches_tag(_span_tags(span), _INVOCATION_TAGS, invocation_id)
+                )
+            ]
+            business_roots = [
+                span for span in roots if span.get("operation_name") == "mpa.agent.turn"
+            ]
+            selected = nearest_trace(business_roots or roots)
+            if not selected:
+                continue
+            trace_id = str(selected[0]["trace_id"])
+            spans = {str(span["span_id"]): span for span in selected}
+            for page in range(_MAX_TRACE_PAGES):
+                rows = _list_spans(
+                    api,
+                    ListSpanRequest(
+                        project_name=project_name or "default",
+                        start_time=api_time(end_time_ms - _QUERY_WINDOW_MS),
+                        end_time=api_time(query_end_time_ms),
+                        limit=_PAGE_SIZE,
+                        offset=page * _PAGE_SIZE,
+                        min_call_cost_millisecond=0,
+                        max_call_cost_millisecond=86_400_000,
+                        order="desc",
+                        order_by="start_time",
+                        filters=[
+                            FilterForListSpanInput(
+                                key="trace_id", op="in", values=[trace_id]
+                            )
+                        ],
+                    ),
+                )
+                for row in rows:
+                    span = _span_dict(row)
+                    if str(span.get("trace_id") or "") == trace_id and span.get(
+                        "span_id"
+                    ):
+                        spans[str(span["span_id"])] = span
+                if len(rows) < _PAGE_SIZE:
+                    return list(spans.values())
+            raise RuntimeError("APMPlus trace exceeds the Studio span limit")
+        return []
+
     def load_once() -> list[dict[str, Any]]:
+        tagged_trace = load_tagged_trace()
+        if tagged_trace:
+            return tagged_trace
         if now_ms is None:
             tagged_rows = _list_spans(
                 api,

@@ -103,6 +103,11 @@
     "downloadFormat": "下载 {{format}}"
   },
   "blocks": {
+    "a2a": {
+      "connecting": "正在等待 Runtime 响应…",
+      "submitted": "任务排队中…",
+      "working": "任务执行中…"
+    },
     "unsupportedComponent": "不支持的组件：{{component}}",
     "sandboxIdentity": "Codex Sandbox 执行标识",
     "useSkill": "使用 {{name}} 技能",
@@ -363,5 +368,5 @@
   "composer": { "placeholder": "输入消息…", "inputAria": "输入消息", "generating": "正在生成", "send": "发送", "model": "模型" },
   "invocation": { "ariaLabel": "本轮调用上下文", "removeSkill": "移除技能 {{name}}", "removeAgent": "移除 Agent {{name}}" },
   "visualization": { "cardAria": "{{label}} 图表", "viewAria": "{{label}} 显示方式", "preview": "预览", "code": "代码", "invalidEcharts": "ECharts 配置不是有效且安全的数据对象，请切换到代码检查内容。", "renderFailed": "图表暂时无法渲染，请切换到代码检查内容。", "echartsAria": "ECharts 图表预览", "rendering": "正在渲染图表…", "mermaidFailed": "图表暂时无法渲染，请切换到代码查看 Mermaid 内容。", "mermaidAria": "Mermaid 图表预览" }
-  ,"markdown": { "playVideo": "点击播放视频：{{name}}", "enlargeImage": "放大预览：{{name}}", "image": "图片", "enlargeVideo": "点击放大视频", "videoPreview": "视频预览", "downloadVideo": "下载视频", "close": "关闭" }
+  ,"markdown": { "downloadFile": "下载文件", "downloading": "下载中…", "downloadFailed": "下载失败。请确认 Sandbox 和文件仍可用，然后点击重试。", "playVideo": "点击播放视频：{{name}}", "enlargeImage": "放大预览：{{name}}", "image": "图片", "enlargeVideo": "点击放大视频", "videoPreview": "视频预览", "downloadVideo": "下载视频", "close": "关闭" }
 }

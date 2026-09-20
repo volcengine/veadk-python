@@ -87,6 +87,11 @@ def test_apmplus_trace_uses_provider_endpoint_and_filters_spans(
 
         def list_span(self, request: Any) -> SimpleNamespace:
             requests.append(request)
+            if request.filters[0].key in (
+                "tags.mpa.session.id",
+                "tags.gen_ai.session.id",
+            ):
+                return SimpleNamespace(span_list=[])
             return SimpleNamespace(span_list=rows)
 
     monkeypatch.setattr(
@@ -111,9 +116,9 @@ def test_apmplus_trace_uses_provider_endpoint_and_filters_spans(
     assert hosts == [expected_host]
     assert requests[0].project_name == "default"
     assert requests[0].order_by == "start_time"
-    assert requests[0].filters[0].key == "operation_name"
+    assert requests[2].filters[0].key == "operation_name"
     assert requests[0].filters[0].op == "in"
-    assert requests[1].filters[0].key == "trace_id"
+    assert requests[3].filters[0].key == "trace_id"
 
 
 def test_normalize_apmplus_trace_converts_span_shape_for_frontend() -> None:
@@ -309,9 +314,9 @@ def test_apmplus_trace_falls_back_when_run_sse_candidate_is_missing(
         "span-nearest-root",
         "span-nearest-child",
     ]
-    assert requests[0].filters[0].values == ["POST /run_sse"]
-    assert requests[1].filters[0].key == "tags.a2a.context_id"
-    assert requests[2].filters is None
+    assert requests[2].filters[0].values == ["POST /run_sse"]
+    assert requests[3].filters[0].key == "tags.a2a.context_id"
+    assert requests[4].filters is None
 
 
 def test_apmplus_trace_retries_while_spans_are_being_collected(

@@ -1,4 +1,5 @@
-import { Children, isValidElement, memo, useState, type ReactNode } from "react";
+import { SandboxFileContext, SandboxFileLink, sandboxFilePath } from "./SandboxFileLink";
+import { Children, isValidElement, memo, useContext, useState, type ReactNode } from "react";
 import { Maximize2, X, Download } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { PhotoView } from "react-photo-view";
@@ -84,6 +85,7 @@ function MarkdownImpl({
   streaming?: boolean;
 }) {
   const { t } = useTranslation("conversation");
+  const sandboxContext = useContext(SandboxFileContext);
   const [videoViewerOpen, setVideoViewerOpen] = useState<VideoData | null>(null);
 
   // Extract video src from props or source children
@@ -134,6 +136,7 @@ function MarkdownImpl({
   return (
     <div className={className ? `md ${className}` : "md"}>
       <ReactMarkdown
+        disallowedElements={sandboxContext ? ["file-card", "personal-drive-enable-card"] : undefined}
         remarkPlugins={[remarkGfm]}
         rehypePlugins={allowRawHtml ? [rehypeRaw, rehypeHighlight] : [rehypeHighlight]}
         components={{
@@ -160,6 +163,10 @@ function MarkdownImpl({
           },
           a: ({ node, ...props }) => {
             const href = props.href;
+            const sandboxPath = sandboxContext && sandboxFilePath(href);
+            if (sandboxPath) {
+              return <SandboxFileLink {...sandboxContext!} path={sandboxPath}>{props.children}</SandboxFileLink>;
+            }
             if (href && (isVideoUrl(href) || isVideoLink(node))) {
               const videoSrc = href;
               const linkText = getLinkText(node?.children);
