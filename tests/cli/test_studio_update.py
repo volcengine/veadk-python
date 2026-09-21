@@ -2048,8 +2048,11 @@ def test_release_failure_includes_status_when_logs_are_empty(
         service._release_application("application-id")
 
     message = str(exc.value)
-    assert "No application revision logs were returned" in message
-    assert "Application status response" in message
+    assert "控制面日志" in message
+    assert "未返回控制面日志。" in message
+    assert "FaaS 数据面日志" in message
+    assert "未发现可下载的 FaaS 数据面日志链接。" in message
+    assert "最终 VeFaaS 状态" in message
     assert "runtime start failed" in message
     assert "sensitive-token-value" not in message
     assert "******" in message

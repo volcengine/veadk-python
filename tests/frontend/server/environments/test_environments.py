@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 import tarfile
@@ -1279,6 +1280,94 @@ def test_sandbox_build_provisions_and_persists_a_ready_private_tool(
     assert manifest["status"]["toolId"] == f"tool-{provider}"
     assert manifest["status"]["toolStatus"] == "ready"
     assert manifest["spec"]["baseEnvironment"] == base_environment
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ["volcengine", "byteplus"])
+@pytest.mark.parametrize("base_environment", ["aio-sandbox", "codex-sandbox"])
+async def test_delayed_build_log_write_preserves_ready_tool(
+    monkeypatch, provider, base_environment
+):
+    provisioner = FakeToolProvisioner()
+    service, _tos = _service(
+        cloud=FakeCloud(provider=provider), tool_provisioner=provisioner
+    )
+    environment = await service.create(
+        "owner",
+        EnvironmentInput.model_validate(
+            _payload(
+                baseEnvironment=base_environment,
+                dockerfile=(
+                    "FROM enterprise-public-cn-beijing.cr.volces.com/"
+                    "vefaas-public/codexenv:1.1.0"
+                    if base_environment == "codex-sandbox"
+                    else ""
+                ),
+            )
+        ),
+    )
+    started = await service.start_build("owner", environment.id)
+    repository = service._require_repository()
+    update_build = repository.update_build
+
+    async def delayed_log_write(owner_id, build, *, log=None):
+        if log is not None:
+            # Let any already-started provisioning finish before this slow write
+            await asyncio.gather(*list(service._tool_tasks.values()))
+        return await update_build(owner_id, build, log=log)
+
+    monkeypatch.setattr(repository, "update_build", delayed_log_write)
+    await service.get_build("owner", environment.id, started.version_id)
+    await asyncio.gather(*list(service._tool_tasks.values()))
+
+    completed = await repository.get_build("owner", environment.id, started.version_id)
+    assert completed.status == "available"
+    assert completed.tool_id == f"tool-{provider}"
+    assert completed.tool_status == "ready"
+    assert len(provisioner.calls) == 1
+    assert (
+        await repository.get_build_log("owner", environment.id, started.version_id)
+        == "build failed"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ["volcengine", "byteplus"])
+async def test_stale_build_poll_does_not_repeat_completed_tool_provisioning(
+    monkeypatch, provider
+):
+    provisioner = PersistingToolProvisioner()
+    service, _tos = _service(
+        cloud=FakeCloud(provider=provider), tool_provisioner=provisioner
+    )
+    environment = await service.create(
+        "owner",
+        EnvironmentInput.model_validate(_payload(baseEnvironment="aio-sandbox")),
+    )
+    started = await service.start_build("owner", environment.id)
+    await service.get_build("owner", environment.id, started.version_id)
+    await provisioner.persisted.wait()
+    repository = service._require_repository()
+    get_build = repository.get_build
+    delay_next_read = True
+
+    async def delayed_read(*args):
+        nonlocal delay_next_read
+        build = await get_build(*args)
+        if delay_next_read:
+            delay_next_read = False
+            provisioner.release.set()
+            await asyncio.gather(*list(service._tool_tasks.values()))
+        return build
+
+    monkeypatch.setattr(repository, "get_build", delayed_read)
+    await service.get_build("owner", environment.id, started.version_id)
+    await asyncio.gather(*list(service._tool_tasks.values()))
+
+    completed = await repository.get_build("owner", environment.id, started.version_id)
+    assert completed.status == "available"
+    assert completed.tool_status == "ready"
+    assert len(provisioner.calls) == 1
 
 
 def test_ubuntu_build_does_not_provision_a_private_tool():
