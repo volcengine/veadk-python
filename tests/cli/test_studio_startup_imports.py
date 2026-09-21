@@ -1104,6 +1104,35 @@ with tempfile.TemporaryDirectory() as agents_dir:
     )
 
 
+def test_studio_deferred_genai_types_accept_evaluation_output_schema() -> None:
+    root = Path(__file__).resolve().parents[2]
+    script = """
+import os
+import tempfile
+os.environ["MODEL_AGENT_API_KEY"] = "test-only-key"
+from veadk.cli.studio_start import studio_fast_api_factory
+with tempfile.TemporaryDirectory() as agents_dir:
+    studio_fast_api_factory()(agents_dir=agents_dir, web=False)
+    from veadk import Agent
+    from frontend.server.evaluation_automation.models import AutoEvaluationOutput
+    agent = Agent(
+        name="evaluation_startup_test",
+        model_name="doubao-seed-2-0-lite-260428",
+        output_schema=AutoEvaluationOutput,
+        enable_responses=True,
+    )
+    assert agent.output_schema is AutoEvaluationOutput
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
+
+
 def test_session_metadata_defers_agentkit_models_until_first_request() -> None:
     root = Path(__file__).resolve().parents[2]
     script = """

@@ -1565,3 +1565,36 @@ Tokens 使用带展开提示的轻量文字按钮，可通过悬浮、键盘聚�
 `usage` 事件仍保留兼容；已有数据库只增加 `run_turns.metrics` 列。回滚到旧代码时应
 使用新的短期数据库路径，因为旧版本按固定列数写入 `run_turns`。当前单实例云部署
 在实例替换后丢失短期记录的约定不变。
+
+### Runtime evaluation storage
+
+Studio stores evaluation sets and samples in the configured private TOS bucket
+(`VEADK_STUDIO_TOS_BUCKET` and `VEADK_STUDIO_TOS_REGION`). Volcengine and BytePlus
+use their respective server credentials. No AgentKit evaluation APIs are used.
+
+Objects live under `veadk-studio/v1/evaluation/<runtime-id>/`:
+
+- `sets/good.json` and `sets/bad.json` are the two default sets
+- `sets/<id>.json` stores a user-created set and its editable name and description
+- `samples/<id>.json` stores an individual sample, its set ID and `user` or `auto` source
+
+App names, projects and cloud regions are not part of the storage identity.
+Use separate buckets for local and production installations. Existing AgentKit
+sets are not imported.
+
+New Runtime deployments apply the requested instance limits at creation and
+wait for the configured instances to become ready before reporting success.
+This avoids starting the first conversation on a temporary startup instance.
+Runtime sessions still use the Agent's configured short-term memory backend;
+use database-backed memory when sessions must survive instance replacement.
+
+The existing evaluation page and conversation feedback controls use the same
+TOS records. Runtime-scoped APIs support custom set CRUD, sample editing and
+moving, source filtering, search and pagination. Updates use TOS ETag conditions;
+a stale edit returns a conflict. Deletion removes
+sample content and retains a small marker so automatic retries cannot recreate
+it. Deleting a default set stops feedback writes to that set and prevents background recreation; renaming it keeps feedback routing intact.
+
+List filtering and counts currently scan only the selected Runtime's objects,
+with bounded parallel reads. This is intended for the initial dataset sizes;
+large collections will need a separate rebuildable query index.

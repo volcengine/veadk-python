@@ -6452,32 +6452,6 @@ def _run_frontend_server(
         )
         client.delete_runtime(_rt.DeleteRuntimeRequest(RuntimeId=runtime_id))
 
-    def _set_agentkit_runtime_instance_range(
-        runtime_id: str,
-        region: str,
-        min_instance: int,
-        max_instance: int,
-    ) -> None:
-        """Set a Runtime instance range and publish the configuration update."""
-        from agentkit.sdk.runtime import types as _rt
-        from agentkit.sdk.runtime.client import AgentkitRuntimeClient
-
-        ak, sk, token = _resolve_ve_credentials()
-        client = AgentkitRuntimeClient(
-            access_key=ak,
-            secret_key=sk,
-            session_token=token or "",
-            region=region,
-        )
-        client.update_runtime(
-            _rt.UpdateRuntimeRequest(
-                RuntimeId=runtime_id,
-                MinInstance=min_instance,
-                MaxInstance=max_instance,
-                ReleaseEnable=True,
-            )
-        )
-
     def _destroy_deploy_task_runtime(task: dict[str, Any]) -> bool:
         """Destroy a task's Runtime once, if creation has reached that stage."""
         with _deploy_tasks_lock:
@@ -6965,8 +6939,6 @@ def _run_frontend_server(
                 status_code=400,
                 detail="createEvaluationSets must be a boolean",
             )
-        if provider == "byteplus":
-            create_evaluation_sets = False
 
         min_instance = data.get("minInstance", 1)
         max_instance = data.get("maxInstance", 5)
@@ -7078,11 +7050,6 @@ def _run_frontend_server(
             _validate_harness_sidecar_project_files(files, enabled=sidecar_enabled)
         use_managed_sidecar_release = (
             sidecar_enabled and not source_preserving_requested
-        )
-        needs_instance_update = (
-            not sidecar_enabled
-            and not runtime_id
-            and (min_instance != 1 or max_instance != 5)
         )
 
         region = config.get("region") or _default_cloud_region()
@@ -9052,6 +9019,10 @@ def _run_frontend_server(
                             for key, value in _merged_runtime_tags(req.tags).items()
                         ]
                         req.apmplus_enable = True
+                        # Set limits before the first release so a later deployment
+                        # cannot replace the instance holding the first session.
+                        req.min_instance = min_instance
+                        req.max_instance = max_instance
                         created = _create_runtime_with_description_fallback(
                             _orig, self, req
                         )
@@ -9257,33 +9228,42 @@ def _run_frontend_server(
                             result = _launch_config(final_config)
                     else:
                         result = _launch_config(sdk_agentkit_config)
-                    if (
-                        result is not None
-                        and getattr(result, "success", False)
-                        and needs_instance_update
-                    ):
-                        created_runtime_id = str(task_state.get("runtime_id") or "")
-                        if not created_runtime_id:
-                            raise RuntimeError("Runtime 创建成功，但未返回 Runtime ID")
-                        state["phase"] = "update"
-                        _emit(
-                            "info",
-                            f"正在将 Runtime 实例数调整为 {min_instance}～{max_instance}",
-                            0,
-                        )
-                        _set_agentkit_runtime_instance_range(
-                            created_runtime_id,
-                            region,
-                            min_instance,
-                            max_instance,
-                        )
-                        _emit(
-                            "success",
-                            f"Runtime 实例数已调整为 {min_instance}～{max_instance}",
-                            100,
-                        )
                     if result is not None and getattr(result, "success", False):
                         _verify_sdk_sidecar_release(result)
+                        if existing_runtime is None and not sidecar_enabled:
+                            from agentkit.sdk.runtime.client import (
+                                AgentkitRuntimeClient,
+                            )
+                            from frontend.server.runtime_readiness import (
+                                wait_for_runtime_instances,
+                            )
+
+                            deployed = getattr(result, "deploy_result", None)
+                            metadata = getattr(deployed, "metadata", None) or {}
+                            created_id = str(
+                                task_state.get("runtime_id")
+                                or metadata.get("runtime_id")
+                                or ""
+                            )
+                            if not created_id:
+                                raise RuntimeError(
+                                    "Runtime 创建成功，但未返回 Runtime ID"
+                                )
+                            access_key, secret_key, session_token = (
+                                _resolve_ve_credentials()
+                            )
+                            _emit("info", "正在等待 Runtime 实例就绪", 95)
+                            wait_for_runtime_instances(
+                                AgentkitRuntimeClient(
+                                    access_key=access_key,
+                                    secret_key=secret_key,
+                                    session_token=session_token or "",
+                                    region=region,
+                                ),
+                                created_id,
+                                min_instance,
+                                cancelled=task_state["cancel_event"],
+                            )
                         if existing_runtime is not None and provider != "byteplus":
                             try:
                                 access_key, secret_key, session_token = (
@@ -9515,16 +9495,9 @@ def _run_frontend_server(
                                 "\n\n"
                             )
                             try:
-                                from frontend.server.evaluation_automation.datasets import (
-                                    ensure_feedback_sets,
-                                )
-
-                                await ensure_feedback_sets(
-                                    openapi_post=_agentkit_openapi_post,
-                                    region=region,
-                                    project_name=project_name,
-                                    agent_name=agent_name,
-                                )
+                                await evaluation_storage.for_runtime(
+                                    deployed_runtime_id,
+                                ).ensure_defaults()
                                 evaluation_complete = {
                                     "level": "success",
                                     "phase": "evaluation",
@@ -10856,6 +10829,10 @@ def _run_frontend_server(
             ),
         }
 
+    from frontend.server.evaluation import EvaluationStorage
+    from frontend.server.evaluation.sessions import enrich_session, session_identity
+
+    evaluation_storage = EvaluationStorage(provider, _resolve_ve_credentials)
     evaluation_automation: EvaluationAutomationService | None = None
     agent_usage_service: Any | None = None
     if studio:
@@ -10867,24 +10844,10 @@ def _run_frontend_server(
             mount_routes as mount_agent_usage_routes,
         )
 
-        async def _evaluation_automation_openapi_post(
-            *,
-            region: str,
-            action: str,
-            payload: dict[str, Any],
-            query: dict[str, str] | None = None,
-        ) -> dict[str, Any]:
-            return await _agentkit_openapi_post(
-                region=region,
-                action=action,
-                payload=payload,
-                query=query,
-            )
-
         evaluation_automation = create_evaluation_automation_service(
-            openapi_post=_evaluation_automation_openapi_post,
             provider=provider,
             resolve_credentials=_resolve_ve_credentials,
+            evaluation_storage=evaluation_storage,
         )
         agent_usage_service = create_agent_usage_service(
             provider=provider,
@@ -11754,6 +11717,22 @@ def _run_frontend_server(
                     runtime_request_context(upstream.headers)
                 ),
             )
+
+        identity = session_identity(path) if upstream_method == "GET" else None
+        if identity is not None and upstream.status_code == 200:
+            try:
+                session = json.loads(await upstream.aread())
+                return JSONResponse(
+                    await enrich_session(
+                        evaluation_storage, runtime_id, identity, session
+                    ),
+                    headers=studio_runtime_context_headers(
+                        runtime_request_context(upstream.headers)
+                    ),
+                )
+            finally:
+                await upstream.aclose()
+                await client.aclose()
 
         async def _body():
             try:
@@ -13417,559 +13396,24 @@ def _run_frontend_server(
             headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
         )
 
-    @app.post("/web/evaluation/feedback")
-    async def _web_message_feedback(
-        feedback: _MessageFeedbackRequest,
-        request: Request,
-    ) -> dict[str, Any]:
-        """Persist one message rating in ADK state and AgentKit evaluation sets."""
-        feedback.region = _coerce_cloud_region(feedback.region)
-        principal = _current_principal(request)
-        if (
-            principal is None
-            or feedback.user_id.casefold() not in principal.identifiers
-        ):
-            raise HTTPException(
-                status_code=403,
-                detail="Feedback can only be submitted for the current user",
-            )
-        runtime = _authorized_runtime(
+    from frontend.server.evaluation.routes import (
+        mount_routes as mount_evaluation_routes,
+    )
+
+    mount_evaluation_routes(
+        app,
+        storage=evaluation_storage,
+        authorize=lambda request, runtime_id, region, shared=False: _authorized_runtime(
             request,
-            feedback.runtime_id,
-            feedback.region,
-            coded_access_error=True,
-            allow_shared=True,
-        )
-        if provider == "byteplus":
-            return {
-                "rating": None,
-                "evaluationSetId": None,
-                "evaluationSetName": None,
-                "workspaceId": None,
-                "evaluationItemId": None,
-                "syncStatus": "synced",
-                "statePersistence": "browser",
-                "updatedAt": time.time(),
-            }
-        session_path = (
-            f"apps/{quote(feedback.app_name, safe='')}/users/"
-            f"{quote(feedback.user_id, safe='')}/sessions/"
-            f"{quote(feedback.session_id, safe='')}"
-        )
-        agent_info_path = f"web/agent-info/{quote(feedback.app_name, safe='')}"
-
-        async def _feedback_agent_info() -> dict[str, Any]:
-            try:
-                return await _runtime_json_request(
-                    request,
-                    runtime=runtime,
-                    runtime_id=feedback.runtime_id,
-                    region=feedback.region,
-                    method="GET",
-                    path=agent_info_path,
-                )
-            except HTTPException as error:
-                if error.status_code != 404:
-                    raise
-                logger.info(
-                    "Runtime %s does not expose Agent info; using app name %s "
-                    "for evaluation feedback",
-                    feedback.runtime_id,
-                    feedback.app_name,
-                )
-                return {}
-
-        try:
-            session, agent_info = await asyncio.gather(
-                _runtime_json_request(
-                    request,
-                    runtime=runtime,
-                    runtime_id=feedback.runtime_id,
-                    region=feedback.region,
-                    method="GET",
-                    path=session_path,
-                ),
-                _feedback_agent_info(),
-            )
-            from veadk.integrations.agentkit.evaluation import (
-                AgentKitEvaluationDatasetsClient,
-            )
-            from veadk.integrations.agentkit.evaluation.feedback import (
-                extract_feedback_sample,
-                feedback_item_key,
-                feedback_state_key,
-            )
-
-            agent_name = str(agent_info.get("name") or feedback.app_name)
-            project_name = str(getattr(runtime, "project_name", "") or "default")
-            sample = extract_feedback_sample(
-                session,
-                target_event_id=feedback.event_id,
-                runtime_id=feedback.runtime_id,
-                agent_name=agent_name,
-                user_id=feedback.user_id,
-            )
-            state_key = feedback_state_key(feedback.event_id)
-            session_state = session.get("state")
-            previous_value = (
-                session_state.get(state_key)
-                if isinstance(session_state, dict)
-                else None
-            )
-            previous: dict[str, Any] = (
-                previous_value if isinstance(previous_value, dict) else {}
-            )
-
-            async def _evaluation_post(
-                *,
-                action: str,
-                payload: dict[str, Any],
-                query: dict[str, str] | None = None,
-            ) -> dict[str, Any]:
-                return await _agentkit_openapi_post(
-                    region=feedback.region,
-                    action=action,
-                    payload=payload,
-                    query=query,
-                )
-
-            evaluation = AgentKitEvaluationDatasetsClient(
-                _evaluation_post,
-                project_name=project_name,
-            )
-            item_key = feedback_item_key(
-                project_name=project_name,
-                runtime_id=feedback.runtime_id,
-                session_id=feedback.session_id,
-                message_id=feedback.event_id,
-            )
-            deleted_previous_item_ids: set[str] = set()
-            evaluation_set = None
-            evaluation_item = None
-            if feedback.rating is not None:
-                evaluation_set = await evaluation.ensure_feedback_set(
-                    agent_name,
-                    feedback.rating,
-                )
-                evaluation_item = await evaluation.upsert_item(
-                    evaluation_set_id=evaluation_set.id,
-                    workspace_id=evaluation_set.workspace_id,
-                    item_key=item_key,
-                    fields=sample.fields(
-                        rating=feedback.rating,
-                        comment=feedback.comment,
-                    ),
-                )
-
-            previous_rating = str(previous.get("rating") or "")
-            previous_item_id = str(previous.get("evaluationItemId") or "")
-            previous_set_id = str(previous.get("evaluationSetId") or "")
-            previous_workspace_id = str(previous.get("workspaceId") or "")
-            replacing_previous = previous_item_id and (
-                feedback.rating is None or previous_rating != feedback.rating
-            )
-            if replacing_previous and previous_set_id and previous_workspace_id:
-                await evaluation.delete_item(
-                    evaluation_set_id=previous_set_id,
-                    workspace_id=previous_workspace_id,
-                    item_id=previous_item_id,
-                )
-                deleted_previous_item_ids.add(previous_item_id)
-
-            fallback_delete_ratings: tuple[str, ...] = ()
-            if feedback.rating is None:
-                fallback_delete_ratings = ("good", "bad")
-            elif feedback.rating == "good":
-                fallback_delete_ratings = ("bad",)
-            elif feedback.rating == "bad":
-                fallback_delete_ratings = ("good",)
-            for stale_rating in fallback_delete_ratings:
-                stale_set, stale_items = await evaluation.list_feedback_items(
-                    agent_name=agent_name,
-                    rating=stale_rating,
-                    page_size=200,
-                )
-                if stale_set is None:
-                    continue
-                for stale_item in stale_items:
-                    if (
-                        stale_item.item_key != item_key
-                        or stale_item.id in deleted_previous_item_ids
-                    ):
-                        continue
-                    await evaluation.delete_item(
-                        evaluation_set_id=stale_set.id,
-                        workspace_id=stale_set.workspace_id,
-                        item_id=stale_item.id,
-                    )
-                    deleted_previous_item_ids.add(stale_item.id)
-
-            feedback_state = {
-                "rating": feedback.rating,
-                "comment": feedback.comment if feedback.rating is not None else "",
-                "evaluationSetId": evaluation_set.id if evaluation_set else None,
-                "evaluationSetName": evaluation_set.name if evaluation_set else None,
-                "workspaceId": (
-                    evaluation_set.workspace_id if evaluation_set else None
-                ),
-                "evaluationItemId": evaluation_item.id if evaluation_item else None,
-                "syncStatus": "synced",
-                "statePersistence": "runtime",
-                "updatedAt": time.time(),
-            }
-            try:
-                await _runtime_json_request(
-                    request,
-                    runtime=runtime,
-                    runtime_id=feedback.runtime_id,
-                    region=feedback.region,
-                    method="PATCH",
-                    path=session_path,
-                    payload={"state_delta": {state_key: feedback_state}},
-                )
-            except HTTPException as error:
-                if error.status_code != 404:
-                    raise
-                feedback_state["statePersistence"] = "browser"
-                logger.warning(
-                    "Runtime %s does not expose Session PATCH through its gateway; "
-                    "feedback state will use the browser compatibility cache",
-                    feedback.runtime_id,
-                )
-            return feedback_state
-        except HTTPException:
-            raise
-        except ValueError as error:
-            raise HTTPException(status_code=400, detail=str(error)) from error
-        except RuntimeError as error:
-            raise HTTPException(
-                status_code=502,
-                detail=(
-                    "同步反馈到 AgentKit 评测集失败：" + _safe_exception_detail(error)
-                ),
-            ) from error
-
-    @app.get("/web/evaluation/feedback-cases")
-    async def _web_feedback_cases(
-        request: Request,
-        runtimeId: str = Query(..., min_length=1),
-        appName: str = Query(..., min_length=1),
-        region: str = Query(default="", min_length=0),
-        page_size: int = Query(default=100, ge=1, le=200),
-    ) -> dict[str, Any]:
-        """List AgentKit evaluation-set items created from message feedback."""
-        region = _coerce_cloud_region(region)
-        runtime = _authorized_runtime(
-            request,
-            runtimeId,
+            runtime_id,
             region,
             coded_access_error=True,
-        )
-        agent_info_path = f"web/agent-info/{quote(appName, safe='')}"
-        try:
-            try:
-                agent_info = await _runtime_json_request(
-                    request,
-                    runtime=runtime,
-                    runtime_id=runtimeId,
-                    region=region,
-                    method="GET",
-                    path=agent_info_path,
-                )
-            except HTTPException as error:
-                if error.status_code != 404:
-                    raise
-                agent_info = {"name": appName}
-            from frontend.server.evaluation_automation.repository import (
-                AgentKitAutoEvaluationRepository,
-            )
-            from veadk.integrations.agentkit.evaluation import (
-                AgentKitEvaluationDatasetsClient,
-            )
-
-            agent_name = str(agent_info.get("name") or appName)
-            project_name = str(getattr(runtime, "project_name", "") or "default")
-
-            async def _evaluation_post(
-                *,
-                action: str,
-                payload: dict[str, Any],
-                query: dict[str, str] | None = None,
-            ) -> dict[str, Any]:
-                return await _agentkit_openapi_post(
-                    region=region,
-                    action=action,
-                    payload=payload,
-                    query=query,
-                )
-
-            evaluation = AgentKitEvaluationDatasetsClient(
-                _evaluation_post,
-                project_name=project_name,
-            )
-            response_sets: list[dict[str, Any]] = []
-            response_items: list[dict[str, Any]] = []
-            for rating in ("good", "bad"):
-                evaluation_set, items = await evaluation.list_feedback_items(
-                    agent_name=agent_name,
-                    rating=rating,
-                    page_size=page_size,
-                )
-                if evaluation_set is None:
-                    response_sets.append(
-                        {
-                            "kind": rating,
-                            "evaluationSetId": None,
-                            "evaluationSetName": None,
-                            "workspaceId": None,
-                            "itemCount": 0,
-                        }
-                    )
-                    continue
-                response_sets.append(
-                    {
-                        "kind": rating,
-                        "evaluationSetId": evaluation_set.id,
-                        "evaluationSetName": evaluation_set.name,
-                        "workspaceId": evaluation_set.workspace_id,
-                        "itemCount": len(items),
-                    }
-                )
-                for item in items:
-                    fields = item.fields
-                    comment = fields.get("feedback_comment", "")
-                    is_annotated_bad_case = rating == "bad" and bool(comment.strip())
-                    response_items.append(
-                        {
-                            "id": item.id or item.item_key,
-                            "itemKey": item.item_key,
-                            "kind": rating,
-                            "input": fields.get("input", ""),
-                            "output": fields.get("output", ""),
-                            "referenceOutput": fields.get("reference_output", ""),
-                            "comment": comment,
-                            "agentName": fields.get("agent_name", agent_name),
-                            "sessionId": fields.get("session_id", ""),
-                            "messageId": fields.get("message_id", ""),
-                            "runtimeId": fields.get("runtime_id", runtimeId),
-                            "invocationId": fields.get("invocation_id", ""),
-                            "userId": fields.get("user_id", ""),
-                            "createdAt": fields.get("created_at", ""),
-                            "evaluationSetId": evaluation_set.id,
-                            "evaluationSetName": evaluation_set.name,
-                            "workspaceId": evaluation_set.workspace_id,
-                            "source": "user",
-                            "score": 0 if is_annotated_bad_case else None,
-                            "reason": comment if is_annotated_bad_case else "",
-                        }
-                    )
-            if studio:
-                automatic = AgentKitAutoEvaluationRepository(
-                    _evaluation_post,
-                    project_name=project_name,
-                )
-                automatic_cases = await automatic.list_cases(
-                    agent_name=agent_name,
-                    page_size=page_size,
-                )
-                response_items.extend(
-                    case.model_dump(mode="json", by_alias=True)
-                    for case in automatic_cases
-                )
-                for item in response_sets:
-                    item["itemCount"] = sum(
-                        case["kind"] == item["kind"] for case in response_items
-                    )
-            return {
-                "agentName": agent_name,
-                "runtimeId": runtimeId,
-                "region": region,
-                "projectName": project_name,
-                "sets": response_sets,
-                "items": response_items,
-            }
-        except HTTPException:
-            raise
-        except ValueError as error:
-            raise HTTPException(status_code=400, detail=str(error)) from error
-        except RuntimeError as error:
-            if provider == "byteplus" and "AgentKit OpenAPI returned HTTP 404" in str(
-                error
-            ):
-                return {
-                    "agentName": appName,
-                    "runtimeId": runtimeId,
-                    "region": region,
-                    "projectName": getattr(runtime, "project_name", "") or "default",
-                    "sets": [],
-                    "items": [],
-                    "unsupported": True,
-                    "unsupportedMessage": "BytePlus 暂不支持 AgentKit 评测集。",
-                }
-            raise HTTPException(
-                status_code=502,
-                detail="读取 AgentKit 评测集失败：" + _safe_exception_detail(error),
-            ) from error
-
-    @app.post("/web/evaluation/feedback-cases/delete")
-    async def _web_delete_feedback_cases(
-        deletion: _DeleteFeedbackCasesRequest,
-        request: Request,
-    ) -> dict[str, Any]:
-        """Remove feedback cases and clear their thumbs state without deleting chat."""
-        deletion.region = _coerce_cloud_region(deletion.region)
-        requested_ids = {
-            item_id.strip()
-            for item_id in deletion.item_ids
-            if item_id and item_id.strip()
-        }
-        if not requested_ids:
-            raise HTTPException(status_code=400, detail="No feedback cases selected")
-        runtime = _authorized_runtime(
-            request,
-            deletion.runtime_id,
-            deletion.region,
-            coded_access_error=True,
-        )
-        agent_info_path = f"web/agent-info/{quote(deletion.app_name, safe='')}"
-        try:
-            try:
-                agent_info = await _runtime_json_request(
-                    request,
-                    runtime=runtime,
-                    runtime_id=deletion.runtime_id,
-                    region=deletion.region,
-                    method="GET",
-                    path=agent_info_path,
-                )
-            except HTTPException as error:
-                if error.status_code != 404:
-                    raise
-                agent_info = {"name": deletion.app_name}
-            from frontend.server.evaluation_automation.repository import (
-                AgentKitAutoEvaluationRepository,
-            )
-            from veadk.integrations.agentkit.evaluation import (
-                AgentKitEvaluationDatasetsClient,
-            )
-            from veadk.integrations.agentkit.evaluation.feedback import (
-                feedback_state_key,
-            )
-
-            agent_name = str(agent_info.get("name") or deletion.app_name)
-            project_name = str(getattr(runtime, "project_name", "") or "default")
-
-            async def _evaluation_post(
-                *,
-                action: str,
-                payload: dict[str, Any],
-                query: dict[str, str] | None = None,
-            ) -> dict[str, Any]:
-                return await _agentkit_openapi_post(
-                    region=deletion.region,
-                    action=action,
-                    payload=payload,
-                    query=query,
-                )
-
-            evaluation = AgentKitEvaluationDatasetsClient(
-                _evaluation_post,
-                project_name=project_name,
-            )
-            matched: list[tuple[str, str, dict[str, str]]] = []
-            for rating in ("good", "bad"):
-                evaluation_set, items = await evaluation.list_feedback_items(
-                    agent_name=agent_name,
-                    rating=rating,
-                    page_size=200,
-                )
-                if evaluation_set is None:
-                    continue
-                for item in items:
-                    if item.id not in requested_ids:
-                        continue
-                    matched.append(
-                        (evaluation_set.id, evaluation_set.workspace_id, item.fields)
-                    )
-                    await evaluation.delete_item(
-                        evaluation_set_id=evaluation_set.id,
-                        workspace_id=evaluation_set.workspace_id,
-                        item_id=item.id,
-                    )
-
-            automatic_deleted = 0
-            if studio:
-                automatic = AgentKitAutoEvaluationRepository(
-                    _evaluation_post,
-                    project_name=project_name,
-                )
-                automatic_cases = await automatic.list_cases(
-                    agent_name=agent_name,
-                    page_size=200,
-                )
-                for case in automatic_cases:
-                    if case.id not in requested_ids:
-                        continue
-                    await evaluation.delete_item(
-                        evaluation_set_id=case.evaluation_set_id,
-                        workspace_id=case.workspace_id,
-                        item_id=case.id,
-                    )
-                    automatic_deleted += 1
-
-            for _set_id, _workspace_id, fields in matched:
-                session_id = str(fields.get("session_id") or "")
-                message_id = str(fields.get("message_id") or "")
-                user_id = str(fields.get("user_id") or "")
-                if not session_id or not message_id or not user_id:
-                    continue
-                session_path = (
-                    f"apps/{quote(deletion.app_name, safe='')}/users/"
-                    f"{quote(user_id, safe='')}/sessions/"
-                    f"{quote(session_id, safe='')}"
-                )
-                feedback_state = {
-                    "rating": None,
-                    "evaluationSetId": None,
-                    "evaluationSetName": None,
-                    "workspaceId": None,
-                    "evaluationItemId": None,
-                    "syncStatus": "synced",
-                    "statePersistence": "runtime",
-                    "updatedAt": time.time(),
-                }
-                try:
-                    await _runtime_json_request(
-                        request,
-                        runtime=runtime,
-                        runtime_id=deletion.runtime_id,
-                        region=deletion.region,
-                        method="PATCH",
-                        path=session_path,
-                        payload={
-                            "state_delta": {
-                                feedback_state_key(message_id): feedback_state,
-                            }
-                        },
-                    )
-                except HTTPException as error:
-                    if error.status_code != 404:
-                        raise
-                    logger.warning(
-                        "Runtime %s does not expose Session PATCH; feedback case "
-                        "was deleted but message state could not be cleared",
-                        deletion.runtime_id,
-                    )
-            return {"deletedCount": len(matched) + automatic_deleted}
-        except HTTPException:
-            raise
-        except ValueError as error:
-            raise HTTPException(status_code=400, detail=str(error)) from error
-        except RuntimeError as error:
-            raise HTTPException(
-                status_code=502,
-                detail="删除 AgentKit 评测案例失败：" + _safe_exception_detail(error),
-            ) from error
+            allow_shared=shared,
+        ),
+        principal=_current_principal,
+        runtime_request=_runtime_json_request,
+        normalize_region=_coerce_cloud_region,
+    )
 
     @app.get("/web/a2a-spaces")
     async def _web_list_a2a_spaces(
