@@ -2,7 +2,7 @@
 
 - Status: `verified`; `BC-01` through `BC-09` passed on 2026-09-20 and cover `VC-17`
 - Chinese: [browser-cases.zh.md](browser-cases.zh.md)
-- Evidence: `evidence/browser/<run-id>/<case-id>/`
+- Raw local evidence: ignored `evidence/browser/<run-id>/<case-id>/`
 - Delivery note: browser screenshots, network traces, console output, and browser state are local test artifacts and are intentionally not committed.
 
 ## 1. Shared environment
@@ -98,4 +98,4 @@
 
 ## 2. Exit
 
-BC-01 through BC-09 pass with no unhandled console error; each runs `snapshot -a`, `console --errors`, and `network` and saves under `evidence/browser/<run-id>/<case-id>/`. A slice may execute its own BC subset, but only the S5 full regression can mark `VC-17=pass`. If gstack/Chromium or scenario harness is unavailable, `VC-17/AC-8=blocked`; Node tests cannot replace it. Finally reset scenarios, stop A/B through their run-specific state files, stop the fixture service, delete both state files and the token file, and verify zero test resources.
+BC-01 through BC-09 pass with no unhandled console error; each runs `snapshot -a`, `console --errors`, and `network` and saves under ignored local `evidence/browser/<run-id>/<case-id>/`. A slice may execute its own BC subset, but only the S5 full regression can mark `VC-17=pass`. If gstack/Chromium or scenario harness is unavailable, `VC-17/AC-8=blocked`; Node tests cannot replace it. Finally reset scenarios, stop A/B through their run-specific state files, stop the fixture service, delete both state files and the token file, and verify zero test resources.

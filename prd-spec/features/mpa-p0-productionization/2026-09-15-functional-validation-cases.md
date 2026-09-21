@@ -9,7 +9,7 @@
 
 ## 1. Common execution and evidence rules
 
-The evidence root is `evidence/{automated,postgres,browser,contract,live}/<run-id>/`. Run `mkdir -p` for the applicable directory before execution. Each item records `caseId/timestamp/repositorySHA/runtimeImageDigest/agentkitOpenAPIVersion/workerProtocol/environment/command/status/expected/actual/artifactPaths/cleanupResult`; status must be one of `pass|fail|blocked|not_run|not_applicable`. Logs, JSON, screenshots, and manifests must be redacted.
+The raw evidence root is ignored local `evidence/{automated,postgres,browser,contract,live}/<run-id>/`. Run `mkdir -p` for the applicable directory before execution. Each item records `caseId/timestamp/repositorySHA/runtimeImageDigest/agentkitOpenAPIVersion/workerProtocol/environment/command/status/expected/actual/artifactPaths/cleanupResult`; status must be one of `pass|fail|blocked|not_run|not_applicable`. Logs, JSON, screenshots, and manifests must be redacted.
 
 Commands/files marked "to add" below are deliverables of the corresponding slice. Their paths must be verified before execution; they are not capabilities that already exist. Mock, in-memory, PostgreSQL, browser, and live-cloud evidence cannot replace one another.
 
@@ -38,7 +38,7 @@ Commands/files marked "to add" below are deliverables of the corresponding slice
 - Command: `scripts/verify-mpa-p0-e2e.sh --manifest <redacted-json> --case VC-01` (runner exists; the `VC-01` live driver stage is added with S1).
 - Input: two Studio Agent draft/Profile apply requests carrying `sourceProfileId + digest` and no caller-assigned revision.
 - Expected: Runtime prepare -> Profile apply/status -> update/replay -> delete succeeds; Runtime returns revisions 1 and 2; no Managed Agent API is called and cleanup leaves no residue.
-- Evidence: `evidence/live/<run-id>/VC-01.json`, request IDs, version sequence, and cleanup report.
+- Raw local evidence: ignored `evidence/live/<run-id>/VC-01.json`, request IDs, version sequence, and cleanup report.
 - Failure handling: a deployed failure blocks release and returns to the owning S1/S5 task; it does not invalidate the completed local M0 gate. Do not substitute an arkcli subprocess.
 
 ### VC-02: unified RuntimePrincipal
@@ -47,7 +47,7 @@ Commands/files marked "to add" below are deliverables of the corresponding slice
 - Command: live runner `--case VC-02`; Runtime `uv run pytest -q tests/test_runtime_principal.py` (to add).
 - Input: valid bearer/TIP, wrong issuer/audience/kid, expired or missing-claim token, cross-scope principal, and revoked principal.
 - Expected: bearer and TIP map to the same principal; every invalid request returns 401/403 before side effects; JWKS rotation converges.
-- Evidence: `evidence/live/<run-id>/VC-02.json` and JUnit; record only issuer, audience, TTL, and kid hash.
+- Raw local evidence: ignored `evidence/live/<run-id>/VC-02.json` and JUnit; record only issuer, audience, TTL, and kid hash.
 - Failure handling: a local contract failure blocks S1; a deployed issuer/JWKS/revocation failure blocks release. Do not bypass by disabling JWT, using a Runtime key, or trusting a user header.
 
 ### VC-03: Studio Profile mapping and Runtime client contract
@@ -56,7 +56,7 @@ Commands/files marked "to add" below are deliverables of the corresponding slice
 - Command: `uv run --extra dev pytest tests/frontend/server/mpa/test_runtime_profile_client.py tests/frontend/server/mpa/test_profile_mapping.py -q` (`test_runtime_profile_client.py` exists; `test_profile_mapping.py` is added with S1).
 - Input: deterministic AgentDraft normalization, supported/unknown fields, create/update preconditions, Runtime timeout, HTTP error, and non-JSON response.
 - Expected: Profile DTO/digest are stable; bearer, idempotency key, and exactly one of `If-None-Match`/`If-Match` are forwarded; conflicts map to `409 profile_version_conflict`; request ID is retained; Managed Agent/OpenTOP call count is zero.
-- Evidence: `evidence/contract/<run-id>/VC-03.xml` and fixture diff.
+- Raw local evidence: ignored `evidence/contract/<run-id>/VC-03.xml` and fixture diff.
 - Failure handling: return to Step 1 to fix the contract or adapter; do not loosen the schema or swallow errors.
 
 ### VC-04: Profile preconditions and versions
@@ -83,7 +83,7 @@ Commands/files marked "to add" below are deliverables of the corresponding slice
 - Command: `uv run --extra dev pytest tests/frontend/server/mpa/test_agent_operations_repository.py tests/frontend/server/mpa/test_agent_operations_service.py tests/frontend/server/mpa/test_agent_routes.py -q` (to add).
 - Input: create/update idempotency keys; lost first response; crashes before/after Runtime, Profile, and smoke; cleanup failure.
 - Expected: both writes return `202 + operationId`; the same key restores the original operation; active list finds it; retry resumes from a safe stage; each side-effect count is at most one.
-- Evidence: `evidence/automated/<run-id>/VC-06.xml`, TOS ETag, attempt/effect counts, and stage sequence.
+- Raw local evidence: ignored `evidence/automated/<run-id>/VC-06.xml`, TOS ETag, attempt/effect counts, and stage sequence.
 - Failure handling: any duplicate Runtime/Profile effect or lost refresh state blocks S1.
 
 ### VC-07: Profile field mapping
@@ -92,7 +92,7 @@ Commands/files marked "to add" below are deliverables of the corresponding slice
 - Command: VeADK `uv run --extra dev pytest tests/frontend/server/mpa/test_profile_mapping.py -q --junitxml=prd-spec/features/mpa-p0-productionization/evidence/contract/<run-id>/VC-07-veadk.xml`; Runtime `uv run pytest -q tests/test_profile_apply.py --junitxml=<veadk-worktree>/prd-spec/features/mpa-p0-productionization/evidence/contract/<run-id>/VC-07-runtime.xml` (targets to add).
 - Input: all supported fields, Skill without version, unsupported Tool/Multiagent, Secret, and signed URL.
 - Expected: map `sourceProfileId`, name, description, System, Model, Tools, Skills, MCP, Multiagent, and allowlisted Metadata; Runtime allocates `profileRevision`; resolve resource versions first; unsupported fields return 422; only Secret references cross the boundary.
-- Evidence: `evidence/contract/<run-id>/VC-07.json` and JUnit from both repositories.
+- Raw local evidence: ignored `evidence/contract/<run-id>/VC-07.json` and JUnit from both repositories.
 - Failure handling: fix mapping/allowlist; do not silently drop unknown fields and then claim applied.
 
 ### VC-08: execution-config CAS
@@ -173,7 +173,7 @@ Commands/files marked "to add" below are deliverables of the corresponding slice
 - Command: `uv run --extra dev pytest tests/frontend/server/mpa/test_agent_view.py -q && npm --prefix frontend test` (first file plus `mpaAgents.test.mjs`/`mpaAgentDetail.test.mjs` to add).
 - Input: every view state, same ID in different scopes, and a slow response during scope switching.
 - Expected: the view model merges correctly; write gates are correct; MPA does not enter GitHub/generic-draft/evaluation paths; caches do not cross scopes; no Secret is exposed.
-- Evidence: `evidence/automated/<run-id>/VC-16.json` and pytest/npm output.
+- Raw local evidence: ignored `evidence/automated/<run-id>/VC-16.json` and pytest/npm output.
 - Failure handling: state misclassification or entry into a generic flow blocks S5.
 
 ### VC-17: real browser
@@ -182,7 +182,7 @@ Commands/files marked "to add" below are deliverables of the corresponding slice
 - Command: S1 runs BC-01/02 plus the BC-07 create-busy/IME subset; S2 runs BC-04/05; S3 runs BC-06; S4 runs BC-09; S5 strictly runs the complete BC-01 through BC-09 regression in [browser-cases.md](browser-cases.md).
 - Input: creation/failure/refresh/two-client/upgrade/cursor/IME/narrow-viewport scenarios.
 - Expected: slice subsets gate only their slice; `VC-17=pass` only after every S5 BC passes with no unhandled console error.
-- Evidence: `evidence/browser/<run-id>/<case-id>/`.
+- Raw local evidence: ignored `evidence/browser/<run-id>/<case-id>/`.
 - Failure handling: unavailable environment is `blocked`; Node tests do not substitute.
 
 ### VC-18A: PostgreSQL foundation
@@ -191,7 +191,7 @@ Commands/files marked "to add" below are deliverables of the corresponding slice
 - Command: `make test-postgres TEST_SELECT='foundation or migration_harness'`.
 - Input: PostgreSQL 16, schema 0, two connections, and restart/failpoint harness.
 - Expected: container, migration runner, two connections, restart, and failpoint infrastructure work; base schema migration is reentrant; finally cleans up container/volume.
-- Evidence: `evidence/postgres/<run-id>/VC-18A.xml`, image digest, schema dump, and cleanup.
+- Raw local evidence: ignored `evidence/postgres/<run-id>/VC-18A.xml`, image digest, schema dump, and cleanup.
 - Failure handling: block S1; do not substitute in-memory tests.
 
 ### VC-18B: PostgreSQL Profile/Session CAS
@@ -200,7 +200,7 @@ Commands/files marked "to add" below are deliverables of the corresponding slice
 - Command: `make test-postgres TEST_SELECT='profile_cas or execution_config_cas or upgrade_cas'`.
 - Input: two connections concurrently using the same ETag/Profile revision.
 - Expected: one succeeds and one conflicts; no lost update; one current Profile/config revision.
-- Evidence: `evidence/postgres/<run-id>/VC-18B.xml` and rows.
+- Raw local evidence: ignored `evidence/postgres/<run-id>/VC-18B.xml` and rows.
 - Failure handling: block S2.
 
 ### VC-18C: PostgreSQL Outbox/SSE
@@ -209,7 +209,7 @@ Commands/files marked "to add" below are deliverables of the corresponding slice
 - Command: `make test-postgres TEST_SELECT='active_turn or ledger or outbox or sse_restart'`.
 - Input: concurrent run, three failpoints, restart, and persistent cursor.
 - Expected: one active Turn/effect; outbox converges; cursor replay is correct after restart.
-- Evidence: `evidence/postgres/<run-id>/VC-18C.xml`.
+- Raw local evidence: ignored `evidence/postgres/<run-id>/VC-18C.xml`.
 - Failure handling: block S3.
 
 ### VC-18D: PostgreSQL Participants/Continuation
@@ -218,7 +218,7 @@ Commands/files marked "to add" below are deliverables of the corresponding slice
 - Command: `make test-postgres TEST_SELECT='participant or continuation'`.
 - Input: concurrent ACK/lease/generation/continue.
 - Expected: row lock/CAS are correct; full barrier; one linked Turn/effect.
-- Evidence: `evidence/postgres/<run-id>/VC-18D.xml`.
+- Raw local evidence: ignored `evidence/postgres/<run-id>/VC-18D.xml`.
 - Failure handling: block S4.
 
 ### VC-18E: PostgreSQL Secret migration
@@ -227,7 +227,7 @@ Commands/files marked "to add" below are deliverables of the corresponding slice
 - Command: `make test-postgres TEST_SELECT='secret_migration'`.
 - Input: successful reference creation, provider failure, process interruption before clearing, restart/retry, and old-image rollback.
 - Expected: clear only after reference success; retain on failure/interruption; no duplicate reference on retry; no canary in final DB/log/evidence; incompatible rollback is rejected.
-- Evidence: `evidence/postgres/<run-id>/VC-18E.xml`, DB snapshots containing only empty/ref-type data, and secret scan.
+- Raw local evidence: ignored `evidence/postgres/<run-id>/VC-18E.xml`, DB snapshots containing only empty/ref-type data, and secret scan.
 - Failure handling: block S5 and release; local/fake results cannot substitute.
 
 ### VC-19: compatibility, regression, and performance
@@ -236,9 +236,9 @@ Commands/files marked "to add" below are deliverables of the corresponding slice
 - Command: `scripts/verify-mpa-p0-contract.sh --manifest <redacted-compatibility-json> --matrix contracts/mpa-p0/compatibility-matrix.json`, followed by Runtime `make test && make coverage && make test-postgres`, VeADK `uv run --extra dev pytest -n 2 -m "not codex_smoke and not piagent_smoke" && npm --prefix frontend test && npm --prefix frontend run build && uv run --extra dev pre-commit run --all-files`. Performance runner: `scripts/benchmark-mpa-p0.py --warmup 5 --requests 100 --concurrency 10 --list-size 20`.
 - Input: every PRD compatibility combination and fixed fixtures.
 - Expected: matrix results match; MPA update/release/rollback write routes reject incompatible manifests before mutation; Runtime coverage >=95%; no regressions; performance report includes p50/p95/max/error rate.
-- Evidence: `evidence/contract/<run-id>/VC-19.json` and test/build/coverage/benchmark output.
+- Raw local evidence: ignored `evidence/contract/<run-id>/VC-19.json` and test/build/coverage/benchmark output.
 - Failure handling: a permitted combination failure or exceeded target blocks S5; a requirement outside the matrix returns to Step 1 first.
-- Execution 2026-09-18: the S5-10 preflight passed with pinned VeADK `486dc06e429573ce43d6462b6dc960be4bc34ab6`, Runtime `eecc6e3115685e5cb86dcfbff4fb7c6ac7a10dee`, and deployed v62 image digest `sha256:6ac6a2712ecd1c7950125dc9afc6467373a08142fbd6c3577aba12f126079bef`. The live Runtime was `Ready` at version 62 and registry inspection matched the pinned digest. The real manifest matched `p0-codex-rest-v1`; negative fixtures returned the expected `worker_protocol_incompatible` and `invalid_runtime_image_digest` results. Evidence: `evidence/contract/s5-10-v62-20260918/`. This does not mark the post-VC-21 full regression/performance portion complete; that remains S5-13.
+- Execution 2026-09-18: the S5-10 preflight passed with pinned VeADK `486dc06e429573ce43d6462b6dc960be4bc34ab6`, Runtime `eecc6e3115685e5cb86dcfbff4fb7c6ac7a10dee`, and deployed v62 image digest `sha256:6ac6a2712ecd1c7950125dc9afc6467373a08142fbd6c3577aba12f126079bef`. The live Runtime was `Ready` at version 62 and registry inspection matched the pinned digest. The real manifest matched `p0-codex-rest-v1`; negative fixtures returned the expected `worker_protocol_incompatible` and `invalid_runtime_image_digest` results. Raw local evidence: ignored `evidence/contract/s5-10-v62-20260918/`. This does not mark the post-VC-21 full regression/performance portion complete; that remains S5-13.
 
 ### VC-20A: S1 live creation to first chat
 
@@ -246,7 +246,7 @@ Commands/files marked "to add" below are deliverables of the corresponding slice
 - Command: `scripts/verify-mpa-p0-e2e.sh --manifest <redacted-json> --case VC-20A` (to add).
 - Input: fresh Agent, minimal Profile, and valid model.
 - Expected: creation operation, Runtime, Profile, deterministic smoke, mpa-agent Session, and first A2A/worker/result succeed; Session create/read, A2A acceptance, and worker/tool dispatch use the shared authorizer with zero effects after revocation; S2-S4 upgrade/cursor/continue is not required.
-- Evidence: manifest, operation, HTTP/SSE, trace, and cleanup under `evidence/live/<run-id>/VC-20A/`.
+- Raw local evidence: ignored `evidence/live/<run-id>/VC-20A/` containing manifest, operation, HTTP/SSE, trace, and cleanup.
 - Failure handling: insufficient permission/quota is blocked; functional failure is fail; EXIT trap cleans up and cleanup failure blocks S1 separately.
 
 ### VC-20B: complete live creation, identity, and Profile regression
@@ -255,7 +255,7 @@ Commands/files marked "to add" below are deliverables of the corresponding slice
 - Command: `scripts/verify-mpa-p0-e2e.sh --manifest <redacted-json> --case VC-20B --cases AC-11,AC-1,AC-2,AC-6` (to add).
 - Input: fresh Agent, minimal Profile, valid model, and valid/invalid/revoked identities.
 - Expected: creation through first A2A/worker/result; Profile update/replay/conflict; safe rejection; interruption recovery; final zero-residue cleanup.
-- Evidence: manifest, operation, HTTP/SSE, trace, and cleanup under `evidence/live/<run-id>/VC-20B/`.
+- Raw local evidence: ignored `evidence/live/<run-id>/VC-20B/` containing manifest, operation, HTTP/SSE, trace, and cleanup.
 - Failure handling: insufficient permission/quota is blocked; functional failure is fail; an EXIT trap cleans up, and cleanup failure blocks separately.
 
 ### VC-21: Runtime lifecycle, rollback, and deletion
@@ -264,9 +264,9 @@ Commands/files marked "to add" below are deliverables of the corresponding slice
 - Command: `VEADK_MPA_P0_LIVE=1 VEADK_MPA_P0_ASYNC_STAGE_TIMEOUT_SECONDS=900 scripts/verify-mpa-p0-e2e.sh --manifest <redacted-json> --case VC-21 --execute`.
 - Input: valid update/release, controlled failure, compatible rollback, incompatible downgrade, malformed compatibility manifest, delete preview with an active MPA operation, delete preview with an active Runtime Session, delete with idle visible Runtime Sessions, and final delete.
 - Expected: every step has an operation ID/request ID/version timeline; controlled failure is recoverable; incompatible downgrade or manifest fails before mutation; compatible rollback passes smoke. When the target Runtime already runs the approved target image and AgentKit would reject a duplicate `ReleaseRuntime` call in `Ready` state, the rollback check records `noRollbackNeeded=true` and still requires execution-ready smoke. Delete preview reports blockers and cleanup stages before mutation; true active operations or active Sessions prevent deletion with `409`, while a recovered `failed_retryable` operation with applied Profile does not permanently block cleanup. Idle visible Sessions are deleted through Runtime `DELETE /api/v1/sessions/{sessionId}` before AgentKit Runtime deletion; final deletion leaves no residue.
-- Evidence: version timeline, platform responses, smoke trace, and cleanup report under `evidence/live/<run-id>/VC-21/`.
+- Raw local evidence: ignored `evidence/live/<run-id>/VC-21/` containing version timeline, platform responses, smoke trace, and cleanup report.
 - Failure handling: any unsafe mutation, false success, or residual resource makes `AC-9=fail`.
-- Execution 2026-09-18: `vc21-20260918-045` passed all VC-21 stages with v29 image digest `sha256:078519c796b03b298a95ef7a6614f92121bc124513dbb472a7496c95821ee723`; the runner returned `{"case":"VC-21","residue":[],"status":"passed"}` and evidence is under `evidence/live/vc21-20260918-045/`.
+- Execution 2026-09-18: `vc21-20260918-045` passed all VC-21 stages with v29 image digest `sha256:078519c796b03b298a95ef7a6614f92121bc124513dbb472a7496c95821ee723`; the runner returned `{"case":"VC-21","residue":[],"status":"passed"}` and raw evidence was captured locally under ignored `evidence/live/vc21-20260918-045/`.
 
 ### VC-22: CLI parity
 
@@ -274,7 +274,7 @@ Commands/files marked "to add" below are deliverables of the corresponding slice
 - Command: `uv run --extra dev pytest tests/integrations/test_mpa_control_plane_client.py tests/cli/test_cli_mpa_control.py -q`.
 - Input: `veadk mpa control` view, create/update, operation list/get/retry, Profile status/apply, Session config get/patch/profile-upgrade, delete preview, 401/403/409/412/428, old Runtime, and timeout/replay; no Managed Agent endpoint or direct Runtime URL is called. The legacy infrastructure command remains `veadk mpa create`.
 - Expected: CLI does not import a FastAPI route; it shares schemas and `MpaControlPlaneClient` with Studio; writes carry a caller-persisted key and handle 202; CAS commands require the current ETag or Runtime revision; JSON is parseable; no bearer, Runtime credential, or secret-like Profile field is exposed. Exit codes are `0` success, `2` local usage/input, `3` authorization, `4` conflict/precondition, `5` retryable transport/server failure, and `1` other control-plane failure. Retry after timeout reuses the same key and does not repeat a write. Chat/Turn/Debug are not part of this Case because no shared Studio BFF CLI contract exists for them; the CLI must not compensate by bypassing Studio.
-- Evidence: `evidence/automated/<run-id>/VC-22.xml`, UI/CLI response comparison, and secret scan.
+- Raw local evidence: ignored `evidence/automated/<run-id>/VC-22.xml`, UI/CLI response comparison, and secret scan.
 - Failure handling: any semantic divergence, duplicate write, or leak blocks S5.
 
 ## 4. Exit rules

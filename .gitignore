@@ -206,8 +206,17 @@ cython_debug/
 .trae
 .claude
 .agents
+/.dbg/
+/debug-*.md
 .adk/
 **/.adk/
+
+# Local AI/design and verification artifacts. Keep evidence summaries in
+# PRD/spec documents, not raw screenshots, traces, manifests, or run logs.
+/.artifacts/
+/.superpowers/
+/evidence/
+
 # AgentKit deploy config (contains account-specific secrets)
 agentkit.yaml
 agentkit*.yaml

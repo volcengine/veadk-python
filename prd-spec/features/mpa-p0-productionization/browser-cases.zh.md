@@ -2,7 +2,7 @@
 
 - 状态：`verified`；`BC-01` 至 `BC-09` 已于 2026-09-20 通过并覆盖 `VC-17`
 - English：[browser-cases.md](browser-cases.md)
-- 证据：`evidence/browser/<run-id>/<case-id>/`
+- 原始本地证据：被忽略的 `evidence/browser/<run-id>/<case-id>/`
 - 交付说明：浏览器截图、网络记录、console 输出和浏览器状态均为本地测试产物，明确不提交。
 
 ## 1. 公共环境
@@ -98,4 +98,4 @@
 
 ## 2. 准出
 
-BC-01～BC-09 全部 pass，console 无未处理 error；每项执行 `snapshot -a`、`console --errors`、`network` 并保存到 `evidence/browser/<run-id>/<case-id>/`。切片可先执行自己的 BC 子集，但只有 S5 全量回归可标记 `VC-17=pass`。gstack/Chromium 或 scenario harness 不可用则 `VC-17/AC-8=blocked`，Node tests 不替代。结束后调用 reset，分别用 A/B 专属 state file执行 `stop`，停止 fixture 服务，删除两个 state file 和 token file，并确认测试资源为零。
+BC-01～BC-09 全部 pass，console 无未处理 error；每项执行 `snapshot -a`、`console --errors`、`network` 并保存到被忽略的本地 `evidence/browser/<run-id>/<case-id>/`。切片可先执行自己的 BC 子集，但只有 S5 全量回归可标记 `VC-17=pass`。gstack/Chromium 或 scenario harness 不可用则 `VC-17/AC-8=blocked`，Node tests 不替代。结束后调用 reset，分别用 A/B 专属 state file执行 `stop`，停止 fixture 服务，删除两个 state file 和 token file，并确认测试资源为零。

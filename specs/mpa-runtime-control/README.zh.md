@@ -156,7 +156,7 @@ uv run --group dev pytest \
 
 2026-09-16：实现 S3-03 中 accepted-turn recovery 子集。`turn_execution_records` 现在持久化 `dispatch_payload`；`SessionService.initialize()` 从 active 或 retryable Turn 记录重建缺失/error inbox 并调度既有 worker；已终态 inbox 会同步回 Turn status；running inbox lease 过期时会把关联 Turn 标为 `failed_retryable`。验证覆盖 Runtime S3 回归（72 passed）、Runtime Ruff、Runtime `make test-postgres`（6 passed）和 diff hygiene。
 
-2026-09-16：实现 S3-04/S3-05/S3-06 刷新恢复。Runtime SSE 对未知非空 cursor 返回 `410 cursor_expired`；Studio 在浏览器刷新后恢复已持久化的 Runtime Agent 和 Session ID，拉取所选 Session，并向 MPA Runtime `/sse` 传入 `lastEventId`。真实浏览器 `BC-06` 使用 system Google Chrome via Playwright 通过；证据位于 `evidence/browser/mpa-s3-1789516481/BC-06/`。
+2026-09-16：实现 S3-04/S3-05/S3-06 刷新恢复。Runtime SSE 对未知非空 cursor 返回 `410 cursor_expired`；Studio 在浏览器刷新后恢复已持久化的 Runtime Agent 和 Session ID，拉取所选 Session，并向 MPA Runtime `/sse` 传入 `lastEventId`。真实浏览器 `BC-06` 使用 system Google Chrome via Playwright 通过；原始证据已写入被忽略的本地 `evidence/browser/mpa-s3-1789516481/BC-06/`。
 
 2026-09-16：实现 S4-01 participant 状态基础。Runtime 新增 `a2a_turn_participants` schema version 6，并补齐 SQL/in-memory store，支持按 generation 注册参与方、owner-scoped lease heartbeat、带 generation 校验的 safe-point ACK、终态标记和按 generation 有序快照。
 
@@ -168,7 +168,7 @@ uv run --group dev pytest \
 
 2026-09-16：实现 S4-06 RuntimePrincipal 撤权与副作用前复核子集。Runtime 现在提供共享授权 helper 和可注入 authorizer 接线；`/run`、resume、`/continue` 在接受副作用前复核当前授权。accepted Turn/inbox 记录携带非 secret principal 快照，用于后台执行和重启恢复。ADK before-tool callback、直接 sandbox dispatch、模型/workload TIP 解析、OpenViking API key 解析和 sandbox `begin_run` 都会在使用 secret 或外部工具副作用前复核。验证覆盖 S4-06 focused auth/secret/tool tests（46 passed）、broader S4 Runtime regression（206 passed）和 focused Ruff。真实 AgentKit 撤权查询仍是部署态 S5 release gate。
 
-2026-09-16：关闭 S4-07 生命周期、PostgreSQL 与浏览器门禁。Runtime focused auth/secret/tool tests 返回 46 passed，`make test-postgres` 返回 8 passed 且 PostgreSQL 资源已清理。VeADK loopback `turn_lifecycle` 场景已覆盖 Session/task control status、pause/resume、`new_turn_required`、显式 `/continue`、continuation SSE、调用计数和持久状态证据。真实浏览器 `BC-09` 使用 system Google Chrome via Playwright 通过；证据位于 `evidence/browser/mpa-s4-1789532050/BC-09/`。
+2026-09-16：关闭 S4-07 生命周期、PostgreSQL 与浏览器门禁。Runtime focused auth/secret/tool tests 返回 46 passed，`make test-postgres` 返回 8 passed 且 PostgreSQL 资源已清理。VeADK loopback `turn_lifecycle` 场景已覆盖 Session/task control status、pause/resume、`new_turn_required`、显式 `/continue`、continuation SSE、调用计数和持久状态证据。真实浏览器 `BC-09` 使用 system Google Chrome via Playwright 通过；原始证据已写入被忽略的本地 `evidence/browser/mpa-s4-1789532050/BC-09/`。
 
 2026-09-16：实现 S5-01 Secret reference migration 基础。Runtime schema version 7 向 `mpa_agents` 增加 Secret reference 与迁移状态列。`AgentConfigService` 在 AgentKit mode 下拒绝新的明文 `agentApiKey`/`modelApiKey` 写入，但允许写入 reference 字段。`SecretReferenceMigrationService` 先创建受保护引用，再清空明文；provider 或数据库更新失败时保留明文，使用同一幂等键可重试。Runtime 模型和内置 MCP 执行路径在 Secret 使用边界解析 reference；resolver 缺失时 fail closed，不回退到其他凭据。
 
@@ -188,6 +188,6 @@ uv run --group dev pytest \
 
 2026-09-18：在 Runtime commit `eecc6e3` 中完成旧 ADK endpoint 与 AgentKit key-auth 的鉴权对齐。AgentKit mode 下，`require_auth` 现在从 `Authorization` 建立 Runtime principal；非 AgentKit mode 保留既有 `X-Jwt-Token` 行为。定向测试 49 passed，完整 `make test` 2506 passed、14 skipped，focused Ruff 与 diff hygiene 均通过。产出镜像 `agentkit-platform-2112682748-cn-beijing.cr.volces.com/agentkit/mpa_agent:mpa-p0-adk-auth-eecc6e3-20260917`（`sha256:6ac6a2712ecd1c7950125dc9afc6467373a08142fbd6c3577aba12f126079bef`）已发布为 Runtime `r-yeuujrrcowb21078p9jh` version 62，状态为 `Ready`；Runtime 直连和 Studio BFF 的 `/list-apps` 调用均返回 `200 ["default"]`。本次没有改变 Runtime schema 或持久数据模型。
 
-2026-09-18：在 Runtime version 62 上完成真实 Studio 验收，新建 Session `bee3db38-edcc-4020-b925-3d9d6a3a7adc` 并在沙箱执行 `printf 'MPA_V62_BROWSER_OK\n'`。父级沙箱活动和子命令活动均进入 `completed`；最终回答在完成时和 30 秒后持续可见，整页刷新后恢复回答和终态工具卡，页面没有 spinner 或运行中文案。证据位于 `evidence/browser/mpa-v62-live/`。该结果只验证本次对话展示路径，不关闭 S5-12 的完整 `BC-01`–`BC-09` 门禁。
+2026-09-18：在 Runtime version 62 上完成真实 Studio 验收，新建 Session `bee3db38-edcc-4020-b925-3d9d6a3a7adc` 并在沙箱执行 `printf 'MPA_V62_BROWSER_OK\n'`。父级沙箱活动和子命令活动均进入 `completed`；最终回答在完成时和 30 秒后持续可见，整页刷新后恢复回答和终态工具卡，页面没有 spinner 或运行中文案。原始证据已写入被忽略的本地 `evidence/browser/mpa-v62-live/`。该结果只验证本次对话展示路径，不关闭 S5-12 的完整 `BC-01`–`BC-09` 门禁。
 
 2026-09-19：rebase 到 Runtime `origin/master` 后记录其他分支已合入能力。主干 channel API/service 已提供飞书、钉钉和企微的加密绑定与投递；deployment 模块已提供 shared APIG、database、Runtime 和 Skill Space 部署；ADK streaming 已支持完整 artifact answer 仅回放一次。这些能力在主干已有实现和测试，但其 provider/部署专项验收不归本 P0 台账。
