@@ -14,17 +14,19 @@
 
 """One Codex app-server turn that reports its result through a dynamic tool.
 
-Studio drives every structured Codex turn the same way: a dynamic tool registered on
-``thread/start`` carries the result as typed JSON-RPC arguments, a rejected call returns
+Studio drives every structured Codex turn the same way: dynamic tools registered on
+``thread/start`` carry the result as typed JSON-RPC arguments, a rejected call returns
 ``success: false`` so the same turn can correct itself, and the turn ends as soon as the
-contract has been delivered.  Callers own the contract: they pass the tool spec, the
-validator, and the check that says the result has arrived.
+contract has been delivered.  Callers own the contract: they pass the tool specs, the
+validators, and the check that says the result has arrived.  A turn may register several
+tools, because one analysis can both ask the user a question and report its result.
 """
 
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import dataclass
 
 from veadk.cli.codex_app_server import (
     CodexAppServerError,
@@ -32,9 +34,13 @@ from veadk.cli.codex_app_server import (
     CodexDynamicToolResult,
 )
 
-ToolHandler = Callable[[dict[str, object]], CodexDynamicToolResult]
+ToolHandler = Callable[
+    [dict[str, object]],
+    "CodexDynamicToolResult | Awaitable[CodexDynamicToolResult]",
+]
 
 __all__ = [
+    "DynamicTool",
     "ToolHandler",
     "ToolTurnDeadlineExceeded",
     "ToolTurnUnavailable",
@@ -54,6 +60,16 @@ class ToolTurnDeadlineExceeded(ToolTurnUnavailable):
     """
 
 
+@dataclass(frozen=True)
+class DynamicTool:
+    """One host-provided tool that Codex may call inside the turn."""
+
+    name: str
+    description: str
+    schema: dict[str, object]
+    handler: ToolHandler
+
+
 async def run_tool_turn(
     *,
     endpoint: str,
@@ -68,14 +84,25 @@ async def run_tool_turn(
     model: str = "",
     timeout_seconds: float,
     event_sink: Callable[[object], None] | None = None,
+    extra_tools: Sequence[DynamicTool] = (),
+    idle_timeout_seconds: float | None = None,
+    host_wait_seconds: Callable[[], float] | None = None,
 ) -> str:
     """Run one turn and return the thread id that carried it.
 
     ``thread_id`` resumes a durable thread instead of starting a new one; the
     app-server restores that thread's dynamic tools, so the same contract keeps
-    arriving.  ``timeout_seconds`` is a wall-clock budget, not just the app-server's
-    inactivity window: callers that must answer inside a caller-owned window cannot
-    rely on a turn that keeps making progress, so this interrupts it at the deadline.
+    arriving.  ``timeout_seconds`` is a wall-clock budget for Codex' own work, not just
+    the app-server's inactivity window: callers that must answer inside a caller-owned
+    window cannot rely on a turn that keeps making progress, so this interrupts it at
+    the deadline.  ``host_wait_seconds`` excludes time a tool handler spent waiting on
+    a human, which is host latency and not Codex progress, from that budget.
+
+    ``idle_timeout_seconds`` is the inactivity window handed to the app-server client.
+    A handler that blocks on a human produces no events at all while it waits, so a
+    caller with an interactive tool must pass an window longer than the longest wait it
+    allows, or the turn is cancelled under the waiting user.
+
     Any protocol or transport failure becomes ``ToolTurnUnavailable`` so the caller can
     fall back, unless the result already arrived.
     """
@@ -83,13 +110,23 @@ async def run_tool_turn(
     session.cwd = cwd
     if model:
         session.model = model
-    session.register_dynamic_tool(
-        tool_name,
-        tool_description,
-        tool_schema,
-        handler,
-    )
+    for tool in (
+        DynamicTool(
+            name=tool_name,
+            description=tool_description,
+            schema=tool_schema,
+            handler=handler,
+        ),
+        *extra_tools,
+    ):
+        session.register_dynamic_tool(
+            tool.name,
+            tool.description,
+            tool.schema,
+            tool.handler,
+        )
     used_thread = thread_id
+    loop = asyncio.get_running_loop()
     try:
         try:
             if thread_id:
@@ -98,11 +135,15 @@ async def run_tool_turn(
                 await session.connect()
         except CodexAppServerError as error:
             raise ToolTurnUnavailable(str(error)) from error
-        deadline = asyncio.get_running_loop().time() + timeout_seconds
+        started_at = loop.time()
+        deadline = started_at + timeout_seconds
+        idle_timeout = (
+            timeout_seconds if idle_timeout_seconds is None else idle_timeout_seconds
+        )
         try:
             async for event in session.stream_turn(
                 prompt,
-                timeout_seconds=timeout_seconds,
+                timeout_seconds=idle_timeout,
             ):
                 if event_sink is not None:
                     event_sink(event)
@@ -110,7 +151,11 @@ async def run_tool_turn(
                     # 结果已经到手：终止本轮，避免继续消耗 token 和沙箱时间。
                     await session.interrupt()
                     break
-                if asyncio.get_running_loop().time() >= deadline:
+                if host_wait_seconds is not None:
+                    deadline = (
+                        started_at + timeout_seconds + max(0.0, host_wait_seconds())
+                    )
+                if loop.time() >= deadline:
                     # 回合一直在产生进度，但已经超出调用方的窗口：主动收尾。
                     await session.interrupt()
                     raise ToolTurnDeadlineExceeded("Codex 回合超出时间预算。")

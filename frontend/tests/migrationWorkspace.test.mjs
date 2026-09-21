@@ -325,7 +325,15 @@ test("implements the confirmed migration lifecycle as a desktop chat workspace",
     /if \([\s\S]*?action === "confirm"[\s\S]*?!task \|\|[\s\S]*?taskEnvironmentExpired/,
   );
   assert.match(source, /stopMigrationTask/);
-  assert.match(source, /getMigrationActivity/);
+  // Detail state and the activity feed arrive on one Server-Sent Events stream: the
+  // page no longer polls either endpoint itself.
+  assert.match(source, /observeMigrationTask/);
+  assert.match(
+    source,
+    /observeMigrationTask\(\{[\s\S]*?taskId: task\.id[\s\S]*?signal: controller\.signal/,
+  );
+  assert.doesNotMatch(source, /getMigrationActivity/);
+  assert.doesNotMatch(source, /ACTIVITY_POLL_INTERVAL_MS/);
   assert.match(source, /function MigrationActivityFeed/);
   assert.match(source, /import \{ Blocks \} from "\.\.\/ui\/Blocks"/);
   assert.match(source, /useStickToBottom<HTMLDivElement>/);
@@ -638,4 +646,47 @@ test("confirmation card keeps labels beside bounded single-column controls", () 
     /\.migration-confirmation \.migration-confirmation__row \{ grid-template-columns: minmax\(0, 1fr\); gap: 6px; \}/,
     "narrow screens stack the label above the control",
   );
+});
+
+test("answers the questions of a running analysis without re-running it", () => {
+  const source = readFileSync(workspaceUrl, "utf8");
+  const api = readFileSync(apiUrl, "utf8");
+  const styles = readFileSync(stylesUrl, "utf8");
+  const zhQuestions = JSON.parse(readFileSync(zhResourceUrl, "utf8")).pendingInput;
+  const enQuestions = JSON.parse(readFileSync(enResourceUrl, "utf8")).pendingInput;
+
+  // 卡片跟着活着的提问走，不跟着状态走：交付收尾回合提问时任务已经落定。
+  assert.match(source, /const pendingInput = task\?\.pendingInput;/);
+  assert.doesNotMatch(source, /task\?\.state === "analyzing" \? task\.pendingInput/);
+  assert.match(source, /submitMigrationAnalysisInput\(\{/);
+  assert.match(source, /requestId: pendingInput\.id/);
+  assert.match(source, /className="migration-question__options"/);
+  assert.match(source, /role="radiogroup"/);
+  assert.match(source, /t\("pendingInput\.other"\)/);
+  assert.match(source, /disabled=\{!canSubmitInput\}/);
+  assert.match(
+    source,
+    /catch \(cause\) \{[\s\S]*?await reconcileTaskState\(task\.id\)[\s\S]*?!authoritative\.pendingInput[\s\S]*?setError/,
+    "a failed answer should restore the authoritative task before surfacing the error",
+  );
+  const submitInput =
+    source.match(/async function submitInput\(\) \{[\s\S]*?\n  \}\n/)?.[0] ?? "";
+  assert.ok(submitInput, "the in-turn answers need their own submit path");
+  assert.match(submitInput, /submitMigrationAnalysisInput\(/);
+  assert.doesNotMatch(
+    submitInput,
+    /submitMigrationAnalysisAnswers\(/,
+    "the in-turn card must not fall back to the needs_input re-run",
+  );
+  assert.match(api, /`\/tasks\/\$\{encodeURIComponent\(args\.taskId\)\}\/input`/);
+
+  assert.match(styles, /\.migration-question__option\.is-selected/);
+  assert.match(styles, /\.migration-question__other textarea/);
+
+  assert.deepEqual(Object.keys(zhQuestions).sort(), Object.keys(enQuestions).sort());
+  for (const key of Object.keys(zhQuestions)) {
+    assert.equal(typeof enQuestions[key], "string");
+    assert.ok(enQuestions[key].length > 0);
+    assert.ok(zhQuestions[key].length > 0);
+  }
 });

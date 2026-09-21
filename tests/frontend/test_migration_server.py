@@ -4821,3 +4821,763 @@ def test_service_rejects_runtime_incompatible_agent_name_in_confirmation() -> No
 
     assert raised.value.code == "MIGRATION_CONFIRMATION_INVALID"
     assert raised.value.retryable is False
+
+
+def driver_lease(
+    task_id: str,
+    *,
+    state: str = "running",
+    heartbeat_at: int,
+    exit_code: int | None = None,
+    artifact: dict[str, object] | None = None,
+) -> dict[str, object]:
+    finished = state == "finished"
+    return {
+        "schema_version": 1,
+        "run_id": task_id,
+        "state": state,
+        "heartbeat_at": heartbeat_at,
+        "finished_at": heartbeat_at if finished else None,
+        "exit_code": exit_code if finished else None,
+        "artifact": artifact if finished else None,
+    }
+
+
+def mark_driver_lease(
+    gateway: FakeMigrationGateway,
+    task_id: str,
+    payload: dict[str, object],
+) -> None:
+    gateway.files[(task_id, f"{MIGRATION_ROOT}/control/migration-driver.json")] = (
+        json.dumps(payload, ensure_ascii=False).encode()
+    )
+
+
+def mark_delivery_succeeded(
+    gateway: FakeMigrationGateway,
+    task_id: str,
+) -> tuple[bytes, str]:
+    """Stage the delivery contract a finished migration leaves in the Sandbox."""
+    app = b"app = object()\n"
+    report = b'{"status":"succeeded"}\n'
+    artifact = artifact_zip({"agentkit_app.py": app})
+    digest = hashlib.sha256(artifact).hexdigest()
+    result = {
+        "schema_version": 1,
+        "run_id": task_id,
+        "cli": {"name": "agentkit-cli", "version": "0.52.0"},
+        "migration": {
+            "engine": "structured",
+            "framework": "langchain",
+            "entry": "agent.py:agent",
+            "source_sha256": "1" * 64,
+            "provenance_sha256": hashlib.sha256(
+                gateway.files[
+                    (task_id, f"{MIGRATION_ROOT}/control/route-selection.json")
+                ]
+            ).hexdigest(),
+        },
+        "status": "succeeded",
+        "files": [
+            {
+                "path": "agentkit_app.py",
+                "size": len(app),
+                "sha256": hashlib.sha256(app).hexdigest(),
+                "mode": "0644",
+            },
+            {
+                "path": ".agentkit/migration-plan.json",
+                "size": len(report),
+                "sha256": hashlib.sha256(report).hexdigest(),
+                "mode": "0644",
+            },
+        ],
+        "startup": {"module": "agentkit_app.py", "object": "app"},
+        "environment": {"required": ["ARK_API_KEY"], "optional": []},
+        "verification": {
+            "status": "passed",
+            "checks": [{"name": "import", "status": "passed"}],
+        },
+        "warnings": [],
+        "report": {"path": ".agentkit/migration-plan.json"},
+        "artifact": {
+            "path": "migration-result.zip",
+            "size": len(artifact),
+            "sha256": digest,
+        },
+        "created_at": "2026-08-11T08:20:00Z",
+    }
+    gateway.files[(task_id, f"{MIGRATION_ROOT}/delivery/migration-result.json")] = (
+        json.dumps(result).encode()
+    )
+    gateway.files[(task_id, f"{MIGRATION_ROOT}/delivery/migration-result.zip")] = (
+        artifact
+    )
+    gateway.files[(task_id, f"{MIGRATION_ROOT}/delivery/migration-status.json")] = (
+        json.dumps(
+            {
+                "schema_version": 1,
+                "run_id": task_id,
+                "sequence": 4,
+                "state": "succeeded",
+                "phase": "completed",
+                "message": "Migration artifact is ready",
+                "artifact": {
+                    "state": "ready",
+                    "preview_ready": True,
+                    "download_ready": True,
+                    "deploy_ready": True,
+                },
+                "updated_at": "2026-08-11T08:20:00Z",
+            }
+        ).encode()
+    )
+    return artifact, digest
+
+
+def test_delivery_driver_that_stopped_heartbeating_fails_the_task() -> None:
+    now = datetime(2026, 8, 11, 8, 30, tzinfo=timezone.utc).timestamp()
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway, clock=lambda: now)
+    task_id, _ = create_uploaded_task(service)
+    mark_analysis_ready(gateway, task_id)
+    service.confirm(
+        task_id,
+        "owner-1",
+        confirmation_body(gateway, task_id),
+    )
+    mark_driver_lease(
+        gateway,
+        task_id,
+        driver_lease(task_id, heartbeat_at=int(now) - 600),
+    )
+
+    task = service.get_task(task_id, "owner-1")
+
+    assert task["state"] == "failed"
+    assert task["message"] == "迁移执行进程已中断，请重新发起迁移。"
+    assert task["error"]["code"] == "MIGRATION_DELIVERY_INTERRUPTED"
+    assert task["error"]["retryable"] is False
+
+
+def test_delivery_driver_heartbeat_inside_the_window_keeps_migrating() -> None:
+    now = datetime(2026, 8, 11, 8, 30, tzinfo=timezone.utc).timestamp()
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway, clock=lambda: now)
+    task_id, _ = create_uploaded_task(service)
+    mark_analysis_ready(gateway, task_id)
+    service.confirm(
+        task_id,
+        "owner-1",
+        confirmation_body(gateway, task_id),
+    )
+    mark_driver_lease(
+        gateway,
+        task_id,
+        driver_lease(task_id, heartbeat_at=int(now) - 30),
+    )
+
+    task = service.get_task(task_id, "owner-1")
+
+    assert task["state"] == "migrating"
+    assert task["message"] == "正在迁移项目"
+
+
+def test_terminal_delivery_state_wins_over_a_stale_driver_lease() -> None:
+    now = datetime(2026, 8, 11, 8, 30, tzinfo=timezone.utc).timestamp()
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway, clock=lambda: now)
+    task_id, _ = create_uploaded_task(service)
+    mark_analysis_ready(gateway, task_id)
+    service.confirm(
+        task_id,
+        "owner-1",
+        confirmation_body(gateway, task_id),
+    )
+    mark_delivery_succeeded(gateway, task_id)
+    mark_driver_lease(
+        gateway,
+        task_id,
+        driver_lease(task_id, heartbeat_at=int(now) - 600),
+    )
+
+    task = service.get_task(task_id, "owner-1")
+
+    assert task["state"] == "succeeded"
+    assert task["artifact"]["downloadReady"] is True
+
+
+def test_finished_driver_without_delivery_state_still_reports_missing_delivery() -> (
+    None
+):
+    now = datetime(2026, 8, 11, 8, 30, tzinfo=timezone.utc).timestamp()
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway, clock=lambda: now)
+    task_id, _ = create_uploaded_task(service)
+    mark_analysis_ready(gateway, task_id)
+    service.confirm(
+        task_id,
+        "owner-1",
+        confirmation_body(gateway, task_id),
+    )
+    gateway.files.pop((task_id, f"{MIGRATION_ROOT}/delivery/migration-status.json"))
+    mark_driver_lease(
+        gateway,
+        task_id,
+        driver_lease(
+            task_id,
+            state="finished",
+            heartbeat_at=int(now),
+            exit_code=0,
+        ),
+    )
+    gateway.files[
+        (task_id, f"{MIGRATION_ROOT}/diagnostics/migration/process-exit.json")
+    ] = json.dumps(
+        {"schema_version": 1, "exit_code": 0, "finished_at": int(now) - 60}
+    ).encode()
+
+    task = service.get_task(task_id, "owner-1")
+
+    assert task["state"] == "failed"
+    assert task["error"]["code"] == "MIGRATION_DELIVERY_MISSING"
+
+
+def test_delivery_artifact_must_match_the_published_driver_digest() -> None:
+    now = datetime(2026, 8, 11, 8, 30, tzinfo=timezone.utc).timestamp()
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway, clock=lambda: now)
+    task_id, _ = create_uploaded_task(service)
+    mark_analysis_ready(gateway, task_id)
+    service.confirm(
+        task_id,
+        "owner-1",
+        confirmation_body(gateway, task_id),
+    )
+    artifact, digest = mark_delivery_succeeded(gateway, task_id)
+    mark_driver_lease(
+        gateway,
+        task_id,
+        driver_lease(
+            task_id,
+            state="finished",
+            heartbeat_at=int(now),
+            exit_code=0,
+            artifact={
+                "path": "migration-result.zip",
+                "sha256": digest,
+                "size": len(artifact),
+            },
+        ),
+    )
+
+    content, filename = service.download(task_id, "owner-1")
+    assert content == artifact
+    assert filename == "support-agent-migrated.zip"
+
+    mark_driver_lease(
+        gateway,
+        task_id,
+        driver_lease(
+            task_id,
+            state="finished",
+            heartbeat_at=int(now),
+            exit_code=0,
+            artifact={
+                "path": "migration-result.zip",
+                "sha256": "0" * 64,
+                "size": len(artifact),
+            },
+        ),
+    )
+
+    with pytest.raises(MigrationError) as raised:
+        service.download(task_id, "owner-1")
+
+    assert raised.value.code == "MIGRATION_ARTIFACT_INTEGRITY_FAILED"
+    assert str(raised.value) == "迁移产物与交付发布清单不一致。"
+
+
+def test_confirmed_migration_supervises_the_run_with_a_driver_lease() -> None:
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway)
+    task_id, _ = create_uploaded_task(service)
+    mark_analysis_ready(gateway, task_id)
+
+    service.confirm(
+        task_id,
+        "owner-1",
+        confirmation_body(gateway, task_id),
+    )
+
+    command = gateway.commands[-1][2]
+    assert f"{MIGRATION_ROOT}/control/migration-driver.py" in command
+    assert f"{MIGRATION_ROOT}/control/migration-driver.json" in command
+    assert f"{MIGRATION_ROOT}/delivery/migration-result.zip" in command
+    assert "STUDIO_MIGRATION_DRIVER" in command
+    assert " heartbeat &" in command
+    assert 'finish "$code"' in command
+    assert 'kill "$driver_pid" 2>/dev/null' in command
+    syntax = subprocess.run(
+        ["bash", "-n"],
+        input=command,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    assert syntax.returncode == 0, syntax.stderr
+
+    script = migration_service._migration_driver_script()
+    compile(script, "migration-driver.py", "exec")
+    assert "HEARTBEAT_SECONDS = 15.0" in script
+    assert 'publish(lease("running", int(time.time())))' in script
+    assert "artifact_entry=manifest()" in script
+
+
+def agentic_delivery_succeeded(
+    gateway: FakeMigrationGateway,
+    task_id: str,
+    *,
+    status: str = "succeeded_with_warnings",
+    warnings: list[str] | None = None,
+) -> tuple[bytes, str]:
+    """Stage the delivery triple a finished agentic migration leaves in the Sandbox."""
+    app = b"app = object()\n"
+    artifact = artifact_zip({"app.py": app})
+    digest = hashlib.sha256(artifact).hexdigest()
+    source = json.loads(
+        gateway.files[(task_id, f"{MIGRATION_ROOT}/request/source.json")]
+    )
+    result = {
+        "schema_version": 1,
+        "run_id": task_id,
+        "cli": {"name": "agentkit-cli", "version": "0.52.0"},
+        "migration": {
+            "engine": "agentic",
+            "framework": "any",
+            "source_sha256": source["sha256"],
+            "provenance_sha256": hashlib.sha256(
+                gateway.files[
+                    (task_id, f"{MIGRATION_ROOT}/control/route-selection.json")
+                ]
+            ).hexdigest(),
+        },
+        "status": status,
+        "files": [
+            {
+                "path": "app.py",
+                "size": len(app),
+                "sha256": hashlib.sha256(app).hexdigest(),
+                "mode": "0644",
+            }
+        ],
+        "startup": {"module": "app.py", "object": "app"},
+        "environment": {"required": [], "optional": []},
+        "verification": {"status": "passed", "checks": []},
+        "warnings": warnings if warnings is not None else ["APM 未配置"],
+        "report": {"path": "app.py"},
+        "artifact": {
+            "path": "migration-result.zip",
+            "size": len(artifact),
+            "sha256": digest,
+        },
+        "created_at": "2026-08-11T08:20:00Z",
+    }
+    gateway.files[(task_id, f"{MIGRATION_ROOT}/delivery/migration-result.json")] = (
+        json.dumps(result).encode()
+    )
+    gateway.files[(task_id, f"{MIGRATION_ROOT}/delivery/migration-result.zip")] = (
+        artifact
+    )
+    gateway.files[(task_id, f"{MIGRATION_ROOT}/delivery/migration-status.json")] = (
+        json.dumps(
+            {
+                "schema_version": 1,
+                "run_id": task_id,
+                "sequence": 6,
+                "state": status,
+                "phase": "completed",
+                "message": "Migration artifact is ready",
+                "artifact": {
+                    "state": "ready",
+                    "preview_ready": True,
+                    "download_ready": True,
+                    "deploy_ready": status != "partial",
+                },
+                "updated_at": "2026-08-11T08:20:00Z",
+            }
+        ).encode()
+    )
+    return artifact, digest
+
+
+def agentic_delivery_task(
+    service: MigrationService,
+    gateway: FakeMigrationGateway,
+) -> tuple[str, bytes, str]:
+    """Finish one agentic migration up to the delivery triple."""
+    task_id, _ = create_uploaded_task(service)
+    mark_analysis_ready(gateway, task_id, framework="any", entry=None)
+    service.confirm(
+        task_id,
+        "owner-1",
+        confirmation_body(gateway, task_id, framework="any", entry=None),
+    )
+    artifact, digest = agentic_delivery_succeeded(gateway, task_id)
+    return task_id, artifact, digest
+
+
+def wait_for_sandbox_file(
+    gateway: FakeMigrationGateway,
+    task_id: str,
+    path: str,
+    *,
+    timeout: float = 5.0,
+) -> bytes:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        content = gateway.files.get((task_id, path))
+        if content is not None:
+            return content
+        time.sleep(0.01)
+    raise AssertionError(f"{path} was never published")
+
+
+def delivery_report_payload(
+    task_id: str,
+    artifact: bytes,
+    digest: str,
+    *,
+    state: str = "succeeded_with_warnings",
+    message: str = "迁移产物已生成（1 个文件），有 1 条提示：APM 未配置。",
+) -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        "run_id": task_id,
+        "driver": "app-server",
+        "state": state,
+        "message": message,
+        "warnings": ["APM 未配置"],
+        "artifact": {
+            "path": "migration-result.zip",
+            "sha256": digest,
+            "size": len(artifact),
+        },
+        "created_at": "2026-08-11T08:25:00Z",
+    }
+
+
+def test_delivery_turn_closes_a_settled_agentic_delivery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway)
+    task_id, artifact, digest = agentic_delivery_task(service, gateway)
+    report = delivery_report_payload(task_id, artifact, digest)
+
+    async def fake_turn(
+        _self: object,
+        _session: object,
+        *,
+        target: str,
+    ) -> dict[str, object]:
+        assert target == "succeeded_with_warnings"
+        return report
+
+    monkeypatch.setattr(MigrationService, "_run_app_server_delivery_turn", fake_turn)
+
+    task = service.get_task(task_id, "owner-1")
+    assert service.drive_delivery_turn(task_id, "owner-1", task=task) is True
+
+    published = wait_for_sandbox_file(
+        gateway,
+        task_id,
+        f"{MIGRATION_ROOT}/delivery/delivery-report.json",
+    )
+    assert json.loads(published)["state"] == "succeeded_with_warnings"
+    closed = service.get_task(task_id, "owner-1")
+    assert closed["state"] == "succeeded_with_warnings"
+    assert closed["message"] == report["message"]
+    # 收尾回合是叠加的：交付状态和产物仍然来自 CLI 的交付合同。
+    assert closed["artifact"]["downloadReady"] is True
+    assert service.drive_delivery_turn(task_id, "owner-1", task=closed) is False
+
+
+def test_delivery_turn_rejects_a_verdict_that_does_not_match_the_delivery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway)
+    task_id, artifact, digest = agentic_delivery_task(service, gateway)
+    report = delivery_report_payload(
+        task_id,
+        artifact,
+        digest,
+        state="failed",
+        message="迁移失败",
+    )
+    report["artifact"] = None
+
+    async def fake_turn(
+        _self: object,
+        _session: object,
+        *,
+        target: str,
+    ) -> dict[str, object]:
+        return report
+
+    monkeypatch.setattr(MigrationService, "_run_app_server_delivery_turn", fake_turn)
+
+    task = service.get_task(task_id, "owner-1")
+    assert service.drive_delivery_turn(task_id, "owner-1", task=task) is True
+    time.sleep(0.2)
+
+    assert (
+        task_id,
+        f"{MIGRATION_ROOT}/delivery/delivery-report.json",
+    ) not in gateway.files
+    assert service.get_task(task_id, "owner-1")["message"] != report["message"]
+
+
+def test_delivery_turn_keeps_the_cli_state_when_the_app_server_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway)
+    task_id, _artifact, _digest = agentic_delivery_task(service, gateway)
+
+    async def fake_turn(
+        _self: object,
+        _session: object,
+        *,
+        target: str,
+    ) -> dict[str, object]:
+        del target
+        raise migration_service.DeliveryTurnUnavailable("app-server 不可用")
+
+    monkeypatch.setattr(MigrationService, "_run_app_server_delivery_turn", fake_turn)
+
+    task = service.get_task(task_id, "owner-1")
+    assert service.drive_delivery_turn(task_id, "owner-1", task=task) is True
+    time.sleep(0.2)
+
+    assert (
+        task_id,
+        f"{MIGRATION_ROOT}/delivery/delivery-report.json",
+    ) not in gateway.files
+    assert service.get_task(task_id, "owner-1")["state"] == "succeeded_with_warnings"
+
+
+def test_delivery_turn_waits_for_the_delivery_to_settle() -> None:
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway)
+    task_id, _ = create_uploaded_task(service)
+    mark_analysis_ready(gateway, task_id, framework="any", entry=None)
+    service.confirm(
+        task_id,
+        "owner-1",
+        confirmation_body(gateway, task_id, framework="any", entry=None),
+    )
+
+    task = service.get_task(task_id, "owner-1")
+
+    assert task["state"] == "migrating"
+    assert service.drive_delivery_turn(task_id, "owner-1", task=task) is False
+
+
+def test_delivery_turn_ignores_a_structured_delivery() -> None:
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway)
+    task_id, _ = create_uploaded_task(service)
+    mark_analysis_ready(gateway, task_id)
+    service.confirm(task_id, "owner-1", confirmation_body(gateway, task_id))
+    mark_delivery_succeeded(gateway, task_id)
+
+    task = service.get_task(task_id, "owner-1")
+
+    assert task["state"] == "succeeded"
+    assert service.drive_delivery_turn(task_id, "owner-1", task=task) is False
+
+
+def test_delivery_turn_is_switched_off_by_its_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AGENTKIT_MIGRATION_DELIVERY_APP_SERVER", "0")
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway)
+    task_id, _artifact, _digest = agentic_delivery_task(service, gateway)
+
+    task = service.get_task(task_id, "owner-1")
+
+    assert service.drive_delivery_turn(task_id, "owner-1", task=task) is False
+
+
+def test_delivery_turn_waits_for_a_fresh_lease_and_takes_over_a_stale_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # 收尾回合的租约用墙钟判断新鲜度，所以这里按当前时间构造心跳。
+    wall_clock = int(time.time())
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway)
+    task_id, artifact, digest = agentic_delivery_task(service, gateway)
+    report = delivery_report_payload(task_id, artifact, digest)
+    calls: list[str] = []
+
+    async def fake_turn(
+        _self: object,
+        _session: object,
+        *,
+        target: str,
+    ) -> dict[str, object]:
+        calls.append(target)
+        return report
+
+    monkeypatch.setattr(MigrationService, "_run_app_server_delivery_turn", fake_turn)
+    lease_path = f"{MIGRATION_ROOT}/control/delivery-turn.json"
+
+    gateway.files[(task_id, lease_path)] = json.dumps(
+        {
+            "schema_version": 1,
+            "driver": "app-server",
+            "state": "running",
+            "started_at": wall_clock - 5,
+            "heartbeat_at": wall_clock - 5,
+            "owner_process": "another-studio-process",
+        }
+    ).encode()
+    task = service.get_task(task_id, "owner-1")
+    assert service.drive_delivery_turn(task_id, "owner-1", task=task) is False
+
+    gateway.files[(task_id, lease_path)] = json.dumps(
+        {
+            "schema_version": 1,
+            "driver": "app-server",
+            "state": "running",
+            "started_at": wall_clock - 600,
+            "heartbeat_at": wall_clock - 600,
+            "owner_process": "another-studio-process",
+        }
+    ).encode()
+
+    assert service.drive_delivery_turn(task_id, "owner-1", task=task) is True
+    wait_for_sandbox_file(
+        gateway,
+        task_id,
+        f"{MIGRATION_ROOT}/delivery/delivery-report.json",
+    )
+    assert calls == ["succeeded_with_warnings"]
+
+
+def test_delivery_turn_resumes_after_a_lost_report(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway)
+    task_id, artifact, digest = agentic_delivery_task(service, gateway)
+    report = delivery_report_payload(task_id, artifact, digest)
+
+    async def fake_turn(
+        _self: object,
+        _session: object,
+        *,
+        target: str,
+    ) -> dict[str, object]:
+        del target
+        return report
+
+    monkeypatch.setattr(MigrationService, "_run_app_server_delivery_turn", fake_turn)
+    task = service.get_task(task_id, "owner-1")
+    assert service.drive_delivery_turn(task_id, "owner-1", task=task) is True
+    wait_for_sandbox_file(
+        gateway,
+        task_id,
+        f"{MIGRATION_ROOT}/delivery/delivery-report.json",
+    )
+
+    # 报告一旦落盘，再看任务不会再收尾一次。
+    assert service.drive_delivery_turn(task_id, "owner-1", task=task) is False
+
+
+def test_publishing_the_artifact_requires_the_manifest_to_match_the_bytes() -> None:
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway)
+    task_id, artifact, digest = agentic_delivery_task(service, gateway)
+    session = service._session(task_id, "owner-1")
+
+    published = service._publish_delivery_artifact(
+        session,
+        "migration-result.zip",
+        expected_state="succeeded_with_warnings",
+    )
+
+    assert published.sha256 == digest
+    assert published.size == len(artifact)
+
+    gateway.files[(task_id, f"{MIGRATION_ROOT}/delivery/migration-result.zip")] = (
+        artifact_zip({"app.py": b"tampered\n"})
+    )
+    with pytest.raises(migration_service.DeliveryContractError):
+        service._publish_delivery_artifact(
+            session,
+            "migration-result.zip",
+            expected_state="succeeded_with_warnings",
+        )
+
+
+def test_the_delivery_report_never_overrides_another_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway)
+    task_id, artifact, digest = agentic_delivery_task(service, gateway)
+    report = delivery_report_payload(
+        task_id,
+        artifact,
+        digest,
+        state="partial",
+        message="这次交付不完整。",
+    )
+    gateway.files[(task_id, f"{MIGRATION_ROOT}/delivery/delivery-report.json")] = (
+        json.dumps(report).encode()
+    )
+
+    task = service.get_task(task_id, "owner-1")
+
+    assert task["state"] == "succeeded_with_warnings"
+    assert task["message"] == "迁移产物已生成，请查看迁移提示"
+
+
+def test_delivery_turn_gives_up_after_its_attempt_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway)
+    task_id, _artifact, _digest = agentic_delivery_task(service, gateway)
+    calls: list[int] = []
+
+    async def fake_turn(
+        _self: object,
+        _session: object,
+        *,
+        target: str,
+    ) -> dict[str, object]:
+        del target
+        calls.append(1)
+        return None
+
+    monkeypatch.setattr(MigrationService, "_run_app_server_delivery_turn", fake_turn)
+    task = service.get_task(task_id, "owner-1")
+
+    assert service.drive_delivery_turn(task_id, "owner-1", task=task) is True
+    deadline = time.time() + 5
+    while not calls and time.time() < deadline:
+        time.sleep(0.01)
+    for _ in range(50):
+        if service.drive_delivery_turn(task_id, "owner-1", task=task):
+            break
+        time.sleep(0.02)
+    time.sleep(0.2)
+
+    # 一个没有结论的收尾最多再试一次，不能每次读任务都重新烧一个回合。
+    assert calls == [1, 1]
+    assert service.drive_delivery_turn(task_id, "owner-1", task=task) is False

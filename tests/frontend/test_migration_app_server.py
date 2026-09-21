@@ -24,6 +24,7 @@ import time
 import pytest
 
 from frontend.server.migration import service as migration_service
+from frontend.server.migration.analysis_input import AnalysisInputRegistry
 from frontend.server.migration.app_server import (
     MigrationAnalysisUnavailable,
     RouteRecorder,
@@ -83,6 +84,7 @@ class _Service(MigrationService):
     def __init__(self, recorder: _Recorder, *, marker: dict[str, object] | None = None):
         self._recorder = recorder
         self._analysis_drivers = {}
+        self._analysis_input = AnalysisInputRegistry()
         self._marker = marker
         self._session_marker = marker
 
@@ -346,3 +348,118 @@ def test_route_recorder_rejects_an_invalid_contract_then_accepts_a_correction() 
     assert recorder.result is not None
     assert recorder.result["attempt"] == 1
     assert recorder.result["input_sha256"] == "a" * 64
+
+
+def test_app_server_analysis_asks_the_user_inside_the_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """一轮分析里先提问、再交付结果：用户回答不重跑分析。"""
+    monkeypatch.delenv("AGENTKIT_MIGRATION_APP_SERVER", raising=False)
+    recorded: dict[str, object] = {}
+    delivered: dict[str, object] = {}
+    questions = (
+        {
+            "id": "framework",
+            "header": "目标框架",
+            "question": "迁移到 langchain 还是 dify？",
+            "options": [],
+        },
+    )
+
+    async def _run(**kwargs: object) -> dict[str, object]:
+        recorded.update(kwargs)
+        ask = kwargs["questioner"]
+        delivered["answers"] = await ask(questions)  # type: ignore[operator]
+        wait = kwargs["host_wait_seconds"]
+        delivered["waited"] = wait()  # type: ignore[operator]
+        return _contract()
+
+    monkeypatch.setattr(migration_service, "run_route_analysis", _run)
+
+    recorder = _Recorder()
+    service = _Service(recorder)
+    session = _session()
+    assert (
+        service._start_app_server_analysis(
+            session,
+            prompt="分析",
+            attempt=1,
+            input_sha256="a" * 64,
+            timeout_seconds=12.0,
+        )
+        is True
+    )
+
+    pending = None
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        pending = service._analysis_input.pending(session.session_id)
+        if pending is not None:
+            break
+        time.sleep(0.01)
+    assert pending is not None, "分析回合没有把问题交给页面"
+    assert (
+        service._analysis_input.resolve(
+            session.session_id,
+            request_id=pending.request_id,
+            answers={"framework": ("dify",)},
+        )
+        is True
+    )
+    _wait_for_driver(service)
+
+    assert delivered["answers"] == {"framework": ("dify",)}
+    # 等用户的时间既不计入模型预算，也不能让客户端的空闲计时器提前取消回合。
+    assert float(delivered["waited"]) > 0.0  # type: ignore[arg-type]
+    assert recorded["idle_timeout_seconds"] == (
+        12.0
+        + migration_service._ANALYSIS_INPUT_WINDOW_SECONDS
+        + migration_service._ANALYSIS_INPUT_IDLE_MARGIN_SECONDS
+    )
+    assert service._analysis_input.pending(session.session_id) is None
+    assert recorder.written[migration_service._ANALYSIS_STATUS_PATH]["state"] == "ready"
+
+
+def test_app_server_analysis_keeps_going_when_nobody_answers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """没人回答时回合继续，让 Codex 用 needs_input 交付问题，而不是挂住。"""
+    monkeypatch.delenv("AGENTKIT_MIGRATION_APP_SERVER", raising=False)
+    monkeypatch.setattr(migration_service, "_ANALYSIS_INPUT_WINDOW_SECONDS", 0.05)
+    delivered: dict[str, object] = {}
+    questions = (
+        {
+            "id": "framework",
+            "header": "目标框架",
+            "question": "迁移到 langchain 还是 dify？",
+            "options": [],
+        },
+    )
+
+    async def _run(**kwargs: object) -> dict[str, object]:
+        ask = kwargs["questioner"]
+        delivered["answers"] = await ask(questions)  # type: ignore[operator]
+        return _contract("needs_input")
+
+    monkeypatch.setattr(migration_service, "run_route_analysis", _run)
+
+    recorder = _Recorder()
+    service = _Service(recorder)
+    session = _session()
+    assert (
+        service._start_app_server_analysis(
+            session,
+            prompt="分析",
+            attempt=1,
+            input_sha256="a" * 64,
+        )
+        is True
+    )
+    _wait_for_driver(service)
+
+    assert delivered["answers"] is None
+    assert service._analysis_input.pending(session.session_id) is None
+    assert (
+        recorder.written[migration_service._ANALYSIS_STATUS_PATH]["state"]
+        == "needs_input"
+    )

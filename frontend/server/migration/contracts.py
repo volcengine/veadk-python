@@ -367,6 +367,115 @@ def validate_process_exit(value: object) -> dict[str, object]:
     return {str(key): item for key, item in value.items()}
 
 
+def validate_migration_driver(
+    value: object,
+    *,
+    expected_run_id: str,
+) -> dict[str, object]:
+    """Validate the delivery driver lease, including the published artifact.
+
+    The record is written inside the Sandbox by the launch script that supervises the
+    migration CLI.  It lets Studio tell a driver that is still working from one whose
+    process disappeared, and it carries the artifact digest computed right after the
+    CLI exited, so the bytes Studio later pulls can be checked against it.
+    """
+    if not isinstance(value, dict):
+        raise MigrationContractError("driver lease must be an object")
+    _exact_keys(
+        value,
+        required={
+            "schema_version",
+            "run_id",
+            "state",
+            "heartbeat_at",
+            "finished_at",
+            "exit_code",
+            "artifact",
+        },
+    )
+    state = value.get("state")
+    if (
+        value.get("schema_version") != 1
+        or value.get("run_id") != expected_run_id
+        or state not in {"running", "finished"}
+    ):
+        raise MigrationContractError("invalid driver lease identity")
+    _bounded_integer(value.get("heartbeat_at"), maximum=10**12)
+    finished_at = value.get("finished_at")
+    exit_code = value.get("exit_code")
+    artifact = value.get("artifact")
+    if state == "running":
+        if finished_at is not None or exit_code is not None or artifact is not None:
+            raise MigrationContractError("running driver lease published a result")
+    else:
+        _bounded_integer(finished_at, maximum=10**12)
+        _bounded_integer(exit_code, maximum=255)
+        if artifact is not None:
+            if not isinstance(artifact, dict):
+                raise MigrationContractError("invalid artifact descriptor")
+            _exact_keys(artifact, required={"path", "sha256", "size"})
+            if artifact.get("path") != "migration-result.zip":
+                raise MigrationContractError("invalid artifact path")
+            _bounded_integer(artifact.get("size"), maximum=_MAX_ARTIFACT_BYTES)
+            _sha256(artifact.get("sha256"))
+    return {str(key): item for key, item in value.items()}
+
+
+def validate_delivery_report(
+    value: object,
+    *,
+    expected_run_id: str,
+    expected_state: str,
+) -> dict[str, object]:
+    """Validate the verdict the closing delivery turn published.
+
+    The turn explains a delivery; it never decides one.  ``expected_state`` is the
+    state Studio derived from the Sandbox, and a report that disagrees with it is
+    rejected here as well as inside the turn, so a damaged or replayed record cannot
+    describe a delivery other than the one the CLI settled.
+    """
+    if not isinstance(value, dict):
+        raise MigrationContractError("delivery report must be an object")
+    _exact_keys(
+        value,
+        required={
+            "schema_version",
+            "run_id",
+            "driver",
+            "state",
+            "message",
+            "warnings",
+            "artifact",
+            "created_at",
+        },
+    )
+    state = value.get("state")
+    if (
+        value.get("schema_version") != 1
+        or value.get("run_id") != expected_run_id
+        or value.get("driver") != "app-server"
+        or state != expected_state
+        or state not in {"succeeded", "succeeded_with_warnings", "partial", "failed"}
+    ):
+        raise MigrationContractError("delivery report identity does not match")
+    _text(value.get("message"), allow_empty=False, maximum=4_000)
+    _string_list(value.get("warnings"), maximum_items=8)
+    artifact = value.get("artifact")
+    if state == "failed":
+        if artifact is not None:
+            raise MigrationContractError("failed delivery report published an artifact")
+    else:
+        if not isinstance(artifact, dict):
+            raise MigrationContractError("invalid delivery report artifact")
+        _exact_keys(artifact, required={"path", "sha256", "size"})
+        if artifact.get("path") != "migration-result.zip":
+            raise MigrationContractError("invalid delivery report artifact path")
+        _bounded_integer(artifact.get("size"), maximum=_MAX_ARTIFACT_BYTES)
+        _sha256(artifact.get("sha256"))
+    _timestamp_text(value.get("created_at"))
+    return {str(key): item for key, item in value.items()}
+
+
 def validate_stopped_status(value: object) -> dict[str, object]:
     if not isinstance(value, dict):
         raise MigrationContractError("stopped status must be an object")
@@ -812,7 +921,9 @@ __all__ = [
     "validate_analysis_status",
     "validate_confirmation",
     "validate_delivery_result",
+    "validate_delivery_report",
     "validate_delivery_status",
+    "validate_migration_driver",
     "validate_migration_request",
     "validate_process_exit",
     "validate_source_status",

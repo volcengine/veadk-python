@@ -213,6 +213,15 @@
     "submitting": "正在继续分析…",
     "submit": "提交并继续分析"
   },
+  "pendingInput": {
+    "ariaLabel": "回答迁移需要你决定的问题",
+    "title": "迁移需要你的回答",
+    "description": "回答后会在当前这一步里继续，不需要重新开始",
+    "other": "其他",
+    "otherPlaceholder": "也可以直接输入你的答案",
+    "submitting": "正在提交回答…",
+    "submit": "提交回答并继续"
+  },
   "confirmation": {
     "ariaLabel": "确认迁移方式",
     "title": "确认迁移方式",

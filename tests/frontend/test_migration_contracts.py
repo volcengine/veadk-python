@@ -728,3 +728,227 @@ def test_request_models_reject_invalid_ids_hashes_and_answers() -> None:
         SubmitAnalysisAnswersBody(**{**answers, "answers": {" ": "x"}})
     with pytest.raises(ValueError, match="4000"):
         SubmitAnalysisAnswersBody(**{**answers, "answers": {"scope": "x" * 4001}})
+
+
+def driver_lease_payload() -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        "run_id": TASK_ID,
+        "state": "running",
+        "heartbeat_at": 1_786_600_000,
+        "finished_at": None,
+        "exit_code": None,
+        "artifact": None,
+    }
+
+
+def test_driver_lease_contract_bounds_the_heartbeat_and_the_published_artifact() -> (
+    None
+):
+    def validate(value: object) -> dict[str, object]:
+        return contracts.validate_migration_driver(value, expected_run_id=TASK_ID)
+
+    assert validate(driver_lease_payload())["state"] == "running"
+
+    published = {
+        **driver_lease_payload(),
+        "state": "finished",
+        "heartbeat_at": 1_786_600_010,
+        "finished_at": 1_786_600_010,
+        "exit_code": 0,
+        "artifact": {
+            "path": "migration-result.zip",
+            "sha256": SHA256,
+            "size": 10,
+        },
+    }
+    assert validate(published)["exit_code"] == 0
+    without_artifact = {**published, "artifact": None}
+    assert validate(without_artifact)["artifact"] is None
+
+    invalid(validate, None, "must be an object")
+    invalid(
+        validate,
+        {**driver_lease_payload(), "run_id": "migration-v1-" + "3" * 32},
+        "identity",
+    )
+    invalid(validate, {**driver_lease_payload(), "state": "lost"}, "identity")
+    invalid(validate, {**driver_lease_payload(), "heartbeat_at": "now"}, "integer")
+    invalid(
+        validate,
+        {
+            **driver_lease_payload(),
+            "finished_at": 1_786_600_010,
+            "exit_code": 0,
+        },
+        "published a result",
+    )
+    invalid(validate, {**published, "finished_at": None}, "integer")
+    invalid(validate, {**published, "exit_code": 300}, "integer")
+    invalid(
+        validate,
+        {
+            **published,
+            "artifact": {
+                "path": "other.zip",
+                "sha256": SHA256,
+                "size": 10,
+            },
+        },
+        "artifact path",
+    )
+    invalid(
+        validate,
+        {
+            **published,
+            "artifact": {
+                "path": "migration-result.zip",
+                "sha256": "not-a-digest",
+                "size": 10,
+            },
+        },
+        "sha256",
+    )
+    invalid(
+        validate,
+        {
+            **published,
+            "artifact": {
+                "path": "migration-result.zip",
+                "sha256": SHA256,
+                "size": -1,
+            },
+        },
+        "integer",
+    )
+
+
+def delivery_report_payload() -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        "run_id": TASK_ID,
+        "driver": "app-server",
+        "state": "succeeded_with_warnings",
+        "message": "迁移产物已生成，有 1 条提示。",
+        "warnings": ["APM 未配置"],
+        "artifact": {
+            "path": "migration-result.zip",
+            "sha256": SHA256,
+            "size": 2048,
+        },
+        "created_at": "2026-09-21T09:20:41Z",
+    }
+
+
+def test_delivery_report_binds_the_verdict_to_the_state_the_sandbox_published() -> None:
+    def validate(value: object) -> dict[str, object]:
+        return contracts.validate_delivery_report(
+            value,
+            expected_run_id=TASK_ID,
+            expected_state="succeeded_with_warnings",
+        )
+
+    assert validate(delivery_report_payload())["warnings"] == ["APM 未配置"]
+    assert (
+        contracts.validate_delivery_report(
+            {**delivery_report_payload(), "state": "partial"},
+            expected_run_id=TASK_ID,
+            expected_state="partial",
+        )["state"]
+        == "partial"
+    )
+
+    failed = {
+        **delivery_report_payload(),
+        "state": "failed",
+        "artifact": None,
+    }
+    assert (
+        contracts.validate_delivery_report(
+            failed,
+            expected_run_id=TASK_ID,
+            expected_state="failed",
+        )["artifact"]
+        is None
+    )
+
+    invalid(validate, None, "must be an object")
+    invalid(
+        validate,
+        {**delivery_report_payload(), "run_id": "migration-v1-" + "3" * 32},
+        "identity",
+    )
+    invalid(
+        validate,
+        {**delivery_report_payload(), "state": "succeeded"},
+        "identity",
+    )
+    invalid(
+        validate,
+        {**delivery_report_payload(), "driver": "codex-exec"},
+        "identity",
+    )
+    invalid(validate, {**delivery_report_payload(), "message": ""}, "text")
+    invalid(validate, {**delivery_report_payload(), "warnings": "无"}, "string list")
+    invalid(
+        validate,
+        {**delivery_report_payload(), "warnings": ["x"] * 9},
+        "string list",
+    )
+    invalid(
+        validate,
+        {**delivery_report_payload(), "created_at": "2026-09-21 09:20:41"},
+        "timestamp",
+    )
+    invalid(
+        validate,
+        {**delivery_report_payload(), "artifact": None},
+        "artifact",
+    )
+    invalid(
+        lambda value: contracts.validate_delivery_report(
+            value,
+            expected_run_id=TASK_ID,
+            expected_state="failed",
+        ),
+        delivery_report_payload(),
+        "identity",
+    )
+    invalid(
+        lambda value: contracts.validate_delivery_report(
+            value,
+            expected_run_id=TASK_ID,
+            expected_state="failed",
+        ),
+        failed | {"artifact": {"path": "migration-result.zip"}},
+        "artifact",
+    )
+    invalid(
+        lambda value: contracts.validate_delivery_report(
+            value,
+            expected_run_id=TASK_ID,
+            expected_state="failed",
+        ),
+        {
+            **failed,
+            "artifact": {"path": "migration-result.zip", "sha256": SHA256, "size": 1},
+        },
+        "published an artifact",
+    )
+    invalid(
+        validate,
+        {
+            **delivery_report_payload(),
+            "artifact": {
+                "path": "migration-result.zip",
+                "sha256": "not-a-digest",
+                "size": 1,
+            },
+        },
+        "sha256",
+    )
+    invalid(
+        validate,
+        {**delivery_report_payload(), "extra": True},
+        "unexpected object fields",
+    )
