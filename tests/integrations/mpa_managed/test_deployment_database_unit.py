@@ -3,11 +3,12 @@
 import asyncio
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from cryptography.fernet import Fernet
 from sqlalchemy.dialects import postgresql
+from sqlalchemy.ext.asyncio import AsyncEngine
 
 from veadk.integrations.mpa.managed import database as mod
 from veadk.integrations.mpa.managed import registry as shared
@@ -244,7 +245,9 @@ def test_registries_initialize_and_durably_save_scoped_records(monkeypatch):
 def test_account_lock_waits_and_always_unlocks(monkeypatch, failure):
     async def run():
         conn = Connection(scalars=[False, True, None])
-        registry = shared.SharedAPIGRegistry(Engine(conn))
+        registry = shared.SharedAPIGRegistry(
+            Mock(spec=AsyncEngine, wraps=Engine(conn), dialect=Engine.dialect)
+        )
         sleep = AsyncMock()
         monkeypatch.setattr(shared.asyncio, "sleep", sleep)
 
@@ -275,7 +278,9 @@ def test_failed_unlock_invalidates_pooled_connection():
     async def run():
         conn = Connection(scalars=[True])
         conn.rollback.side_effect = OSError("connection lost")
-        registry = shared.SharedAPIGRegistry(Engine(conn))
+        registry = shared.SharedAPIGRegistry(
+            Mock(spec=AsyncEngine, wraps=Engine(conn), dialect=Engine.dialect)
+        )
         with pytest.raises(OSError):
             async with registry.lock("a", "r"):
                 pass

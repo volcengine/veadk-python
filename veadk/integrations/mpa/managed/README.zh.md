@@ -46,3 +46,77 @@ Studio 在 `.adk/mpa-creation.sqlite3` 保存不含密钥的任务状态（可�
 ### Runtime 显示名称
 
 新建托管 Runtime 的名称等于 Studio 中输入或通过 `--agent-id` 指定的智能体 ID，例如 `mi-example`。AgentKit 仍会分配独立的 `r-...` Runtime ID。已有 Runtime 保留原名；当前更新接口没有 Name 参数。重试旧版未完成的创建时，在原始输入匹配的情况下保留原哈希名称和请求 token。数据库、worker 和技能空间的命名仍按账号、地域和智能体标识隔离。
+
+### 显式配置 MPA 和 worker 镜像
+
+使用 `managed.runtime.image` 独立固定 MPA 镜像，与 `managed.worker.image` 分开配置：
+
+```yaml
+managed:
+  version: 1
+  from-runtime: r-reference
+  runtime:
+    image: registry.example/agentkit/mpa_agent:release-tag
+  worker:
+    image: registry.example/agentkit/mpa_codex_worker:release-tag
+```
+
+这只是配置片段，需保留其他必需设置。`from-runtime` 除默认镜像外，还提供角色、计算/扩缩容/并发、APM/项目、VPC，以及经身份清理的模型/数据库连接等环境设置。显式 Runtime 镜像会作为自定义镜像覆盖默认值。对 `template-file` 和平铺模式也同样生效；平铺模式设置本字段后可省略顶层 `image`。省略/null 保持原行为；空字符串、含空白字符或占位符的镜像校验失败。模板来源选择规则不变。修改该配置不会自动更新已有智能体；重试未完成创建时须保留原实际镜像。
+
+### 不依赖参考 Runtime 的显式基础配置
+
+移除 `managed.from-runtime` 和 `managed.template-file`，即可使用平铺模型/数据库字段及以下覆盖配置：
+
+```yaml
+managed:
+  version: 1
+  runtime:
+    image: registry.example/agentkit/mpa_agent:release-tag
+    role-name: IDRoleForArkClawShareAgent
+    cpu-milli: 2000       # 2 核 CPU
+    memory-mb: 4096      # 4 GiB
+    min-instance: 1
+    max-instance: 1
+    max-concurrency: 100
+    apmplus-enable: true
+    project-name: default
+    env:
+      CLOUD_PROVIDER: volcengine
+  network:
+    vpc-id: vpc-existing
+    subnet-ids: [subnet-existing]
+  worker:
+    image: registry.example/agentkit/mpa_codex_worker:release-tag
+model-provider: openai
+model-name: your-model
+model-api-base: https://model.example/api/v3
+model-api-key: "${MPA_MODEL_API_KEY}"
+pg-host: database.example
+pg-port: "5432"
+pg-user: app
+pg-password: "${MPA_PG_PASSWORD}"
+pg-sslmode: require
+pg-channel-binding: require
+```
+
+需保留完整示例中的地域、共享/管理员数据库秘密引用，以及 worker 专用设置。`runtime.env` 支持其他字符串应用配置与完整环境变量引用，不能指定创建流程拥有的标识、生成的数据库名、Runtime 密钥或部署数据库 URL。任意来源模式下，显式 runtime 字段优先，省略则保留原默认值。最少实例可为零，但不能超过合并后的最多实例。网络创建仍要求公网/私网连通，不会创建数据库白名单。固定配置后，参考 Runtime 的后续变化不再影响该配置。如果保留 worker 的 `reference-id`，它仍会独立提供 worker 环境变量。这些设置用于后续创建/部署，不会自动重新部署已有实例。
+
+### 在 Studio 创建时填写镜像
+
+创建弹窗新增 **MPA 镜像**和 **Worker 镜像**文本框，默认填入当前服务端配置。可为本次创建修改任一镜像，或清空以使用配置默认值。填写 `registry.example/mpa:v2` 或 `registry.example/worker@sha256:<64 位十六进制>` 这样的容器镜像引用，不接受下载网址或镜像仓库登录凭据。输入不会修改 YAML 或重新部署已有智能体。提交后锁定两个输入；失败、取消、关闭后重开均保留原请求及已知实际镜像，以安全重试。仅引用 Runtime/已有 worker 的配置可能没有本地可展示的默认镜像，留空仍沿用该来源。镜像访问权限和兼容性由管理员负责。显式填写 Worker 镜像会创建独立 worker，即使原配置选择复用已有 worker。
+
+### Worker 重试与失败诊断
+
+Worker 参考查询、发现、创建和读取遇到已识别的超时、连接失败、限流或暂时性服务错误时，最多**尝试 4 次**，依次等待 **1、2、4 秒**。创建调用复用持久化载荷和 ClientToken。仅已登记的托管 Worker 会重试已识别的不存在错误；参考/既有 Worker 缺失、权限错误、参数错误和归属冲突立即失败。准备 Worker 默认预算 600 秒（包含重试），并遵循总任务期限和取消。SDK 内部重试可能增加网络请求次数。未知错误仍需排查，并使用相同身份手动重试；这不保证所有服务端故障都能恢复。
+
+Studio 将安全诊断类别写入服务端日志和私有任务数据库的 `task_diagnostics` 表。每任务最新 100 条事件跨手动重试和重启保留。事件包含任务 ID、时间戳、阶段、操作、尝试次数、类别和结果（`retrying`、`failed`、`cancelled`），不包含原始消息、凭据或请求载荷。已有 HTTP 错误码和弹窗行为不变。本地查看方式：
+
+```bash
+sqlite3 -readonly .adk/mpa-creation.sqlite3 "SELECT task_id,datetime(created,'unixepoch'),stage,operation,category,attempt,outcome FROM task_diagnostics ORDER BY id DESC LIMIT 30;"
+```
+
+若设置了 `VEADK_MPA_TASK_DB`，请使用该路径。示例时间为 UTC。`permission` 需检查部署凭据/权限；`invalid_request` 需检查配置；`ownership` 和 `configuration_changed` 需核对原始资源身份/输入。`timeout`、`connection`、`throttled`、`unavailable` 区分暂时性故障；`not_found` 根据操作表示可见性延迟或资源缺失。`unknown`/`provider_error` 表示未能安全识别服务端错误，不代表成功。子进程异常退出、服务中断、超时和取消也会记录。旧版本已丢弃的历史错误无法恢复。
+
+### 初始化元数据延迟
+
+对于已持久化创建 ID/令牌/哈希的托管 Worker，初始化期间缺失 ID/项目/归属标签时，最多观察四次不完整响应，依次等待 5、10、20 秒，处理 CreateTool 返回后元数据稍晚可见的情况。已有值明确冲突仍立即失败；Ready 后缺失字段及终态/未知状态不享受宽限。等待遵循原阶段期限和取消，不会创建另一个 Worker。安全诊断操作标明具体字段（`worker_id`、`worker_project`、`worker_managed_by`、`worker_agent_key`、`worker_agent_binding`、`worker_state`）；`metadata_pending` 表示正在等待，`metadata_missing` 表示有界检查未通过。实际字段值仍保持私有。

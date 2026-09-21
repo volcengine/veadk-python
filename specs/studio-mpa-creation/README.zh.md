@@ -55,3 +55,14 @@ CON-1–4 对应配置/service/network/gateway/worker/database/Runtime 测试。
 Worker 查询按云端返回的 `NextToken` 游标翻页，使用 `MaxResults=100`，不能根据当前页数量判断查询结束。重复游标或超过 1,000 页必须明确失败。重叠页中匹配的 ToolId 应去重，不同 ID 的同名资源仍构成归属冲突。查询失败或不完整时不得视为资源不存在（CON-2/CON-3）。
 
 CON-3 命名：新建托管 Runtime 的 `Name` 等于 `MPA_AGENT_ID`。已有登记 Runtime 保留其名称。旧版待完成创建尚未返回 Runtime ID 时，仅在完整旧请求与持久化请求哈希匹配的情况下沿用哈希名称，保持 ClientToken 重试语义。其他输入变化仍构成冲突。Runtime ID 和数据库/worker/技能空间的标识不变。当前 UpdateRuntime API 未提供 Name，因此本调整不会重命名已有云实例。
+
+CON-1 镜像优先级：可选 `managed.runtime.image` 显式指定 MPA 自定义镜像（ArtifactType 为 `image`），优先于所选参考 Runtime/模板/平铺来源。省略/null 保持原来源行为。空字符串、含空白字符、占位符的值和未知 runtime 配置项在本地校验失败。平铺模式可用它提供必需的镜像，不替代其他前置配置。`managed.worker.image` 仍独立生效。不会自动更新已有智能体，也不会放宽未完成请求哈希检查。
+
+CON-1 显式基础设施：`managed.runtime` 可选字段包括 `role-name`、正数 `cpu-milli`/`memory-mb`/`max-concurrency`、非负 `min-instance`、正数 `max-instance`、`apmplus-enable`、`project-name` 和 `env`（字符串环境值，完整 `${ENV_NAME}` 引用由服务端解析）。显式值覆盖参考 Runtime/模板/平铺设置，省略字段保留默认值。合并来源后验证 min<=max。平铺 `model-*`、`pg-*` 与 `managed.network.vpc-id/subnet-ids` 支持不依赖参考 Runtime 的配置。Runtime env 键须为大写环境变量标识；禁止设置创建流程拥有的智能体/Runtime/工具/技能 ID、派生数据库名、Runtime 端点/鉴权/加密、数据库管理员/共享注册库 URL、请求/遥测标识。CON-3/CON-8 的生成、秘密脱敏和未完成请求一致性仍为准。Worker 参考配置独立于 MPA Runtime 来源。
+
+CON-9 创建镜像：弹窗包含可编辑的 MPA/Worker 镜像输入框，使用鉴权配置返回的 `runtimeImage`/`workerImage` 初始化。留空沿用服务端来源，显式镜像仅作用于本次创建。提交后锁定输入，并保留原请求值以支持重试/恢复。POST 接受可选镜像引用（去除首尾空白，最多 1024 字符），拒绝 URL/凭据/查询片段/非法 SHA256 digest，绝不作为 shell 命令执行。配置接口仅返回本地可确定的默认镜像，纯参考配置可为空。CON-6/CON-8 任务存储新增 `images` JSON 列，旧记录为 `{}`。首次提交保存本地可确定的实际镜像，重试沿用该列并拒绝修改显式输入。任务响应包含该非秘密快照，固定 runner 将其应用于配置副本。显式 worker 镜像会在本次新任务中取消配置的已有 worker 选择。权限和其他资源设置仍由服务端管理。
+
+
+CON-10 — Worker 恢复/诊断：暂时性 Worker 操作最多尝试 4 次，间隔 1/2/4 秒，受默认 600 秒阶段预算和总任务期限限制。创建重试保持同一载荷/ClientToken；仅已登记的托管 Worker 可恢复已识别的不存在错误。永久/未知错误和归属冲突立即失败。只含安全枚举的诊断记录到日志和 `task_diagnostics`（每任务最新 100 条，跨重试保留），绝不持久化原始异常数据。任务 HTTP 字段和错误码不变。见[已批准设计](../../prd-spec/bugfixes/mpa-worker-retry/2026-09-20-worker-retry.zh.md)。
+
+CON-10 元数据可见性：区分初始化元数据缺失和显式冲突。具有持久化 ID/令牌/哈希的托管 Worker 仅在 Creating/Pending/Starting/Initializing/Provisioning 或无状态时可等待缺失 ID/项目/归属标签，最多 4 次不完整观测，等待 5/10/20 秒。Ready 缺失字段、已有值冲突、终态/未知状态以及无托管创建意图的 Worker 立即失败。固定字段诊断不包含值。见[可见性修复](../../prd-spec/bugfixes/mpa-worker-retry/2026-09-20-worker-metadata-visibility.zh.md)。

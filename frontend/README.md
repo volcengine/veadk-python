@@ -1450,3 +1450,9 @@ Skills show only the bound Skill Spaces, with pagination. Temporary mounting has
 The production entry loads both component token stylesheets before rendering. When the host does not set `data-theme` on `<html>`, Studio uses `light` to match its existing page; an explicit `light` or `dark` value is preserved. This keeps portalled dialogs, their text, inputs and buttons on the same palette. Component-preview defaults are unchanged.
 
 生产入口在渲染前加载两份组件主题样式。宿主未在 `<html>` 上设置 `data-theme` 时沿用浅色页面；显式浅色或深色设置保持不变，确保弹窗、文字、输入框和按钮配色一致。组件预览的默认主题不变。
+
+### MPA creation image inputs / MPA 创建镜像输入
+
+The MPA creation dialog pre-fills MPA and Worker image inputs from the server profile. Users with agent-management permission can edit either reference or leave it blank to use the configured default. Inputs lock on submission; retry and browser-session recovery preserve the original request and effective-image snapshot. URLs and credentials are rejected. These values affect only the requested creation, not the server YAML or existing agents. See [managed creation](../veadk/integrations/mpa/managed/README.md).
+
+MPA 创建弹窗默认填入服务端配置中的 MPA 和 Worker 镜像。有智能体管理权限的用户可以修改或留空使用默认值。提交后锁定输入，重试和浏览器会话恢复保留原请求及实际镜像快照。不接受网址或凭据。这些输入只影响本次创建，不修改服务端 YAML 或已有智能体。参见[托管创建说明](../veadk/integrations/mpa/managed/README.zh.md)。

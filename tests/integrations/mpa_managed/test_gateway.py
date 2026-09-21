@@ -43,9 +43,9 @@ class Cloud:
         self.created = 0
         self.im_created = 0
         self.im = False
-        self.create_error = None
+        self.create_error: Exception | None = None
         self.commit_before_error = False
-        self.status_error = None
+        self.status_error: Exception | None = None
 
     async def account_id(self):
         return self.account

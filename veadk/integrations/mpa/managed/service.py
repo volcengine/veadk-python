@@ -5,7 +5,7 @@ from __future__ import annotations
 import copy
 import re
 
-from .config import Profile
+from .config import ConfigurationError, Profile, Runtime
 from .database import AgentDatabaseProvisioner, AgentDeploymentRegistry, DeploymentError
 from .gateway import SharedAPIGService
 from .gateway_cloud import GatewayCloud
@@ -22,7 +22,7 @@ def fresh_template(profile, agent_id, account):
 
     values = profile.values
     params = MpaProvisionParams(
-        image=str(values["image"]),
+        image=profile.managed.runtime.image or str(values["image"]),
         pg_host=str(values["pg_host"]),
         pg_user=str(values["pg_user"]),
         pg_password=str(values["pg_password"]),
@@ -54,6 +54,31 @@ def fresh_template(profile, agent_id, account):
     }
 
 
+def apply_runtime_settings(template: dict, options: Runtime):
+    fields = {
+        "role_name": "RoleName",
+        "cpu_milli": "CpuMilli",
+        "memory_mb": "MemoryMb",
+        "min_instance": "MinInstance",
+        "max_instance": "MaxInstance",
+        "max_concurrency": "MaxConcurrency",
+        "apmplus_enable": "ApmplusEnable",
+        "project_name": "ProjectName",
+    }
+    for field, target in fields.items():
+        value = getattr(options, field)
+        if value is not None:
+            template[target] = value
+    if options.image:
+        template.update(ArtifactType="image", ArtifactUrl=options.image)
+    if options.env:
+        env = {**env_map(template), **options.env}
+        template["Envs"] = [{"Key": k, "Value": v} for k, v in env.items()]
+    minimum, maximum = template.get("MinInstance"), template.get("MaxInstance")
+    if minimum is not None and maximum is not None and minimum > maximum:
+        raise ConfigurationError("Minimum instances exceed maximum instances")
+
+
 async def provision(
     profile: Profile,
     *,
@@ -80,6 +105,7 @@ async def provision(
         template = copy.deepcopy(profile.template)
     else:
         template = fresh_template(profile, agent_id, account)
+    apply_runtime_settings(template, profile.managed.runtime)
     env = env_map(template)
     for key in (
         "AGENTKIT_RUNTIME_ID",

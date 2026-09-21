@@ -5,10 +5,10 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-import time
 import uuid
 
 from .database import DeploymentError, agent_suffix
+from .diagnostics import report, retry_worker
 
 
 class WorkerCloud:
@@ -71,8 +71,31 @@ class WorkerCloud:
 
 
 async def ensure_worker(
-    entry, cloud, options, *, account, region, agent_id, project="default", timeout=600
+    entry,
+    cloud,
+    options,
+    *,
+    account,
+    region,
+    agent_id,
+    project="default",
+    timeout: float = 600,
 ):
+    return await asyncio.wait_for(
+        _ensure_worker(
+            entry,
+            cloud,
+            options,
+            account=account,
+            region=region,
+            agent_id=agent_id,
+            project=project,
+        ),
+        timeout=timeout,
+    )
+
+
+async def _ensure_worker(entry, cloud, options, *, account, region, agent_id, project):
     record = await entry.read()
     suffix = agent_suffix(account, region, agent_id)
     owned = {"managed_by": "mpa-deployment", "mpa_agent_key": suffix}
@@ -86,7 +109,9 @@ async def ensure_worker(
     if not tool_id:
         env = {}
         if options.reference_id:
-            source = await cloud.get(options.reference_id)
+            source = await retry_worker(
+                "get_reference_worker", lambda: cloud.get(options.reference_id)
+            )
             excluded = {
                 "MPA_AGENT_ID",
                 "AGENTKIT_RUNTIME_ID",
@@ -130,7 +155,7 @@ async def ensure_worker(
             raise DeploymentError(
                 "Unfinished worker configuration changed; resume original inputs"
             )
-        matches = await cloud.find(request["Name"])
+        matches = await retry_worker("find_worker", lambda: cloud.find(request["Name"]))
         if matches:
             if len(matches) != 1 or not record.get("worker_token"):
                 raise DeploymentError(
@@ -141,8 +166,9 @@ async def ensure_worker(
             record.setdefault("worker_token", str(uuid.uuid4()))
             record.update(worker_hash=digest, worker_managed=True)
             await entry.save(record)
-            tool_id = await cloud.create(
-                {**request, "ClientToken": record["worker_token"]}
+            create_request = {**request, "ClientToken": record["worker_token"]}
+            tool_id = await retry_worker(
+                "create_worker", lambda: cloud.create(create_request)
             )
         if not tool_id:
             raise DeploymentError(
@@ -150,31 +176,95 @@ async def ensure_worker(
             )
         record.update(worker_id=tool_id, worker_managed=True)
         await entry.save(record)
-    deadline = time.monotonic() + timeout
+    incomplete_observations = 0
     while True:
-        tool = await cloud.get(tool_id)
-        tags = {t["Key"]: t.get("Value") for t in tool.get("Tags", [])}
-        env = {t["Key"]: t.get("Value") for t in tool.get("Envs", [])}
-        if (
-            tool.get("ToolId") != tool_id
-            or tool.get("ProjectName", "default") != project
-        ):
-            raise DeploymentError("Worker is missing or belongs to another project")
-        if record.get("worker_managed") and any(
-            tags.get(k) != v for k, v in owned.items()
-        ):
-            raise DeploymentError("Worker ownership does not match this agent")
-        if env.get("MPA_AGENT_ID") and env["MPA_AGENT_ID"] != agent_id:
-            raise DeploymentError("Worker is attached to another agent")
-        if tool.get("Status") == "Ready":
-            record.update(worker_id=tool_id)
-            await entry.save(record)
-            return tool_id
-        if (
-            tool.get("Status") in {"Failed", "Error", "Deleted", "Deleting"}
-            or time.monotonic() >= deadline
-        ):
+        tool = await retry_worker(
+            "get_worker",
+            lambda: cloud.get(tool_id),
+            retry_not_found=bool(
+                record.get("worker_managed")
+                and record.get("worker_token")
+                and record.get("worker_id")
+            ),
+        )
+        missing = _missing_worker_metadata(
+            tool,
+            tool_id=tool_id,
+            project=project,
+            owned=owned,
+            agent_id=agent_id,
+            managed=bool(record.get("worker_managed")),
+        )
+        status = tool.get("Status")
+        if status in {"Failed", "Error", "Deleted", "Deleting"}:
+            report("worker_state", "resource_failed")
             raise DeploymentError(
                 "Worker is not ready; inspect it and retry the same agent"
             )
+        if missing:
+            incomplete_observations += 1
+            retrying = (
+                incomplete_observations < 4
+                and status
+                in {
+                    None,
+                    "",
+                    "Creating",
+                    "Pending",
+                    "Starting",
+                    "Initializing",
+                    "Provisioning",
+                }
+                and bool(
+                    record.get("worker_managed")
+                    and record.get("worker_id")
+                    and record.get("worker_token")
+                    and record.get("worker_hash")
+                )
+            )
+            for operation in missing:
+                report(
+                    operation,
+                    "metadata_pending" if retrying else "metadata_missing",
+                    attempt=incomplete_observations,
+                    outcome="retrying" if retrying else "failed",
+                )
+            if not retrying:
+                raise DeploymentError("Worker ownership metadata is incomplete")
+            await asyncio.sleep(5 * 2 ** (incomplete_observations - 1))
+            continue
+        if status == "Ready":
+            record.update(worker_id=tool_id)
+            await entry.save(record)
+            return tool_id
         await asyncio.sleep(5)
+
+
+def _missing_worker_metadata(tool, *, tool_id, project, owned, agent_id, managed):
+    """Reject any present conflict before considering incomplete metadata."""
+    tags = {t["Key"]: t.get("Value") for t in tool.get("Tags") or []}
+    env = {t["Key"]: t.get("Value") for t in tool.get("Envs") or []}
+    checks = [
+        ("worker_id", tool.get("ToolId"), tool_id),
+        (
+            "worker_project",
+            tool.get("ProjectName", None if managed else "default"),
+            project,
+        ),
+    ]
+    if managed:
+        checks.extend(
+            [
+                ("worker_managed_by", tags.get("managed_by"), owned["managed_by"]),
+                ("worker_agent_key", tags.get("mpa_agent_key"), owned["mpa_agent_key"]),
+            ]
+        )
+    # The agent environment is optional for existing workers, but must never conflict.
+    for operation, value, expected in [
+        *checks,
+        ("worker_agent_binding", env.get("MPA_AGENT_ID"), agent_id),
+    ]:
+        if value not in (None, "") and value != expected:
+            report(operation, "ownership")
+            raise DeploymentError("Worker ownership does not match this agent")
+    return [operation for operation, value, _ in checks if value in (None, "")]

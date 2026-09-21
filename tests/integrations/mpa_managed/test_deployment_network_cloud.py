@@ -94,10 +94,13 @@ def test_sdk_requests_use_verified_rotating_credentials_and_region(monkeypatch):
     ],
 )
 def test_sdk_errors_do_not_expose_credentials_or_response_bodies(body, code):
+    class SDKError(RuntimeError):
+        def __init__(self, body: str):
+            super().__init__("private secret")
+            self.body = body
+
     def credentials():
-        error = RuntimeError("private secret")
-        error.body = body
-        raise error
+        raise SDKError(body)
 
     cloud = NetworkCloud(region="r", credentials=credentials)
     with pytest.raises(NetworkCloudError) as exc:

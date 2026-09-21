@@ -6,6 +6,7 @@ import asyncio
 from contextlib import contextmanager
 import hashlib
 import json
+import logging
 import os
 from pathlib import Path
 import re
@@ -13,6 +14,10 @@ import sqlite3
 import sys
 import time
 import uuid
+
+from .diagnostics import classify_error, validate_diagnostic
+
+logger = logging.getLogger(__name__)
 
 STAGES = {
     "queued",
@@ -37,8 +42,21 @@ class CreationTasks:
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.path = path
         with self.db() as db:
+            db.execute("BEGIN IMMEDIATE")
             db.execute(
                 "CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, owner TEXT NOT NULL, request TEXT NOT NULL, payload TEXT NOT NULL, state TEXT NOT NULL, stage TEXT NOT NULL, result TEXT NOT NULL DEFAULT '{}', error TEXT NOT NULL DEFAULT '', supervisor INTEGER NOT NULL, updated REAL NOT NULL, UNIQUE(owner,request))"
+            )
+            if "images" not in {
+                row[1] for row in db.execute("PRAGMA table_info(tasks)")
+            }:
+                db.execute(
+                    "ALTER TABLE tasks ADD COLUMN images TEXT NOT NULL DEFAULT '{}'"
+                )
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS task_diagnostics (id INTEGER PRIMARY KEY, task_id TEXT NOT NULL, stage TEXT NOT NULL, operation TEXT NOT NULL, category TEXT NOT NULL, attempt INTEGER NOT NULL, outcome TEXT NOT NULL, created REAL NOT NULL)"
+            )
+            db.execute(
+                "CREATE INDEX IF NOT EXISTS task_diagnostics_task ON task_diagnostics(task_id,id)"
             )
         os.chmod(path, 0o600)
         self.running: dict[str, asyncio.Task] = {}
@@ -66,6 +84,40 @@ class CreationTasks:
                 (*values.values(), task_id),
             )
 
+    def record_diagnostic(self, task_id, value):
+        diagnostic = validate_diagnostic(value)
+        if diagnostic is None:
+            return
+        with self.db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT stage FROM tasks WHERE id=?", (task_id,)
+            ).fetchone()
+            if row is None:
+                return
+            stage = row["stage"] if row["stage"] in STAGES else "queued"
+            created = time.time()
+            db.execute(
+                "INSERT INTO task_diagnostics (task_id,stage,operation,category,attempt,outcome,created) VALUES (?,?,?,?,?,?,?)",
+                (
+                    task_id,
+                    stage,
+                    diagnostic["operation"],
+                    diagnostic["category"],
+                    diagnostic["attempt"],
+                    diagnostic["outcome"],
+                    created,
+                ),
+            )
+            db.execute(
+                "DELETE FROM task_diagnostics WHERE task_id=? AND id NOT IN (SELECT id FROM task_diagnostics WHERE task_id=? ORDER BY id DESC LIMIT 100)",
+                (task_id, task_id),
+            )
+        logger.warning(
+            "MPA creation diagnostic: %s",
+            {"taskId": task_id, "stage": stage, "created": created, **diagnostic},
+        )
+
     def get(self, owner, task_id):
         with self.db() as db:
             row = db.execute(
@@ -78,6 +130,15 @@ class CreationTasks:
                 os.kill(row["supervisor"], 0)
             except ProcessLookupError:
                 self._update(task_id, state="failed", error="interrupted")
+                self.record_diagnostic(
+                    task_id,
+                    dict(
+                        operation="supervisor",
+                        category="interrupted",
+                        attempt=1,
+                        outcome="failed",
+                    ),
+                )
                 return self.get(owner, task_id)
         return {
             "taskId": task_id,
@@ -85,10 +146,11 @@ class CreationTasks:
             "stage": row["stage"],
             "result": json.loads(row["result"]),
             "error": row["error"],
+            "images": json.loads(row["images"]),
             **json.loads(row["payload"]),
         }
 
-    async def start(self, owner, payload, *, config_path, timeout):
+    async def start(self, owner, payload, *, config_path, timeout, images=None):
         encoded = json.dumps(payload, sort_keys=True)
         # Reconcile stopped supervisors before acquiring the write transaction.
         # get() may write interrupted status and must not nest a SQLite writer.
@@ -108,6 +170,7 @@ class CreationTasks:
                 raise TaskError("Request identity already has different inputs")
             if row and row["state"] in ACTIVE | {"succeeded"}:
                 return self.get(owner, row["id"])
+            selected_images = json.loads(row["images"]) if row else dict(images or {})
             count = db.execute(
                 "SELECT COUNT(*) FROM tasks WHERE state IN ('running','cancelling')"
             ).fetchone()[0]
@@ -119,7 +182,7 @@ class CreationTasks:
                 raise TaskError("Another creation is running; wait or cancel it")
             task_id = row["id"] if row else str(uuid.uuid4())
             db.execute(
-                "INSERT INTO tasks (id,owner,request,payload,state,stage,supervisor,updated) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET state='running', stage='queued', result='{}', error='', supervisor=excluded.supervisor, updated=excluded.updated",
+                "INSERT INTO tasks (id,owner,request,payload,state,stage,supervisor,updated,images) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET state='running', stage='queued', result='{}', error='', supervisor=excluded.supervisor, updated=excluded.updated",
                 (
                     task_id,
                     owner,
@@ -129,6 +192,7 @@ class CreationTasks:
                     "queued",
                     os.getpid(),
                     time.time(),
+                    json.dumps(selected_images),
                 ),
             )
         task = asyncio.create_task(
@@ -143,6 +207,7 @@ class CreationTasks:
         succeeded = None
         terminal = {"state": "failed", "error": "creationFailed"}
         spawn = None
+        failure_reported = False
         try:
             spawn = asyncio.create_task(
                 asyncio.create_subprocess_exec(
@@ -160,6 +225,7 @@ class CreationTasks:
                 "description": payload["description"],
                 "owner": owner,
                 "region": payload["region"],
+                "images": self.get(owner, task_id)["images"],
             }
             assert process.stdin is not None and process.stdout is not None
             process.stdin.write(json.dumps(data).encode())
@@ -180,7 +246,15 @@ class CreationTasks:
                 if not line.startswith(b"MPA_EVENT "):
                     continue
                 event = json.loads(line[10:])
-                if event.get("stage") in STAGES:
+                if not isinstance(event, dict):
+                    raise TaskError("Invalid event")
+                diagnostic = validate_diagnostic(event.get("diagnostic"))
+                if diagnostic is not None:
+                    self.record_diagnostic(task_id, diagnostic)
+                    failure_reported = (
+                        failure_reported or diagnostic["outcome"] == "failed"
+                    )
+                if isinstance(event.get("stage"), str) and event["stage"] in STAGES:
                     self._update(task_id, stage=event["stage"])
                 if event.get("result"):
                     result = event["result"]
@@ -208,6 +282,17 @@ class CreationTasks:
                 process.wait(), max(0.1, deadline - time.monotonic())
             )
             if code != 0 or not succeeded:
+                if not failure_reported:
+                    self.record_diagnostic(
+                        task_id,
+                        dict(
+                            operation="supervisor",
+                            category="child_exit",
+                            attempt=1,
+                            outcome="failed",
+                        ),
+                    )
+                    failure_reported = True
                 raise TaskError("Creation failed")
             terminal = {
                 "state": "succeeded",
@@ -216,10 +301,39 @@ class CreationTasks:
             }
         except asyncio.CancelledError:
             terminal = {"state": "cancelled", "error": "cancelled"}
+            self.record_diagnostic(
+                task_id,
+                dict(
+                    operation="supervisor",
+                    category="cancelled",
+                    attempt=1,
+                    outcome="cancelled",
+                ),
+            )
         except asyncio.TimeoutError:
             terminal = {"state": "failed", "error": "timeout"}
-        except Exception:
-            pass
+            self.record_diagnostic(
+                task_id,
+                dict(
+                    operation="supervisor",
+                    category="timeout",
+                    attempt=1,
+                    outcome="failed",
+                ),
+            )
+        except Exception as error:
+            if not failure_reported:
+                self.record_diagnostic(
+                    task_id,
+                    dict(
+                        operation="supervisor",
+                        category="protocol_error"
+                        if isinstance(error, (TaskError, ValueError))
+                        else classify_error(error),
+                        attempt=1,
+                        outcome="failed",
+                    ),
+                )
         finally:
 
             async def finish():

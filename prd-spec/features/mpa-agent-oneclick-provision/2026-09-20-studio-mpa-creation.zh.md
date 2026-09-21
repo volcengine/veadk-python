@@ -160,3 +160,37 @@
 任务与测试：先添加失败用例，覆盖新名称直接对应 ID、保留已有旧名称、旧版创建响应丢失后用完全相同的请求/token 恢复，以及拒绝旧请求输入变更；仅实现 Runtime 名称选择与请求哈希兼容。验收：命名/恢复用例与 managed/CLI 回归通过，变更文件 Ruff/Pyright 和空白检查通过。无需重新生成前端产物。风险：云端重名仍作为提供方错误返回，不会接管其他资源；旧版程序无法恢复新版的待完成请求哈希。状态：已批准，验证待执行。`review-spec` 技能不可用，以此处的边界、兼容和双语直接评审替代。
 
 FR-11 验证（2026-09-20，基于 `314d43c8` 的工作区）：**pass**，`uv run --extra dev pytest tests/integrations/mpa_managed tests/cli/test_cli_mpa.py -q` 为 176 passed。实施前，直接名称回归失败（1 failed、19 passed）；旧版兼容用例验证已有请求仍可恢复。变更 Runtime/测试文件的 Ruff 0.11.12 检查/格式、Runtime Pyright 和 `git diff --check` 通过。直接实现评审确认：兼容回退要求完整旧请求哈希匹配，且尚未登记 Runtime ID，不会忽略任意输入变化或替换现有 Runtime。双语 PRD、CON-3 与操作文档已同步。FR-11/T-7/AC-8 的新建命名与兼容部分已实现。浏览器/构建检查为 **not_applicable**（没有 UI 或产物变更）；未再次运行全量 Python 回归（**not_run**），该独立命名改动已由 managed/CLI 套件覆盖。未创建另一个智能体验证新名称（线上创建 **not_run**）；已有云实例改名为 **blocked**，因为受支持的更新契约没有 Name 参数。未修改已有资源，未提交或推送。
+
+### 后续调整：显式配置 MPA 镜像（2026-09-20）
+
+FR-12/T-8/AC-9，用户要求 MPA 镜像像 worker 镜像一样配置，已批准实施。背景：`managed.from-runtime` 继承 ArtifactType/ArtifactUrl、角色、CPU/内存、扩缩容/并发、APM/项目、VPC 和经过身份清理的环境变量，并非只有镜像。操作者需要在保留基础设施、模型和数据库配置时独立固定 MPA 镜像。
+
+方案：新增可选 `managed.runtime.image`，与 `managed.worker.image` 并列。显式提供的非空镜像覆盖 ArtifactUrl，并将 ArtifactType 设为 `image`，对参考 Runtime、JSON 模板、平铺配置三种来源均生效。省略/null 保持原有来源行为；本地校验拒绝空白、含空格/占位符的镜像及未知 runtime 配置项。平铺模式可用该字段替代原顶层 `image`，其他前置配置仍然必需。浏览器配置摘要不新增镜像值。模板复制及继承环境变量清理不变。未完成部署的请求哈希仍拒绝镜像变化；不会自动更新已有智能体。将已验证的当前 MPA 镜像写入本地 Git 忽略的 YAML，实际选用镜像和其他私有配置不变。确认没有活跃创建任务后才重新加载本地 Studio，不部署或分配云资源。
+
+直接设计评审：这是 CON-1 的增量配置契约，模板来源仍互斥，显式镜像不能替代必要的凭据、网络、数据库或模型设置。测试覆盖所有来源的覆盖优先级、省略兼容性、非法配置和平铺镜像前置条件，仅模拟云调用。运行 managed/CLI 测试、Ruff/Pyright 和本地配置 GET。同步双语组件/操作文档与占位符 YAML 示例。现有前端行为与产物不受影响。风险：指定镜像仍需兼容继承配置；未完成请求必须保留原实际镜像。review-spec 不可用，已直接完成双语、兼容和安全评审，无未解决的实施阻断。状态：已批准，验证待执行。
+
+FR-12 验证（2026-09-20，基于 `314d43c8` 的工作区，配置/服务/测试与双语文档/示例）：**pass**。实施前针对性测试 5 failed、20 passed；实施后 `uv run --extra dev pytest tests/integrations/mpa_managed tests/cli/test_cli_mpa.py -q` 为 188 passed。变更文件 Ruff 0.11.12 和 config/service Pyright 通过，已格式化；示例 Managed schema、双语文档评审和 `git diff --check` 通过。Git 忽略的私有 YAML 已通过 `managed.runtime.image` 固定先前验证的 MPA 镜像，并保留 0600 权限及其他配置。确认活跃创建任务为零后，保留内存中的原启动环境重启了本地 Studio。实际 GET `/web/mpa-creation/config?region=cn-beijing` 返回 HTTP 200、configured=true、source=reference。没有输出或新增持久化秘密。FR-12/T-8/AC-9 已实现。线上部署为 **not_run**（验证该配置变更无需新分配资源）；前端/构建/浏览器检查为 **not_applicable**（未修改前端代码或产物）；未再次运行全量 Python 和 pre-commit（**not_run**，已完成 managed/CLI 定向回归，用户未要求提交）。未变更云资源、提交或推送。
+
+### 后续调整：显式配置 Runtime 基础设施与环境（2026-09-20）
+
+FR-13/T-9/AC-10。用户要求列出实际继承的设置并将其配置化。只读检查确认所选来源使用 CPU 2000 milli、内存 4096 MiB、最少/最多实例 1/1、并发 100、开启 APM、项目 default、Runtime IAM 角色、公网/私网双网络，以及模型/PostgreSQL/应用环境设置。目标：让这些选择在 YAML 中明确可查，移除本地配置对 `from-runtime` 的依赖。既有 worker 参考配置属于独立范围，保持原样；不部署云资源或替换实例。
+
+方案：扩展可选 `managed.runtime`，增加 role-name、cpu-milli、memory-mb、min-instance、max-instance、max-concurrency、apmplus-enable、project-name 和 env。省略字段保持所选模板/默认值，显式值覆盖对应字段。资源变更前验证计算规格/并发为正、最少实例非负、最多实例为正，且合并后的 min<=max。既有 `managed.network.vpc-id/subnet-ids` 指定双网络，仍要求公网与私网连通。现有平铺 model/PG 字段显式设置模型地址/名称/提供方和数据库地址/端口/登录/SSL。`runtime.env` 提供显式应用环境覆盖，并在服务端解析完整 `${ENV_NAME}` 引用。值必须为字符串，键必须是合法环境变量标识。拒绝创建流程拥有的字段（智能体/Runtime/工具/技能标识、派生数据库名、Runtime 端点/鉴权/加密、共享注册库/管理员 URL、请求/遥测标识）；模型与数据库连接仍可配置。配置摘要和校验错误不返回环境变量值。
+
+迁移：将当前实际基础设施、模型/PG/应用设置固定到被 Git 忽略的本地 YAML，移除 `from-runtime`；秘密值放入现有 Git 忽略且权限为 0600 的 .env，YAML 仅引用变量。两个文件保持 0600，并保留私有回退副本。使用之前已授权的内存凭据读取云端值，仅输出非秘密摘要与等价校验结果。保存前比较新模板设置与旧参考配置，不改变所选镜像、网络、角色、凭据或资源标识。仅在没有活跃创建任务时重启本地 Studio 并验证配置接口。部署 AK/SK 始终只在内存中使用。
+
+直接评审：CON-1 增量覆盖字段，旧配置保持默认行为；继续执行 CON-3/CON-8 的生成标识和脱敏规则。未完成部署中修改来源模型仍会触发已有请求哈希冲突，重试必须保持原实际设置。先测试全部覆盖字段、优先级/省略、false 布尔值、最少实例为零、合并后扩缩容冲突、秘密引用解析/脱敏与保留键拒绝，再运行 managed/CLI 回归和 Ruff/Pyright。同步双语契约/操作文档/示例。前端 API 和产物不变，无需浏览器构建。风险：显式固定后不再跟随参考 Runtime 的后续修改，更新由操作者负责。用户请求授权本次配置工作，不包含提交、部署或新建智能体。review-spec 不可用，已完成直接评审。状态：已批准，验证待执行。
+
+FR-13 验证（2026-09-20，基于 `314d43c8` 的工作区，config/service/测试与双语文档/示例）：**pass**。实施前针对性回归 5 failed、40 passed；实施后 `uv run --extra dev pytest tests/integrations/mpa_managed tests/cli/test_cli_mpa.py -q` 为 208 passed。变更文件 Ruff 0.11.12、config/service Pyright、示例 schema 和 `git diff --check` 通过。Runtime 覆盖测试涵盖 false/零值、实际 min/max 约束、非法/创建流程保留环境键、秘密解析/脱敏及原来源兼容。本地配置迁移逐项验证镜像、全部基础设施字段、VPC 及有效环境值相同，仅排除创建阶段重新生成的流程专属字段。已移除 from-runtime，保留 worker 引用，将两个秘密值改为环境引用，并保留私有回退文件；YAML/.env 仍被 Git 忽略且权限为 0600。重启前确认活跃创建任务为零，原启动环境仅在内存保留；实际配置 GET 返回 HTTP 200 和 configured=true。没有云端写入、新建智能体、提交或推送。浏览器/构建为 **not_applicable**（无前端或产物变更）。未再次运行全量 Python 回归/pre-commit（**not_run**，managed/CLI 定向套件覆盖该增量配置变更，用户未要求提交）。显式配置下的完整线上创建为 **not_run**；等价比较与本地配置验证不能证明所有云配置组合。FR-13/T-9/AC-10 的配置与本地迁移已实现。
+
+### 后续调整：创建弹窗可编辑镜像（2026-09-20）
+
+FR-14/T-10/AC-11，用户明确批准：新增 MPA 镜像和 Worker 镜像文本输入框，默认填入当前配置，可手动覆盖；留空则使用服务端配置。复用现有弹窗输入和本地化帮助/错误文案，不接镜像仓库选择或列表。仍要求现有管理员权限。
+
+契约与设计评审：鉴权后的配置 GET 仅新增本地可确定的镜像引用（`runtimeImage`、`workerImage`），不返回环境变量/凭据。旧版仅引用 Runtime 的配置无法在本地确定镜像时，留空并保留原来源行为。POST 可选字段同名，去除首尾空白，限制 1024 字符，拒绝 URL/凭据/查询参数/片段及非法 digest。显式 Runtime 镜像覆盖所选来源；显式 Worker 镜像选择独立 worker，不再复用配置指定的已有 worker。留空保持默认值。SQLite 新增 `images` JSON 列，首次提交时保存本地可确定的实际镜像，独立于原请求标识，防止空字段重试时默认配置变化。旧记录填 `{}`，保留旧行为；迁移不调用云端或隐式接管资源。Runner 接收并应用持久化镜像快照。同一请求更改显式镜像构成冲突。不含秘密的任务响应返回实际镜像，提交后输入锁定，session storage 保留原请求，包含响应丢失情况。迟到配置响应不覆盖手动编辑、清空值或恢复的已提交输入。关闭/取消延续现有任务生命周期。
+
+任务：先补充失败的配置/接口/任务/runner 与前端回归；实现类型、校验、快照迁移/runner 传递和两个输入框；同步语言包、双语契约/操作文档与 frontend README；运行针对性及全量前端测试、managed/CLI 测试、变更 Python Ruff/Pyright、生产构建/产物/i18n 检查，并用隔离真实浏览器验证正常/空白/非法/加载/重试/恢复/取消/键盘/窄窗口。不在验证中创建云资源；镜像可访问性和 IAM 兼容性仍由用户发起部署时的云端检查确定。兼容旧配置、旧客户端和旧记录。frontend-design、ui-ux-pro-max 和 review-spec 仍不可用，遵循 frontend/SPEC.md 并直接评审。评审覆盖重复/丢失请求、结构迁移、固定重试、显式已有 worker 覆盖、错误和秘密边界。状态：已批准，验证待执行。
+
+FR-14 验证（2026-09-20，基于 `314d43c8` 的工作区，弹窗/客户端/语言包、创建接口/配置/任务/runner、测试/文档及重建前端产物）：**pass**。实施前 4 个新增后端用例与 3 个前端用例失败。最终 `uv run --extra dev pytest tests/integrations/mpa_managed tests/cli/test_cli_mpa.py -q` 为 221 passed，覆盖旧 SQLite 结构迁移、重试固定快照、worker 复用覆盖及实际 runner 配置应用。`npm --prefix frontend test`：1208 个 Node 测试、25 个 Vitest 测试通过。`npm --prefix frontend run build`、`test:webui-assets`（104 文件/248 引用）、`check:i18n`（2 种语言/21 命名空间）通过。变更 Python Ruff 0.11.12 检查/格式与 Pyright 通过。按仓库规则对本次源码/构建产物快照运行 Gitleaks，无发现，保留 vendor 排除规则。`git diff --check` 通过，双语文档与 API 标识已评审。
+
+真实浏览器使用实际弹窗和隔离模拟接口，验证通过：默认值、非法镜像提示/禁止提交、自定义 MPA 镜像与 worker 留空回退、多行中文输入、Tab/Enter、提交锁定、失败/重试、关闭后任务恢复、取消、加载时字段禁用，以及 390×844 深浅主题布局。缺失配置与 POST 响应丢失恢复由自动化测试覆盖；尝试的浏览器缺失配置场景结论不明确，不声称通过。原生操作系统 IME 候选交互为 **not_run**。已删除临时测试页、停止测试服务、关闭测试标签并重置视口。没有继续操作生产 Studio 登录页，没有新建账号/接受条款或实际云端创建。确认没有活跃创建任务后保留原启动环境重启 Studio，实际配置 GET 为 HTTP 200、configured=true，两个镜像默认值非空，未返回环境/凭据字段。没有改变已有云端智能体。未再次运行全量 Python 回归或 pre-commit（**not_run**，定向生命周期/接口/CLI 覆盖已通过，用户未要求提交）。未提交/推送。FR-14/T-10/AC-11 已实现；模拟部署不能证明镜像可拉取及云端权限。

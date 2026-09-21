@@ -15,6 +15,7 @@ import {
 } from "../../adk/mpaCreation";
 import "../../components/composites/ModalButton/ModalButton.css";
 import "./MpaCreateDialog.css";
+import { validCreationImage } from "../../adk/mpaCreationImages";
 
 function initial(region: string): {
   input: MpaCreationInput;
@@ -76,6 +77,9 @@ export function MpaCreateDialog({
   const created = useRef(onCreated);
   created.current = onCreated;
   const running = task?.state === "running" || task?.state === "cancelling";
+  const imagesValid =
+    validCreationImage(input.runtimeImage) &&
+    validCreationImage(input.workerImage);
   function persist(id?: string) {
     try {
       sessionStorage.setItem(
@@ -98,7 +102,21 @@ export function MpaCreateDialog({
     setLoading(true);
     void getMpaCreationConfig(region, controller.signal)
       .then((value) => {
-        if (!controller.signal.aborted) setConfig(value);
+        if (!controller.signal.aborted) {
+          setConfig(value);
+          if (
+            value.configured &&
+            !saved.submitted &&
+            !saved.taskId &&
+            !lock.current
+          ) {
+            setInput((previous) => ({
+              ...previous,
+              runtimeImage: previous.runtimeImage ?? value.runtimeImage ?? "",
+              workerImage: previous.workerImage ?? value.workerImage ?? "",
+            }));
+          }
+        }
       })
       .catch(() => {
         if (!controller.signal.aborted) setError(t(key("loadFailed")));
@@ -144,6 +162,7 @@ export function MpaCreateDialog({
     if (
       lock.current ||
       !config?.configured ||
+      !imagesValid ||
       running ||
       task?.state === "succeeded"
     )
@@ -245,6 +264,48 @@ export function MpaCreateDialog({
                     }
                   />
                 </label>
+                {(["runtimeImage", "workerImage"] as const).map((field) => (
+                  <label key={field}>
+                    {t(key(field))}
+                    <input
+                      name={field}
+                      value={
+                        submitted
+                          ? (task?.images?.[field] ?? input[field] ?? "")
+                          : (input[field] ?? "")
+                      }
+                      maxLength={1024}
+                      placeholder={t(key("imageDefault"))}
+                      disabled={
+                        loading || busy || submitted || !config?.configured
+                      }
+                      autoComplete="off"
+                      spellCheck={false}
+                      aria-invalid={!validCreationImage(input[field])}
+                      aria-describedby={`mpa-${field}-help`}
+                      onChange={(event) =>
+                        setInput((previous) => ({
+                          ...previous,
+                          [field]: event.target.value,
+                        }))
+                      }
+                    />
+                    <p
+                      id={`mpa-${field}-help`}
+                      role={
+                        !validCreationImage(input[field]) ? "alert" : undefined
+                      }
+                    >
+                      {t(
+                        key(
+                          validCreationImage(input[field])
+                            ? "imageDefault"
+                            : "imageInvalid",
+                        ),
+                      )}
+                    </p>
+                  </label>
+                ))}
                 <section
                   className="mpa-create-plan"
                   aria-label={t(key("plan"))}
@@ -275,11 +336,13 @@ export function MpaCreateDialog({
                 {task && (
                   <section aria-live="polite">
                     <strong>{t(key(`states.${task.state}`))}</strong>
-                    {task.state !== "succeeded" && <p>
-                      {t(key(`stages.${task.stage}`), {
-                        defaultValue: task.stage,
-                      })}
-                    </p>}
+                    {task.state !== "succeeded" && (
+                      <p>
+                        {t(key(`stages.${task.stage}`), {
+                          defaultValue: task.stage,
+                        })}
+                      </p>
+                    )}
                     {task.state === "failed" || task.state === "cancelled" ? (
                       <p>{t(key(task.error || "creationFailed"))}</p>
                     ) : null}
@@ -334,6 +397,7 @@ export function MpaCreateDialog({
                         disabled={
                           loading ||
                           !config?.configured ||
+                          !imagesValid ||
                           !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(input.agentId)
                         }
                         onClick={() => void submit()}
