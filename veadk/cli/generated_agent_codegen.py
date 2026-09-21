@@ -1625,6 +1625,12 @@ class CreateAgentToolset(_BaseCreateAgentToolset):
 
     _MAX_COMPLETED_CREATIONS = 128
 
+    def __deepcopy__(self, memo: dict[int, Any]) -> CreateAgentToolset:
+        # Pinned runtimes before #1113 deep-copy LlmRequest for 429 retries, and
+        # tools_dict reaches this toolset, its bootstrap agents, tracers and locks.
+        memo[id(self)] = self
+        return self
+
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         kwargs.setdefault("resource_store", _ReusableResourceStore())
         super().__init__(*args, **kwargs)
