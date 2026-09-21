@@ -7380,6 +7380,13 @@ def test_sidecar_update_resolves_or_explicitly_reuses_stored_mcp_credentials(
     from agentkit.sdk.runtime.client import AgentkitRuntimeClient
     from veadk.extensions.harness import sidecar
 
+    # Credential reuse must not depend on background recovery finishing within
+    # two seconds on busy CI workers; separate tests cover pending latency
+    monkeypatch.setattr(
+        "veadk.cli.cli_frontend._RUNTIME_UPDATE_CAPABILITY_INITIAL_WAIT_SECONDS",
+        30.0,
+    )
+
     agent_name = "stored_mcp_agent"
     unnamed = mode == "changed-unnamed-explicit-reuse"
     published_tool_name = "" if unnamed else "orders"
