@@ -32,12 +32,10 @@ from frontend.server.video.client import (
     ArkTokenCache,
     ArkTokenProvider,
 )
+from .client import PROVIDER_CONFIGS, ModelApiKeyClient, ModelCatalogClient
 from .errors import model_catalog_error_response
-from .client import PROVIDER_CONFIGS
 from .protocol import (
     CredentialResolver,
-    ModelApiKeyClient,
-    ModelCatalogClient,
     ModelCatalogError,
     Provider,
     SignedRequest,

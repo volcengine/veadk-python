@@ -12,10 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Initialize the two default Runtime evaluation collections in TOS"""
+"""Studio-owned evaluation storage and management"""
 
-from frontend.server.evaluation.repository import TosEvaluationRepository
+from .repository import EvaluationStorage
 
-
-async def ensure_feedback_sets(repository: TosEvaluationRepository) -> list[str]:
-    return [item.name for item in await repository.ensure_defaults()]
+__all__ = ["EvaluationStorage"]
