@@ -1420,6 +1420,7 @@ DatePicker 在基础组件中展示日期与日期时间选择；IndexLayout 在
 飞书群聊权限列表不再提供“编辑”；每行右侧的 × 按钮用于移除该群权限。
 
 配置方式不跨页面或 Runtime 保存。切换方式会清空未提交凭据、隐藏二维码并停止前端轮询或企微授权等待；注册提交进行中禁止切换。已绑定机器人也可以通过手动配置替换，失败保留现有绑定。飞书与钉钉手动配置须由 Runtime 的 `credentialBindingChannels` 声明支持；旧镜像显示升级提示。
+
 ### MPA Runtime scheduled tasks
 
 Select a connected cloud Runtime and open the Runtime scheduled tasks tab. The list/calendar supports search, status filtering, pagination, creation, editing, copying, deletion, enable/disable, manual execution, and execution history. Studio retains gateway authentication and Runtime authorization, forwards the authenticated Studio user as `x-user-id`, and does not require JWT input or TOP credential exchange. With MPA JWT disabled, task ownership remains scoped to that user. The Runtime resolves the default executing Agent; no Agent ID input is required. Errors are not rendered as empty results. Complex Cron expressions show the server's next execution in the calendar.

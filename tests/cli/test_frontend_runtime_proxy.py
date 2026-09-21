@@ -3443,7 +3443,9 @@ def test_runtime_proxy_bridges_a2a_only_runtime_for_studio_chat(
             "skillSpacesStatus": "ready",
         }
 
-    monkeypatch.setattr("frontend.server.mpa_agent_info.load_mpa_agent_info", fake_mpa_info)
+    monkeypatch.setattr(
+        "frontend.server.mpa_agent_info.load_mpa_agent_info", fake_mpa_info
+    )
 
     class _ActivatedCatalog:
         async def list_options(self):
@@ -3477,7 +3479,9 @@ def test_runtime_proxy_bridges_a2a_only_runtime_for_studio_chat(
                     key_auth=SimpleNamespace(api_key="runtime-api-key"),
                     custom_jwt_authorizer=None,
                 ),
-                tags=[SimpleNamespace(key="veadk:agent-type", value="mpa")] if mpa else [],
+                tags=[SimpleNamespace(key="veadk:agent-type", value="mpa")]
+                if mpa
+                else [],
             )
 
     monkeypatch.setattr(

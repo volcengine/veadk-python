@@ -194,3 +194,23 @@ FR-14/T-10/AC-11，用户明确批准：新增 MPA 镜像和 Worker 镜像文本
 FR-14 验证（2026-09-20，基于 `314d43c8` 的工作区，弹窗/客户端/语言包、创建接口/配置/任务/runner、测试/文档及重建前端产物）：**pass**。实施前 4 个新增后端用例与 3 个前端用例失败。最终 `uv run --extra dev pytest tests/integrations/mpa_managed tests/cli/test_cli_mpa.py -q` 为 221 passed，覆盖旧 SQLite 结构迁移、重试固定快照、worker 复用覆盖及实际 runner 配置应用。`npm --prefix frontend test`：1208 个 Node 测试、25 个 Vitest 测试通过。`npm --prefix frontend run build`、`test:webui-assets`（104 文件/248 引用）、`check:i18n`（2 种语言/21 命名空间）通过。变更 Python Ruff 0.11.12 检查/格式与 Pyright 通过。按仓库规则对本次源码/构建产物快照运行 Gitleaks，无发现，保留 vendor 排除规则。`git diff --check` 通过，双语文档与 API 标识已评审。
 
 真实浏览器使用实际弹窗和隔离模拟接口，验证通过：默认值、非法镜像提示/禁止提交、自定义 MPA 镜像与 worker 留空回退、多行中文输入、Tab/Enter、提交锁定、失败/重试、关闭后任务恢复、取消、加载时字段禁用，以及 390×844 深浅主题布局。缺失配置与 POST 响应丢失恢复由自动化测试覆盖；尝试的浏览器缺失配置场景结论不明确，不声称通过。原生操作系统 IME 候选交互为 **not_run**。已删除临时测试页、停止测试服务、关闭测试标签并重置视口。没有继续操作生产 Studio 登录页，没有新建账号/接受条款或实际云端创建。确认没有活跃创建任务后保留原启动环境重启 Studio，实际配置 GET 为 HTTP 200、configured=true，两个镜像默认值非空，未返回环境/凭据字段。没有改变已有云端智能体。未再次运行全量 Python 回归或 pre-commit（**not_run**，定向生命周期/接口/CLI 覆盖已通过，用户未要求提交）。未提交/推送。FR-14/T-10/AC-11 已实现；模拟部署不能证明镜像可拉取及云端权限。
+
+
+### 集成验证：变基到 main（2026-09-21）
+
+范围与授权：用户要求解决 PR #5 的合并冲突。将 `feat/from-main` 变基到 `origin/main` 的 `f55e8918`，审查合并后的 `703859c7` 及集成差异。保留 main 的定时任务、A2A、沙箱下载、JWT 和 tracing 文档，以及本分支的 MPA 信息侧栏和托管创建文档。从合并后的源码重新构建全部打包 WebUI 产物。冲突解决不引入新行为或组件契约，现有双语契约继续生效。原有两份本地类型验证文档修改已单独保存，待集成提交后恢复。
+
+干净安装最初因合并后的锁文件缺少可选依赖记录而失败。使用 npm 重新生成 `frontend/package-lock.json`，未改变任何已有依赖版本，随后 `npm --prefix frontend ci --no-audit --no-fund` 通过。本机 Node 26 的实验性 Web Storage 导致沙箱下载测试的四个清理步骤失败；使用 `NODE_OPTIONS=--no-experimental-webstorage` 运行相同套件后通过，未修改应用或测试行为。首次 pre-commit 仅格式化了合并后 Runtime 代理测试的两处表达式，Ruff 检查和敏感信息扫描通过。最终 pre-commit 与格式化文件回归结果补充在下方。
+
+2026-09-21 验证结果：
+
+- **pass** — `uv run --extra dev pytest tests/integrations/mpa_managed tests/integrations/test_mpa_provision_env.py tests/integrations/test_mpa_runtime.py tests/cli/test_cli_mpa.py tests/frontend/server/test_mpa_cron.py tests/cli/test_frontend_runtime_proxy.py tests/cli/test_frontend_apmplus_trace.py tests/cli/test_studio_trace_pagination.py -q`：398 项通过。
+- **pass** — `MODEL_AGENT_API_KEY=test-only MODEL_EMBEDDING_API_KEY=test-only uv run --extra dev --with anthropic --with 'llama-index-embeddings-openai-like>=0.2.2' --with 'llama-index-llms-openai-like>=0.5.1' pytest -n 2 -m 'not codex_smoke and not piagent_smoke'`：4,850 项通过、7 项跳过、2 项预期失败。使用两个 worker 控制本地资源占用。跳过项、预期失败项以及真实运行时 smoke 不由此证明。
+- **pass** — `npm --prefix frontend test`：1,215 项 Node 测试和 25 项 Vitest 测试；`npm --prefix frontend run test:mpa-cron-coverage`：71 项测试及配置的覆盖率门禁；`NODE_OPTIONS=--no-experimental-webstorage npm --prefix frontend run test:sandbox-download-coverage`：26 项测试及配置的覆盖率门禁。
+- **pass** — `npm --prefix frontend run build`、`npm --prefix frontend run test:webui-assets`（104 个文件、248 处引用）和 `npm --prefix frontend run check:i18n`（2 种语言、21 个命名空间）。保留现有的大体积 chunk 构建警告。
+- **pass** — 使用真实组件和模拟 API 的隔离浏览器 smoke：定时任务未选 Runtime 状态；创建镜像默认值、无效镜像提示与禁用提交、自定义 MPA 镜像与空 Worker 镜像、多行中文描述、提交后字段锁定、模拟失败及重试成功。临时测试入口、服务和标签页已删除或关闭，未修改云资源或生产用户状态。
+- **not_run** — 再次完整浏览器矩阵、原生 IME 和真实云端/运行时 smoke：本次集成保留现有行为，前文保留功能级浏览器证据，自动回归与合并源码的定向浏览器 smoke 覆盖冲突解决范围。真实镜像访问及 IAM 组合仍不在本次验证范围内。
+
+直接审查未发现残留冲突标记或遗漏文档章节。最终集成提交仅包含重建产物、锁文件规范化、合并后测试的格式化及本双语验证记录。本次不合入或发布 main，而是更新 PR 分支以继续正常审查与 CI。
+
+最终检查：**pass**，`uv run --extra dev pre-commit run --all-files`（Ruff 检查、Ruff 格式、Gitleaks）；**pass**，格式化后 `uv run --extra dev pytest tests/cli/test_frontend_runtime_proxy.py -q`（80 项通过）；**pass**，源码/文档 `git diff --cached --check -- . ':!veadk/webui'`。未过滤的差异空白检查为 **fail**，仅涉及生成 bundle 中七行变更行的第三方字符串空白。集成 bundle 重建前后均有 36 行尾部空白，因此保留生成字符串内容，未手工改写。最后一次获取远端确认 base 和原 PR 分支没有新提交。索引中无未解决冲突项。本次集成同时修正文档章节间距。
