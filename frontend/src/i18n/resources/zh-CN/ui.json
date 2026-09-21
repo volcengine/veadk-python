@@ -1471,6 +1471,10 @@
     },
     "wakingHint": "正在唤醒智能体，可能需要一些时间。",
     "mpaCreate": {
+      "runtimeImage": "MPA 镜像",
+      "workerImage": "Worker 镜像",
+      "imageDefault": "留空使用配置文件中的默认镜像",
+      "imageInvalid": "请输入有效的镜像地址，不要包含网址、空格或登录凭据。",
       "title": "创建 MPA 智能体",
       "agentId": "智能体 ID",
       "description": "描述",

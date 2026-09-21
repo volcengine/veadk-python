@@ -9,7 +9,11 @@ from veadk.integrations.mpa.managed.database import DeploymentError
 from tests.integrations.mpa_managed.test_agent_deployment import Registry
 
 
-def test_lost_worker_response_reuses_token_and_scoped_identity():
+def test_lost_worker_response_reuses_token_and_scoped_identity(monkeypatch):
+    from veadk.integrations.mpa.managed import diagnostics
+
+    monkeypatch.setattr(diagnostics.asyncio, "sleep", AsyncMock())
+
     async def run():
         registry = Registry()
         cloud = AsyncMock()
@@ -26,9 +30,8 @@ def test_lost_worker_response_reuses_token_and_scoped_identity():
                 registry, cloud, options, account="a", region="r", agent_id="agent"
             )
         assert [c.args[0]["ClientToken"] for c in cloud.create.call_args_list] == [
-            token,
-            token,
-        ]
+            token
+        ] * 8
         assert "Envs" not in str(registry.row)
 
     asyncio.run(run())

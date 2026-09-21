@@ -50,7 +50,14 @@ def _available(subnet):
 
 class AccountNetworkProvisioner:
     def __init__(
-        self, *, cloud, account, region, options=None, timeout=300, interval=3
+        self,
+        *,
+        cloud,
+        account,
+        region,
+        options=None,
+        timeout: float = 300,
+        interval: float = 3,
     ):
         self.cloud, self.account, self.region = cloud, account, region
         self.options = options or NetworkOptions()

@@ -8,12 +8,15 @@ export interface MpaCreationInput {
   agentId: string;
   description: string;
   region: string;
+  runtimeImage?: string;
+  workerImage?: string;
 }
 export interface MpaCreationTask extends MpaCreationInput {
   taskId: string;
   state: "running" | "cancelling" | "succeeded" | "failed" | "cancelled";
   stage: string;
   error?: string;
+  images?: { runtimeImage?: string; workerImage?: string };
   result?: {
     runtime_id?: string;
     skill_space_id?: string;
@@ -24,6 +27,8 @@ export interface MpaCreationConfig {
   configured: boolean;
   region: string;
   error?: string;
+  runtimeImage?: string;
+  workerImage?: string;
 }
 async function request<T>(
   path: string,

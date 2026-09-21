@@ -3,6 +3,7 @@
 import asyncio
 import copy
 import re
+from unittest.mock import AsyncMock
 from contextlib import asynccontextmanager
 
 import pytest
@@ -48,6 +49,7 @@ class Registry:
         self.row = {}
         self.mutex = asyncio.Lock()
         self.network = NetworkEntry()
+        self.shared = object()
 
     def network_entry(self):
         return self.network
@@ -56,7 +58,7 @@ class Registry:
         pass
 
     @asynccontextmanager
-    async def lock(self, *args):
+    async def lock(self, account, region, agent_id):
         async with self.mutex:
             yield self
 
@@ -74,6 +76,8 @@ class Databases:
     def __init__(self):
         self.key = ""
         self.seeded = []
+        self.check = AsyncMock()
+        self.close = AsyncMock()
 
     async def ensure(self, entry, *, account, region, agent_id):
         row = await entry.read()
@@ -131,7 +135,7 @@ class Cloud:
     async def account_id(self):
         return "account"
 
-    async def create(self, request):
+    async def create(self, request) -> str:
         self.creates.append(copy.deepcopy(request))
         self.runtimes.setdefault(
             "r-agent",
@@ -166,7 +170,7 @@ class Cloud:
         self.updates.append(request)
         self.runtimes[request["RuntimeId"]].update(request)
 
-    async def is_ready(self, runtime):
+    async def is_ready(self, runtime) -> bool:
         assert not self.registry.mutex.locked(), (
             "APIG startup must be able to acquire account lock"
         )
@@ -416,7 +420,7 @@ def test_agent_spaces_are_independent():
         svc, registry, cloud, _ = deployer()
         await svc.deploy(template())
         other = Registry()
-        async with other.lock() as entry:
+        async with other.lock("account", "cn-beijing", "agent-two") as entry:
             second_id = await ensure_skill_space(
                 entry,
                 cloud,
@@ -514,7 +518,7 @@ def test_concurrent_agents_share_one_network_and_have_distinct_runtimes():
                 yield entry
 
     class MultiCloud(Cloud):
-        async def create(self, request):
+        async def create(self, request) -> str:
             rid = "r-" + env_map(request)["MPA_AGENT_ID"]
             self.creates.append(copy.deepcopy(request))
             self.runtimes[rid] = {

@@ -1471,6 +1471,10 @@
     },
     "wakingHint": "Waking the agent. This may take some time.",
     "mpaCreate": {
+      "runtimeImage": "MPA image",
+      "workerImage": "Worker image",
+      "imageDefault": "Leave blank to use the configured image",
+      "imageInvalid": "Enter a valid container image reference without URLs, spaces or credentials.",
       "title": "Create MPA agent",
       "agentId": "Agent ID",
       "description": "Description",

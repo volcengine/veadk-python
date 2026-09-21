@@ -279,8 +279,8 @@ class AgentRuntimeDeployer:
         cloud,
         region,
         shared_database_url,
-        timeout=900,
-        interval=5,
+        timeout: float = 900,
+        interval: float = 5,
         progress=None,
         network_options=None,
     ):

@@ -5,12 +5,19 @@ from __future__ import annotations
 import json
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 from sqlalchemy.engine import make_url
 
 from .network import NetworkOptions
@@ -18,6 +25,20 @@ from .network import NetworkOptions
 
 class ConfigurationError(ValueError):
     """A safe configuration error without user input or secret values."""
+
+
+def validate_image_reference(value: str) -> str:
+    value = value.strip()
+    if not value:
+        return ""
+    if (
+        len(value) > 1024
+        or not re.fullmatch(r"[A-Za-z0-9._:/@-]+", value)
+        or "//" in value
+        or ("@" in value and not re.fullmatch(r"[^@]+@sha256:[a-fA-F0-9]{64}", value))
+    ):
+        raise ValueError("Invalid container image reference")
+    return value
 
 
 class Options(BaseModel):
@@ -53,6 +74,54 @@ class Apig(Options):
     adopt_id: str = ""
 
 
+class Runtime(Options):
+    image: str | None = Field(default=None, min_length=1, pattern=r"^[^\s<>]+$")
+    role_name: str | None = Field(default=None, min_length=1)
+    cpu_milli: int | None = Field(default=None, gt=0)
+    memory_mb: int | None = Field(default=None, gt=0)
+    min_instance: int | None = Field(default=None, ge=0)
+    max_instance: int | None = Field(default=None, gt=0)
+    max_concurrency: int | None = Field(default=None, gt=0)
+    apmplus_enable: bool | None = None
+    project_name: str | None = Field(default=None, min_length=1)
+    env: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("env")
+    @classmethod
+    def validate_environment(cls, value):
+        reserved = {
+            "MPA_AGENT_ID",
+            "AGENTKIT_RUNTIME_ID",
+            "AGENTKIT_TOOL_ID",
+            "AGENTKIT_TOOL_REGION",
+            "SKILL_SPACE_ID",
+            "PGDATABASE",
+            "A2A_PUBLIC_URL",
+            "CODEX_MCP_RUNTIME_API_KEY",
+            "CHANNEL_STATE_ENCRYPTION_KEY",
+            "DEPLOYMENT_DATABASE_ADMIN_URL",
+            "SHARED_APIG_DATABASE_URL",
+            "MODEL_AGENT_CLIENT_REQ_ID",
+            "OTEL_SERVICE_NAME",
+        }
+        if any(
+            not re.fullmatch(r"[A-Z_][A-Z0-9_]*", key) or key in reserved
+            for key in value
+        ):
+            raise ValueError("Invalid or provisioner-owned environment key")
+        return value
+
+    @model_validator(mode="after")
+    def validate_scaling(self):
+        if (
+            self.min_instance is not None
+            and self.max_instance is not None
+            and self.min_instance > self.max_instance
+        ):
+            raise ValueError("Minimum instances exceed maximum instances")
+        return self
+
+
 class Managed(Options):
     version: Literal[1]
     database_admin_url_env: str = "DEPLOYMENT_DATABASE_ADMIN_URL"
@@ -62,6 +131,7 @@ class Managed(Options):
     template_file: str = ""
     network: Network = Field(default_factory=Network)
     apig: Apig = Field(default_factory=Apig)
+    runtime: Runtime = Field(default_factory=Runtime)
     worker: Worker
     timeout_seconds: int = Field(default=1800, ge=60, le=7200)
 
@@ -81,8 +151,25 @@ class Profile:
     admin_url: str
     shared_url: str
 
+    def image_defaults(self):
+        runtime_image = self.managed.runtime.image or (
+            (self.template or {}).get("ArtifactUrl", "")
+            if self.template or self.managed.from_runtime
+            else self.values.get("image", "")
+        )
+        try:
+            return {
+                "runtimeImage": validate_image_reference(runtime_image),
+                "workerImage": validate_image_reference(self.managed.worker.image),
+            }
+        except (ValueError, AttributeError):
+            raise ConfigurationError(
+                "Invalid configured container image reference"
+            ) from None
+
     def summary(self):
         return {
+            **self.image_defaults(),
             "region": self.region,
             "configured": True,
             "source": "reference" if self.managed.from_runtime else "template",
@@ -97,6 +184,18 @@ class Profile:
             "checks": ["configuration"],
             "requiresLiveChecks": True,
         }
+
+
+def with_creation_images(profile: Profile, images: dict[str, str]) -> Profile:
+    managed = profile.managed.model_copy(deep=True)
+    runtime_image = validate_image_reference(images.get("runtimeImage", ""))
+    worker_image = validate_image_reference(images.get("workerImage", ""))
+    if runtime_image:
+        managed.runtime.image = runtime_image
+    if worker_image:
+        managed.worker.image = worker_image
+        managed.worker.existing_id = ""
+    return replace(profile, managed=managed)
 
 
 def _secret(name: str) -> str:
@@ -158,7 +257,14 @@ def load_profile(path: str | Path, *, region: str = "") -> Profile:
             raise ConfigurationError(
                 "Configure the managed section in VEADK_MPA_CREATE_CONFIG"
             )
-        managed = Managed.model_validate(values["managed"])
+        managed_values = dict(values["managed"])
+        if isinstance(managed_values.get("runtime"), dict):
+            managed_values["runtime"] = dict(managed_values["runtime"])
+            if "env" in managed_values["runtime"]:
+                managed_values["runtime"]["env"] = _resolve(
+                    managed_values["runtime"]["env"]
+                )
+        managed = Managed.model_validate(managed_values)
         selected = str(values.get("region", "cn-beijing"))
         if not re.fullmatch(r"cn-[a-z]+", selected) or region and selected != region:
             raise ConfigurationError("No managed configuration for the selected region")
@@ -212,6 +318,8 @@ def load_profile(path: str | Path, *, region: str = "") -> Profile:
                 "model_api_key",
                 "model_name",
             ):
+                if key == "image" and managed.runtime.image:
+                    continue
                 if not values.get(key) or str(values[key]).startswith("<"):
                     raise ConfigurationError(f"Missing configured field: {key}")
         return Profile(selected, managed, values, template, admin, shared)

@@ -3,7 +3,7 @@
 import asyncio
 import copy
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import httpx
 import pytest
@@ -37,14 +37,14 @@ def test_cloud_sdk_credentials_are_checked_on_every_call(monkeypatch):
     monkeypatch.setattr(
         sts, "get_caller_identity", lambda *a, **kw: {"AccountId": next(accounts)}
     )
-    monkeypatch.setattr(
-        runtime_sdk, "AgentkitRuntimeClient", lambda **kw: ("runtime", kw)
-    )
-    monkeypatch.setattr(skill_sdk, "AgentkitSkillsClient", lambda **kw: ("skills", kw))
+    runtime_factory = Mock(return_value=Mock(spec=runtime_sdk.AgentkitRuntimeClient))
+    skill_factory = Mock(return_value=Mock(spec=skill_sdk.AgentkitSkillsClient))
+    monkeypatch.setattr(runtime_sdk, "AgentkitRuntimeClient", runtime_factory)
+    monkeypatch.setattr(skill_sdk, "AgentkitSkillsClient", skill_factory)
     cloud = mod.RuntimeCloud(region="cn-beijing", credential_file="iam")
     assert asyncio.run(cloud.account_id()) == "a"
-    kind, kw = cloud._client(skills=True)
-    assert kind == "skills" and kw["session_token"] == "token"
+    assert cloud._client(skills=True) is skill_factory.return_value
+    assert skill_factory.call_args.kwargs["session_token"] == "token"
     with pytest.raises(DeploymentError, match="accounts"):
         cloud._client()
 

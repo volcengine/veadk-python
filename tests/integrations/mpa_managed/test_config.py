@@ -133,3 +133,110 @@ def test_invalid_template_json_does_not_echo_input(tmp_path, monkeypatch):
         load_profile(path)
     assert "Invalid Runtime template JSON" in str(error.value)
     assert "never-echo-this" not in str(error.value)
+
+
+def test_explicit_runtime_image_is_optional_and_not_exposed(tmp_path, monkeypatch):
+    profile = load_profile(profile_file(tmp_path, monkeypatch))
+    assert profile.managed.runtime.image is None
+    profile = load_profile(
+        profile_file(
+            tmp_path, monkeypatch, runtime={"image": "registry.example/mpa:v1"}
+        )
+    )
+    assert profile.managed.runtime.image == "registry.example/mpa:v1"
+    assert profile.summary()["runtimeImage"] == "registry.example/mpa:v1"
+
+
+@pytest.mark.parametrize(
+    "runtime",
+    [
+        {"image": ""},
+        {"image": " "},
+        {"image": "bad image"},
+        {"image": "repo/<tag>"},
+        {"unknown": "value"},
+    ],
+)
+def test_invalid_runtime_image_settings_fail_locally(tmp_path, monkeypatch, runtime):
+    with pytest.raises(ConfigurationError):
+        load_profile(profile_file(tmp_path, monkeypatch, runtime=runtime))
+
+
+def test_flat_mode_accepts_explicit_runtime_image_and_still_requires_other_fields(
+    tmp_path, monkeypatch
+):
+    path = profile_file(
+        tmp_path,
+        monkeypatch,
+        **{"from-runtime": "", "runtime": {"image": "registry.example/mpa:v1"}},
+    )
+    data = yaml.safe_load(path.read_text())
+    data.update(
+        {
+            "pg-host": "pg.example",
+            "pg-user": "app",
+            "pg-password": "fake",
+            "model-provider": "openai",
+            "model-api-base": "https://model.example",
+            "model-api-key": "fake",
+            "model-name": "model",
+        }
+    )
+    path.write_text(yaml.safe_dump(data))
+    profile = load_profile(path)
+    assert "image" not in profile.values
+    assert profile.managed.runtime.image == "registry.example/mpa:v1"
+    del data["pg-host"]
+    path.write_text(yaml.safe_dump(data))
+    with pytest.raises(ConfigurationError, match="pg_host"):
+        load_profile(path)
+
+
+def test_runtime_environment_resolves_secret_refs_without_exposing_values(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("TEST_RUNTIME_SECRET", "private-test-value")
+    profile = load_profile(
+        profile_file(
+            tmp_path,
+            monkeypatch,
+            runtime={"env": {"MODEL_AGENT_API_KEY": "${TEST_RUNTIME_SECRET}"}},
+        )
+    )
+    assert profile.managed.runtime.env["MODEL_AGENT_API_KEY"] == "private-test-value"
+    assert "private-test-value" not in str(profile.summary())
+    monkeypatch.delenv("TEST_RUNTIME_SECRET")
+    with pytest.raises(ConfigurationError, match="TEST_RUNTIME_SECRET"):
+        load_profile(
+            profile_file(
+                tmp_path,
+                monkeypatch,
+                runtime={"env": {"MODEL_AGENT_API_KEY": "${TEST_RUNTIME_SECRET}"}},
+            )
+        )
+
+
+@pytest.mark.parametrize(
+    "settings",
+    [
+        {"cpu-milli": 0},
+        {"memory-mb": -1},
+        {"min-instance": -1},
+        {"max-instance": 0},
+        {"max-concurrency": 0},
+        {"min-instance": 3, "max-instance": 2},
+        {"env": {"NOT A KEY": "private-test-value"}},
+        {"env": {"PGDATABASE": "private-test-value"}},
+        {"env": {"MPA_AGENT_ID": "private-test-value"}},
+        {"env": {"AGENTKIT_RUNTIME_ID": "private-test-value"}},
+        {"env": {"SKILL_SPACE_ID": "private-test-value"}},
+        {"env": {"AGENTKIT_TOOL_ID": "private-test-value"}},
+        {"env": {"CHANNEL_STATE_ENCRYPTION_KEY": "private-test-value"}},
+        {"env": {"SHARED_APIG_DATABASE_URL": "private-test-value"}},
+        {"env": {"DEPLOYMENT_DATABASE_ADMIN_URL": "private-test-value"}},
+    ],
+)
+def test_runtime_override_validation_is_safe(tmp_path, monkeypatch, settings):
+    with pytest.raises(ConfigurationError) as error:
+        load_profile(profile_file(tmp_path, monkeypatch, runtime=settings))
+    assert "private-test-value" not in str(error.value)

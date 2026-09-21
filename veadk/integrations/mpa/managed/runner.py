@@ -4,8 +4,9 @@ import asyncio
 import json
 import sys
 
-from .config import load_profile
+from .config import load_profile, with_creation_images
 from .service import provision
+from .diagnostics import classify_error, diagnostic_scope, report
 
 
 def emit(**event):
@@ -13,9 +14,15 @@ def emit(**event):
 
 
 def main():
+    with diagnostic_scope(lambda diagnostic: emit(diagnostic=diagnostic)):
+        return run()
+
+
+def run():
     try:
         data = json.loads(sys.stdin.read(16384))
         profile = load_profile(data["config"], region=data["region"])
+        profile = with_creation_images(profile, data.get("images", {}))
         result = asyncio.run(
             asyncio.wait_for(
                 provision(
@@ -42,7 +49,8 @@ def main():
             }
         )
         return 0
-    except Exception:
+    except Exception as error:
+        report("provision", classify_error(error))
         # Error text can contain SDK request payloads, URLs and credentials.
         emit(error="creationFailed")
         return 1
