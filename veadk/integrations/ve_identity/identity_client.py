@@ -471,14 +471,48 @@ class IdentityClient:
         return convert_response(resp)
 
     @refresh_credentials
+    def get_workload_pool(
+        self, *, workload_pool_name: str
+    ) -> volcenginesdkid.GetWorkloadPoolResponse:
+        """Get a workload pool by its exact name."""
+        return self._api_client.get_workload_pool(
+            volcenginesdkid.GetWorkloadPoolRequest(
+                workload_pool_name=workload_pool_name
+            )
+        )
+
+    @refresh_credentials
+    def create_workload_pool(
+        self, *, workload_pool_name: str
+    ) -> volcenginesdkid.CreateWorkloadPoolResponse:
+        """Create a workload pool with the supplied name."""
+        return self._api_client.create_workload_pool(
+            volcenginesdkid.CreateWorkloadPoolRequest(
+                workload_pool_name=workload_pool_name
+            )
+        )
+
+    @refresh_credentials
+    def get_workload_identity(
+        self, *, workload_pool_name: str, name: str
+    ) -> volcenginesdkid.GetWorkloadIdentityResponse:
+        """Get a workload identity by pool and exact name."""
+        return self._api_client.get_workload_identity(
+            volcenginesdkid.GetWorkloadIdentityRequest(
+                workload_pool_name=workload_pool_name, name=name
+            )
+        )
+
+    @refresh_credentials
     def create_workload_identity(
-        self, name: Optional[str] = None
+        self, name: Optional[str] = None, *, workload_pool_name: str | None = None
     ) -> volcenginesdkid.CreateWorkloadIdentityResponse:
         """Create a new workload identity.
 
         Args:
             name: Optional name for the workload identity. If not provided,
                   a random name will be generated.
+            workload_pool_name: Optional workload pool containing the identity.
 
         Returns:
             Dictionary containing the created workload identity information.
@@ -488,7 +522,9 @@ class IdentityClient:
             name = f"workload-{uuid.uuid4().hex[:8]}"
 
         return self._api_client.create_workload_identity(
-            volcenginesdkid.CreateWorkloadIdentityRequest(name=name),
+            volcenginesdkid.CreateWorkloadIdentityRequest(
+                name=name, workload_pool_name=workload_pool_name
+            ),
         )
 
     @refresh_credentials

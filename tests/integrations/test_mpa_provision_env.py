@@ -14,14 +14,18 @@
 
 """Tests for mpa-agent runtime env assembly (FR-5/FR-10/FR-11, VC-10)."""
 
+import pytest
+
 from veadk.integrations.mpa.mpa_provision import (
-    MpaProvisionParams,
     SECRET_ENV_KEYS,
+    MpaProvisionParams,
     build_runtime_env,
     derive_claw_space_id,
     generate_mpa_agent_id,
     mask_secret,
     tool_name_for_agent,
+    validate_mpa_agent_id,
+    workload_identity_name,
 )
 
 
@@ -29,7 +33,7 @@ def _params(**overrides) -> MpaProvisionParams:
     base = dict(
         image="registry.example.com/mpa:latest",
         registry_name="registry",
-        mpa_agent_id="mi-abc",
+        mpa_agent_id="mi-abc123def456",
         account_id="2100000001",
         region="cn-beijing",
         pg_host="pg.example.com",
@@ -64,6 +68,17 @@ def test_generate_mpa_agent_id_is_valid_and_unique() -> None:
         assert agent_id.startswith("mi-")
         assert agent_id[3:].isalnum()
         assert agent_id[3:] == agent_id[3:].lower()
+
+
+def test_validate_mpa_agent_id_requires_canonical_shape() -> None:
+    assert validate_mpa_agent_id(" mi-abc123def456 ") == "mi-abc123def456"
+    for value in ("mi-short", "mi-ABC123DEF456", "agent-abc123def456", ""):
+        with pytest.raises(ValueError, match="mi-"):
+            validate_mpa_agent_id(value)
+
+
+def test_workload_identity_name_keeps_base_agent_id() -> None:
+    assert workload_identity_name("mi-abc123def456") == "mi-abc123def456-studio"
 
 
 def test_tool_name_is_derived_from_agent_id() -> None:
@@ -102,7 +117,9 @@ def test_env_contains_startup_keys_and_identity_adaptation() -> None:
     assert env["APMPLUS_TRACE_CONTENT"] == "false"
     assert env["FORCE_APMPLUS_EXPORTER_REGISTRATION"] == "true"
     assert env["CLAW_SPACE_ID"] == "csi-2100000001"
-    assert env["MPA_AGENT_ID"] == "mi-abc"
+    assert env["MPA_AGENT_ID"] == "mi-abc123def456"
+    assert env["MPA_WORKLOAD_POOL_NAME"] == "agentkit-studio-workload"
+    assert env["MPA_WORKLOAD_IDENTITY_NAME"] == "mi-abc123def456-studio"
     # AgentKit
     assert env["AGENTKIT_TOOL_ID"] == "tool-1"
 

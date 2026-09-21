@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -23,12 +24,29 @@ from click.testing import CliRunner
 
 from veadk.cli import cli_mpa
 
+_REAL_IDENTITY_CLIENT = cli_mpa._identity_client
+
+
+@pytest.fixture(autouse=True)
+def _stub_workload_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cli_mpa, "_identity_client", lambda region: object())
+    monkeypatch.setattr(
+        cli_mpa,
+        "ensure_studio_workload_identity",
+        lambda client, mpa_agent_id: SimpleNamespace(
+            workload_pool_name="agentkit-studio-workload",
+            workload_identity_name=f"{mpa_agent_id}-studio",
+            pool_created=False,
+            identity_created=False,
+        ),
+    )
+
 
 def _base_args(**overrides: str) -> list[str]:
     args = {
         "--image": "registry.example.com/mpa:latest",
         "--registry-name": "registry",
-        "--mpa-agent-id": "mi-abc",
+        "--mpa-agent-id": "mi-abc123def456",
         "--account-id": "2100000001",
         "--pg-host": "pg.example.com",
         "--pg-database": "mpa",
@@ -72,6 +90,30 @@ def test_gateway_resolution_accepts_only_an_exact_embedded_id() -> None:
     )
 
 
+def test_identity_client_uses_management_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    class FakeIdentityClient:
+        def __init__(self, **kwargs: Any):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(cli_mpa, "_ve_credentials", lambda: ("ak", "sk", "token"))
+    monkeypatch.setattr(
+        "veadk.integrations.ve_identity.identity_client.IdentityClient",
+        FakeIdentityClient,
+    )
+
+    assert isinstance(_REAL_IDENTITY_CLIENT("cn-beijing"), FakeIdentityClient)
+    assert captured == {
+        "access_key": "ak",
+        "secret_key": "sk",
+        "region": "cn-beijing",
+        "session_token": "token",
+    }
+
+
 def test_top_level_commands_still_resolve() -> None:
     """VC-1: registering mpa does not drop existing top-level commands."""
     from veadk.cli.cli import veadk
@@ -95,6 +137,47 @@ def test_create_missing_required_param_named_error() -> None:
     assert "--image" in result.output
 
 
+def test_create_rejects_noncanonical_agent_id_before_side_effects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+    monkeypatch.setattr(cli_mpa, "_identity_client", lambda region: calls.append("id"))
+
+    result = CliRunner().invoke(
+        cli_mpa.mpa,
+        _base_args(mpa_agent_id="mi-short", compute_plane="vefaas"),
+    )
+
+    assert result.exit_code != 0
+    assert "mi-" in result.output
+    assert calls == []
+
+
+def test_create_stops_before_other_side_effects_when_identity_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    def fail_identity(client: Any, mpa_agent_id: str):
+        raise cli_mpa.MpaIdentityError("missing id:GetWorkloadPool")
+
+    monkeypatch.setattr(cli_mpa, "ensure_studio_workload_identity", fail_identity)
+    monkeypatch.setattr(cli_mpa, "_make_seed_engine", lambda params: calls.append("db"))
+    monkeypatch.setattr(
+        cli_mpa, "_skills_client", lambda region: calls.append("skills")
+    )
+    monkeypatch.setattr(cli_mpa, "_tools_client", lambda region: calls.append("tools"))
+
+    result = CliRunner().invoke(
+        cli_mpa.mpa,
+        _base_args(compute_plane="vefaas"),
+    )
+
+    assert result.exit_code != 0
+    assert "id:GetWorkloadPool" in result.output
+    assert calls == []
+
+
 def test_create_config_yaml_supplies_defaults(
     monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:
@@ -104,7 +187,7 @@ def test_create_config_yaml_supplies_defaults(
     cfg = {
         "image": "registry.example.com/mpa:latest",
         "registry-name": "registry",
-        "mpa-agent-id": "mi-abc",
+        "mpa-agent-id": "mi-abc123def456",
         "account-id": "2100000001",
         "pg-host": "pg.example.com",
         "pg-database": "mpa",
@@ -137,7 +220,7 @@ def test_create_cli_option_overrides_config(tmp_path) -> None:
     cfg = {
         "image": "registry.example.com/from-config:latest",
         "registry-name": "registry",
-        "mpa-agent-id": "mi-config",
+        "mpa-agent-id": "mi-cfg123def456",
         "account-id": "2100000001",
         "pg-host": "pg.example.com",
         "pg-database": "mpa",
@@ -161,14 +244,14 @@ def test_create_cli_option_overrides_config(tmp_path) -> None:
             "--config",
             str(cfg_path),
             "--mpa-agent-id",
-            "mi-override",
+            "mi-ovr123def456",
             "--dry-run",
         ],
     )
     assert result.exit_code == 0, result.output
     # Overridden id present; config id absent.
-    assert "mi-override" in result.output
-    assert "mi-config" not in result.output
+    assert "mi-ovr123def456" in result.output
+    assert "mi-cfg123def456" not in result.output
 
 
 def test_create_config_missing_file_errors() -> None:
@@ -208,6 +291,8 @@ def test_create_dry_run_masks_secrets_and_no_side_effects(
     assert "model-secret" not in result.output
     # Plan shown.
     assert "mpa_meta" in result.output or "MPA_AGENT_ID" in result.output
+    assert "agentkit-studio-workload" in result.output
+    assert "mi-abc123def456-studio" in result.output
     assert calls["deploy"] == 0
     assert calls["seed"] == 0
 
@@ -261,6 +346,15 @@ def test_create_full_flow_orchestration_vefaas(
     """AC-14: --compute-plane vefaas reproduces route A (deploy->seed->verify)."""
     order: list[str] = []
 
+    def _ensure_identity(client: Any, mpa_agent_id: str):
+        order.append("identity")
+        return SimpleNamespace(
+            workload_pool_name="agentkit-studio-workload",
+            workload_identity_name=f"{mpa_agent_id}-studio",
+            pool_created=True,
+            identity_created=True,
+        )
+
     def _deploy(**kwargs: Any):
         order.append("deploy")
         assert kwargs["enable_key_auth"] is True
@@ -274,7 +368,7 @@ def test_create_full_flow_orchestration_vefaas(
 
     def _pre_seed(engine: Any, *, mpa_agent_id: str, values: dict, **kwargs: Any):
         order.append("pre_seed")
-        assert mpa_agent_id == "mi-abc"
+        assert mpa_agent_id == "mi-abc123def456"
         # phase 1 placeholders present and complete.
         assert values["runtime_id"] == "pending"
         return values
@@ -291,6 +385,7 @@ def test_create_full_flow_orchestration_vefaas(
         return cli_mpa.VerificationResult(endpoint=endpoint, passed=True)
 
     monkeypatch.setattr(cli_mpa, "_deploy_image", lambda **kw: _deploy(**kw))
+    monkeypatch.setattr(cli_mpa, "ensure_studio_workload_identity", _ensure_identity)
     monkeypatch.setattr(cli_mpa, "_make_seed_engine", lambda params: object())
     monkeypatch.setattr(cli_mpa, "seed_mpa_meta", _pre_seed)
     monkeypatch.setattr(cli_mpa, "overwrite_mpa_meta", _finalize)
@@ -299,7 +394,7 @@ def test_create_full_flow_orchestration_vefaas(
     runner = CliRunner()
     result = runner.invoke(cli_mpa.mpa, _base_args(compute_plane="vefaas"))
     assert result.exit_code == 0, result.output
-    assert order == ["pre_seed", "deploy", "finalize", "verify"]
+    assert order == ["identity", "pre_seed", "deploy", "finalize", "verify"]
     # FR-7: Studio guidance in output.
     assert "agent-card.json" in result.output
     assert "https://app.example.com" in result.output
@@ -315,8 +410,17 @@ def test_create_orchestration_order_runtime_plane(
     monkeypatch.setattr(cli_mpa, "_tools_client", lambda region: object())
     monkeypatch.setattr(cli_mpa, "_runtime_client", lambda region: object())
     monkeypatch.setattr(
-        cli_mpa, "_resolve_apig_instance_id", lambda region: (lambda ep: "gw-r")
+        cli_mpa, "_resolve_apig_instance_id", lambda region: lambda ep: "gw-r"
     )
+
+    def _ensure_identity(client: Any, mpa_agent_id: str):
+        order.append("identity")
+        return SimpleNamespace(
+            workload_pool_name="agentkit-studio-workload",
+            workload_identity_name=f"{mpa_agent_id}-studio",
+            pool_created=False,
+            identity_created=False,
+        )
 
     def _ensure_space(client: Any, *, name: str, **kw: Any) -> str:
         order.append("skill_space")
@@ -325,14 +429,14 @@ def test_create_orchestration_order_runtime_plane(
 
     def _ensure_tool(client: Any, *, name: str, image: str, **kw: Any) -> str:
         order.append("tool")
-        assert name == "mi_generated123"
+        assert name == "mi_gen123def456"
         assert image == "registry.example.com/worker:tag"
         assert kw["role_name"] == "CustomMpaRole"
         return "t-created"
 
     def _provision(client: Any, **kwargs: Any):
         order.append("runtime")
-        assert kwargs["name"] == "mi-generated123"
+        assert kwargs["name"] == "mi-gen123def456"
         assert kwargs["tool_id"] == "t-created"
         assert kwargs["artifact_url"] == "registry.example.com/mpa:latest"
         # SKILL_SPACE_ID injected into runtime env.
@@ -374,13 +478,14 @@ def test_create_orchestration_order_runtime_plane(
         return cli_mpa.VerificationResult(endpoint=endpoint, passed=True)
 
     monkeypatch.setattr(cli_mpa, "ensure_skill_space", _ensure_space)
+    monkeypatch.setattr(cli_mpa, "ensure_studio_workload_identity", _ensure_identity)
     monkeypatch.setattr(cli_mpa, "ensure_codex_worker_tool", _ensure_tool)
     monkeypatch.setattr(cli_mpa, "provision_runtime", _provision)
     monkeypatch.setattr(cli_mpa, "_make_seed_engine", lambda params: object())
     monkeypatch.setattr(cli_mpa, "seed_mpa_meta", _pre_seed)
     monkeypatch.setattr(cli_mpa, "overwrite_mpa_meta", _finalize)
     monkeypatch.setattr(cli_mpa, "verify_instance", _verify)
-    monkeypatch.setattr(cli_mpa, "generate_mpa_agent_id", lambda: "mi-generated123")
+    monkeypatch.setattr(cli_mpa, "generate_mpa_agent_id", lambda: "mi-gen123def456")
 
     runner = CliRunner()
     result = runner.invoke(
@@ -395,6 +500,7 @@ def test_create_orchestration_order_runtime_plane(
     )
     assert result.exit_code == 0, result.output
     assert order == [
+        "identity",
         "skill_space",
         "tool",
         "pre_seed",
@@ -403,7 +509,7 @@ def test_create_orchestration_order_runtime_plane(
         "verify",
     ]
     assert "agent-card.json" in result.output
-    assert "mpa-agent-id: mi-generated123" in result.output
+    assert "mpa-agent-id: mi-gen123def456" in result.output
 
 
 def test_runtime_plane_without_gateway_id_fails_before_finalize(
@@ -413,7 +519,7 @@ def test_runtime_plane_without_gateway_id_fails_before_finalize(
     finalized: list[dict[str, Any]] = []
     monkeypatch.setattr(cli_mpa, "_runtime_client", lambda region: object())
     monkeypatch.setattr(
-        cli_mpa, "_resolve_apig_instance_id", lambda region: (lambda ep: "")
+        cli_mpa, "_resolve_apig_instance_id", lambda region: lambda ep: ""
     )
     monkeypatch.setattr(cli_mpa, "_make_seed_engine", lambda params: object())
     monkeypatch.setattr(cli_mpa, "seed_mpa_meta", lambda *a, **kw: kw["values"])
@@ -445,7 +551,7 @@ def test_explicit_gateway_id_finalizes_shared_gateway_runtime(
     finalized: list[dict[str, Any]] = []
     monkeypatch.setattr(cli_mpa, "_runtime_client", lambda region: object())
     monkeypatch.setattr(
-        cli_mpa, "_resolve_apig_instance_id", lambda region: (lambda ep: "")
+        cli_mpa, "_resolve_apig_instance_id", lambda region: lambda ep: ""
     )
     monkeypatch.setattr(cli_mpa, "_make_seed_engine", lambda params: object())
     monkeypatch.setattr(cli_mpa, "seed_mpa_meta", lambda *a, **kw: kw["values"])
@@ -484,7 +590,7 @@ def test_generated_identity_missing_tool_input_fails_before_writes(
     """VC-22: runtime mode requires Tool input before any side effect."""
     calls: list[str] = []
 
-    monkeypatch.setattr(cli_mpa, "generate_mpa_agent_id", lambda: "mi-generated123")
+    monkeypatch.setattr(cli_mpa, "generate_mpa_agent_id", lambda: "mi-gen123def456")
     monkeypatch.setattr(cli_mpa, "_make_seed_engine", lambda params: calls.append("db"))
     monkeypatch.setattr(
         cli_mpa, "_skills_client", lambda region: calls.append("skills")
