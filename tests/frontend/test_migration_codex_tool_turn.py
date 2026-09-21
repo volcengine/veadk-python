@@ -24,6 +24,7 @@ import pytest
 
 from frontend.server.migration import codex_tool_turn
 from frontend.server.migration.codex_tool_turn import (
+    DynamicTool,
     ToolTurnDeadlineExceeded,
     ToolTurnUnavailable,
     run_tool_turn,
@@ -201,6 +202,57 @@ async def test_run_tool_turn_stops_at_the_wall_clock_deadline(
 
     assert session.interrupted == 1
     assert session.closed == 1
+
+
+@pytest.mark.asyncio
+async def test_run_tool_turn_registers_every_tool_it_is_given(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _install(monkeypatch, _FakeSession(["one"], thread_id="thread-live"))
+
+    await _run(
+        session,
+        extra_tools=(
+            DynamicTool(
+                name="askUser",
+                description="提问。",
+                schema={},
+                handler=lambda _arguments: "answered",
+            ),
+        ),
+        idle_timeout_seconds=30.0,
+    )
+
+    assert session.tools == ["reportEvaluation", "askUser"]
+
+
+@pytest.mark.asyncio
+async def test_run_tool_turn_does_not_charge_host_waiting_to_the_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """等用户回答的时间不算 Codex 的工作时间，不能因为等待就中断回合。"""
+    session = _install(monkeypatch, _FakeSession(["progress"], forever=True))
+    waited = [0.0]
+    seen: list[str] = []
+
+    def has_result() -> bool:
+        seen.append("check")
+        # 第一个事件之后才「回答」，这样等待发生在回合进行中。
+        return len(seen) > 1
+
+    waited[0] = 5.0
+    thread = await _run(
+        session,
+        has_result=has_result,
+        timeout_seconds=0.05,
+        host_wait_seconds=lambda: waited[0],
+    )
+    assert thread == session.thread_id
+
+    # 同一个回合如果不扣除等待时间，就会撞上墙钟预算。
+    other = _install(monkeypatch, _FakeSession(["progress"], forever=True))
+    with pytest.raises(ToolTurnDeadlineExceeded):
+        await _run(other, timeout_seconds=0.05)
 
 
 @pytest.mark.asyncio

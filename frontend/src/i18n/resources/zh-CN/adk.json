@@ -170,6 +170,7 @@
     "invalidAnalysisEvidence": "分析证据格式错误。",
     "invalidEntryCandidate": "入口候选格式错误。",
     "invalidQuestion": "待确认问题格式错误。",
+    "invalidPendingInput": "分析问题无法读取",
     "invalidTask": "迁移会话格式错误。",
     "invalidAnalysisReference": "分析结果引用格式错误。",
     "invalidSourcePersistence": "迁移源码保存状态格式错误。",
@@ -193,8 +194,12 @@
     "createTaskFailed": "创建迁移会话失败",
     "uploadProjectFailed": "上传迁移项目失败",
     "loadActivityFailed": "读取迁移执行动态失败",
+    "loadEventsFailed": "订阅迁移进度流失败",
+    "invalidEventsResponse": "迁移进度流返回了非法数据帧。",
+    "reconnecting": "连接已断开，正在重新连接迁移进度流…",
     "startFailed": "启动迁移失败",
     "submitAnswersFailed": "提交分析补充信息失败",
+    "submitInputFailed": "提交分析回答失败",
     "stopFailed": "终止迁移失败",
     "deleteTaskFailed": "删除迁移会话失败",
     "loadArtifactFailed": "读取迁移产物失败",
@@ -268,7 +273,10 @@
       "evaluationSummary": "评测汇总",
       "evaluationCaseResult": "评测用例结果",
       "evaluationOutput": "评测输出",
-      "evaluationLimitations": "评测限制"
+      "evaluationLimitations": "评测限制",
+      "pendingInput": "分析提问",
+      "pendingQuestion": "分析问题项",
+      "pendingOption": "分析问题选项"
     }
   },
   "sandbox": {

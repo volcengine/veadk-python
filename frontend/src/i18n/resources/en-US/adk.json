@@ -170,6 +170,7 @@
     "invalidAnalysisEvidence": "The analysis evidence has an invalid format.",
     "invalidEntryCandidate": "An entry candidate has an invalid format.",
     "invalidQuestion": "A follow-up question has an invalid format.",
+    "invalidPendingInput": "Analysis questions are not readable",
     "invalidTask": "The migration session has an invalid format.",
     "invalidAnalysisReference": "The analysis result reference has an invalid format.",
     "invalidSourcePersistence": "The migration source persistence status has an invalid format.",
@@ -193,8 +194,12 @@
     "createTaskFailed": "Failed to create the migration session",
     "uploadProjectFailed": "Failed to upload the migration project",
     "loadActivityFailed": "Failed to load migration activity",
+    "loadEventsFailed": "Failed to follow the migration progress stream",
+    "invalidEventsResponse": "The migration progress stream returned an invalid frame.",
+    "reconnecting": "Connection lost. Reconnecting to the migration progress stream…",
     "startFailed": "Failed to start the migration",
     "submitAnswersFailed": "Failed to submit additional analysis information",
+    "submitInputFailed": "Could not submit the analysis answer",
     "stopFailed": "Failed to stop the migration",
     "deleteTaskFailed": "Failed to delete the migration session",
     "loadArtifactFailed": "Failed to load the migration artifact",
@@ -268,7 +273,10 @@
       "evaluationSummary": "Evaluation summary",
       "evaluationCaseResult": "Evaluation case result",
       "evaluationOutput": "Evaluation output",
-      "evaluationLimitations": "Evaluation limitations"
+      "evaluationLimitations": "Evaluation limitations",
+      "pendingInput": "Analysis question",
+      "pendingQuestion": "Analysis question item",
+      "pendingOption": "Analysis question option"
     }
   },
   "sandbox": {

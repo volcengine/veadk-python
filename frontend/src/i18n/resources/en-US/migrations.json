@@ -213,6 +213,15 @@
     "submitting": "Continuing analysis…",
     "submit": "Submit and continue analysis"
   },
+  "pendingInput": {
+    "ariaLabel": "Answer the questions the migration needs you to decide",
+    "title": "The migration needs your answer",
+    "description": "Your answer continues the current step instead of restarting it",
+    "other": "Other",
+    "otherPlaceholder": "Or type your own answer",
+    "submitting": "Submitting your answer…",
+    "submit": "Submit answer and continue"
+  },
   "confirmation": {
     "ariaLabel": "Confirm migration method",
     "title": "Confirm migration method",

@@ -17,7 +17,6 @@ import {
   createMigrationTask,
   downloadMigrationArtifact,
   downloadMigrationEvaluationReport,
-  getMigrationActivity,
   getMigrationArtifact,
   getMigrationArtifactFile,
   getMigrationCapabilities,
@@ -25,12 +24,14 @@ import {
   getMigrationEvaluationReport,
   getMigrationTask,
   listMigrationTasks,
+  observeMigrationTask,
   MigrationApiError,
   putMigrationEvaluationDataset,
   resumeMigrationEvaluation,
   retryMigrationEvaluation,
   stopMigrationTask,
   submitMigrationAnalysisAnswers,
+  submitMigrationAnalysisInput,
   uploadMigrationSource,
   type MigrationAnalysis,
   type MigrationActivity,
@@ -105,8 +106,8 @@ import { i18n } from "../i18n/runtime";
 import "./MigrationWorkspace.css";
 
 const MAX_SOURCE_BYTES = 20 * 1024 * 1024;
-const POLL_INTERVAL_MS = 1_200;
-const ACTIVITY_POLL_INTERVAL_MS = 3_000;
+// Task detail and activity arrive on one Server-Sent Events stream; only the
+// list of recent tasks is still polled.
 const LIST_POLL_INTERVAL_MS = 5_000;
 const MAX_VISIBLE_FILES = 500;
 const ignoreMigrationAction = () => undefined;
@@ -732,6 +733,7 @@ export function MigrationWorkspace({
   const evaluationTabRef = useRef<HTMLButtonElement>(null);
   const preparedAnalysisRef = useRef("");
   const evaluationDraftTaskRef = useRef("");
+  const taskEventCursorRef = useRef({ taskId: "", seq: 0 });
   const transferAbortRef = useRef<AbortController | null>(null);
   const evaluationReportAbortRef = useRef<AbortController | null>(null);
   const [capability, setCapability] = useState<MigrationCapabilities | null>(
@@ -757,7 +759,14 @@ export function MigrationWorkspace({
   const [loadKey, setLoadKey] = useState(0);
   const [showAllTasks, setShowAllTasks] = useState(false);
   const [action, setAction] = useState<
-    "create" | "upload" | "answer" | "confirm" | "stop" | "download" | ""
+    | "create"
+    | "upload"
+    | "answer"
+    | "input"
+    | "confirm"
+    | "stop"
+    | "download"
+    | ""
   >("");
   const [error, setError] = useState("");
   const [pollError, setPollError] = useState("");
@@ -768,6 +777,10 @@ export function MigrationWorkspace({
   const [entry, setEntry] = useState("");
   const [appName, setAppName] = useState("");
   const [answers, setAnswers] = useState<Record<string, string>>({});
+  // Answers for questions asked inside the running analysis turn.  They are kept
+  // apart from the needs_input answers: the two cards are mutually exclusive and
+  // carry different payloads.
+  const [inputAnswers, setInputAnswers] = useState<Record<string, string>>({});
   const [artifact, setArtifact] = useState<MigrationArtifact | null>(null);
   const [artifactError, setArtifactError] = useState("");
   const [artifactErrorRetryable, setArtifactErrorRetryable] = useState(false);
@@ -1072,55 +1085,74 @@ export function MigrationWorkspace({
   }, [action, hasPollableTasks]);
 
   useEffect(() => {
+    if (action === "confirm" || !task || taskEnvironmentExpired) return;
     if (
-      action === "confirm" ||
-      !task ||
-      taskEnvironmentExpired ||
-      (!isActiveState(task.state) &&
-        task.persistence?.state !== "saving" &&
-        !isEvaluationPollingState(task))
+      !shouldShowCodexActivity(task) &&
+      !isActiveState(task.state) &&
+      task.persistence?.state !== "saving" &&
+      !isEvaluationPollingState(task)
     )
       return;
     const controller = new AbortController();
-    let timer: number | undefined;
-    const poll = async () => {
-      try {
-        const next = await getMigrationTask(task.id, controller.signal);
+    // Task detail and activity are one snapshot stream now, so the page stops polling
+    // both.  The effect restarts whenever the server-side settlement rule can change;
+    // the cursor keeps those restarts cheap by resuming instead of replaying.
+    const resume =
+      taskEventCursorRef.current.taskId === task.id
+        ? taskEventCursorRef.current.seq
+        : 0;
+    setActivityLoading(activity === null && shouldShowCodexActivity(task));
+    void observeMigrationTask({
+      taskId: task.id,
+      signal: controller.signal,
+      after: resume,
+      onEvent: (event) => {
         if (controller.signal.aborted) return;
-        setTasks((current) => upsertTask(current, next));
+        taskEventCursorRef.current = { taskId: task.id, seq: event.seq };
+        if (event.kind === "error") {
+          setActivityLoading(false);
+          // A frame without code or message says the task is readable again.
+          const cleared = !event.code && !event.message;
+          setPollError(cleared ? "" : event.message || t("activity.loadError"));
+          setPollErrorRetryable(cleared ? false : event.retryable);
+          return;
+        }
         setPollError("");
         setPollErrorRetryable(false);
-        if (
-          !isMigrationEnvironmentExpired(next, Date.now()) &&
-          (isActiveState(next.state) ||
-            next.persistence?.state === "saving" ||
-            isEvaluationPollingState(next))
-        ) {
-          timer = window.setTimeout(() => void poll(), POLL_INTERVAL_MS);
+        if (event.kind === "task") {
+          setTasks((current) => upsertTask(current, event.task));
+          return;
         }
-      } catch (cause) {
+        if (event.kind === "activity") {
+          setActivity(event.activity);
+          setActivityError("");
+          setActivityLoading(false);
+          return;
+        }
+        setActivityLoading(false);
+      },
+      onConnection: (message) => {
         if (controller.signal.aborted) return;
-        setPollError(cause instanceof Error ? cause.message : String(cause));
-        setPollErrorRetryable(
-          cause instanceof MigrationApiError && cause.retryable,
-        );
-        if (cause instanceof MigrationApiError && cause.retryable) {
-          timer = window.setTimeout(() => void poll(), POLL_INTERVAL_MS);
-        }
-      }
-    };
-    timer = window.setTimeout(() => void poll(), POLL_INTERVAL_MS);
-    return () => {
-      controller.abort();
-      if (timer !== undefined) window.clearTimeout(timer);
-    };
+        setPollError(message);
+        setPollErrorRetryable(false);
+      },
+    }).catch((cause: unknown) => {
+      if (controller.signal.aborted) return;
+      setActivityLoading(false);
+      setPollError(cause instanceof Error ? cause.message : String(cause));
+      setPollErrorRetryable(cause instanceof MigrationApiError && cause.retryable);
+    });
+    return () => controller.abort();
   }, [
+    action,
     task?.id,
     task?.state,
+    task?.analysisRef?.sha256,
+    task?.confirmation?.framework,
     task?.persistence?.state,
     task?.evaluation?.state,
     taskEnvironmentExpired,
-    action,
+    t,
   ]);
 
   useEffect(() => {
@@ -1140,62 +1172,6 @@ export function MigrationWorkspace({
     setActivityError("");
     setActivityLoading(false);
   }, [task?.id]);
-
-  useEffect(() => {
-    if (!task || taskEnvironmentExpired || !shouldShowCodexActivity(task)) {
-      return;
-    }
-
-    const controller = new AbortController();
-    let timer: number | undefined;
-    const poll = async () => {
-      setActivityLoading(true);
-      try {
-        const next = await getMigrationActivity(task.id, controller.signal);
-        if (controller.signal.aborted) return;
-        setActivity(next);
-        setActivityError("");
-        if (
-          !next.complete &&
-          !taskEnvironmentExpired &&
-          isActiveState(task.state)
-        ) {
-          timer = window.setTimeout(
-            () => void poll(),
-            ACTIVITY_POLL_INTERVAL_MS,
-          );
-        }
-      } catch (cause) {
-        if (controller.signal.aborted) return;
-        setActivityError(t("activity.loadError"));
-        if (
-          !taskEnvironmentExpired &&
-          isActiveState(task.state) &&
-          cause instanceof MigrationApiError &&
-          cause.retryable
-        ) {
-          timer = window.setTimeout(
-            () => void poll(),
-            ACTIVITY_POLL_INTERVAL_MS,
-          );
-        }
-      } finally {
-        if (!controller.signal.aborted) setActivityLoading(false);
-      }
-    };
-    void poll();
-    return () => {
-      controller.abort();
-      if (timer !== undefined) window.clearTimeout(timer);
-    };
-  }, [
-    task?.id,
-    task?.state,
-    task?.analysisRef?.sha256,
-    task?.confirmation?.framework,
-    taskEnvironmentExpired,
-    t,
-  ]);
 
   useEffect(() => {
     if (
@@ -1614,6 +1590,44 @@ export function MigrationWorkspace({
       requiredQuestionsAnswered,
   );
 
+  // The card follows a live question, not the state: a delivery turn asks after the delivery has already settled.
+  const pendingInput = task?.pendingInput;
+  const pendingInputAnswered = (pendingInput?.questions ?? []).every(
+    (question) => (inputAnswers[question.id] || "").trim().length > 0,
+  );
+  const canSubmitInput = Boolean(pendingInput && pendingInputAnswered && !action);
+
+  // Every question set is a new one, so the previous draft must not leak into it.
+  const pendingInputId = pendingInput?.id;
+  useEffect(() => {
+    setInputAnswers({});
+  }, [pendingInputId]);
+
+  async function submitInput() {
+    if (!task || !pendingInput || !canSubmitInput) return;
+    setAction("input");
+    setError("");
+    try {
+      const next = await submitMigrationAnalysisInput({
+        taskId: task.id,
+        requestId: pendingInput.id,
+        answers: Object.fromEntries(
+          pendingInput.questions.map((question) => [
+            question.id,
+            (inputAnswers[question.id] || "").trim(),
+          ]),
+        ),
+      });
+      setTasks((current) => upsertTask(current, next));
+    } catch (cause) {
+      const authoritative = await reconcileTaskState(task.id);
+      if (authoritative && !authoritative.pendingInput) return;
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setAction("");
+    }
+  }
+
   async function submitAnswers() {
     if (!task?.analysisRef || !canSubmitAnswers) return;
     setAction("answer");
@@ -1972,7 +1986,7 @@ export function MigrationWorkspace({
   const composerFile = sourceFile;
   const composerBusy = action === "create" || action === "upload";
   const isHome = page === "new" && !task && action !== "create";
-  const navigationBusy = composerBusy || action === "confirm" || action === "answer" || action === "stop" || Boolean(evaluationAction);
+  const navigationBusy = composerBusy || action === "confirm" || action === "answer" || action === "input" || action === "stop" || Boolean(evaluationAction);
   const showComposer = !task || (task.canUpload && !taskEnvironmentExpired);
   const expiryCopy = task ? migrationExpiryCopy(task, now) : null;
   const hasEvaluationTab = Boolean(task?.evaluation?.enabled);
@@ -2495,6 +2509,97 @@ export function MigrationWorkspace({
               </article>
             </>
           )}
+
+          {pendingInput ? (
+            <section
+              className="migration-confirmation"
+              aria-label={t("pendingInput.ariaLabel")}
+            >
+              <div className="migration-confirmation__heading">
+                <strong>{t("pendingInput.title")}</strong>
+                <span>{t("pendingInput.description")}</span>
+              </div>
+              {pendingInput.questions.map((question) => {
+                const selected = inputAnswers[question.id] || "";
+                const chosen = question.options.some(
+                  (option) => option.label === selected,
+                );
+                return (
+                  <div className="migration-question" key={question.id}>
+                    <span className="migration-question__header">
+                      {question.header}
+                    </span>
+                    <p className="migration-question__prompt">
+                      {question.question}
+                    </p>
+                    {question.options.length > 0 ? (
+                      <div
+                        className="migration-question__options"
+                        role="radiogroup"
+                        aria-label={question.header}
+                      >
+                        {question.options.map((option) => (
+                          <label
+                            className={
+                              "migration-question__option" +
+                              (selected === option.label ? " is-selected" : "")
+                            }
+                            key={option.label}
+                          >
+                            <input
+                              type="radio"
+                              name={`${pendingInput.id}:${question.id}`}
+                              checked={selected === option.label}
+                              onChange={() => {
+                                setInputAnswers((current) => ({
+                                  ...current,
+                                  [question.id]: option.label,
+                                }));
+                              }}
+                              disabled={Boolean(action)}
+                            />
+                            <span>
+                              <strong>{option.label}</strong>
+                              <em>{option.description}</em>
+                            </span>
+                          </label>
+                        ))}
+                      </div>
+                    ) : null}
+                    <label className="migration-question__other">
+                      <span>{t("pendingInput.other")}</span>
+                      <textarea
+                        value={chosen ? "" : selected}
+                        placeholder={t("pendingInput.otherPlaceholder")}
+                        maxLength={4_000}
+                        aria-label={`${question.header} ${t("pendingInput.other")}`}
+                        onChange={(event) => {
+                          const value = event.currentTarget.value;
+                          setInputAnswers((current) => ({
+                            ...current,
+                            [question.id]: value,
+                          }));
+                        }}
+                        disabled={Boolean(action)}
+                      />
+                    </label>
+                  </div>
+                );
+              })}
+              <div className="migration-confirmation__actions">
+                <button
+                  type="button"
+                  className="migration-primary-button"
+                  onClick={() => void submitInput()}
+                  disabled={!canSubmitInput}
+                >
+                  {action === "input"
+                    ? t("pendingInput.submitting")
+                    : t("pendingInput.submit")}
+                </button>
+              </div>
+            </section>
+          ) : null}
 
           {task?.state === "needs_input" && task.analysis ? (
             <section
