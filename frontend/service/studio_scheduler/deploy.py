@@ -21,7 +21,6 @@ import os
 import shutil
 import tempfile
 import time
-import urllib.request
 from collections.abc import Iterator
 from contextlib import contextmanager
 from functools import partial
@@ -35,7 +34,7 @@ from frontend.service.studio_release_server.offline_runtime import (
     build_studio_offline_requirements,
 )
 
-from .diagnostics import sanitize_diagnostic
+from .deploy_progress import FunctionDeploymentProgress
 
 _SCAN_TIMER_NAME = "veadk-studio-cronjobs-minute"
 _WORKER_TIMER_NAME = "veadk-studio-cronjobs-worker-minute"
@@ -141,57 +140,81 @@ def _deploy_scheduler(
     worker_name = scheduler_worker_function_name(studio_application_name)
     with tempfile.TemporaryDirectory(prefix="studio_cronjob_scheduler_") as tmp:
         deployment_root = Path(tmp)
-        _stage_package(package_root, deployment_root)
-        function_id = _find_function_id(service, function_name)
-        if function_id:
-            service._replace_application_code_bundle(
-                function_id=function_id,
-                path=str(deployment_root),
-                environment_overrides=environment,
-            )
-        else:
-            function_id = _create_function(
+        with FunctionDeploymentProgress(service, function_name) as progress:
+            progress.step("准备部署文件", "Preparing deployment files")
+            _stage_package(package_root, deployment_root)
+            progress.step("查找扫描器 Function", "Looking up scanner Function")
+            function_id = _find_function_id(service, function_name)
+            if function_id:
+                progress.function(function_id)
+                progress.step("更新代码并上传", "Updating and uploading code")
+                service._replace_application_code_bundle(
+                    function_id=function_id,
+                    path=str(deployment_root),
+                    environment_overrides=environment,
+                )
+            else:
+                progress.step(
+                    "创建 Function 并上传代码", "Creating Function and uploading code"
+                )
+                function_id = _create_function(
+                    service,
+                    function_name=function_name,
+                    deployment_root=deployment_root,
+                    role_trn=role_trn,
+                    environment=environment,
+                )
+                progress.function(function_id)
+            _install_dependencies(service, function_id, progress)
+            _release_function(service, function_id, progress)
+            progress.step("配置每分钟触发器", "Configuring minute timer")
+            timer_id = _ensure_minute_timer(
                 service,
-                function_name=function_name,
-                deployment_root=deployment_root,
-                role_trn=role_trn,
-                environment=environment,
+                function_id,
+                name=_SCAN_TIMER_NAME,
+                phase="scan",
+                enable_concurrency=False,
             )
-        _install_dependencies(service, function_id)
-        _release_function(service, function_id)
-        timer_id = _ensure_minute_timer(
-            service,
-            function_id,
-            name=_SCAN_TIMER_NAME,
-            phase="scan",
-            enable_concurrency=False,
-        )
+            progress.ready(timer_id)
 
-        worker_function_id = _find_function_id(service, worker_name)
-        if worker_function_id:
-            _require_async_worker(service, worker_function_id, worker_name)
-            service._replace_application_code_bundle(
-                function_id=worker_function_id,
-                path=str(deployment_root),
-                environment_overrides=environment,
-            )
-        else:
-            worker_function_id = _create_async_worker_function(
+        with FunctionDeploymentProgress(service, worker_name, worker=True) as progress:
+            progress.step("查找执行器 Function", "Looking up worker Function")
+            worker_function_id = _find_function_id(service, worker_name)
+            if worker_function_id:
+                progress.function(worker_function_id)
+                progress.step(
+                    "检查执行器配置并更新代码",
+                    "Checking worker configuration and updating code",
+                )
+                _require_async_worker(service, worker_function_id, worker_name)
+                service._replace_application_code_bundle(
+                    function_id=worker_function_id,
+                    path=str(deployment_root),
+                    environment_overrides=environment,
+                )
+            else:
+                progress.step(
+                    "创建 Function 并上传代码", "Creating Function and uploading code"
+                )
+                worker_function_id = _create_async_worker_function(
+                    service,
+                    function_name=worker_name,
+                    deployment_root=deployment_root,
+                    role_trn=role_trn,
+                    environment=environment,
+                )
+                progress.function(worker_function_id)
+            _install_dependencies(service, worker_function_id, progress)
+            _release_function(service, worker_function_id, progress)
+            progress.step("配置每分钟触发器", "Configuring minute timer")
+            worker_timer_id = _ensure_minute_timer(
                 service,
-                function_name=worker_name,
-                deployment_root=deployment_root,
-                role_trn=role_trn,
-                environment=environment,
+                worker_function_id,
+                name=_WORKER_TIMER_NAME,
+                phase="execute",
+                enable_concurrency=True,
             )
-        _install_dependencies(service, worker_function_id)
-        _release_function(service, worker_function_id)
-        worker_timer_id = _ensure_minute_timer(
-            service,
-            worker_function_id,
-            name=_WORKER_TIMER_NAME,
-            phase="execute",
-            enable_concurrency=True,
-        )
+            progress.ready(worker_timer_id)
     return function_id, timer_id, worker_function_id, worker_timer_id
 
 
@@ -409,28 +432,33 @@ def _find_function_id(service: Any, function_name: str) -> str:
     return str(getattr(matches[0], "id", "") or "") if matches else ""
 
 
-def _release_function(service: Any, function_id: str) -> None:
+def _release_function(
+    service: Any, function_id: str, progress: FunctionDeploymentProgress
+) -> None:
     from volcenginesdkvefaas import GetReleaseStatusRequest, ReleaseRequest
 
+    progress.step("提交 Function 发布", "Submitting Function release")
     service.client.release(ReleaseRequest(function_id=function_id, revision_number=0))
+    progress.step("等待云端发布", "Waiting for cloud deployment")
     for _ in range(120):
         response = service.client.get_release_status(
             GetReleaseStatusRequest(function_id=function_id)
         )
         state = str(getattr(response, "status", "") or "").lower()
+        progress.release_status(response)
         if "succ" in state or state == "done":
             return
         if "fail" in state or "error" in state:
-            detail = sanitize_diagnostic(
+            detail = progress.detail(
                 " ".join(
                     str(value or "").strip()
                     for value in (
                         getattr(response, "error_code", ""),
                         getattr(response, "status_message", ""),
+                        getattr(response, "failed_instance_logs", ""),
                     )
                     if value
                 ),
-                limit=2_000,
             )
             suffix = f". {detail}" if detail else ""
             raise RuntimeError(f"Scheduler function release failed: {state}{suffix}")
@@ -438,44 +466,62 @@ def _release_function(service: Any, function_id: str) -> None:
     raise RuntimeError("Scheduler function release did not finish in 10 minutes")
 
 
-def _install_dependencies(service: Any, function_id: str) -> None:
+def _dependency_install_logs(
+    service: Any, function_id: str, progress: FunctionDeploymentProgress, *, final: bool
+) -> str:
+    from volcenginesdkvefaas import GetDependencyInstallTaskLogDownloadURIRequest
+
+    try:
+        method = service.client.get_dependency_install_task_log_download_uri
+        kwargs = {"_request_timeout": 5} if _accepts_request_timeout(method) else {}
+        response = method(
+            GetDependencyInstallTaskLogDownloadURIRequest(function_id=function_id),
+            **kwargs,
+        )
+        url = str(getattr(response, "download_url", "") or "").strip()
+        if not url:
+            progress.log_error(final=final)
+            return ""
+        progress.warnings.discard("control")
+        return progress.build_log(url, final=final)
+    except Exception:  # noqa: BLE001 - optional diagnostics must not fail deployment
+        progress.log_error(final=final)
+        return ""
+
+
+def _install_dependencies(
+    service: Any, function_id: str, progress: FunctionDeploymentProgress
+) -> None:
     from volcenginesdkvefaas import (
         CreateDependencyInstallTaskRequest,
-        GetDependencyInstallTaskLogDownloadURIRequest,
         GetDependencyInstallTaskStatusRequest,
     )
 
+    progress.step("提交依赖安装任务", "Submitting dependency installation")
     service.client.create_dependency_install_task(
         CreateDependencyInstallTaskRequest(function_id=function_id)
     )
+    progress.step("等待云端安装依赖", "Waiting for cloud dependency installation")
+    detail = ""
     for _ in range(120):
         response = service.client.get_dependency_install_task_status(
             GetDependencyInstallTaskStatusRequest(function_id=function_id)
         )
         state = str(getattr(response, "status", "") or "").lower()
-        if "succ" in state or state == "done":
+        progress.step(
+            f"依赖安装状态: {state or 'unknown'}",
+            f"Dependency installation status: {state or 'unknown'}",
+        )
+        success = "succ" in state or state == "done"
+        failed = "fail" in state or "error" in state
+        log = _dependency_install_logs(
+            service, function_id, progress, final=success or failed
+        )
+        if log:
+            detail = progress.detail(log[-2_000:])
+        if success:
             return
-        if "fail" in state or "error" in state:
-            detail = ""
-            try:
-                log_response = (
-                    service.client.get_dependency_install_task_log_download_uri(
-                        GetDependencyInstallTaskLogDownloadURIRequest(
-                            function_id=function_id
-                        )
-                    )
-                )
-                download_url = str(
-                    getattr(log_response, "download_url", "") or ""
-                ).strip()
-                if download_url:
-                    with urllib.request.urlopen(download_url, timeout=30) as log_stream:
-                        detail = sanitize_diagnostic(
-                            log_stream.read().decode("utf-8", "replace"),
-                            limit=2_000,
-                        )
-            except Exception:  # noqa: BLE001 - diagnostics must not mask failure
-                detail = ""
+        if failed:
             suffix = f". {detail}" if detail else ""
             raise RuntimeError(
                 f"Scheduler dependency installation failed: {state}{suffix}"

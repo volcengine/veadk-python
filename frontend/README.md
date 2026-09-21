@@ -980,6 +980,11 @@ Each image version exposes a read-only Manifest at
 environment card opens the same version-bound contract as YAML for inspection
 and copying.
 
+Build logs and the initial provisioning state are saved before the Sandbox Tool
+task starts. Delayed status polls recheck the saved state before provisioning,
+so a completed task is not repeated when an earlier poll returns late. This
+applies to both Volcengine and BytePlus
+
 When an environment is mounted to an Agent conversation, Studio assigns a new
 `mount_instance_id`. Sandbox Tool Sessions are reused only while the Agent
 session, mount instance, environment version, Tool ID, image, provider, and
@@ -1333,6 +1338,17 @@ scanner runs once per minute, copies the current due bucket into the durable
 schedule without waiting for Runtime execution. A separate asynchronous worker
 drains ready entries, invokes Runtime, and writes terminal results. The scanner,
 worker, and Studio BFF can therefore restart independently without losing work.
+
+Deployment output identifies the scanner and worker separately, including each
+Function name, ID, console link, dependency installation status, cloud build log,
+release status, revision, and minute timer ID. Build logs are printed as they
+become available, with repeated lines suppressed. Release failures include the
+status message and failed-instance logs returned by VeFaaS. During quiet periods,
+a progress message reports the current stage and elapsed time about every 15
+seconds, including while an SDK request is pending. Optional log retrieval uses
+short timeouts and does not interrupt deployment; credentials and signed URL
+queries are redacted. Volcengine uses Chinese progress messages and BytePlus uses
+English messages
 
 Duplicate timer deliveries are deduplicated with immutable run IDs and TOS
 conditional writes; an ETag lock prevents concurrent executions of the same

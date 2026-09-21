@@ -623,7 +623,11 @@ class EnvironmentService:
                     repository,
                     owner_id,
                     updated,
+                    log=log,
                 )
+                if updated.tool_status == "creating":
+                    # Provisioning owns subsequent writes after it is scheduled
+                    return updated
             return await repository.update_build(owner_id, updated, log=log)
         except Exception as error:  # noqa: BLE001 - persist status lookup failures
             failed = build.model_copy(
@@ -770,6 +774,8 @@ class EnvironmentService:
         repository: TosEnvironmentRepository,
         owner_id: str,
         build: EnvironmentBuild,
+        *,
+        log: str | None = None,
     ) -> EnvironmentBuild:
         environment = await repository.get_version_config(
             owner_id,
@@ -790,7 +796,7 @@ class EnvironmentService:
                 "updated_at": _now(),
             }
         )
-        creating = await repository.update_build(owner_id, creating)
+        creating = await repository.update_build(owner_id, creating, log=log)
         self._schedule_tool_provisioning(repository, owner_id, creating)
         return creating
 
@@ -829,6 +835,12 @@ class EnvironmentService:
         build: EnvironmentBuild,
     ) -> None:
         try:
+            # A poll can return an old snapshot after the previous task finishes
+            build = await repository.get_build(
+                owner_id, build.environment_id, build.version_id
+            )
+            if build.status != "building" or build.tool_status != "creating":
+                return
             if self._tool_provisioner is None:
                 raise RuntimeError("AgentKit Sandbox Tool 服务未配置。")
             resources = build.resources
