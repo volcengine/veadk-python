@@ -210,6 +210,83 @@ def mpa() -> None:
     """VeADK-version mpa-agent provisioning."""
 
 
+@mpa.command("provision")
+@click.option(
+    "--config",
+    "config_path",
+    required=True,
+    type=click.Path(exists=True, dir_okay=False),
+)
+@click.option(
+    "--agent-id",
+    required=True,
+    help="Stable agent identity; reuse it to resume a failed deployment.",
+)
+@click.option("--description", default="")
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Validate local configuration and show the resource plan without cloud calls.",
+)
+def provision_managed(
+    config_path: str, agent_id: str, description: str, dry_run: bool
+) -> None:
+    """Prepare network, shared APIG, database, skills and worker before Runtime."""
+    import asyncio
+    import json
+    import re
+
+    from veadk.integrations.mpa.managed.config import ConfigurationError, load_profile
+    from veadk.integrations.mpa.managed.database import DeploymentError
+    from veadk.integrations.mpa.managed.service import provision
+
+    if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", agent_id):
+        raise click.BadParameter(
+            "Use 1–64 lowercase letters, digits, underscores or hyphens",
+            param_hint="--agent-id",
+        )
+    try:
+        profile = load_profile(config_path)
+        if dry_run:
+            click.echo(
+                json.dumps({**profile.summary(), "agentId": agent_id, "dryRun": True})
+            )
+            return
+        result = asyncio.run(
+            asyncio.wait_for(
+                provision(
+                    profile,
+                    agent_id=agent_id,
+                    owner="cli",
+                    description=description,
+                    progress=lambda stage: click.echo(f"MPA: {stage}"),
+                ),
+                timeout=profile.managed.timeout_seconds,
+            )
+        )
+        click.echo(
+            json.dumps(
+                {
+                    k: result[k]
+                    for k in (
+                        "agent_id",
+                        "region",
+                        "runtime_id",
+                        "skill_space_id",
+                        "gateway_id",
+                        "state",
+                    )
+                }
+            )
+        )
+    except (ConfigurationError, DeploymentError) as exc:
+        raise click.ClickException(str(exc)) from None
+    except Exception:
+        raise click.ClickException(
+            "MPA provisioning failed; check the current stage, credentials and resource permissions, then retry the same agent ID"
+        ) from None
+
+
 def _load_config_default_map(
     ctx: click.Context, _param: click.Parameter, value: str | None
 ) -> str | None:

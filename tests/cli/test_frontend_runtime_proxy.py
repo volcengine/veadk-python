@@ -3419,13 +3419,33 @@ def test_runtime_proxy_uses_exact_list_item_when_role_get_runtime_is_hidden(
 
 
 @pytest.mark.parametrize("streaming", [False, True, "fallback"])
+@pytest.mark.parametrize(
+    "mpa,info_app",
+    [(False, "a2a-default"), (True, "a2a-default"), (True, "default")],
+)
 def test_runtime_proxy_bridges_a2a_only_runtime_for_studio_chat(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     streaming: bool | str,
+    mpa: bool,
+    info_app: str,
 ) -> None:
     app = _create_frontend_app(monkeypatch, tmp_path)
     requests: list[dict[str, Any]] = []
+
+    async def fake_mpa_info(*args, **kwargs):
+        assert mpa
+        assert kwargs["runtime_api_key"] == "runtime-api-key"
+        return {
+            "agentsMd": "# Real MPA instructions",
+            "agentsMdStatus": "ready",
+            "skillSpaces": [],
+            "skillSpacesStatus": "ready",
+        }
+
+    monkeypatch.setattr(
+        "frontend.server.mpa_agent_info.load_mpa_agent_info", fake_mpa_info
+    )
 
     class _ActivatedCatalog:
         async def list_options(self):
@@ -3459,7 +3479,9 @@ def test_runtime_proxy_bridges_a2a_only_runtime_for_studio_chat(
                     key_auth=SimpleNamespace(api_key="runtime-api-key"),
                     custom_jwt_authorizer=None,
                 ),
-                tags=[],
+                tags=[SimpleNamespace(key="veadk:agent-type", value="mpa")]
+                if mpa
+                else [],
             )
 
     monkeypatch.setattr(
@@ -3697,7 +3719,7 @@ def test_runtime_proxy_bridges_a2a_only_runtime_for_studio_chat(
             "/web/runtime-proxy/runtime-1/list-apps?_runtime_region=cn-beijing"
         )
         info_response = client.get(
-            "/web/runtime-proxy/runtime-1/web/agent-info/a2a-default"
+            f"/web/runtime-proxy/runtime-1/web/agent-info/{info_app}"
             "?_runtime_region=cn-beijing"
         )
         create_session = client.post(
@@ -3742,6 +3764,11 @@ def test_runtime_proxy_bridges_a2a_only_runtime_for_studio_chat(
     assert list_response.status_code == 200
     assert list_response.json() == ["a2a-default"]
     assert info_response.status_code == 200
+    assert info_response.json().get("agentCategory") == ("mpa" if mpa else "general")
+    if mpa:
+        assert info_response.json()["mpa"]["agentsMd"] == "# Real MPA instructions"
+    else:
+        assert "mpa" not in info_response.json()
     assert info_response.json()["selectableModels"] == [
         "model-default",
         "model-alt",

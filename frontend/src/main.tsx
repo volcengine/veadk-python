@@ -2,6 +2,8 @@ import "@fontsource/inter/latin-400.css";
 import "@fontsource/inter/latin-500.css";
 import "@fontsource/inter/latin-600.css";
 import "./styles.css";
+import "./components/tokens/theme.css";
+import "./components/tokens/component-themes.css";
 import "./i18n";
 
 import React from "react";
@@ -10,6 +12,10 @@ import { MotionConfig } from "motion/react";
 import { PhotoProvider } from "react-photo-view";
 import App from "./App";
 import "react-photo-view/dist/react-photo-view.css";
+
+// Keep the existing Studio light by default, including portalled components.
+// Respect an explicit theme supplied by the host page.
+document.documentElement.dataset.theme ??= "light";
 
 const PRELOAD_RECOVERY_KEY = "veadk.preloadRecoveryAt";
 

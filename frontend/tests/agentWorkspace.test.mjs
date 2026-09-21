@@ -130,7 +130,7 @@ test("focused agent details can render without the workspace tabs or list sideba
   assert.match(appSource, /runtimeApp: detailConnection\?\.apps\[0\]/);
   assert.match(workspaceSource, /const knownApp = selectedAgent\?\.runtimeApp \?\? ""[\s\S]*?getRuntimeAgentInfo\([\s\S]*?knownApp/);
   assert.match(clientSource, /loadDraft = true/);
-  assert.match(clientSource, /return fetchAgentInfo\(app, ep, false\)/);
+  assert.match(clientSource, /return fetchAgentInfo\(app, ep, false, signal\)/);
 });
 
 test("focused agent details use the shared resource detail header", () => {

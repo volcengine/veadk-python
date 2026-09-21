@@ -1,0 +1,81 @@
+.mpa-skill-editor-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: hsl(var(--foreground) / 0.25);
+}
+.mpa-skill-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: min(800px, 100%);
+  max-height: calc(100dvh - 32px);
+  overflow: auto;
+  padding: 24px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 16px;
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+}
+.mpa-skill-editor header,
+.mpa-skill-editor footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.mpa-skill-editor h2 {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 18px;
+}
+.mpa-skill-editor p {
+  margin: 0;
+  font-size: 13px;
+}
+.mpa-skill-editor-hint {
+  color: hsl(var(--muted-foreground));
+  line-height: 1.6;
+}
+.mpa-skill-editor .studio-textarea {
+  min-height: 200px;
+  height: min(45dvh, 440px);
+  flex-shrink: 0;
+}
+.mpa-skill-editor textarea {
+  font-family: ui-monospace, monospace;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.mpa-skill-editor footer {
+  justify-content: flex-end;
+}
+.mpa-skill-editor [role="alert"] {
+  color: hsl(var(--destructive));
+}
+.topo-skill-open {
+  width: 100%;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.topo-skill-open:hover {
+  text-decoration: underline;
+}
+.topo-skill-open:focus-visible {
+  outline: 2px solid hsl(var(--primary));
+  outline-offset: 3px;
+}
+@media (max-width: 600px) {
+  .mpa-skill-editor {
+    padding: 16px;
+  }
+}

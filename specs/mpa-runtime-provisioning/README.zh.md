@@ -46,3 +46,7 @@
 VeADK MPA 部署默认设置 DISABLE_JWT_AUTH=true。extra_env 显式配置优先，包括 false。网关鉴权及其他部署路径不变。
 
 MPA 部署默认注入 `OTEL_PYTHON_DISABLED_INSTRUMENTATIONS=sqlalchemy,asyncpg,psycopg,psycopg2,dbapi`，关闭数据库自动埋点并保留业务链路。显式 `extra_env` 优先，包括传空字符串重新启用埋点。适用于新部署或显式重新部署的资源，不自动修改已有运行实例。
+
+## 托管创建边界
+
+Studio MPA 创建和 `veadk mpa provision` 由 [Studio MPA 创建](../studio-mpa-creation/README.zh.md)负责。该路径准备账号资源并通过真实 Runtime 元数据初始化。本文原有职责和旧入口保持不变。

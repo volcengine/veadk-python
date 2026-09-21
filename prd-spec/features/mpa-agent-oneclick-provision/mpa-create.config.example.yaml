@@ -1,5 +1,11 @@
 # Copy to a local file (e.g. mpa-create.config.yaml) and fill in real values.
-# Pass it with: veadk mpa create --config mpa-create.config.yaml
+# Legacy (requires account-id): veadk mpa create --config mpa-create.config.yaml
+# Managed creation (prepares network/APIG/database/skills/worker):
+#   veadk mpa provision --config mpa-create.config.yaml --agent-id customer-service
+# Preview without cloud/database calls: add --dry-run.
+# Studio uses the same private file via VEADK_MPA_CREATE_CONFIG (absolute path).
+# The managed path is implemented entirely in VeADK.
+# Setup/recovery: veadk/integrations/mpa/managed/README.md (README.zh.md).
 #
 # SECURITY: the filled-in file contains secrets (pg-password, model-api-key,
 # openviking-api-key, feishu-app-secret). It MUST NOT be committed to git.
@@ -12,7 +18,8 @@
 image: agentkit-platform-<account>-cn-beijing.cr.volces.com/agentkit/mpa_agent:<tag>
 registry-name: agentkit-platform-<account>
 # mpa-agent-id is omitted by default; CLI generates mi-<12 lowercase alnum>.
-account-id: "2112682748"
+# Optional expected-account assertion; the cloud identity remains authoritative.
+# account-id: "<expected-account>"
 region: cn-beijing
 
 # --- PostgreSQL (external, pre-created) ---
@@ -43,11 +50,76 @@ runtime-role-name: IDRoleForArkClawShareAgent
 # Set this to the dedicated APIG gateway allocated for mpa-agent IM routing.
 # apig-instance-id: gda-xxxxxxxx
 
-# --- OpenViking (optional; only mounts when a compatible OpenViking Server URL is set) ---
+# --- Legacy OpenViking (optional; only mounts when a compatible OpenViking Server URL is set) ---
 # openviking-url: https://<openviking-server>
 # openviking-resource-id: ov-xxxx
 # openviking-api-key: "<openviking-api-key>"
 
-# --- Feishu channel (optional) ---
+# --- Legacy Feishu channel (optional; managed mode binds channels after creation) ---
 # feishu-app-id: cli_xxxx
 # feishu-app-secret: "<feishu-app-secret>"
+
+# --- managed provisioning (used by `mpa provision` and Studio) ---
+# Pre-create a PostgreSQL instance, shared registry database, PG login/owner,
+# Runtime/worker IAM roles, and model access. Database admin needs CREATEDB.
+# Both PG URLs must be set in the Studio/CLI process environment; never commit
+# values. Example shape: postgresql+asyncpg://USER:PASSWORD@HOST/REGISTRY?ssl=require
+# The registry must use direct/session pooling, not transaction pooling.
+managed:
+  version: 1
+  database-admin-url-env: DEPLOYMENT_DATABASE_ADMIN_URL
+  shared-database-url-env: SHARED_APIG_DATABASE_URL
+  # Optional rotating deployment STS file. Otherwise use the existing
+  # VOLCENGINE_ACCESS_KEY / VOLCENGINE_SECRET_KEY / VOLCENGINE_SESSION_TOKEN env.
+  # credential-file: /var/run/secrets/iam/credential
+
+  # Choose one source, or leave both unset to use the flat image/model/PG fields.
+  # from-runtime: r-reference
+  # template-file: /secure/runtime-template.json
+  # Reference mode does not inherit the source agent's channels or Skill Space.
+  # Business database names are derived per agent; pg-database above is legacy-only.
+
+  # Optional explicit MPA image, overriding any of the three template sources.
+  # Omit runtime to retain the source image. Other prerequisites remain required.
+  # runtime:
+  #   image: registry.example/agentkit/mpa_agent:release-tag
+  #   role-name: IDRoleForArkClawShareAgent
+  #   cpu-milli: 2000
+  #   memory-mb: 4096
+  #   min-instance: 1
+  #   max-instance: 1
+  #   max-concurrency: 100
+  #   apmplus-enable: true
+  #   project-name: default
+  #   env:
+  #     CLOUD_PROVIDER: volcengine
+  #     CUSTOM_API_KEY: "${MPA_CUSTOM_API_KEY}"
+  # Omitted fields retain the chosen source/default. Flat model/PG fields above
+  # let you remove from-runtime entirely. Generated identities and database names
+  # cannot be supplied through runtime.env. Never put secrets directly in YAML.
+
+  network:
+    # For private PG, explicitly select its reachable VPC/subnets. Auto-created
+    # networks do not create database allowlists, peering or private connectivity.
+    # vpc-id: vpc-existing
+    # subnet-ids: [subnet-existing]
+    vpc-cidr: 172.20.0.0/16
+    subnet-prefix: 24
+    # zone: cn-beijing-a
+  apig:
+    # Optional explicit adoption (requires network.vpc-id). Otherwise create/reuse the registered gateway
+    # for this verified account/region. Prepare IM Gateway before CreateRuntime.
+    # adopt-id: gda-existing
+    {}
+  worker:
+    image: agentkit-platform-<account>-cn-beijing.cr.volces.com/agentkit/mpa_codex_worker:<tag>
+    # reference-id: t-worker-template
+    role-name: IDRoleForArkClawShareAgent
+    # To reuse a verified worker, replace image/reference-id with existing-id.
+    # existing-id: t-existing
+  timeout-seconds: 1800
+
+# Managed flat secrets may use a complete environment reference, e.g.
+# pg-password: "${MPA_PG_PASSWORD}" and model-api-key: "${MPA_MODEL_API_KEY}".
+# Keep MPA_AGENT_ID stable on retry. Cancellation preserves registered resources.
+# Deleting a Runtime does not delete shared APIG/VPC, business DB or Skill Space.
