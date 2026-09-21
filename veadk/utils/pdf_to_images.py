@@ -53,26 +53,32 @@ def render_pdf_to_png_parts(
     """Render up to ``max_pages`` pages of a PDF into ``image/png`` parts."""
     import pypdfium2 as pdfium
 
-    pdf = pdfium.PdfDocument(pdf_bytes)
-    page_count = len(pdf)
-    rendered = min(page_count, max_pages)
-    if page_count > max_pages:
-        logger.warning(
-            f"PDF has {page_count} pages; rendering only the first {max_pages}."
-        )
-
-    parts: list[types.Part] = []
-    for i in range(rendered):
-        # pypdfium2 leaves `scale` untyped (default 1), so it is inferred as
-        # int; floats are valid at runtime (e.g. 1.5x). Cast away the warning.
-        image = pdf[i].render(scale=scale).to_pil()  # type: ignore[arg-type]
-        buffer = io.BytesIO()
-        image.save(buffer, format="PNG")
-        parts.append(
-            types.Part(
-                inline_data=types.Blob(mime_type="image/png", data=buffer.getvalue())
+    # PdfDocument wraps native PDFium memory. Closing it (the context manager)
+    # also closes the pages and bitmaps created from it; without that the
+    # handles only go away once the cyclic GC happens to run, so a busy
+    # callback can pile up unreleased documents.
+    with pdfium.PdfDocument(pdf_bytes) as pdf:
+        page_count = len(pdf)
+        rendered = min(page_count, max_pages)
+        if page_count > max_pages:
+            logger.warning(
+                f"PDF has {page_count} pages; rendering only the first {max_pages}."
             )
-        )
+
+        parts: list[types.Part] = []
+        for i in range(rendered):
+            # pypdfium2 leaves `scale` untyped (default 1), so it is inferred as
+            # int; floats are valid at runtime (e.g. 1.5x). Cast away the warning.
+            image = pdf[i].render(scale=scale).to_pil()  # type: ignore[arg-type]
+            buffer = io.BytesIO()
+            image.save(buffer, format="PNG")
+            parts.append(
+                types.Part(
+                    inline_data=types.Blob(
+                        mime_type="image/png", data=buffer.getvalue()
+                    )
+                )
+            )
     return parts
 
 
