@@ -196,9 +196,13 @@ def _install_lazy_genai_types() -> ModuleType:
             model_validate = getattr(target, "model_validate", None)
             if callable(model_validate):
                 return model_validate(value)
-            from pydantic import TypeAdapter
+            from pydantic import ConfigDict, TypeAdapter
 
-            return TypeAdapter(target).validate_python(value)
+            # GenAI aliases such as SchemaUnion include GenericAlias and
+            # UnionType, matching its own arbitrary-types model configuration.
+            return TypeAdapter(
+                target, config=ConfigDict(arbitrary_types_allowed=True)
+            ).validate_python(value)
 
         def _core_schema(
             cls: type[Any],

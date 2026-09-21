@@ -1596,12 +1596,12 @@ def test_byteplus_deploy_agentkit_uses_iam_file_for_sdk_templates(
             ),
         )
 
-    async def initialize_evaluation_sets(**_kwargs: Any) -> list[str]:
-        raise AssertionError("BytePlus deploy should not create evaluation sets")
+    def initialize_evaluation_sets(_storage, runtime_id):
+        raise AssertionError("Default deployment should not create evaluation sets")
 
     monkeypatch.setattr("agentkit.toolkit.sdk.launch", launch)
     monkeypatch.setattr(
-        "frontend.server.evaluation_automation.datasets.ensure_feedback_sets",
+        "frontend.server.evaluation.repository.EvaluationStorage.for_runtime",
         initialize_evaluation_sets,
     )
     app = _create_studio_app(
@@ -1672,14 +1672,14 @@ def test_volcengine_deploy_omits_feedback_evaluation_sets_by_default(
             ),
         )
 
-    async def initialize_evaluation_sets(**_kwargs: Any) -> list[str]:
+    def initialize_evaluation_sets(_storage, runtime_id):
         nonlocal evaluation_set_calls
         evaluation_set_calls += 1
-        return ["unexpected"]
+        raise AssertionError("Default deployment should not create evaluation sets")
 
     monkeypatch.setattr("agentkit.toolkit.sdk.launch", launch)
     monkeypatch.setattr(
-        "frontend.server.evaluation_automation.datasets.ensure_feedback_sets",
+        "frontend.server.evaluation.repository.EvaluationStorage.for_runtime",
         initialize_evaluation_sets,
     )
     app = _create_studio_app(monkeypatch, tmp_path, developers="developer")
@@ -6179,7 +6179,7 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
     captured_config: dict[str, Any] = {}
     captured_dockerfile = ""
     update_requests: list[Any] = []
-    evaluation_set_calls: list[dict[str, Any]] = []
+    evaluation_set_calls: list[str] = []
     resolved_model_keys: list[dict[str, Any]] = []
     runtime_tag_sync_calls: list[dict[str, Any]] = []
 
@@ -6272,14 +6272,18 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
         resolve_model_key,
     )
 
-    async def initialize_evaluation_sets(**kwargs: Any) -> list[str]:
-        evaluation_set_calls.append(kwargs)
-        if evaluation_error:
-            raise RuntimeError(evaluation_error)
-        return ["updated-agent_good_case", "updated-agent_bad_case"]
+    def initialize_evaluation_sets(_storage, runtime_id):
+        evaluation_set_calls.append(runtime_id)
+
+        async def ensure_defaults():
+            if evaluation_error:
+                raise RuntimeError(evaluation_error)
+            return []
+
+        return SimpleNamespace(ensure_defaults=ensure_defaults)
 
     monkeypatch.setattr(
-        "frontend.server.evaluation_automation.datasets.ensure_feedback_sets",
+        "frontend.server.evaluation.repository.EvaluationStorage.for_runtime",
         initialize_evaluation_sets,
     )
     if provider == "byteplus":
@@ -6414,36 +6418,22 @@ def test_update_deployment_reuses_owned_runtime_and_returns_new_version(
     evaluation_frames = [
         frame for frame in frames if frame.get("phase") == "evaluation"
     ]
-    if provider == "byteplus":
-        assert evaluation_frames == []
-        assert "warnings" not in frames[-1]
-        assert evaluation_set_calls == []
-    else:
-        assert evaluation_frames[0]["message"] == (
-            "正在创建 Good Case 和 Bad Case 评测集"
+    assert evaluation_frames[0]["message"] == ("正在创建 Good Case 和 Bad Case 评测集")
+    if evaluation_error:
+        assert evaluation_frames[-1]["level"] == "warning"
+        assert evaluation_frames[-1]["message"] == (
+            "Good Case 和 Bad Case 评测集创建失败"
         )
-        if evaluation_error:
-            assert evaluation_frames[-1]["level"] == "warning"
-            assert evaluation_frames[-1]["message"] == (
-                "Good Case 和 Bad Case 评测集创建失败"
-            )
-            assert frames[-1]["warnings"] == [
-                "Runtime 已部署，但评测集创建失败：evaluation workspace unavailable"
-            ]
-        else:
-            assert evaluation_frames[-1]["level"] == "success"
-            assert evaluation_frames[-1]["message"] == (
-                "Good Case 和 Bad Case 评测集已创建"
-            )
-            assert "warnings" not in frames[-1]
-        assert len(evaluation_set_calls) == 1
-        assert callable(evaluation_set_calls[0]["openapi_post"])
-        assert evaluation_set_calls[0] | {"openapi_post": None} == {
-            "openapi_post": None,
-            "region": region,
-            "project_name": "default",
-            "agent_name": "updated-agent",
-        }
+        assert frames[-1]["warnings"] == [
+            "Runtime 已部署，但评测集创建失败：evaluation workspace unavailable"
+        ]
+    else:
+        assert evaluation_frames[-1]["level"] == "success"
+        assert evaluation_frames[-1]["message"] == (
+            "Good Case 和 Bad Case 评测集已创建"
+        )
+        assert "warnings" not in frames[-1]
+    assert evaluation_set_calls == [runtime.runtime_id]
     cloud = captured_config["launch_types"]["cloud"]
     assert cloud["runtime_id"] == runtime.runtime_id
     assert cloud["runtime_name"] == runtime.name
@@ -6794,28 +6784,27 @@ def test_application_owned_mcp_update_routes_cover_reuse_and_additions(
         "session_storage",
         "min_instance",
         "max_instance",
-        "expects_update",
         "quick_mode",
     ),
     [
-        ("in-memory", 1, 1, True, False),
-        ("persistent", 1, 5, False, False),
-        ("persistent", 0, 5, True, False),
-        ("persistent", 2, 4, True, False),
-        ("persistent", 1, 5, False, True),
+        ("in-memory", 1, 1, False),
+        ("persistent", 1, 5, False),
+        ("persistent", 0, 5, False),
+        ("persistent", 2, 4, False),
+        ("persistent", 1, 5, True),
     ],
 )
 @pytest.mark.parametrize("provider", ["volcengine", "byteplus"])
-def test_new_deployment_only_updates_non_default_instance_range(
+def test_new_deployment_creates_requested_instance_range_without_republishing(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     session_storage: str,
     min_instance: int,
     max_instance: int,
-    expects_update: bool,
     quick_mode: bool,
     provider: str,
     _stub_studio_runtime_role,
+    _stub_studio_runtime_readiness,
 ) -> None:
     from agentkit.sdk.runtime.client import AgentkitRuntimeClient
 
@@ -6908,6 +6897,11 @@ def test_new_deployment_only_updates_non_default_instance_range(
     assert frames[-1]["success"] is True
     assert frames[-1]["agentName"] == "demo-agent"
     assert frames[-1]["runtimeName"] == "generated-runtime-name"
+    _stub_studio_runtime_readiness.assert_called_once()
+    assert _stub_studio_runtime_readiness.call_args.args[1:] == (
+        runtime_id,
+        min_instance,
+    )
     created_tags = {tag.key: tag.value for tag in create_requests[-1].tags}
     assert created_tags["veadk:environment-id"] == "default"
     assert created_tags["veadk:author"] == "developer"
@@ -6944,9 +6938,10 @@ def test_new_deployment_only_updates_non_default_instance_range(
     assert "ENABLE_APMPLUS" not in runtime_envs
     assert "OBSERVABILITY_OPENTELEMETRY_APMPLUS_API_KEY" not in runtime_envs
     assert not any(frame.get("phase") == "evaluation" for frame in frames)
-    assert bool(update_requests) is expects_update
-    assert all(request.apmplus_enable is True for request in update_requests)
-    assert any(frame.get("phase") == "update" for frame in frames) is expects_update
+    assert update_requests == []
+    assert create_requests[0].min_instance == min_instance
+    assert create_requests[0].max_instance == max_instance
+    assert not any(frame.get("phase") == "update" for frame in frames)
     assert captured_config["launch_types"]["cloud"]["runtime_role_name"] == (
         "shared-runtime-role"
     )
@@ -6961,12 +6956,6 @@ def test_new_deployment_only_updates_non_default_instance_range(
         or "快速模式 Runtime 已具备 AgentKit 资源访问权限" == frame.get("message")
         for frame in frames
     )
-    if expects_update:
-        request = update_requests[0]
-        assert request.runtime_id == runtime_id
-        assert request.min_instance == min_instance
-        assert request.max_instance == max_instance
-        assert request.release_enable is True
 
 
 def test_deployment_rejects_internal_runtime_environment(
@@ -7391,6 +7380,13 @@ def test_sidecar_update_resolves_or_explicitly_reuses_stored_mcp_credentials(
     from agentkit.sdk.runtime.client import AgentkitRuntimeClient
     from veadk.extensions.harness import sidecar
 
+    # Credential reuse must not depend on background recovery finishing within
+    # two seconds on busy CI workers; separate tests cover pending latency
+    monkeypatch.setattr(
+        "veadk.cli.cli_frontend._RUNTIME_UPDATE_CAPABILITY_INITIAL_WAIT_SECONDS",
+        30.0,
+    )
+
     agent_name = "stored_mcp_agent"
     unnamed = mode == "changed-unnamed-explicit-reuse"
     published_tool_name = "" if unnamed else "orders"
@@ -7751,13 +7747,18 @@ def test_sidecar_deployment_rejects_cr_conflict_before_build(
     }
 
 
-def test_single_instance_update_failure_fails_the_deployment_at_update_phase(
+@pytest.mark.parametrize("ready", [True, False])
+def test_single_instance_deployment_does_not_start_a_second_release(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    _stub_studio_runtime_readiness,
+    ready: bool,
 ) -> None:
     from agentkit.sdk.runtime.client import AgentkitRuntimeClient
 
     runtime_id = "r-update-failure"
+    if not ready:
+        _stub_studio_runtime_readiness.side_effect = RuntimeError("实例未在时限内就绪")
 
     monkeypatch.setattr(
         AgentkitRuntimeClient,
@@ -7810,9 +7811,10 @@ def test_single_instance_update_failure_fails_the_deployment_at_update_phase(
             ]
 
     assert response.status_code == 200
-    assert frames[-1]["success"] is False
-    assert frames[-1]["phase"] == "update"
-    assert "instance update failed" in frames[-1]["error"]
+    assert frames[-1]["success"] is ready
+    if not ready:
+        assert "实例未在时限内就绪" in frames[-1]["error"]
+    assert not any(frame.get("phase") == "update" for frame in frames)
 
 
 def test_deployment_maps_create_runtime_duplicate_name_to_actionable_error(

@@ -66,6 +66,16 @@ def _stub_studio_deploy_role_confirmation(
 
 
 @pytest.fixture(autouse=True)
+def _stub_studio_runtime_readiness(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+    """Keep deployment route tests independent of cloud instance polling"""
+    wait = MagicMock()
+    monkeypatch.setattr(
+        "frontend.server.runtime_readiness.wait_for_runtime_instances", wait
+    )
+    return wait
+
+
+@pytest.fixture(autouse=True)
 def _stub_studio_runtime_role(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     """Keep deployment tests isolated from live Runtime IAM operations"""
     resolver = MagicMock(return_value="shared-runtime-role")
