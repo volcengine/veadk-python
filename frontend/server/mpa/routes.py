@@ -303,6 +303,14 @@ def mount_mpa_profile_routes(
                     active_operation=active_operation,
                     safe_error_code=error.code,
                 )
+            if error.code == "runtime_legacy_auth_unsupported":
+                return _mpa_agent_view_payload(
+                    mpa_instance_id=mpa_instance_id,
+                    binding_status="bound",
+                    runtime=binding.visible,
+                    active_operation=active_operation,
+                    safe_error_code=error.code,
+                )
             _raise_runtime_error(error)
         payload = _result_payload(profile_status_result)
         if etag := str(payload.get("etag") or ""):
@@ -984,7 +992,16 @@ def _mpa_agent_view_payload(
 ) -> dict[str, Any]:
     can_manage = bool((runtime or {}).get("canManage", True))
     can_read = binding_status in {"bound", "orphan_runtime"}
-    can_write = binding_status in {"bound", "orphan_runtime"} and can_manage
+    auth_unsupported = safe_error_code == "runtime_legacy_auth_unsupported"
+    can_write = (
+        binding_status in {"bound", "orphan_runtime"}
+        and can_manage
+        and not auth_unsupported
+    )
+    operation_status = str((active_operation or {}).get("status") or "")
+    operation_blocks_debug = (
+        operation_status in {"active", "failed_retryable"} or auth_unsupported
+    )
     return {
         "mpaInstanceId": mpa_instance_id,
         "bindingStatus": binding_status,
@@ -995,7 +1012,7 @@ def _mpa_agent_view_payload(
         "capabilities": {
             "canRead": can_read,
             "canWrite": can_write,
-            "canDebug": binding_status == "bound",
+            "canDebug": binding_status == "bound" and not operation_blocks_debug,
         },
         "safeError": (
             {"code": safe_error_code, "message": safe_error_code}

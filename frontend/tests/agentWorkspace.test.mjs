@@ -46,6 +46,15 @@ const zhUiCatalog = JSON.parse(
   readFileSync(new URL("../src/i18n/resources/zh-CN/ui.json", import.meta.url), "utf8"),
 );
 
+test("failed MPA deployment tasks expose explicit safe retry", () => {
+  assert.match(
+    workspaceSource,
+    /const retryOperation = \(\) => \{[\s\S]*?task\.retry\(\)[\s\S]*?\.catch\(\(\) => undefined\)[\s\S]*?\.finally\(\(\) => setRetrying\(false\)\)/,
+  );
+  assert.equal(enUiCatalog.agentWorkspace.retryOperation, "Retry operation");
+  assert.equal(zhUiCatalog.agentWorkspace.retryOperation, "重试操作");
+});
+
 test("Agent navigation uses the card page and keeps only detail workspace routes", () => {
   assert.match(appSource, /import \{[\s\S]*?AgentWorkspace[\s\S]*?\} from "\.\/ui\/AgentWorkspace"/);
   assert.match(
@@ -130,7 +139,7 @@ test("focused agent details can render without the workspace tabs or list sideba
   assert.match(appSource, /runtimeApp: detailConnection\?\.apps\[0\]/);
   assert.match(workspaceSource, /const knownApp = selectedAgent\?\.runtimeApp \?\? ""[\s\S]*?getRuntimeAgentInfo\([\s\S]*?knownApp/);
   assert.match(clientSource, /loadDraft = true/);
-  assert.match(clientSource, /return fetchAgentInfo\(app, ep, false, signal\)/);
+  assert.match(clientSource, /return fetchAgentInfoWithA2aFallback\(app, ep, false, signal\)/);
 });
 
 test("focused agent details use the shared resource detail header", () => {
@@ -379,6 +388,9 @@ test("MPA Agent detail consumes the dedicated MpaAgentView model", () => {
   assert.match(workspaceSource, /t\("agentWorkspace\.mpaRuntimeMissing"\)/);
   assert.match(workspaceSource, /t\("agentWorkspace\.mpaRuntimeBindingAmbiguous"\)/);
   assert.match(workspaceSource, /t\("agentWorkspace\.mpaRuntimeOrphan"\)/);
+  assert.match(workspaceSource, /function mpaSafeErrorMessage/);
+  assert.match(workspaceSource, /runtime_legacy_auth_unsupported/);
+  assert.match(workspaceSource, /selectedMpaSafeError \|\|/);
   assert.match(workspaceSource, /t\("agentWorkspace\.mpaControlPlane"\)/);
   assert.equal(
     enUiCatalog.agentWorkspace.mpaRuntimeBindingAmbiguous,
@@ -413,9 +425,10 @@ test("MPA Agent details expose Profile configuration as the Studio control entry
   );
   assert.match(workspaceSource, /const mpaProfileCanWrite = selectedMpaAgentView\?\.capabilities\.canWrite === true/);
   assert.match(workspaceSource, /const profileConfigDisabledReason = !selectedAgent/);
+  assert.match(workspaceSource, /runtimeReady=\{mpaProfileCanWrite\}/);
   assert.match(workspaceSource, /selectedMpaBindingStatus === "runtime_missing"[\s\S]*?t\("agentWorkspace\.mpaRuntimeMissing"\)/);
   assert.match(workspaceSource, /selectedMpaBindingStatus === "binding_ambiguous"[\s\S]*?t\("agentWorkspace\.mpaRuntimeBindingAmbiguous"\)/);
-  assert.match(workspaceSource, /!mpaProfileCanWrite[\s\S]*?t\("agentWorkspace\.errors\.noManagePermission"\)/);
+  assert.match(workspaceSource, /selectedMpaSafeError[\s\S]*?selectedMpaSafeError[\s\S]*?!mpaProfileCanWrite[\s\S]*?t\("agentWorkspace\.errors\.noManagePermission"\)/);
   assert.match(workspaceSource, /export interface MpaProfileEditTarget/);
   assert.match(workspaceSource, /onEditMpaProfile\?: \(target: MpaProfileEditTarget\) => void/);
   assert.match(workspaceSource, /function editMpaProfileFromStudio\(\)/);
@@ -1395,6 +1408,9 @@ test("runtime category reaches detail entries through both live and cached cards
   const cards = readFileSync(new URL("../src/ui/MyAgents.tsx", import.meta.url), "utf8");
   assert.match(cards, /agentCategory: runtime\.agentCategory \?\? agentCategory/);
   assert.equal((cards.match(/runtimeToAgent\(runtime, t, agentCategory\)/g) || []).length, 2);
-  assert.match(appSource, /agentCategory: agentDetailTarget\.runtime\.agentCategory/);
+  assert.match(
+    appSource,
+    /agentCategory: agentDetailTarget\.agentCategory \?\? agentDetailTarget\.runtime\.agentCategory/,
+  );
   assert.match(connectionsSource, /agentCategory\?: "general" \| "mpa"/);
 });

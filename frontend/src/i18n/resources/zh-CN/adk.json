@@ -481,8 +481,11 @@
       "inProgress": "正在部署"
     },
     "deploymentFailed": "部署失败",
+    "listSessionsFailed": "加载 Session 失败",
     "mpaOperationFailed": "应用 MPA Runtime 配置失败",
     "mpaOperationLoadFailed": "加载 MPA Runtime 操作失败",
+    "mpaRuntimeLegacyAuthUnsupported": "该 MPA Runtime 使用旧版鉴权适配，当前无法读取 Studio Session。请将 Runtime 镜像更新到最新 MPA AgentKit 版本后刷新此 Agent。\n{{detail}}",
+    "mpaRuntimeSessionsLoadFailed": "加载 MPA Runtime Session 失败",
     "mpaDeletePreviewFailed": "加载 MPA 删除预览失败",
     "loadMpaDiagnosticsFailed": "加载 MPA Runtime 诊断失败",
     "mpaExecutionConfigFailed": "更新 MPA 会话配置失败",

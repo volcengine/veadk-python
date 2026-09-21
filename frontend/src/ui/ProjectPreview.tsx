@@ -82,6 +82,7 @@ import {
   initializeGithubDeliveryMain,
   syncGithubCicdRuntime,
   applyMpaProfileAfterDeployment,
+  retryMpaAgentOperation,
   RuntimeProbeError,
   type DeployAuthentication,
   type DeployBuildLogSnapshot,
@@ -608,6 +609,8 @@ export interface DeploymentTaskUpdate {
   runtimeName: string;
   runtimeId?: string;
   mpaInstanceId?: string;
+  /** Server-persisted MPA lifecycle operation recovered after refresh. */
+  operationId?: string;
   region: string;
   startedAt: number;
   status: "running" | "success" | "error" | "cancelled";
@@ -1662,6 +1665,7 @@ export function ProjectPreview({
     let latestRuntimeId = deploymentRuntimeId;
     let latestRegion = deployRegion;
     let latestMpaInstanceId = deploymentMpaInstanceId;
+    let failedMpaRetry: (() => Promise<void>) | undefined;
     const terminalBuildLog = (
       status: DeployBuildLogSnapshot["status"],
     ): DeployBuildLogSnapshot | undefined => (
@@ -2058,6 +2062,56 @@ export function ProjectPreview({
             mpaOperation.safeErrorCode ||
             t("projectPreview.errors.mpaOperationIncomplete");
           publishMpaStage(failedPhase, failedMessage, 100, "error");
+          if (mpaOperation.status === "failed_retryable") {
+            const operationId = mpaOperation.operationId;
+            const retryParams = {
+              operationKind: isRuntimeUpdate ? "update" as const : "create" as const,
+              runtimeId,
+              region: runtimeRegion,
+              mpaInstanceId:
+                deploymentMpaInstanceId ?? completeResult.mpaInstanceId ?? runtimeId,
+              sourceProfileId: initialTask.draftId?.trim()
+                ? `studio-draft:${initialTask.draftId.trim()}`
+                : `studio-agent:${taskAgentName}:${taskId}`,
+              draft: agentDraft,
+              targetKey: isRuntimeUpdate
+                ? deploymentMpaInstanceId ?? runtimeId
+                : `runtime:${runtimeRegion}:${requestedRuntimeName || runtimeId}`,
+              runtimeRevision: isRuntimeUpdate ? deploymentRuntimeRevision : undefined,
+            };
+            failedMpaRetry = async () => {
+              const retried = await retryMpaAgentOperation(
+                operationId,
+                retryParams,
+              );
+              onDeploymentTaskChange?.({
+                ...initialTask,
+                runtimeName: completeResult.runtimeName || taskRuntimeName,
+                runtimeId,
+                mpaInstanceId: retryParams.mpaInstanceId,
+                region: runtimeRegion,
+                status: retried.status === "succeeded" ? "success" : "error",
+                phase: retried.stage,
+                label: retried.status === "succeeded"
+                  ? t("projectPreview.task.deploymentComplete")
+                  : t("projectPreview.task.deploymentFailed"),
+                message: retried.safeErrorCode || undefined,
+                pct: 100,
+                mpaProfile: true,
+                mpaSmoke: !isRuntimeUpdate,
+                operationId: retried.operationId,
+              });
+              if (retried.status !== "succeeded") {
+                throw new Error(
+                  retried.safeErrorCode || t("projectPreview.errors.mpaOperationIncomplete"),
+                );
+              }
+              await onDeploymentComplete?.({
+                ...completeResult,
+                mpaOperation: retried,
+              });
+            };
+          }
           throw new Error(
             failedMessage,
           );
@@ -2224,7 +2278,7 @@ export function ProjectPreview({
           : {}),
         mpaProfile: Boolean(latestPhase === "profile_applying" || latestPhase === "smoke_running"),
         mpaSmoke: Boolean(latestPhase === "smoke_running"),
-        retry: requestDeploymentConfirmation,
+        retry: failedMpaRetry ?? requestDeploymentConfirmation,
       });
     } finally {
       if (mountedRef.current) setDeploying(false);

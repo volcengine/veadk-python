@@ -2,7 +2,7 @@
 
 - Component ID: `mpa-runtime-control`
 - Status: `draft`; S1, S2, S3, S4, S5-01, S5-01a, S5-04, the S5-08 Session creation fix, and S5-11 live lifecycle verification are implemented or recorded; S5-06 and S5-07 no-impact records are captured; remaining S5 contracts remain target behavior
-- Revised: 2026-09-18
+- Revised: 2026-09-19
 - Chinese: [README.zh.md](README.zh.md)
 - PRD: [MPA AgentKit P0 Functional Migration](../../prd-spec/features/mpa-p0-productionization/2026-09-15-mpa-p0-productionization-design.md)
 - Owning code: Agent, Session, A2A, worker, authorization, and diagnostics modules in `agentkit-mpa-agent`
@@ -12,6 +12,8 @@
 AgentKit Studio owns the MPA authoring entry and platform Skill, Tool, Environment, Vault, and other resources. P0 does not use Managed Agent CRUD/version/Session. mpa-agent owns immutable executable Profile revisions, session execution configuration versions, Turn execution records, participant state, and diagnostic linkage. It does not provide templates, experts, review/install, or a separate publishing service. Studio/BFF is a client and orchestrator, not execution-state authority.
 
 At code revision `2f5e039`, the Runtime already had Agent config revisions, Session CRUD/run/SSE/events/MCP, A2A generation/lease and pause/resume, worker interruption, health/readiness, and Runtime Console. Those were reuse points. The current P0 branch has since implemented the S1 Profile/readiness/auth foundation, the S2 Session execution-config/Profile-upgrade Runtime subset, the S3 Turn acceptance, dispatcher recovery, and refresh cursor subset, the S4-01/S4-02 participant data-model plus pause-barrier subset, the S4-03 lease-aware resume boundary, the S4-04 Runtime linked continuation API/outbox, the S5-08 MPA Session creation initialization fix, and the S5-11 execution-smoke Worker endpoint integration described below. Studio control wiring for deletion and lifecycle verification is captured in the Studio control-plane spec.
+
+Runtime mainline also independently provides encrypted multi-channel binding, shared APIG control-plane support, persistent deployment records, isolated PostgreSQL database creation, Runtime provisioning, and one persistent Skill Space per logical agent. These are reusable infrastructure capabilities governed by their own deployment/channel contracts. They do not alter the P0 authority model: Profile, Session execution configuration, Turn, lifecycle, and diagnostic state remain Runtime-owned, and their presence does not close the remaining P0 evidence gates.
 
 ## CON-1: Identity and authorization
 
@@ -187,3 +189,5 @@ The user confirmed on 2026-09-15 that an existing Session pins its creation-time
 2026-09-18: Aligned legacy ADK endpoint authentication with AgentKit key-auth in Runtime commit `eecc6e3`. In AgentKit mode, `require_auth` now derives the Runtime principal from `Authorization`; outside AgentKit mode it retains the existing `X-Jwt-Token` behavior. Focused tests returned 49 passed, full `make test` returned 2506 passed and 14 skipped, and focused Ruff plus diff hygiene passed. The resulting image `agentkit-platform-2112682748-cn-beijing.cr.volces.com/agentkit/mpa_agent:mpa-p0-adk-auth-eecc6e3-20260917` (`sha256:6ac6a2712ecd1c7950125dc9afc6467373a08142fbd6c3577aba12f126079bef`) is deployed as Runtime `r-yeuujrrcowb21078p9jh` version 62 and is `Ready`; direct and Studio BFF `/list-apps` calls both returned `200 ["default"]`. No Runtime schema or persisted model changed.
 
 2026-09-18: Live Studio acceptance against Runtime version 62 created Session `bee3db38-edcc-4020-b925-3d9d6a3a7adc` and executed `printf 'MPA_V62_BROWSER_OK\n'` in the sandbox. The parent sandbox activity and child command activity both reached `completed`; the final answer remained visible at completion and after 30 seconds, and a full refresh restored the answer and terminal tool cards with no spinner or running text. Evidence is under `evidence/browser/mpa-v62-live/`. This validates the exercised chat-display path only and does not close the full S5-12 `BC-01`–`BC-09` gate.
+
+2026-09-19: Rebased onto Runtime `origin/master` and recorded independently merged capabilities. Mainline channel APIs/services provide encrypted Feishu, DingTalk, and WeCom binding and delivery; deployment modules provide shared APIG, database, Runtime, and Skill-Space provisioning; ADK streaming replays complete artifact answers once. These capabilities are implemented and tested in mainline, but remain outside this P0 ledger's provider/deployment acceptance.

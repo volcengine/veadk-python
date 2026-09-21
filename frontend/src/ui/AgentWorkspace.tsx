@@ -431,6 +431,21 @@ function mpaDeleteBlockerLabel(code: string, t: TFunction<"ui">): string {
   }
 }
 
+function mpaSafeErrorMessage(code: string | undefined, t: TFunction<"ui">): string {
+  switch (code) {
+    case "runtime_legacy_auth_unsupported":
+      return t("agentWorkspace.mpaRuntimeLegacyAuthUnsupported");
+    case "profile_not_found":
+      return t("agentWorkspace.mpaRuntimeOrphan");
+    case "binding_ambiguous":
+      return t("agentWorkspace.mpaRuntimeBindingAmbiguous");
+    case "runtime_missing":
+      return t("agentWorkspace.mpaRuntimeMissing");
+    default:
+      return code ?? "";
+  }
+}
+
 function MpaDeletePreviewDetails({
   preview,
   t,
@@ -1664,6 +1679,7 @@ function DeploymentProgressCard({
   onReturnToEdit?: () => void;
 }) {
   const { t } = useTranslation("ui");
+  const [retrying, setRetrying] = useState(false);
   const steps = deploymentSteps(task, t);
   const currentIndex = deploymentStepIndex(task, t);
   const progress = task.status === "success"
@@ -1678,6 +1694,13 @@ function DeploymentProgressCard({
         : task.status === "error"
           ? t("agentWorkspace.deployStatus.error")
           : t("agentWorkspace.deployStatus.cancelled");
+  const retryOperation = () => {
+    if (retrying || !task.retry) return;
+    setRetrying(true);
+    void task.retry()
+      .catch(() => undefined)
+      .finally(() => setRetrying(false));
+  };
 
   return (
     <section
@@ -1765,11 +1788,37 @@ function DeploymentProgressCard({
       </ol>
       {(task.status === "error" || task.status === "cancelled") && onReturnToEdit && (
         <div className="aw-deploy-progress-actions">
+          {task.status === "error" && task.retry && (
+            <button
+              type="button"
+              className="studio-update-action"
+              disabled={retrying}
+              onClick={retryOperation}
+            >
+              {retrying
+                ? t("deploymentError.retrying")
+                : t("agentWorkspace.retryOperation")}
+            </button>
+          )}
           <button
             type="button"
             className="studio-update-action"
             onClick={onReturnToEdit}
           >{t("agentWorkspace.returnToEdit")}</button>
+        </div>
+      )}
+      {task.status === "error" && task.retry && !onReturnToEdit && (
+        <div className="aw-deploy-progress-actions">
+          <button
+            type="button"
+            className="studio-update-action"
+            disabled={retrying}
+            onClick={retryOperation}
+          >
+            {retrying
+              ? t("deploymentError.retrying")
+              : t("agentWorkspace.retryOperation")}
+          </button>
         </div>
       )}
     </section>
@@ -2127,6 +2176,10 @@ export function AgentWorkspace({
       ? mpaProfileStatus.value
       : selectedMpaAgentView?.profile ?? null;
   const selectedMpaBindingStatus = selectedMpaAgentView?.bindingStatus ?? "";
+  const selectedMpaSafeError = mpaSafeErrorMessage(
+    selectedMpaAgentView?.safeError?.code,
+    t,
+  );
   const mpaProfileCanWrite = selectedMpaAgentView?.capabilities.canWrite === true;
   const selectedMpaDiagnostics =
     mpaDiagnostics?.requestKey === mpaDiagnosticsRequestKey
@@ -2413,6 +2466,8 @@ export function AgentWorkspace({
         ? t("agentWorkspace.loadingMpaAgentView")
         : mpaAgentViewError
           ? mpaAgentViewError
+          : selectedMpaSafeError
+            ? selectedMpaSafeError
           : selectedMpaBindingStatus === "runtime_missing"
             ? t("agentWorkspace.mpaRuntimeMissing")
             : selectedMpaBindingStatus === "binding_ambiguous"
@@ -2430,6 +2485,8 @@ export function AgentWorkspace({
         ? t("agentWorkspace.loadingMpaAgentView")
         : mpaAgentViewError
           ? mpaAgentViewError
+          : selectedMpaSafeError
+            ? selectedMpaSafeError
           : selectedMpaBindingStatus === "runtime_missing"
             ? t("agentWorkspace.mpaRuntimeMissing")
             : selectedMpaBindingStatus === "binding_ambiguous"
@@ -4365,6 +4422,7 @@ export function AgentWorkspace({
                           mpaAgentViewLoading
                             ? t("agentWorkspace.loadingMpaAgentView")
                             : mpaAgentViewError ||
+                              selectedMpaSafeError ||
                               t(
                                 selectedMpaBindingStatus === "bound"
                                   ? "agentWorkspace.mpaRuntimeBound"
@@ -4691,12 +4749,7 @@ export function AgentWorkspace({
                 <MpaProfileConfigPanel
                   profile={profileDraft}
                   profileStatus={selectedMpaProfileStatus}
-                  runtimeReady={Boolean(
-                    selectedAgent?.runtimeId &&
-                    selectedAgentCategory === "mpa" &&
-                    selectedMpaBindingStatus !== "runtime_missing" &&
-                    selectedMpaBindingStatus !== "binding_ambiguous",
-                  )}
+                  runtimeReady={mpaProfileCanWrite}
                   disabledReason={profileConfigDisabledReason}
                   saving={mpaProfileApply.saving}
                   error={mpaProfileApply.error}

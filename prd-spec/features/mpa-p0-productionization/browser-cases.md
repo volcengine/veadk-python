@@ -1,8 +1,9 @@
 # MPA AgentKit P0 Browser Verification Runbook
 
-- Status: `designed`; covers `VC-17`
+- Status: `verified`; `BC-01` through `BC-09` passed on 2026-09-20 and cover `VC-17`
 - Chinese: [browser-cases.zh.md](browser-cases.zh.md)
 - Evidence: `evidence/browser/<run-id>/<case-id>/`
+- Delivery note: browser screenshots, network traces, console output, and browser state are local test artifacts and are intentionally not committed.
 
 ## 1. Shared environment
 

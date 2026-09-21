@@ -2,7 +2,7 @@
 
 - Component ID：`mpa-runtime-control`
 - 状态：`draft`；S1、S2、S3、S4、S5-01、S5-01a、S5-04、S5-08 Session 创建修复与 S5-11 真实生命周期验证已实现或记录；S5-06 与 S5-07 no-impact 记录已补充；其余 S5 仍为目标契约
-- 修订日期：2026-09-18
+- 修订日期：2026-09-19
 - English：[README.md](README.md)
 - PRD：[MPA AgentKit P0 功能迁移](../../prd-spec/features/mpa-p0-productionization/2026-09-15-mpa-p0-productionization-design.zh.md)
 - 负责代码：`agentkit-mpa-agent` 的 Agent、Session、A2A、worker、鉴权与诊断模块
@@ -12,6 +12,8 @@
 AgentKit Studio 持有 MPA 创作入口以及 Skill、Tool、Environment、Vault 等平台资源。本期不使用 Managed Agent CRUD/version/Session。mpa-agent 持有不可变的可执行 Profile revision、会话执行配置版本、Turn 执行记录、参与方状态和诊断关联，不提供模板、专家、审核安装或独立发布服务。Studio/BFF 是客户端和编排层，不成为执行状态权威。
 
 代码基线 `2f5e039` 已有 Agent config revision、Session CRUD/run/SSE/events/MCP、A2A generation/lease 与 pause/resume、worker interrupt、health/readiness 和 Runtime Console，这些是复用点。当前 P0 分支已实现下文所述 S1 Profile/readiness/auth 基础、S2 Session execution-config/Profile-upgrade Runtime 子集、S3 Turn acceptance、dispatcher recovery 与刷新 cursor 子集、S4-01/S4-02 的 participant 数据模型和 pause-barrier 子集、S4-03 lease-aware resume 边界、S4-04 Runtime linked continuation API/outbox、S5-08 MPA Session 创建初始化修复，以及下文记录的 S5-11 execution-smoke Worker endpoint 接线。删除与生命周期验证的 Studio 控制接线记录在 Studio 控制面 spec 中。
+
+Runtime 主干还由其他 feature 独立提供加密多渠道绑定、shared APIG 控制面支撑、持久部署记录、隔离 PostgreSQL database 创建、Runtime 部署和每个逻辑 Agent 一个持久 Skill Space。这些是由独立渠道/部署契约管理的可复用基础能力，不改变 P0 权威边界：Profile、Session execution configuration、Turn、生命周期和诊断状态仍由 Runtime 持有，也不能因这些能力存在就关闭剩余 P0 证据门禁。
 
 ## CON-1：身份与授权
 
@@ -187,3 +189,5 @@ uv run --group dev pytest \
 2026-09-18：在 Runtime commit `eecc6e3` 中完成旧 ADK endpoint 与 AgentKit key-auth 的鉴权对齐。AgentKit mode 下，`require_auth` 现在从 `Authorization` 建立 Runtime principal；非 AgentKit mode 保留既有 `X-Jwt-Token` 行为。定向测试 49 passed，完整 `make test` 2506 passed、14 skipped，focused Ruff 与 diff hygiene 均通过。产出镜像 `agentkit-platform-2112682748-cn-beijing.cr.volces.com/agentkit/mpa_agent:mpa-p0-adk-auth-eecc6e3-20260917`（`sha256:6ac6a2712ecd1c7950125dc9afc6467373a08142fbd6c3577aba12f126079bef`）已发布为 Runtime `r-yeuujrrcowb21078p9jh` version 62，状态为 `Ready`；Runtime 直连和 Studio BFF 的 `/list-apps` 调用均返回 `200 ["default"]`。本次没有改变 Runtime schema 或持久数据模型。
 
 2026-09-18：在 Runtime version 62 上完成真实 Studio 验收，新建 Session `bee3db38-edcc-4020-b925-3d9d6a3a7adc` 并在沙箱执行 `printf 'MPA_V62_BROWSER_OK\n'`。父级沙箱活动和子命令活动均进入 `completed`；最终回答在完成时和 30 秒后持续可见，整页刷新后恢复回答和终态工具卡，页面没有 spinner 或运行中文案。证据位于 `evidence/browser/mpa-v62-live/`。该结果只验证本次对话展示路径，不关闭 S5-12 的完整 `BC-01`–`BC-09` 门禁。
+
+2026-09-19：rebase 到 Runtime `origin/master` 后记录其他分支已合入能力。主干 channel API/service 已提供飞书、钉钉和企微的加密绑定与投递；deployment 模块已提供 shared APIG、database、Runtime 和 Skill Space 部署；ADK streaming 已支持完整 artifact answer 仅回放一次。这些能力在主干已有实现和测试，但其 provider/部署专项验收不归本 P0 台账。

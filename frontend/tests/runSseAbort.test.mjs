@@ -50,6 +50,7 @@ const {
   registerRemoteApp,
   runSseFirstEventTimeoutError,
   runSSE,
+  getAgentInfo,
 } = await import(moduleUrl);
 
 test("createSession uses the MPA instance id instead of the Runtime id", async (t) => {
@@ -256,6 +257,76 @@ test("listSessions uses the native MPA Runtime session API", async (t) => {
     /\/web\/runtime-proxy\/r-runtime-1\/api\/v1\/sessions\?_runtime_region=cn-beijing$/,
   );
   assert.equal(captured[0].method, "GET");
+});
+
+test("listSessions explains legacy MPA Runtime auth failures", async (t) => {
+  const previousFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = previousFetch;
+    clearRemoteApps();
+  });
+
+  registerRemoteApp("mpa-agent", {
+    app: "default",
+    runtimeId: "r-runtime-legacy",
+    region: "cn-beijing",
+    agentCategory: "mpa",
+  });
+
+  globalThis.fetch = async () =>
+    Response.json(
+      { detail: "X-Jwt-Token header is required" },
+      { status: 401 },
+    );
+
+  await assert.rejects(
+    () => listSessions("mpa-agent", "studio-user"),
+    /older authentication adapter[\s\S]*X-Jwt-Token header is required/,
+  );
+});
+
+test("getAgentInfo falls back to A2A metadata when Runtime default agent-info is absent", async (t) => {
+  const previousFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = previousFetch;
+    clearRemoteApps();
+  });
+
+  registerRemoteApp("mpa-agent", {
+    app: "default",
+    runtimeId: "r-runtime-a2a",
+    region: "cn-beijing",
+    agentCategory: "mpa",
+  });
+
+  const urls = [];
+  globalThis.fetch = async (url) => {
+    urls.push(String(url));
+    const path = String(url);
+    if (path.includes("/web/agent-info/default")) {
+      return Response.json({ detail: "Not Found" }, { status: 404 });
+    }
+    if (path.includes("/web/agent-info/a2a-default")) {
+      return Response.json({
+        name: "default",
+        description: "A2A metadata",
+        type: "a2a",
+        model: "model-a",
+        tools: [],
+        skills: [],
+        subAgents: [],
+      });
+    }
+    throw new Error(`unexpected URL: ${path}`);
+  };
+
+  const info = await getAgentInfo("mpa-agent");
+
+  assert.equal(info.name, "default");
+  assert.equal(info.type, "a2a");
+  assert.equal(info.model, "model-a");
+  assert.match(urls[0], /\/web\/agent-info\/default/);
+  assert.match(urls[1], /\/web\/agent-info\/a2a-default/);
 });
 
 test("listSessions treats legacy MPA Runtime connections with mpaInstanceId as native MPA", async (t) => {

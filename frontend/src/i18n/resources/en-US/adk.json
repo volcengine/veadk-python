@@ -481,8 +481,11 @@
       "inProgress": "Deployment in progress"
     },
     "deploymentFailed": "Deployment failed",
+    "listSessionsFailed": "Failed to load sessions",
     "mpaOperationFailed": "Failed to apply the MPA Runtime profile",
     "mpaOperationLoadFailed": "Failed to load MPA Runtime operations",
+    "mpaRuntimeLegacyAuthUnsupported": "This MPA Runtime uses an older authentication adapter and cannot list Studio sessions. Update the Runtime image to the current MPA AgentKit build, then refresh this Agent.\n{{detail}}",
+    "mpaRuntimeSessionsLoadFailed": "Failed to load MPA Runtime sessions",
     "mpaDeletePreviewFailed": "Failed to load MPA delete preview",
     "loadMpaDiagnosticsFailed": "Failed to load MPA Runtime diagnostics",
     "mpaExecutionConfigFailed": "Failed to update the MPA session configuration",

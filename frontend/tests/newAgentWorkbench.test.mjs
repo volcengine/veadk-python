@@ -18,6 +18,10 @@ const workbenchStyles = readFileSync(
   new URL("../src/create/NewAgentWorkbench.css", import.meta.url),
   "utf8",
 );
+const projectPreviewSource = readFileSync(
+  new URL("../src/ui/ProjectPreview.tsx", import.meta.url),
+  "utf8",
+);
 const catalogSource = readFileSync(
   new URL("../src/create/veadkCatalog.ts", import.meta.url),
   "utf8",
@@ -99,6 +103,52 @@ test("deployment tasks carry the workspace draft id into the library", () => {
     /const taskBase = \{[\s\S]*?\.\.\.\(workspaceDraftId \? \{ draftId: workspaceDraftId \} : \{\}\)/,
   );
   assert.match(appSource, /workspaceDraftId=\{editingDraftId \|\| undefined\}/);
+});
+
+test("MPA deployment recovery uses the persisted operation instead of redeploying", () => {
+  assert.match(
+    appSource,
+    /getMpaAgentOperation\([\s\S]*?listActiveMpaAgentOperations\(\)/,
+  );
+  assert.match(
+    appSource,
+    /operationToDeploymentTask[\s\S]*?status === "succeeded"[\s\S]*?status === "failed_retryable"/,
+  );
+  assert.match(
+    appSource,
+    /operationToDeploymentTask[\s\S]*?uiText\("agentWorkspace\.deployStatus\.success"\)/,
+  );
+  assert.match(customCreateSource, /retryMpaAgentOperation/);
+  assert.match(projectPreviewSource, /retryMpaAgentOperation/);
+  assert.match(
+    customCreateSource,
+    /failedMpaRetry[\s\S]*?retryMpaAgentOperation\([\s\S]*?operationId/,
+  );
+  assert.doesNotMatch(
+    customCreateSource.slice(
+      customCreateSource.indexOf("failedMpaRetry = async"),
+      customCreateSource.indexOf("throw new Error(latestMessage)"),
+    ),
+    /deployFromNewWorkbench/,
+  );
+  assert.match(
+    projectPreviewSource,
+    /failedMpaRetry[\s\S]*?retryMpaAgentOperation\([\s\S]*?operationId/,
+  );
+  assert.doesNotMatch(
+    projectPreviewSource.slice(
+      projectPreviewSource.indexOf("failedMpaRetry = async"),
+      projectPreviewSource.indexOf("throw new Error(\n            failedMessage"),
+    ),
+    /requestDeploymentConfirmation/,
+  );
+});
+
+test("AI creation prompt ignores Enter while an IME composition is active", () => {
+  assert.match(
+    customCreateSource,
+    /className="cw-ai-compose-form"[\s\S]*?onKeyDown=\{\(event\) => \{[\s\S]*?isImeCompositionEvent\(event\.nativeEvent\)[\s\S]*?event\.key === "Enter"/,
+  );
 });
 
 test("quick Runtime updates keep the existing target and use update semantics", () => {

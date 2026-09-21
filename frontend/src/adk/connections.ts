@@ -44,7 +44,6 @@ export interface AgentEntry {
   mpaInstanceId?: string;
   region?: string;
   currentVersion?: number | null;
-  agentCategory?: "general" | "mpa";
   /** Server-authorized permission for Studio-managed Runtime deletion. */
   canDelete?: boolean;
   /** Product category supplied by the Runtime list; unknown entries hide MPA-only UI. */

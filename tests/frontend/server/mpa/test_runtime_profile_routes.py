@@ -2,12 +2,15 @@ from __future__ import annotations
 
 from typing import Any
 
+import anyio
+import httpx
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from frontend.server.mpa.routes import MpaRuntimeBinding, mount_mpa_profile_routes
 from frontend.server.mpa.operations import MpaLifecycleOperation, MpaOperationConflict
-from frontend.server.mpa.runtime_client import MpaRuntimeError
+from frontend.server.mpa.runtime_client import MpaRuntimeClient, MpaRuntimeError
 
 
 class FakeRuntimeClient:
@@ -135,6 +138,12 @@ class OrphanRuntimeClient(FakeRuntimeClient):
     async def profile_status(self, **kwargs: Any) -> Any:
         self.calls.append(("status", kwargs))
         raise MpaRuntimeError("profile_not_found", status_code=404)
+
+
+class LegacyAuthRuntimeClient(FakeRuntimeClient):
+    async def profile_status(self, **kwargs: Any) -> Any:
+        self.calls.append(("status", kwargs))
+        raise MpaRuntimeError("runtime_legacy_auth_unsupported", status_code=401)
 
 
 class FakeOperationService:
@@ -393,7 +402,7 @@ def test_mpa_agent_view_hydrates_unique_runtime_binding_and_profile_status():
     assert body["capabilities"] == {
         "canRead": True,
         "canWrite": True,
-        "canDebug": True,
+        "canDebug": False,
     }
     assert runtime_client.calls == [
         (
@@ -429,6 +438,80 @@ def test_mpa_agent_view_allows_profile_write_for_orphan_runtime():
         "canDebug": False,
     }
     assert body["safeError"]["code"] == "profile_not_found"
+
+
+def test_mpa_agent_view_reports_legacy_runtime_auth_as_safe_error():
+    runtime_client = LegacyAuthRuntimeClient()
+    client = _app(
+        runtime_client,
+        operation_service=FakeOperationService(),
+        runtime_bindings=[_binding("runtime-legacy")],
+    )
+
+    response = client.get("/web/mpa/agents/mpa-1/view", params={"region": "all"})
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["bindingStatus"] == "bound"
+    assert body["runtime"]["runtimeId"] == "runtime-legacy"
+    assert body["profile"] is None
+    assert body["capabilities"] == {
+        "canRead": True,
+        "canWrite": False,
+        "canDebug": False,
+    }
+    assert body["safeError"]["code"] == "runtime_legacy_auth_unsupported"
+
+
+def test_runtime_client_classifies_legacy_x_jwt_token_auth_error():
+    async def handler(request):
+        del request
+        return httpx.Response(
+            401,
+            json={"detail": "X-Jwt-Token header is required"},
+        )
+
+    async def run() -> None:
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(handler)
+        ) as transport:
+            client = MpaRuntimeClient(transport=transport)
+
+            with pytest.raises(MpaRuntimeError) as error_info:
+                await client.profile_status(
+                    endpoint="https://runtime.example",
+                    mpa_instance_id="mpa-1",
+                    bearer_token="runtime-token",
+                )
+
+            assert error_info.value.status_code == 401
+            assert error_info.value.code == "runtime_legacy_auth_unsupported"
+
+    anyio.run(run)
+
+
+def test_runtime_client_classifies_profile_status_not_found_text():
+    async def handler(request):
+        del request
+        return httpx.Response(404, json={"detail": "Not Found"})
+
+    async def run() -> None:
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(handler)
+        ) as transport:
+            client = MpaRuntimeClient(transport=transport)
+
+            with pytest.raises(MpaRuntimeError) as error_info:
+                await client.profile_status(
+                    endpoint="https://runtime.example",
+                    mpa_instance_id="mpa-1",
+                    bearer_token="runtime-token",
+                )
+
+            assert error_info.value.status_code == 404
+            assert error_info.value.code == "profile_not_found"
+
+    anyio.run(run)
 
 
 def test_mpa_agent_view_blocks_writes_when_runtime_binding_is_ambiguous():

@@ -34,6 +34,7 @@ import {
   getTurnControl,
   getAutomaticEvaluationStatuses,
   getMpaSessionExecutionConfig,
+  getMpaAgentOperation,
   getSessionTrace,
   getSession,
   getStudioAccess,
@@ -44,6 +45,7 @@ import {
   listEnvironments,
   listWorkspaces,
   listModelOptions,
+  listActiveMpaAgentOperations,
   listSessions,
   prepareSessionEnvironmentMounts,
   runSseIncompleteResponseError,
@@ -68,6 +70,7 @@ import {
   type CloudRuntime,
   type MessageFeedbackRating,
   type MpaSessionExecutionConfig,
+  type MpaAgentOperation,
   type SiteBranding,
   type RuntimeStudioToolCapabilities,
   type SessionEnvironmentMountSelection,
@@ -1014,6 +1017,10 @@ const pickGreetingKey = () => GREETING_KEYS[Math.floor(Math.random() * GREETING_
 
 function appText(key: string, options?: Record<string, unknown>): string {
   return i18n.t(key, { ns: "app", ...options });
+}
+
+function uiText(key: string, options?: Record<string, unknown>): string {
+  return i18n.t(key, { ns: "ui", ...options });
 }
 
 function releaseAttachmentPreviews(items: Attachment[]) {
@@ -2136,6 +2143,38 @@ export default function App() {
       return next;
     });
   }, []);
+
+  const operationToDeploymentTask = useCallback((
+    operation: MpaAgentOperation,
+  ): DeploymentTaskUpdate => {
+    const succeeded = operation.status === "succeeded";
+    const failed = operation.status === "failed_retryable"
+      || operation.status === "failed_terminal";
+    const startedAt = Date.parse(operation.createdAt ?? operation.updatedAt ?? "");
+    return {
+      id: `mpa-operation:${operation.operationId}`,
+      agentName: operation.mpaInstanceId || operation.runtimeId || operation.operationId,
+      runtimeName: operation.mpaInstanceId || operation.runtimeId || operation.operationId,
+      runtimeId: operation.runtimeId,
+      mpaInstanceId: operation.mpaInstanceId,
+      region: operation.runtimeRegion || "cn-beijing",
+      startedAt: Number.isFinite(startedAt) ? startedAt : Date.now(),
+      status: succeeded ? "success" : failed ? "error" : "running",
+      phase: operation.stage,
+      label: failed
+        ? uiText("agentWorkspace.deploymentFailed")
+        : succeeded
+          ? uiText("agentWorkspace.deployStatus.success")
+          : uiText("agentWorkspace.deployStatus.running"),
+      message: operation.safeErrorCode || undefined,
+      pct: succeeded || failed ? 100 : undefined,
+      mpaProfile: true,
+      mpaSmoke: operation.operationKind === "create",
+      operationId: operation.operationId,
+    };
+  }, []);
+  const recoveredOperationIdsRef = useRef(new Set<string>());
+
   // Whether the server has cloud AK/SK. The agent-creation workbench needs
   // them; assume present until the runtime-config check says otherwise (avoids
   // flashing the notice in the common, configured case).
@@ -2266,6 +2305,43 @@ export default function App() {
     defaultCloudRegion(cloudProvider),
   );
   const [focusedDeploymentTaskId, setFocusedDeploymentTaskId] = useState("");
+
+  useEffect(() => {
+    if (authStatus !== "authenticated") return;
+    const controller = new AbortController();
+
+    const recover = async (initial: MpaAgentOperation) => {
+      if (recoveredOperationIdsRef.current.has(initial.operationId)) return;
+      recoveredOperationIdsRef.current.add(initial.operationId);
+      let operation = initial;
+      try {
+        while (!controller.signal.aborted) {
+          operation = await getMpaAgentOperation(
+            operation.operationId,
+            controller.signal,
+          );
+          const task = operationToDeploymentTask(operation);
+          updateDeploymentTask(task);
+          if (operation.operationKind === "create") {
+            setFocusedDeploymentTaskId(task.id);
+            setFocusedWorkspaceAgentId("");
+            setManageAgents(true);
+          }
+          if (operation.status !== "active") return;
+          await new Promise((resolve) => window.setTimeout(resolve, 500));
+        }
+      } finally {
+        recoveredOperationIdsRef.current.delete(initial.operationId);
+      }
+    };
+
+    void listActiveMpaAgentOperations()
+      .then((operations) => Promise.all(operations.map(recover)))
+      .catch(() => {
+        // Recovery is best-effort; normal Runtime discovery remains available.
+      });
+    return () => controller.abort();
+  }, [authStatus, operationToDeploymentTask, updateDeploymentTask]);
   const [focusedWorkspaceAgentId, setFocusedWorkspaceAgentId] = useState("");
   const [agentDetailTarget, setAgentDetailTarget] =
     useState<MyAgentCardData | null>(null);
@@ -6865,7 +6941,6 @@ export default function App() {
         app: agentDetailTarget.appName ?? agentDetailTarget.name,
         remote: true,
         runtimeApp: detailConnection?.apps[0],
-        agentCategory: agentDetailTarget.runtime.agentCategory,
         runtimeId: agentDetailTarget.runtime.runtimeId,
         mpaInstanceId: agentDetailTarget.runtime.mpaInstanceId,
         region: agentDetailTarget.runtime.region,

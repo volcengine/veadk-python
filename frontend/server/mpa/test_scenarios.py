@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hmac
 import json
 import os
@@ -76,12 +77,20 @@ class _ScenarioState:
             items.append(deepcopy(payload))
             self._condition.notify_all()
 
+    def mark_operation_complete(self, scenario: str) -> None:
+        with self._condition:
+            state = self._require(scenario)
+            state["data"]["operationComplete"] = True
+            self._condition.notify_all()
+
     def release(self, scenario: str, barrier: str) -> None:
         with self._condition:
             state = self._require(scenario)
             if barrier not in state["barriers"]:
                 raise KeyError(barrier)
             state["barriers"][barrier] = "released"
+            if barrier == "operation_complete":
+                state["data"]["operationComplete"] = True
             if scenario == "turn_lifecycle":
                 participants = state["data"].setdefault("participants", {})
                 participant_id = {
@@ -304,6 +313,18 @@ class _ScenarioState:
         with self._condition:
             state = self._require_active_session()
             return deepcopy(state["data"].get("events", []))
+
+    def persist_session_event(self, event: dict[str, Any]) -> None:
+        with self._condition:
+            state = self._require_active_session()
+            events = state["data"].setdefault("events", [])
+            event_id = str(event.get("id") or "")
+            if event_id and any(
+                str(item.get("id") or "") == event_id for item in events
+            ):
+                return
+            events.append(deepcopy(event))
+            self._condition.notify_all()
 
     def update_execution_config(
         self,
@@ -595,6 +616,49 @@ def _adk_session(
     }
 
 
+_CREATION_FAILURES = {
+    "profile_apply_failed": ("profile_applying", "profile_apply_failed"),
+    "smoke_worker_not_ready": ("smoke_running", "smoke_worker_not_ready"),
+    "smoke_output_mismatch": ("smoke_running", "smoke_output_mismatch"),
+    "cleanup_failed": ("smoke_running", "cleanup_failed"),
+}
+
+
+def _scenario_operation(
+    scenario: str, data: dict[str, Any], *, retried: bool = False
+) -> dict[str, Any]:
+    operation = {
+        "operationId": f"mpaop-{scenario}",
+        "operationKind": "create",
+        "ownerId": "scenario-user",
+        "targetKey": f"runtime:{data['region']}:{data['runtimeName']}",
+        "stage": "runnable",
+        "status": "succeeded",
+        "mpaInstanceId": data["runtimeId"],
+        "runtimeId": data["runtimeId"],
+        "runtimeRegion": data["region"],
+        "runtimeRevision": str(data["latestProfileRevision"]),
+        "profileRevision": data["latestProfileRevision"],
+        "profileOperationId": "scenario-profile",
+        "retryCount": 1 if retried else 0,
+    }
+    if scenario in _CREATION_FAILURES and not retried:
+        stage, error_code = _CREATION_FAILURES[scenario]
+        operation.update(
+            {
+                "stage": stage,
+                "status": "failed_retryable",
+                "safeErrorCode": error_code,
+                "profileRevision": (
+                    None
+                    if scenario == "profile_apply_failed"
+                    else data["latestProfileRevision"]
+                ),
+            }
+        )
+    return operation
+
+
 def mount_test_scenario_routes(app: FastAPI, *, token_file: Path) -> bool:
     """Mount test routes only when both isolation switches are explicit."""
     if not (
@@ -624,11 +688,7 @@ def mount_test_scenario_routes(app: FastAPI, *, token_file: Path) -> bool:
     ) -> tuple[str, dict[str, Any]] | None:
         authorize_loopback(request)
         active = state.active()
-        if active is None or active[0] not in {
-            "session_revision_6",
-            "cursor_expired",
-            "turn_lifecycle",
-        }:
+        if active is None:
             return None
         return active[0], active[1]["data"]
 
@@ -659,8 +719,214 @@ def mount_test_scenario_routes(app: FastAPI, *, token_file: Path) -> bool:
             status_code=status_code,
         )
 
+    @app.get("/web/runtime-name-availability")
+    def fixture_runtime_name_availability(
+        request: Request, name: str = "", region: str = ""
+    ) -> dict[str, bool]:
+        active = active_mpa_scenario(request)
+        if active is None:
+            raise HTTPException(status_code=404, detail="scenario_not_found")
+        scenario, _data = active
+        state.count(scenario, "runtime-name-availability")
+        state.append_payload(
+            scenario,
+            "runtime-name-availability",
+            {"name": name, "region": region},
+        )
+        return {"available": True}
+
+    @app.post("/web/generated-agent-projects")
+    async def fixture_generated_agent_projects(request: Request) -> dict[str, Any]:
+        active = active_mpa_scenario(request)
+        if active is None:
+            raise HTTPException(status_code=404, detail="scenario_not_found")
+        scenario, _data = active
+        payload = await request.json()
+        state.count(scenario, "generated-agent-projects")
+        state.append_payload(scenario, "generated-agent-projects", payload)
+        draft = payload.get("draft") if isinstance(payload, dict) else {}
+        name = str(draft.get("name") or "scenario-agent")
+        project_name = name.strip().lower().replace("-", "_").replace(" ", "_")
+        return {
+            "name": project_name or "scenario_agent",
+            "files": [
+                {
+                    "path": "app.py",
+                    "content": "# browser scenario project\n",
+                }
+            ],
+        }
+
+    @app.post("/web/generated-agent-drafts")
+    async def fixture_generated_agent_drafts(request: Request) -> dict[str, Any]:
+        active = active_mpa_scenario(request)
+        if active is None:
+            raise HTTPException(status_code=404, detail="scenario_not_found")
+        scenario, _data = active
+        payload = await request.json()
+        state.count(scenario, "generated-agent-drafts")
+        state.append_payload(scenario, "generated-agent-drafts", payload)
+        return {
+            "draft": {
+                "name": "ime_generated",
+                "description": "IME scenario",
+                "instruction": "Generated after composition ends.",
+                "agentType": "llm",
+                "subAgents": [],
+            },
+            "summary": "IME scenario generated",
+            "unresolvedItems": [],
+        }
+
+    @app.post("/web/deploy-agentkit")
+    async def fixture_deploy_agentkit(request: Request) -> StreamingResponse:
+        active = active_mpa_scenario(request)
+        if active is None:
+            raise HTTPException(status_code=404, detail="scenario_not_found")
+        scenario, data = active
+        payload = await request.json()
+        state.count(scenario, "deploy-agentkit")
+        state.append_payload(scenario, "deploy-agentkit", payload)
+
+        async def body():
+            progress = {
+                "level": "info",
+                "phase": "deploy",
+                "message": "Scenario deployment isolated",
+                "pct": 50,
+                "runtimeName": data["runtimeName"],
+            }
+            final = {
+                "done": True,
+                "success": True,
+                "agentName": data["appName"],
+                "runtimeName": data["runtimeName"],
+                "runtimeId": data["runtimeId"],
+                "mpaInstanceId": data["runtimeId"],
+                "region": data["region"],
+                "version": data["latestProfileRevision"],
+            }
+            yield f"data: {json.dumps(progress)}\n\n".encode("utf-8")
+            try:
+                await asyncio.to_thread(
+                    state.wait_if_blocked, scenario, "deploy_complete"
+                )
+            except TimeoutError:
+                return
+            yield f"data: {json.dumps(final)}\n\n".encode("utf-8")
+
+        return StreamingResponse(body(), media_type="text/event-stream")
+
+    @app.post("/web/mpa/agents", status_code=202)
+    async def fixture_create_mpa_agent(request: Request) -> dict[str, Any]:
+        active = active_mpa_scenario(request)
+        if active is None:
+            raise HTTPException(status_code=404, detail="scenario_not_found")
+        scenario, data = active
+        payload = await request.json()
+        state.count(scenario, "mpa-agent-create")
+        state.append_payload(scenario, "mpa-agent-create", payload)
+        if scenario == "create_success":
+            try:
+                await asyncio.to_thread(
+                    state.wait_if_blocked, scenario, "operation_complete"
+                )
+            except TimeoutError as error:
+                raise HTTPException(
+                    status_code=504, detail="scenario_barrier_timeout"
+                ) from error
+        state.mark_operation_complete(scenario)
+        if "operation_complete" in state.get(scenario)["barriers"]:
+            state.count(scenario, "mpa-operation-complete")
+        return _scenario_operation(scenario, data)
+
+    @app.get("/web/mpa/agent-operations")
+    def fixture_list_mpa_operations(
+        request: Request, status: str = ""
+    ) -> dict[str, Any]:
+        active = active_mpa_scenario(request)
+        if active is None:
+            return {"operations": []}
+        scenario, data = active
+        state.count(scenario, "mpa-operation-list")
+        scenario_state = state.get(scenario)
+        if scenario_state["calls"].get("mpa-agent-create", 0) == 0:
+            return {"operations": []}
+        operation_complete = bool(
+            scenario_state["data"].get("operationComplete")
+            or scenario_state["calls"].get("mpa-operation-complete", 0) > 0
+        )
+        operation = _scenario_operation(
+            scenario,
+            data,
+            retried=scenario_state["calls"].get("mpa-operation-retry-complete", 0) > 0,
+        )
+        if scenario == "create_success" and not operation_complete:
+            operation.update({"status": "active", "stage": "profile_applying"})
+        if status == "active" and operation["status"] not in {
+            "active",
+            "failed_retryable",
+        }:
+            return {"operations": []}
+        return {"operations": [operation]}
+
+    @app.get("/web/mpa/agent-operations/{operation_id}")
+    def fixture_get_mpa_operation(
+        operation_id: str, request: Request
+    ) -> dict[str, Any]:
+        active = active_mpa_scenario(request)
+        if active is None:
+            raise HTTPException(status_code=404, detail="scenario_not_found")
+        scenario, data = active
+        scenario_state = state.get(scenario)
+        if scenario_state["calls"].get("mpa-agent-create", 0) == 0:
+            raise HTTPException(status_code=404, detail="mpa_operation_not_found")
+        operation_complete = bool(
+            scenario_state["data"].get("operationComplete")
+            or scenario_state["calls"].get("mpa-operation-complete", 0) > 0
+        )
+        operation = _scenario_operation(
+            scenario,
+            data,
+            retried=scenario_state["calls"].get("mpa-operation-retry-complete", 0) > 0,
+        )
+        if scenario == "create_success" and not operation_complete:
+            operation.update({"status": "active", "stage": "profile_applying"})
+        if operation_id != operation["operationId"]:
+            raise HTTPException(status_code=404, detail="mpa_operation_not_found")
+        state.count(scenario, "mpa-operation-get")
+        return operation
+
+    @app.post("/web/mpa/agent-operations/{operation_id}/retry", status_code=202)
+    async def fixture_retry_mpa_operation(
+        operation_id: str, request: Request
+    ) -> dict[str, Any]:
+        active = active_mpa_scenario(request)
+        if active is None:
+            raise HTTPException(status_code=404, detail="scenario_not_found")
+        scenario, data = active
+        operation = _scenario_operation(scenario, data)
+        if operation_id != operation["operationId"]:
+            raise HTTPException(status_code=404, detail="mpa_operation_not_found")
+        payload = await request.json()
+        state.count(scenario, "mpa-operation-retry")
+        state.append_payload(scenario, "mpa-operation-retry", payload)
+        try:
+            await asyncio.to_thread(state.wait_if_blocked, scenario, "retry_complete")
+        except TimeoutError as error:
+            raise HTTPException(
+                status_code=504, detail="scenario_barrier_timeout"
+            ) from error
+        state.count(scenario, "mpa-operation-retry-complete")
+        return _scenario_operation(scenario, data, retried=True)
+
     @app.get("/web/runtimes")
-    def fixture_runtimes(request: Request, agentCategory: str = "") -> dict[str, Any]:
+    def fixture_runtimes(
+        request: Request,
+        agentCategory: str = "",
+        scope: str = "",
+        region: str = "",
+    ) -> dict[str, Any]:
         active = active_mpa_scenario(request)
         if active is None:
             return {"runtimes": [], "nextToken": ""}
@@ -668,8 +934,126 @@ def mount_test_scenario_routes(app: FastAPI, *, token_file: Path) -> bool:
         category = agentCategory.strip().lower()
         if category and category != "mpa":
             return {"runtimes": [], "nextToken": ""}
+        if scenario == "slow_scope_switch":
+            user = request.headers.get("X-VeADK-Local-User", "").strip()
+            if scope != "mine":
+                raise HTTPException(status_code=404, detail="resource_not_found")
+            if user == "alice" and region == "cn-beijing":
+                state.count(scenario, "runtime-list-old")
+                try:
+                    state.wait_if_blocked(scenario, "old_scope_response")
+                except TimeoutError as error:
+                    raise HTTPException(
+                        status_code=504, detail="scenario_barrier_timeout"
+                    ) from error
+                item = _runtime_item(
+                    {
+                        **data,
+                        "runtimeId": "runtime-same-id",
+                        "runtimeName": "MPA Scope Alice",
+                        "region": "cn-beijing",
+                    }
+                )
+                return {"runtimes": [item], "nextToken": ""}
+            if user == "bob" and region == "cn-shanghai":
+                state.count(scenario, "runtime-list-current")
+                item = _runtime_item(
+                    {
+                        **data,
+                        "runtimeId": "runtime-same-id",
+                        "runtimeName": "MPA Scope Bob",
+                        "region": "cn-shanghai",
+                    }
+                )
+                return {"runtimes": [item], "nextToken": ""}
+            state.count(scenario, "runtime-list-denied")
+            raise HTTPException(status_code=404, detail="resource_not_found")
         state.count(scenario, "runtime-list")
         return {"runtimes": [_runtime_item(data)], "nextToken": ""}
+
+    @app.get("/web/mpa/agents/{mpa_instance_id}/view")
+    def fixture_mpa_agent_view(
+        mpa_instance_id: str,
+        request: Request,
+    ) -> dict[str, Any]:
+        active = active_mpa_scenario(request)
+        if active is None:
+            raise HTTPException(status_code=404, detail="scenario_not_found")
+        scenario, data = active
+        if scenario == "slow_scope_switch":
+            user = request.headers.get("X-VeADK-Local-User", "").strip()
+            if user not in {"alice", "bob"}:
+                state.count(scenario, "mpa-view-denied")
+                raise HTTPException(status_code=404, detail="resource_not_found")
+        if mpa_instance_id != data["runtimeId"]:
+            raise HTTPException(status_code=404, detail="runtime_not_found")
+
+        runtime = _runtime_item(data)
+        profile = {
+            "operationId": "scenario-profile",
+            "status": "applied",
+            "profileRevision": data["latestProfileRevision"],
+            "runtimeRevision": str(data["latestProfileRevision"]),
+            "etag": f'"{data["latestProfileRevision"]}"',
+        }
+        binding_status = "bound"
+        bindings: list[dict[str, Any]] = []
+        safe_error = None
+        can_read = True
+        can_write = True
+        can_debug = True
+        active_operation = None
+        if scenario in _CREATION_FAILURES:
+            scenario_state = state.get(scenario)
+            recovered = (
+                scenario_state["calls"].get("mpa-operation-retry-complete", 0) > 0
+            )
+            if not recovered:
+                active_operation = _scenario_operation(scenario, data)
+                can_debug = False
+        if scenario == "runtime_missing":
+            binding_status = "runtime_missing"
+            runtime = None
+            profile = None
+            can_read = can_write = can_debug = False
+            safe_error = {"code": "runtime_missing", "message": "runtime_missing"}
+        elif scenario == "binding_ambiguous":
+            binding_status = "binding_ambiguous"
+            bindings = [
+                runtime,
+                {
+                    **runtime,
+                    "runtimeId": "runtime-mpa-s2-secondary",
+                    "region": "cn-shanghai",
+                },
+            ]
+            runtime = None
+            profile = None
+            can_read = can_write = can_debug = False
+            safe_error = {"code": "binding_ambiguous", "message": "binding_ambiguous"}
+        elif scenario == "orphan_runtime":
+            binding_status = "orphan_runtime"
+            profile = None
+            can_debug = False
+            safe_error = {"code": "profile_not_found", "message": "profile_not_found"}
+        elif scenario == "old_runtime":
+            runtime = {**runtime, "currentVersion": 1}
+            can_write = can_debug = False
+
+        return {
+            "mpaInstanceId": mpa_instance_id,
+            "bindingStatus": binding_status,
+            "runtime": runtime,
+            "profile": profile,
+            "activeOperation": active_operation,
+            "bindings": bindings,
+            "capabilities": {
+                "canRead": can_read,
+                "canWrite": can_write,
+                "canDebug": can_debug,
+            },
+            "safeError": safe_error,
+        }
 
     @app.get("/web/runtime-detail")
     def fixture_runtime_detail(
@@ -838,6 +1222,18 @@ def mount_test_scenario_routes(app: FastAPI, *, token_file: Path) -> bool:
                 "runtimeRevision": str(data["latestProfileRevision"]),
                 "etag": f'"{data["latestProfileRevision"]}"',
             }
+        if request.method == "GET" and path == "api/v1/sessions":
+            state.count(scenario, "runtime-session-list")
+            return [
+                {
+                    "sessionId": data["sessionId"],
+                    "id": data["sessionId"],
+                    "appName": data["appName"],
+                    "userId": "scenario-user",
+                    "mpaInstanceId": data["runtimeId"],
+                    "profileRevision": data["profileRevision"],
+                }
+            ]
         if request.method == "POST" and path == "api/v1/sessions":
             state.count(scenario, "runtime-session-create")
             payload = await request.json()
@@ -860,6 +1256,13 @@ def mount_test_scenario_routes(app: FastAPI, *, token_file: Path) -> bool:
         if request.method == "GET" and session_detail_match:
             state.count(scenario, "runtime-session-read")
             return _adk_session(data)
+        session_events_match = fullmatch(
+            rf"api/v1/sessions/{data['sessionId']}/events",
+            path,
+        )
+        if request.method == "GET" and session_events_match:
+            state.count(scenario, "runtime-session-events")
+            return {"events": deepcopy(data.get("events", []))}
         control_by_session_match = fullmatch(
             rf"api/v1/a2a/tasks/by-session/{data['sessionId']}/control",
             path,
@@ -1006,6 +1409,29 @@ def mount_test_scenario_routes(app: FastAPI, *, token_file: Path) -> bool:
                     },
                     "turnComplete": True,
                 }
+                if scenario == "turn_lifecycle":
+                    running_event = {
+                        "id": "event-lifecycle-running",
+                        "invocationId": "turn_lifecycle-invocation",
+                        "author": data["appName"],
+                        "partial": True,
+                        "content": {
+                            "role": "model",
+                            "parts": [{"text": "Lifecycle task running"}],
+                        },
+                        "turnComplete": False,
+                    }
+                    yield f"data: {json.dumps(running_event)}\n\n".encode("utf-8")
+                    try:
+                        await asyncio.to_thread(
+                            state.wait_if_blocked,
+                            scenario,
+                            "stream_complete",
+                        )
+                    except TimeoutError:
+                        return
+                if scenario == "cursor_expired":
+                    state.persist_session_event(event)
                 yield f"data: {json.dumps(event)}\n\n".encode("utf-8")
 
             return StreamingResponse(body(), media_type="text/event-stream")

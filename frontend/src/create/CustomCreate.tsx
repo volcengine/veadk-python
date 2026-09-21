@@ -162,6 +162,7 @@ import {
   generateAgentProject,
   listModelApiKeys,
   listModelOptions,
+  retryMpaAgentOperation,
   type ModelApiKeyOption,
   runGeneratedAgentTestSSE,
   type ModelOption,
@@ -5332,6 +5333,7 @@ export function CustomCreate({
     let latestMessage = t("traditional.deployment.generatingConfiguration");
     let latestRuntimeId = deploymentTarget?.runtimeId;
     let latestRegion = deploymentTarget?.region ?? deployRegion;
+    let failedMpaRetry: (() => Promise<void>) | undefined;
     try {
       if (!deploymentTarget) {
         const availability = await checkRuntimeNameAvailability(
@@ -5563,6 +5565,51 @@ export function CustomCreate({
             message: latestMessage,
             pct: 100,
           });
+          if (mpaOperation.status === "failed_retryable") {
+            const retryParams = {
+              operationKind: deploymentTarget ? "update" as const : "create" as const,
+              runtimeId: mpaRuntimeId,
+              region: mpaRegion,
+              mpaInstanceId:
+                deploymentTarget?.mpaInstanceId ?? result.mpaInstanceId ?? mpaRuntimeId,
+              sourceProfileId: workspaceDraftId?.trim()
+                ? `studio-draft:${workspaceDraftId.trim()}`
+                : `studio-agent:${deploymentDraft.name}:${taskId}`,
+              draft: deploymentDraft,
+              targetKey: deploymentTarget
+                ? deploymentTarget.mpaInstanceId ?? mpaRuntimeId
+                : `runtime:${mpaRegion}:${deploymentRuntimeName.trim() || result.runtimeName}`,
+              runtimeRevision: deploymentTarget?.etag,
+            };
+            failedMpaRetry = async () => {
+              const retried = await retryMpaAgentOperation(
+                mpaOperation.operationId,
+                retryParams,
+              );
+              onDeploymentTaskChange?.({
+                ...taskBase,
+                runtimeId: mpaRuntimeId,
+                mpaInstanceId: retryParams.mpaInstanceId,
+                region: mpaRegion,
+                status: retried.status === "succeeded" ? "success" : "error",
+                phase: retried.stage,
+                label: retried.status === "succeeded"
+                  ? t("traditional.deployment.complete")
+                  : t("traditional.deployment.failed"),
+                message: retried.safeErrorCode || undefined,
+                pct: 100,
+                mpaProfile: true,
+                mpaSmoke: !deploymentTarget,
+                operationId: retried.operationId,
+              });
+              if (retried.status !== "succeeded") {
+                throw new Error(
+                  retried.safeErrorCode || t("traditional.deployment.mpaOperationIncomplete"),
+                );
+              }
+              await onDeploymentComplete?.({ ...result, mpaOperation: retried });
+            };
+          }
           throw new Error(latestMessage);
         }
         if (deploymentTarget) {
@@ -5646,7 +5693,8 @@ export function CustomCreate({
         message,
         mpaProfile: true,
         mpaSmoke: !deploymentTarget,
-        retry: () => deployFromNewWorkbench(deploymentOptions),
+        operationId: undefined,
+        retry: failedMpaRetry ?? (() => deployFromNewWorkbench(deploymentOptions)),
       };
       onDeploymentTaskChange?.(failedTask);
     } finally {
@@ -5714,6 +5762,7 @@ export function CustomCreate({
                 }
                 onChange={(event) => setAiRequirement(event.target.value)}
                 onKeyDown={(event) => {
+                  if (isImeCompositionEvent(event.nativeEvent)) return;
                   if (event.key === "Enter") {
                     event.preventDefault();
                     void handleGenerateDraft();

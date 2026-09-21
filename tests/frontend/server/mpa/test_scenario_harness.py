@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+import time
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -81,6 +83,480 @@ def test_scenario_barrier_and_call_count_are_deterministic(
     state = client.get("/__test/mpa/scenarios/turn_lifecycle").json()
     assert state["calls"] == {"dispatch": 1}
     assert state["barriers"] == {"participant_ack": "released"}
+
+
+def test_create_success_scenario_isolates_the_complete_public_write_chain(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.setenv("VEADK_MPA_TEST_SCENARIOS", "1")
+    app = FastAPI()
+    mount_test_scenario_routes(app, token_file=_token_file(tmp_path))
+    client = TestClient(app)
+    control_headers = {"Authorization": "Bearer scenario-token"}
+
+    seeded = client.put(
+        "/__test/mpa/scenarios/create_success",
+        headers=control_headers,
+        json={"barriers": []},
+    )
+    assert seeded.status_code == 200
+
+    availability = client.get(
+        "/web/runtime-name-availability",
+        params={"name": "scenario-runtime", "region": "cn-beijing"},
+    )
+    assert availability.status_code == 200
+    assert availability.json() == {"available": True}
+
+    generated = client.post(
+        "/web/generated-agent-projects",
+        json={
+            "draft": {
+                "name": "scenario-agent",
+                "description": "Scenario Agent",
+                "instruction": "Stay isolated.",
+            }
+        },
+    )
+    assert generated.status_code == 200
+    assert generated.json()["name"] == "scenario_agent"
+    assert generated.json()["files"]
+
+    deployed = client.post(
+        "/web/deploy-agentkit",
+        json={
+            "name": "scenario_agent",
+            "files": generated.json()["files"],
+            "config": {"region": "cn-beijing", "projectName": "default"},
+            "runtimeName": "scenario-runtime",
+            "agentCategory": "mpa",
+            "taskId": "scenario-task",
+        },
+    )
+    assert deployed.status_code == 200
+    assert '"done": true' in deployed.text
+    assert "runtime-mpa-s2" in deployed.text
+
+    operation_payload = {
+        "operationKind": "create",
+        "runtimeId": "runtime-mpa-s2",
+        "region": "cn-beijing",
+        "mpaInstanceId": "runtime-mpa-s2",
+        "sourceProfileId": "studio-agent:scenario-agent:scenario-task",
+        "targetKey": "runtime:cn-beijing:scenario-runtime",
+        "profile": {
+            "name": "scenario-agent",
+            "description": "Scenario Agent",
+            "system": "Stay isolated.",
+            "model": {},
+            "tools": [],
+            "skills": [],
+            "mcpServers": [],
+            "metadata": {"veadk:agent-type": "mpa"},
+        },
+    }
+    created = client.post(
+        "/web/mpa/agents",
+        headers={"Idempotency-Key": "scenario-task:mpa-profile"},
+        json=operation_payload,
+    )
+    assert created.status_code == 202
+    assert created.json()["status"] == "succeeded"
+    assert created.json()["stage"] == "runnable"
+
+    listed = client.get("/web/mpa/agent-operations", params={"status": "active"})
+    recovered = client.get(f"/web/mpa/agent-operations/{created.json()['operationId']}")
+    assert listed.status_code == 200
+    assert listed.json() == {"operations": []}
+    assert recovered.status_code == 200
+    assert recovered.json() == created.json()
+
+    state = client.get(
+        "/__test/mpa/scenarios/create_success", headers=control_headers
+    ).json()
+    assert state["calls"] == {
+        "runtime-name-availability": 1,
+        "generated-agent-projects": 1,
+        "deploy-agentkit": 1,
+        "mpa-agent-create": 1,
+        "mpa-operation-list": 1,
+        "mpa-operation-get": 1,
+    }
+    assert state["data"]["payloads"]["deploy-agentkit"][0]["agentCategory"] == "mpa"
+    assert state["data"]["payloads"]["mpa-agent-create"][0] == operation_payload
+
+
+def test_creation_failure_scenarios_retry_without_redeploying_runtime(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.setenv("VEADK_MPA_TEST_SCENARIOS", "1")
+    app = FastAPI()
+    mount_test_scenario_routes(app, token_file=_token_file(tmp_path))
+    client = TestClient(app)
+    control_headers = {"Authorization": "Bearer scenario-token"}
+    operation_payload = {
+        "operationKind": "create",
+        "runtimeId": "runtime-mpa-s2",
+        "region": "cn-beijing",
+        "mpaInstanceId": "runtime-mpa-s2",
+        "sourceProfileId": "studio-agent:scenario-agent:scenario-task",
+        "targetKey": "runtime:cn-beijing:scenario-runtime",
+        "profile": {
+            "name": "scenario-agent",
+            "description": "Scenario Agent",
+            "system": "Stay isolated.",
+            "model": {},
+            "tools": [],
+            "skills": [],
+            "mcpServers": [],
+            "metadata": {"veadk:agent-type": "mpa"},
+        },
+    }
+    expected = {
+        "profile_apply_failed": ("profile_applying", "profile_apply_failed"),
+        "smoke_worker_not_ready": ("smoke_running", "smoke_worker_not_ready"),
+        "smoke_output_mismatch": ("smoke_running", "smoke_output_mismatch"),
+        "cleanup_failed": ("smoke_running", "cleanup_failed"),
+    }
+
+    for scenario, (stage, error_code) in expected.items():
+        seeded = client.put(
+            f"/__test/mpa/scenarios/{scenario}",
+            headers=control_headers,
+            json={"barriers": ["retry_complete"]},
+        )
+        assert seeded.status_code == 200
+
+        deployed = client.post(
+            "/web/deploy-agentkit",
+            json={
+                "name": "scenario_agent",
+                "files": [{"path": "app.py", "content": "# isolated\n"}],
+                "config": {"region": "cn-beijing"},
+                "runtimeName": "scenario-runtime",
+                "agentCategory": "mpa",
+            },
+        )
+        assert deployed.status_code == 200
+
+        failed = client.post(
+            "/web/mpa/agents",
+            headers={"Idempotency-Key": f"{scenario}:mpa-profile"},
+            json=operation_payload,
+        )
+        assert failed.status_code == 202
+        failed_body = failed.json()
+        assert failed_body["status"] == "failed_retryable"
+        assert failed_body["stage"] == stage
+        assert failed_body["safeErrorCode"] == error_code
+        view = client.get(
+            "/web/mpa/agents/runtime-mpa-s2/view",
+            params={"region": "cn-beijing"},
+        )
+        assert view.status_code == 200
+        assert view.json()["activeOperation"] == failed_body
+        assert view.json()["capabilities"]["canDebug"] is False
+
+        replay = client.post(
+            "/web/mpa/agents",
+            headers={"Idempotency-Key": f"{scenario}:mpa-profile"},
+            json=operation_payload,
+        )
+        assert replay.status_code == 202
+        assert replay.json() == failed_body
+        active = client.get("/web/mpa/agent-operations", params={"status": "active"})
+        assert active.status_code == 200
+        assert active.json()["operations"] == [failed_body]
+
+        retry_result: dict[str, object] = {}
+
+        def retry_operation() -> None:
+            response = client.post(
+                f"/web/mpa/agent-operations/{failed_body['operationId']}/retry",
+                json=operation_payload,
+            )
+            retry_result["status"] = response.status_code
+            retry_result["body"] = response.json()
+
+        thread = threading.Thread(target=retry_operation)
+        thread.start()
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            scenario_state = client.get(
+                f"/__test/mpa/scenarios/{scenario}", headers=control_headers
+            ).json()
+            if scenario_state["calls"].get("mpa-operation-retry") == 1:
+                break
+            time.sleep(0.01)
+        assert thread.is_alive()
+
+        released = client.post(
+            f"/__test/mpa/scenarios/{scenario}/barriers/retry_complete/release",
+            headers=control_headers,
+        )
+        assert released.status_code == 200
+        thread.join(timeout=2)
+        assert thread.is_alive() is False
+        assert retry_result["status"] == 202
+        assert retry_result["body"]["status"] == "succeeded"
+        assert retry_result["body"]["stage"] == "runnable"
+        assert retry_result["body"]["retryCount"] == 1
+        recovered_view = client.get(
+            "/web/mpa/agents/runtime-mpa-s2/view",
+            params={"region": "cn-beijing"},
+        )
+        assert recovered_view.json()["activeOperation"] is None
+        assert recovered_view.json()["capabilities"]["canDebug"] is True
+
+        state = client.get(
+            f"/__test/mpa/scenarios/{scenario}", headers=control_headers
+        ).json()
+        assert state["calls"]["deploy-agentkit"] == 1
+        assert state["calls"]["mpa-agent-create"] == 2
+        assert state["calls"]["mpa-operation-retry"] == 1
+
+
+def test_create_success_deploy_can_be_held_busy_without_completing_early(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.setenv("VEADK_MPA_TEST_SCENARIOS", "1")
+    app = FastAPI()
+    mount_test_scenario_routes(app, token_file=_token_file(tmp_path))
+    client = TestClient(app)
+    control_headers = {"Authorization": "Bearer scenario-token"}
+    client.put(
+        "/__test/mpa/scenarios/create_success",
+        headers=control_headers,
+        json={"barriers": ["deploy_complete"]},
+    )
+    result: dict[str, object] = {}
+
+    def deploy() -> None:
+        response = client.post(
+            "/web/deploy-agentkit",
+            json={
+                "name": "scenario_agent",
+                "files": [{"path": "app.py", "content": "# isolated\n"}],
+                "config": {"region": "cn-beijing"},
+                "runtimeName": "scenario-runtime",
+                "agentCategory": "mpa",
+            },
+        )
+        result["status"] = response.status_code
+        result["text"] = response.text
+
+    thread = threading.Thread(target=deploy)
+    thread.start()
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        scenario_state = client.get(
+            "/__test/mpa/scenarios/create_success", headers=control_headers
+        ).json()
+        if scenario_state["calls"].get("deploy-agentkit") == 1:
+            break
+        time.sleep(0.01)
+    assert thread.is_alive()
+
+    client.post(
+        "/__test/mpa/scenarios/create_success/barriers/deploy_complete/release",
+        headers=control_headers,
+    )
+    thread.join(timeout=2)
+    assert thread.is_alive() is False
+    assert result["status"] == 200
+    assert '"done": true' in str(result["text"])
+
+
+def test_create_success_operation_is_recoverable_while_completion_is_blocked(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.setenv("VEADK_MPA_TEST_SCENARIOS", "1")
+    app = FastAPI()
+    mount_test_scenario_routes(app, token_file=_token_file(tmp_path))
+    client = TestClient(app)
+    control_headers = {"Authorization": "Bearer scenario-token"}
+    client.put(
+        "/__test/mpa/scenarios/create_success",
+        headers=control_headers,
+        json={"barriers": ["operation_complete"]},
+    )
+    result: dict[str, object] = {}
+    payload = {
+        "operationKind": "create",
+        "runtimeId": "runtime-mpa-s2",
+        "region": "cn-beijing",
+        "mpaInstanceId": "runtime-mpa-s2",
+        "sourceProfileId": "studio-agent:scenario-agent:scenario-task",
+        "targetKey": "runtime:cn-beijing:scenario-runtime",
+        "profile": {
+            "name": "scenario-agent",
+            "system": "Stay isolated.",
+            "model": {},
+            "tools": [],
+            "skills": [],
+            "mcpServers": [],
+            "metadata": {"veadk:agent-type": "mpa"},
+        },
+    }
+
+    def create_operation() -> None:
+        response = client.post(
+            "/web/mpa/agents",
+            headers={"Idempotency-Key": "scenario-task:mpa-profile"},
+            json=payload,
+        )
+        result["status"] = response.status_code
+        result["body"] = response.json()
+
+    thread = threading.Thread(target=create_operation)
+    thread.start()
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        scenario_state = client.get(
+            "/__test/mpa/scenarios/create_success", headers=control_headers
+        ).json()
+        if scenario_state["calls"].get("mpa-agent-create") == 1:
+            break
+        time.sleep(0.01)
+    assert thread.is_alive()
+
+    active = client.get("/web/mpa/agent-operations", params={"status": "active"})
+    assert active.status_code == 200
+    active_operation = active.json()["operations"][0]
+    assert active_operation["status"] == "active"
+    assert active_operation["stage"] == "profile_applying"
+    recovered = client.get(
+        f"/web/mpa/agent-operations/{active_operation['operationId']}"
+    )
+    assert recovered.json() == active_operation
+
+    client.post(
+        "/__test/mpa/scenarios/create_success/barriers/operation_complete/release",
+        headers=control_headers,
+    )
+    thread.join(timeout=2)
+    assert thread.is_alive() is False
+    assert result["status"] == 202
+    assert result["body"]["status"] == "succeeded"
+    terminal = client.get(
+        f"/web/mpa/agent-operations/{active_operation['operationId']}"
+    )
+    assert terminal.json()["stage"] == "runnable"
+
+
+def test_slow_scope_switch_isolates_principal_region_and_denied_results(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.setenv("VEADK_MPA_TEST_SCENARIOS", "1")
+    app = FastAPI()
+    mount_test_scenario_routes(app, token_file=_token_file(tmp_path))
+    client = TestClient(app)
+    control_headers = {"Authorization": "Bearer scenario-token"}
+    client.put(
+        "/__test/mpa/scenarios/slow_scope_switch",
+        headers=control_headers,
+        json={"barriers": ["old_scope_response"]},
+    )
+    old_result: dict[str, object] = {}
+
+    def load_old_scope() -> None:
+        response = client.get(
+            "/web/runtimes",
+            headers={"X-VeADK-Local-User": "alice"},
+            params={
+                "agentCategory": "mpa",
+                "scope": "mine",
+                "region": "cn-beijing",
+            },
+        )
+        old_result["status"] = response.status_code
+        old_result["body"] = response.json()
+
+    thread = threading.Thread(target=load_old_scope)
+    thread.start()
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        scenario_state = client.get(
+            "/__test/mpa/scenarios/slow_scope_switch", headers=control_headers
+        ).json()
+        if scenario_state["calls"].get("runtime-list-old") == 1:
+            break
+        time.sleep(0.01)
+    assert thread.is_alive()
+
+    current = client.get(
+        "/web/runtimes",
+        headers={"X-VeADK-Local-User": "bob"},
+        params={
+            "agentCategory": "mpa",
+            "scope": "mine",
+            "region": "cn-shanghai",
+        },
+    )
+    assert current.status_code == 200
+    assert current.json()["runtimes"][0]["name"] == "MPA Scope Bob"
+    assert current.json()["runtimes"][0]["runtimeId"] == "runtime-same-id"
+
+    denied = client.get(
+        "/web/mpa/agents/runtime-same-id/view",
+        headers={"X-VeADK-Local-User": "mallory"},
+        params={"region": "cn-shanghai"},
+    )
+    assert denied.status_code == 404
+    assert denied.json() == {"detail": "resource_not_found"}
+
+    client.post(
+        "/__test/mpa/scenarios/slow_scope_switch/barriers/old_scope_response/release",
+        headers=control_headers,
+    )
+    thread.join(timeout=2)
+    assert thread.is_alive() is False
+    assert old_result["status"] == 200
+    assert old_result["body"]["runtimes"][0]["name"] == "MPA Scope Alice"
+    assert old_result["body"]["runtimes"][0]["runtimeId"] == "runtime-same-id"
+
+    state = client.get(
+        "/__test/mpa/scenarios/slow_scope_switch", headers=control_headers
+    ).json()
+    assert state["calls"] == {
+        "runtime-list-old": 1,
+        "runtime-list-current": 1,
+        "mpa-view-denied": 1,
+    }
+
+
+def test_agent_view_scenarios_expose_binding_states_through_public_route(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.setenv("VEADK_MPA_TEST_SCENARIOS", "1")
+    app = FastAPI()
+    mount_test_scenario_routes(app, token_file=_token_file(tmp_path))
+    client = TestClient(app, headers={"Authorization": "Bearer scenario-token"})
+
+    expected = {
+        "session_revision_6": ("bound", True, True),
+        "runtime_missing": ("runtime_missing", False, False),
+        "binding_ambiguous": ("binding_ambiguous", False, False),
+        "orphan_runtime": ("orphan_runtime", True, False),
+        "old_runtime": ("bound", False, False),
+    }
+    for scenario, (binding_status, can_write, can_debug) in expected.items():
+        client.put(f"/__test/mpa/scenarios/{scenario}", json={"barriers": []})
+        response = client.get(
+            "/web/mpa/agents/runtime-mpa-s2/view",
+            params={"region": "cn-beijing"},
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["bindingStatus"] == binding_status
+        assert body["capabilities"]["canWrite"] is can_write
+        assert body["capabilities"]["canDebug"] is can_debug
 
 
 def test_turn_lifecycle_scenario_serves_control_and_continuation_contract(
@@ -217,6 +693,50 @@ def test_turn_lifecycle_scenario_serves_control_and_continuation_contract(
     ]
 
 
+def test_turn_lifecycle_stream_waits_for_explicit_completion_barrier(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.setenv("VEADK_MPA_TEST_SCENARIOS", "1")
+    app = FastAPI()
+    mount_test_scenario_routes(app, token_file=_token_file(tmp_path))
+    client = TestClient(app, headers={"Authorization": "Bearer scenario-token"})
+    client.put(
+        "/__test/mpa/scenarios/turn_lifecycle",
+        json={"barriers": ["stream_complete"]},
+    )
+    result: dict[str, object] = {}
+
+    def consume_stream() -> None:
+        response = client.post(
+            "/web/runtime-proxy/runtime-mpa-s2/"
+            "api/v1/sessions/turn_lifecycle-session/sse",
+            json={"invocationId": "turn_lifecycle-invocation"},
+        )
+        result["status"] = response.status_code
+        result["text"] = response.text
+
+    thread = threading.Thread(target=consume_stream)
+    thread.start()
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        state = client.get("/__test/mpa/scenarios/turn_lifecycle").json()
+        if state["calls"].get("runtime-sse") == 1:
+            break
+        time.sleep(0.01)
+    assert thread.is_alive()
+
+    released = client.post(
+        "/__test/mpa/scenarios/turn_lifecycle/barriers/stream_complete/release"
+    )
+    assert released.status_code == 200
+    thread.join(timeout=2)
+    assert thread.is_alive() is False
+    assert result["status"] == 200
+    assert "event-lifecycle-running" in str(result["text"])
+    assert "event-after-refresh" in str(result["text"])
+
+
 def test_session_revision_scenario_serves_studio_runtime_paths(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -280,6 +800,25 @@ def test_session_revision_scenario_serves_studio_runtime_paths(
     )
     assert mpa_created.status_code == 200
     assert mpa_created.json()["sessionId"] == "session-s2"
+
+    listed = client.get("/web/runtime-proxy/runtime-mpa-s2/api/v1/sessions")
+    assert listed.status_code == 200
+    assert listed.json() == [
+        {
+            "sessionId": "session-s2",
+            "id": "session-s2",
+            "appName": "a2a-default",
+            "userId": "scenario-user",
+            "mpaInstanceId": "runtime-mpa-s2",
+            "profileRevision": 6,
+        }
+    ]
+
+    events = client.get(
+        "/web/runtime-proxy/runtime-mpa-s2/api/v1/sessions/session-s2/events"
+    )
+    assert events.status_code == 200
+    assert events.json() == {"events": []}
 
 
 def test_session_revision_scenario_provides_cas_current_state(
@@ -410,6 +949,15 @@ def test_cursor_expired_scenario_serves_runtime_run_and_cursor_sse(
     assert "Before refresh" not in resumed.text
     assert "event-after-refresh" in resumed.text
     assert "After refresh" in resumed.text
+    persisted = client.get(
+        "/web/runtime-proxy/runtime-mpa-s2/"
+        "api/v1/sessions/cursor_expired-session/events"
+    )
+    assert persisted.status_code == 200
+    assert [event["id"] for event in persisted.json()["events"]] == [
+        "event-before-refresh",
+        "event-after-refresh",
+    ]
 
     expired = client.post(
         "/web/runtime-proxy/runtime-mpa-s2/api/v1/sessions/cursor_expired-session/sse",
@@ -425,6 +973,7 @@ def test_cursor_expired_scenario_serves_runtime_run_and_cursor_sse(
     assert state["calls"] == {
         "runtime-run": 1,
         "runtime-sse": 2,
+        "runtime-session-events": 1,
     }
     assert state["data"]["payloads"]["run"] == [
         {"content": "continue", "executionConfigVersion": 6}

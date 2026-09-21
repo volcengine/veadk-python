@@ -82,6 +82,28 @@ class MpaRuntimeError(RuntimeError):
         self.current_state = current_state
 
 
+def _runtime_error_code(
+    payload: dict[str, Any], *, method: str, url: str, status_code: int
+) -> str:
+    error = payload.get("error") if isinstance(payload, dict) else {}
+    detail = payload.get("detail") if isinstance(payload, dict) else {}
+    code = error.get("code") if isinstance(error, dict) else None
+    if code is None and isinstance(detail, dict):
+        code = detail.get("code")
+    if code is None and isinstance(detail, str):
+        if "X-Jwt-Token" in detail:
+            return "runtime_legacy_auth_unsupported"
+        if (
+            status_code == 404
+            and method.upper() == "GET"
+            and url.rstrip("/").endswith("/profile-status")
+        ):
+            return "profile_not_found"
+        if detail.strip():
+            return detail.strip()
+    return str(code or "runtime_request_failed")
+
+
 class MpaRuntimeClient:
     def __init__(self, *, transport: httpx.AsyncClient | None = None) -> None:
         self._transport = transport
@@ -247,11 +269,8 @@ class MpaRuntimeClient:
                 payload = response.json()
             except ValueError:
                 payload = {}
-            error = payload.get("error") if isinstance(payload, dict) else {}
             detail = payload.get("detail") if isinstance(payload, dict) else {}
-            code = error.get("code") if isinstance(error, dict) else None
-            if code is None and isinstance(detail, dict):
-                code = detail.get("code")
+            error = payload.get("error") if isinstance(payload, dict) else {}
             current_state = None
             if isinstance(error, dict) and isinstance(error.get("currentState"), dict):
                 current_state = dict(error["currentState"])
@@ -260,7 +279,12 @@ class MpaRuntimeClient:
             ):
                 current_state = dict(detail["currentState"])
             raise MpaRuntimeError(
-                str(code or "runtime_request_failed"),
+                _runtime_error_code(
+                    payload,
+                    method=method,
+                    url=url,
+                    status_code=response.status_code,
+                ),
                 status_code=response.status_code,
                 request_id=response.headers.get("X-Request-Id", ""),
                 current_state=current_state,

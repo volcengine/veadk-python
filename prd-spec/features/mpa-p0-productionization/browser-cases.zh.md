@@ -1,8 +1,9 @@
 # MPA AgentKit P0 浏览器验证 Runbook
 
-- 状态：`designed`；对应 `VC-17`
+- 状态：`verified`；`BC-01` 至 `BC-09` 已于 2026-09-20 通过并覆盖 `VC-17`
 - English：[browser-cases.md](browser-cases.md)
 - 证据：`evidence/browser/<run-id>/<case-id>/`
+- 交付说明：浏览器截图、网络记录、console 输出和浏览器状态均为本地测试产物，明确不提交。
 
 ## 1. 公共环境
 

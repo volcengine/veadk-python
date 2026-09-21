@@ -26,9 +26,7 @@ from veadk.cli.mpa_p0_contract import (
 SOURCE_RUNTIME_ID = os.getenv(
     "VEADK_MPA_P0_SOURCE_RUNTIME_ID", "r-yeuujrrcowb21078p9jh"
 )
-STUDIO_URL = os.getenv(
-    "VEADK_MPA_P0_STUDIO_URL", "http://127.0.0.1:8000"
-).rstrip("/")
+STUDIO_URL = os.getenv("VEADK_MPA_P0_STUDIO_URL", "http://127.0.0.1:8000").rstrip("/")
 LOCAL_USER = os.getenv("VEADK_MPA_P0_LOCAL_USER", "mpa-p0-e2e")
 _SECRET_KEYS = {
     "authorization",
@@ -44,7 +42,7 @@ _SECRET_KEYS = {
 }
 _SAFE_ERROR_FRAGMENT = re.compile(r"[^a-z0-9]+")
 _PROVIDER_CODE_PATTERNS = (
-    re.compile(r'\"Code\"\s*:\s*\"([A-Za-z][A-Za-z0-9_.-]{0,127})\"'),
+    re.compile(r"\"Code\"\s*:\s*\"([A-Za-z][A-Za-z0-9_.-]{0,127})\""),
     re.compile(
         r"\b(?:error_code)[=: ]+"
         r"([A-Za-z][A-Za-z0-9_.-]{0,127})\b",
@@ -241,9 +239,7 @@ def _record_runtime_log_diagnostics(
 ) -> None:
     """Best-effort diagnostic capture that cannot replace the primary error."""
     try:
-        diagnostics = _collect_runtime_log_diagnostics(
-            client, str(state["runtimeId"])
-        )
+        diagnostics = _collect_runtime_log_diagnostics(client, str(state["runtimeId"]))
     except Exception as error:
         _record(
             state,
@@ -374,9 +370,7 @@ def _save_state(state: dict[str, Any]) -> None:
 
 def _record(state: dict[str, Any], stage: str, **payload: Any) -> None:
     state.setdefault("timeline", []).append(
-        safe_evidence(
-            {"stage": stage, "observedAt": int(time.time()), **payload}
-        )
+        safe_evidence({"stage": stage, "observedAt": int(time.time()), **payload})
     )
     _save_state(state)
 
@@ -522,9 +516,7 @@ def _ensure_isolated_tool(state: dict[str, Any], source_tool: Any) -> bool:
                 MemoryMb=int(source_tool.memory_mb or 4096),
                 RoleName=str(source_tool.role_name or ""),
                 ApmplusEnable=bool(source_tool.apmplus_enable),
-                EnableObjectSetIsolation=bool(
-                    source_tool.enable_object_set_isolation
-                ),
+                EnableObjectSetIsolation=bool(source_tool.enable_object_set_isolation),
                 EnableSecurity=bool(source_tool.enable_security),
                 EnableSnapshot=bool(source_tool.enable_snapshot),
                 UseCodingPlan=bool(source_tool.use_coding_plan),
@@ -744,9 +736,7 @@ def _create_profile_and_prove_active_operation(
         response = future.result(timeout=130)
     if response.status_code not in {200, 202}:
         raise VC21DriverError(
-            _http_error_code(
-                "studio_create_operation", response.status_code
-            )
+            _http_error_code("studio_create_operation", response.status_code)
         )
     payload = response.json()
     if payload.get("status") != "succeeded" or payload.get("stage") != "runnable":
@@ -807,9 +797,7 @@ def _smoke(state: Mapping[str, Any], suffix: str) -> dict[str, Any]:
         json={},
     )
     if response.status_code != 200:
-        raise RuntimeError(
-            f"Runtime smoke failed with HTTP {response.status_code}"
-        )
+        raise RuntimeError(f"Runtime smoke failed with HTTP {response.status_code}")
     payload = response.json()
     if payload.get("status") != "passed":
         raise RuntimeError("Runtime execution smoke did not pass")
@@ -859,9 +847,7 @@ def _stage_provision(
         tt.GetToolRequest(ToolId=str(source.tool_id))
     )
     if not state.get("databaseName"):
-        suffix = re.sub(
-            r"[^a-z0-9]+", "_", str(manifest["runId"]).lower()
-        ).strip("_")
+        suffix = re.sub(r"[^a-z0-9]+", "_", str(manifest["runId"]).lower()).strip("_")
         state.update(
             {
                 "region": region,
@@ -895,9 +881,7 @@ def _stage_provision(
         )
         authorizer = rt.AuthorizerForCreateRuntime(
             key_auth=rt.AuthorizerKeyAuthForCreateRuntime(
-                api_key_name=(
-                    f"{state['runtimeName']}-{secrets.token_hex(4)}"
-                ),
+                api_key_name=(f"{state['runtimeName']}-{secrets.token_hex(4)}"),
                 api_key_location="Header",
             )
         )
@@ -1009,9 +993,7 @@ def _stage_provision(
             "retryAfterSeconds": 10,
             "resources": _resources(state),
         }
-    tool = _tool_client(region).get_tool(
-        tt.GetToolRequest(ToolId=str(state["toolId"]))
-    )
+    tool = _tool_client(region).get_tool(tt.GetToolRequest(ToolId=str(state["toolId"])))
     if not _tool_has_runtime(tool, str(state["runtimeId"])):
         return {
             "status": "pending",
@@ -1246,9 +1228,10 @@ def _stage_rollback(
             "retryAfterSeconds": 10,
             "resources": _resources(state),
         }
-    if str(runtime.status or "") != "Ready" or int(
-        runtime.current_version_number or 0
-    ) != target:
+    if (
+        str(runtime.status or "") != "Ready"
+        or int(runtime.current_version_number or 0) != target
+    ):
         return {
             "status": "pending",
             "retryAfterSeconds": 10,
@@ -1305,9 +1288,7 @@ def _stage_active_session(
             },
         )
         if created.status_code != 201:
-            raise RuntimeError(
-                f"Session create failed with HTTP {created.status_code}"
-            )
+            raise RuntimeError(f"Session create failed with HTTP {created.status_code}")
         state["sessionId"] = str(created.json()["sessionId"])
         _save_state(state)
     if not state.get("activeSessionRunStarted"):
@@ -1315,9 +1296,7 @@ def _stage_active_session(
             state,
             "POST",
             f"api/v1/sessions/{state['sessionId']}/run",
-            headers={
-                "Idempotency-Key": f"{state['runId']}-active-session"
-            },
+            headers={"Idempotency-Key": f"{state['runId']}-active-session"},
             json={
                 "content": (
                     "Use the sandbox to sleep for 45 seconds, then reply done."
@@ -1326,9 +1305,7 @@ def _stage_active_session(
             },
         )
         if run.status_code not in {200, 202}:
-            raise RuntimeError(
-                f"Session run failed with HTTP {run.status_code}"
-            )
+            raise RuntimeError(f"Session run failed with HTTP {run.status_code}")
         state["activeSessionRunStarted"] = True
         _save_state(state)
     status, preview = _delete_preview(state)
@@ -1352,9 +1329,7 @@ def _stage_active_session(
         json={},
     )
     if aborted.status_code != 200:
-        raise RuntimeError(
-            f"Session abort failed with HTTP {aborted.status_code}"
-        )
+        raise RuntimeError(f"Session abort failed with HTTP {aborted.status_code}")
     _record(
         state,
         "VC21-DELETE-ACTIVE-SESSION",
@@ -1402,9 +1377,7 @@ def _stage_final_delete(
         state["runtimeDeleted"] = True
         _save_state(state)
     if state.get("databaseName") and not state.get("databaseDeleted"):
-        source = _runtime(
-            _runtime_client(state["region"]), SOURCE_RUNTIME_ID
-        )
+        source = _runtime(_runtime_client(state["region"]), SOURCE_RUNTIME_ID)
         asyncio.run(_drop_database(_env_map(source), state["databaseName"]))
         state["databaseDeleted"] = True
         _save_state(state)
@@ -1488,9 +1461,7 @@ def _find_tool_resources(prefix: str, region: str) -> list[dict[str, str]]:
     return result
 
 
-def _list_resources(
-    prefix: str, state: Mapping[str, Any]
-) -> list[dict[str, str]]:
+def _list_resources(prefix: str, state: Mapping[str, Any]) -> list[dict[str, str]]:
     region = str(state.get("region") or "cn-beijing")
     resources = _find_runtime_resources(prefix, region)
     resources.extend(_find_tool_resources(prefix, region))
@@ -1539,9 +1510,7 @@ def _delete_resource(resource: Mapping[str, Any]) -> None:
                             ToolId=str(resource["id"]),
                         )
                     )
-            client.delete_tool(
-                tt.DeleteToolRequest(ToolId=str(resource["id"]))
-            )
+            client.delete_tool(tt.DeleteToolRequest(ToolId=str(resource["id"])))
         except Exception as error:
             detail = f"{type(error).__name__}: {error}".casefold()
             if "notfound" not in detail and "not found" not in detail:
@@ -1559,9 +1528,7 @@ def _delete_resource(resource: Mapping[str, Any]) -> None:
                 # Runtime deletion is asynchronous. Keep its database alive
                 # until no instance can reconnect during termination.
                 return
-        source = _runtime(
-            _runtime_client(region), str(resource["sourceRuntimeId"])
-        )
+        source = _runtime(_runtime_client(region), str(resource["sourceRuntimeId"]))
         asyncio.run(_drop_database(_env_map(source), str(resource["id"])))
 
 

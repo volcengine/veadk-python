@@ -251,12 +251,11 @@ function runtimeToAgent(
     isMine: runtime.isMine,
     agentCategory: category,
     runtime: {
-      agentCategory: runtime.agentCategory ?? agentCategory,
       runtimeId: runtime.runtimeId,
       mpaInstanceId: runtime.mpaInstanceId,
       region: runtime.region,
       currentVersion: runtime.currentVersion,
-      agentCategory: category,
+      agentCategory: runtime.agentCategory ?? agentCategory,
       canDelete: runtime.canDelete,
       canManage: runtime.canManage,
       canPublish: runtime.canPublish,

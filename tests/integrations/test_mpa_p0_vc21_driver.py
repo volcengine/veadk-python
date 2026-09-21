@@ -95,14 +95,20 @@ def test_tool_runtime_association_requires_the_expected_runtime_id() -> None:
 def test_tool_runtime_association_waits_for_permission_propagation() -> None:
     module = _driver_module()
 
-    assert module._tool_association_stable(
-        {"toolRuntimeAssociationObservedAt": 100},
-        now=129,
-    ) is False
-    assert module._tool_association_stable(
-        {"toolRuntimeAssociationObservedAt": 100},
-        now=130,
-    ) is True
+    assert (
+        module._tool_association_stable(
+            {"toolRuntimeAssociationObservedAt": 100},
+            now=129,
+        )
+        is False
+    )
+    assert (
+        module._tool_association_stable(
+            {"toolRuntimeAssociationObservedAt": 100},
+            now=130,
+        )
+        is True
+    )
 
 
 def test_safe_evidence_keeps_ids_and_status_but_removes_credentials() -> None:
@@ -156,11 +162,7 @@ def test_runtime_artifact_url_comes_from_live_manifest_not_source_runtime() -> N
 
     assert (
         module.runtime_artifact_url(
-            {
-                "runtimeImageUrl": (
-                    "registry.example.com/agentkit/mpa_agent:vc21-build"
-                )
-            }
+            {"runtimeImageUrl": ("registry.example.com/agentkit/mpa_agent:vc21-build")}
         )
         == "registry.example.com/agentkit/mpa_agent:vc21-build"
     )
@@ -233,9 +235,7 @@ def test_rollback_skips_release_when_current_runtime_already_uses_target_artifac
     monkeypatch.setattr(
         module,
         "_record",
-        lambda state, stage, **payload: records.append(
-            {"stage": stage, **payload}
-        ),
+        lambda state, stage, **payload: records.append({"stage": stage, **payload}),
     )
 
     state = {
@@ -245,9 +245,7 @@ def test_rollback_skips_release_when_current_runtime_already_uses_target_artifac
     }
     result = module._stage_rollback(
         state,
-        {
-            "runtimeImageUrl": "registry.example.com/agentkit/mpa_agent:vc21-build"
-        },
+        {"runtimeImageUrl": "registry.example.com/agentkit/mpa_agent:vc21-build"},
     )
 
     assert result == {
@@ -293,13 +291,13 @@ app.integrations.agentkit_sandbox.CodexSandboxUnavailable: private sandbox endpo
     assert result == {
         "providerCodes": ["AccessDenied"],
         "exceptionTypes": ["ApiError", "CodexSandboxUnavailable"],
-	        "httpStatuses": ["404"],
+        "httpStatuses": ["404"],
         "knownReasons": ["endpoint_unavailable", "permission_denied"],
-	        "sandboxStages": ["ready_probe"],
+        "sandboxStages": ["ready_probe"],
         "toolApiActions": ["create_session"],
         "toolAuthModes": ["openapi"],
         "toolProviderCodes": ["resource_not_found"],
-	        "workerPhases": ["init"],
+        "workerPhases": ["init"],
         "workerStages": ["sandbox_prepare"],
     }
     assert "secret" not in str(result)
@@ -331,8 +329,7 @@ def test_runtime_log_diagnostics_read_at_most_1000_lines_per_instance(
             requests.append(request)
             return SimpleNamespace(
                 logs=(
-                    "stage=ready ApiError: \"Code\":\"AccessDenied\" "
-                    "token=must-not-persist"
+                    'stage=ready ApiError: "Code":"AccessDenied" token=must-not-persist'
                 )
             )
 
@@ -350,13 +347,13 @@ def test_runtime_log_diagnostics_read_at_most_1000_lines_per_instance(
     assert result == {
         "providerCodes": ["AccessDenied"],
         "exceptionTypes": ["ApiError"],
-	        "httpStatuses": [],
+        "httpStatuses": [],
         "knownReasons": ["permission_denied"],
-	        "sandboxStages": [],
+        "sandboxStages": [],
         "toolApiActions": [],
         "toolAuthModes": [],
         "toolProviderCodes": [],
-	        "workerPhases": [],
+        "workerPhases": [],
         "workerStages": ["ready"],
     }
     assert requests[0].runtime_id == "runtime-1"

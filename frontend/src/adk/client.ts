@@ -559,6 +559,17 @@ export async function httpErrorMessage(
   }
 }
 
+async function mpaRuntimeSessionListError(res: Response): Promise<string> {
+  const detail = await httpErrorMessage(
+    res,
+    adkT("client.mpaRuntimeSessionsLoadFailed"),
+  );
+  if (res.status === 401 && /X-Jwt-Token/i.test(detail)) {
+    return adkT("client.mpaRuntimeLegacyAuthUnsupported", { detail });
+  }
+  return detail;
+}
+
 export async function listModelApiKeys(
   signal?: AbortSignal,
   refresh = false,
@@ -943,12 +954,14 @@ export async function listSessions(
   const { app, ep } = resolve(appName);
   if (isMpaEndpoint(ep)) {
     const res = await apiFetch("/api/v1/sessions", { cache: "no-store" }, ep);
-    if (!res.ok) throw new Error(`list sessions failed: ${res.status}`);
+    if (!res.ok) throw new Error(await mpaRuntimeSessionListError(res));
     const payload = (await res.json()) as { sessions?: AdkSession[] } | AdkSession[];
     return Array.isArray(payload) ? payload : payload.sessions ?? [];
   }
   const res = await apiFetch(`/apps/${app}/users/${encodeURIComponent(userId)}/sessions`, {}, ep);
-  if (!res.ok) throw new Error(`list sessions failed: ${res.status}`);
+  if (!res.ok) {
+    throw new Error(await httpErrorMessage(res, adkT("client.listSessionsFailed")));
+  }
   return res.json();
 }
 
@@ -1718,6 +1731,24 @@ async function fetchAgentInfo(
   };
 }
 
+function isAgentInfoNotFound(error: unknown): boolean {
+  return /agent-info failed:\s*404\b/i.test(String(error));
+}
+
+async function fetchAgentInfoWithA2aFallback(
+  app: string,
+  ep: AdkEndpoint,
+  loadDraft = true,
+  signal?: AbortSignal,
+): Promise<AgentInfo> {
+  try {
+    return await fetchAgentInfo(app, ep, loadDraft, signal);
+  } catch (error) {
+    if (app === "a2a-default" || !isAgentInfoNotFound(error)) throw error;
+    return fetchAgentInfo("a2a-default", ep, loadDraft, signal);
+  }
+}
+
 export type TurnControlAction = "pause" | "resume";
 
 export interface TurnLifecycleCapability {
@@ -1970,7 +2001,7 @@ export async function* continueTurnSSE({
 
 export async function getAgentInfo(appName: string, signal?: AbortSignal): Promise<AgentInfo> {
   const { app, ep } = resolve(appName);
-  return fetchAgentInfo(app, ep, false, signal);
+  return fetchAgentInfoWithA2aFallback(app, ep, false, signal);
 }
 
 /** Read Agent metadata for a Runtime without connecting or persisting it. */
@@ -1994,7 +2025,7 @@ async function fetchRuntimeAgentInfo(
         freshCached?.apps[0] ||
         (await fetchRemoteApps("", "", ep))[0];
       if (!app) throw new Error(adkT("client.noPreviewableAgent"));
-      return fetchAgentInfo(app, ep);
+      return fetchAgentInfoWithA2aFallback(app, ep);
     } catch (error) {
       if (
         error instanceof RuntimeAccessDeniedError ||
@@ -2499,6 +2530,8 @@ export interface MpaAgentOperation {
   profileOperationId?: string;
   safeErrorCode?: string;
   retryCount?: number;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface MpaProfileStatus {
@@ -2858,6 +2891,20 @@ export async function listActiveMpaAgentOperations(): Promise<MpaAgentOperation[
   }
   const payload = (await res.json()) as { operations?: MpaAgentOperation[] };
   return payload.operations ?? [];
+}
+
+export async function getMpaAgentOperation(
+  operationId: string,
+  signal?: AbortSignal,
+): Promise<MpaAgentOperation> {
+  const res = await apiFetch(
+    `/web/mpa/agent-operations/${encodeURIComponent(operationId)}`,
+    { cache: "no-store", signal },
+  );
+  if (!res.ok) {
+    throw new Error(await httpErrorMessage(res, adkT("client.mpaOperationLoadFailed")));
+  }
+  return (await res.json()) as MpaAgentOperation;
 }
 
 export async function getMpaProfileStatus(params: {

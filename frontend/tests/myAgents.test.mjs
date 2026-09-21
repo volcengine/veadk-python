@@ -216,7 +216,9 @@ test("renders Agent creation as the first dashed card instead of a toolbar butto
   assert.match(pageSource, /canCreateRuntimeAgents: boolean/);
   assert.match(pageSource, /canCreatePersonalAgents: boolean/);
   assert.match(pageSource, /cloudProvider: CloudProvider/);
-  assert.match(pageSource, /\(activeType === "general" \|\| activeType === "mpa"\)[\s\S]*?onCreateAgent\(region, activeType\)[\s\S]*?onCreateSandboxAgent\(activeType\)/);
+  assert.match(pageSource, /activeType === "general"[\s\S]*?onCreateAgent\(region, "general"\)/);
+  assert.match(pageSource, /activeType === "mpa"[\s\S]*?setMpaCreateRegion\(region\)/);
+  assert.match(pageSource, /isSandboxMyAgentType\(activeType\)[\s\S]*?onCreateSandboxAgent\(activeType\)/);
   assert.match(pageSource, /onCreateSandboxAgent: \(kind: "codex" \| SandboxAgentKind\) => void/);
   assert.match(pageSource, /<ResourceGrid className="my-agent-grid">[\s\S]*?createAgent \? \([\s\S]*?<ResourceCreateCard[\s\S]*?className="my-agent-create-card"[\s\S]*?t\("myAgents\.createAgent"\)[\s\S]*?visibleAgents\.map/);
   assert.doesNotMatch(pageSource, /my-agent-create-primary/);
