@@ -113,6 +113,15 @@ BYTEPLUS_STUDIO_DEPENDENCY_WHEELS = (
         ),
         sha256="e561593fccf61e8a20fc46dfc2dfe075b8be7d0188df33f221ad1f0139180f9d",
     ),
+    StudioDependencyWheel(
+        filename="vikingdb_python_sdk-0.1.32-py3-none-any.whl",
+        url=(
+            "https://files.pythonhosted.org/packages/e7/4d/"
+            "933c322781c6a1ac4543a3442d1975e164182a6a0e35eff81118cc92995d/"
+            "vikingdb_python_sdk-0.1.32-py3-none-any.whl"
+        ),
+        sha256="7e58ba299b561bd53859cfb63a5e4af95088a3723378109548c2011390f90bfb",
+    ),
 )
 
 
