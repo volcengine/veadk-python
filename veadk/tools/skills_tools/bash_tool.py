@@ -16,12 +16,57 @@ from __future__ import annotations
 
 import asyncio
 import os
+import signal
 
 from google.adk.tools import ToolContext
 from veadk.tools.skills_tools.session_path import get_session_path
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
+_PROCESS_CLEANUP_TIMEOUT = 5.0
+
+
+async def _run_command(command, working_dir, env, timeout):
+    process = None
+    completed = False
+    spawning = asyncio.create_task(
+        asyncio.create_subprocess_shell(
+            command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=working_dir,
+            env=env,
+            start_new_session=os.name == "posix",
+        )
+    )
+    try:
+        try:
+            process = await asyncio.shield(spawning)
+        except asyncio.CancelledError:
+            # Cancellation can arrive after fork but before the Process is
+            # returned. Retain ownership so that its children are cleaned up.
+            process = await spawning
+            raise
+        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout)
+        completed = True
+        return process.returncode, stdout, stderr
+    finally:
+        if process is not None and not completed:
+            try:
+                if os.name == "posix":
+                    # Do this even if the shell has exited: its descendants
+                    # can still hold stdout/stderr open and block communicate.
+                    os.killpg(process.pid, signal.SIGKILL)
+                else:
+                    process.kill()
+            except ProcessLookupError:
+                pass
+            try:
+                await asyncio.wait_for(process.wait(), _PROCESS_CLEANUP_TIMEOUT)
+            except asyncio.TimeoutError:
+                # A detached descendant may keep a pipe open. Process has no
+                # public close API; release the local transports on this path.
+                process._transport.close()
 
 
 async def bash_tool(
@@ -61,6 +106,7 @@ async def bash_tool(
     Timeouts:
     - Default timeout is 600 seconds (10 minutes).
     - Adjust the 'timeout' parameter as needed for longer-running commands.
+    - Interrupted commands have up to 5 additional seconds for process cleanup.
 
     Args:
         command: Bash command to execute. Use && to chain commands.
@@ -102,29 +148,19 @@ async def bash_tool(
         # Execute with local bash shell
         local_bash_command = f"{command}"
 
-        process = await asyncio.create_subprocess_shell(
-            local_bash_command,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=working_dir,
-            env=env,  # Pass the modified environment
-        )
-
         try:
-            stdout, stderr = await asyncio.wait_for(
-                process.communicate(), timeout=timeout
+            returncode, stdout, stderr = await _run_command(
+                local_bash_command, working_dir, env, timeout
             )
         except asyncio.TimeoutError:
-            process.kill()
-            await process.wait()
             return f"Error: Command timed out after {timeout}s"
 
         stdout_str = stdout.decode("utf-8", errors="replace") if stdout else ""
         stderr_str = stderr.decode("utf-8", errors="replace") if stderr else ""
 
         # Handle command failure
-        if process.returncode != 0:
-            error_msg = f"Command failed with exit code {process.returncode}"
+        if returncode != 0:
+            error_msg = f"Command failed with exit code {returncode}"
             if stderr_str:
                 error_msg += f":\n{stderr_str}"
             elif stdout_str:
