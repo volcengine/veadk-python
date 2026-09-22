@@ -3887,7 +3887,10 @@ class MigrationService:
                 pending.future.result,
                 window_seconds,
             )
-        except TimeoutError:
+        # 线程里等的是 concurrent.futures.Future：3.10 跨回 asyncio 时它的
+        # TimeoutError 会被换成 asyncio 自己的类（3.11+ 才同为内置类），
+        # 因此两种都收，别退回单个 TimeoutError。
+        except (TimeoutError, asyncio.TimeoutError):
             logger.info(
                 "Studio migration question timed out task_id=%s attempt=%s "
                 "window_seconds=%s",
