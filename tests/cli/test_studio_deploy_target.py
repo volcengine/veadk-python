@@ -74,6 +74,7 @@ def _stage_test_studio_dependencies(
     ]
     if provider == "byteplus":
         names.append("pydantic-2.12.5-py3-none-any.whl")
+        names.append("vikingdb_python_sdk-0.1.32-py3-none-any.whl")
     staged: list[Path] = []
     for name in names:
         wheel = destination / name
