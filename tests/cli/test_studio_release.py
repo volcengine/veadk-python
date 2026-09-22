@@ -42,6 +42,7 @@ from veadk.cli.studio_dependencies import (
     STUDIO_DEPENDENCY_SOURCES,
     StudioDependencyWheel,
     stage_studio_dependency_wheels,
+    studio_dependency_wheels,
     write_studio_dependency_manifest,
 )
 from veadk.cli.studio_package import build_frontend_assets, studio_run_script
@@ -567,6 +568,18 @@ def test_stage_byteplus_dependency_wheels_prefers_primary_pypi(
 
     assert staged[0].read_bytes() == content
     assert urls == [dependency.url]
+
+
+def test_byteplus_dependency_wheels_include_vikingdb_sdk_pin() -> None:
+    volcengine_names = {
+        dependency.filename for dependency in studio_dependency_wheels("volcengine")
+    }
+    byteplus_names = {
+        dependency.filename for dependency in studio_dependency_wheels("byteplus")
+    }
+
+    assert "vikingdb_python_sdk-0.1.32-py3-none-any.whl" not in volcengine_names
+    assert "vikingdb_python_sdk-0.1.32-py3-none-any.whl" in byteplus_names
 
 
 def test_write_dependency_manifest_uses_pinned_wheel_metadata(
