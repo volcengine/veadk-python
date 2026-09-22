@@ -415,6 +415,11 @@
     0 3px 10px hsl(var(--foreground) / 0.05);
 }
 
+.new-chat-compact-select__menu.is-dropup {
+  top: auto;
+  bottom: calc(100% + 7px);
+}
+
 .new-chat-compact-select__search {
   display: block;
   padding: 2px 2px 5px;
@@ -433,7 +438,7 @@
 }
 
 .new-chat-compact-select__list {
-  max-height: 240px;
+  max-height: var(--new-chat-compact-select-list-height, 240px);
   overflow-y: auto;
 }
 

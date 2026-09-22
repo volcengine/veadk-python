@@ -551,6 +551,11 @@ test("renders Codex migration events through one shared block stream", () => {
   assert.match(activityBlocks, /kind: "plan"/);
   assert.match(activityBlocks, /kind: "tool"/);
   assert.match(source, /<Blocks[\s\S]*?blocks=\{blocks\}/);
+  assert.match(
+    source,
+    /<Blocks[\s\S]*?groupProcess[\s\S]*?streaming=\{!activity\?\.complete\}/,
+    "the Codex output renders as the intelligent build's grouped process stream",
+  );
   assert.doesNotMatch(source, /migration-activity__status/);
   assert.doesNotMatch(styles, /\.migration-activity__status/);
 });
@@ -631,6 +636,11 @@ test("confirmation card keeps labels beside bounded single-column controls", () 
   );
   assert.match(card, /className="migration-confirmation__footer"/);
   assert.match(card, /className="migration-confirmation__consent"/);
+  assert.doesNotMatch(
+    card,
+    /confirmation\.description/,
+    "the card title stands alone; the removed subtitle must not come back",
+  );
   assert.doesNotMatch(card, /migration-running-note/);
 
   assert.match(styles, /\.migration-confirmation__grid\s*\{[^}]*grid-template-columns: minmax\(0, 1fr\)/);

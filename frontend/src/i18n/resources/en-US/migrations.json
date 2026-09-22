@@ -225,7 +225,6 @@
   "confirmation": {
     "ariaLabel": "Confirm migration method",
     "title": "Confirm migration method",
-    "description": "Migration starts only after confirmation",
     "framework": "Migration method",
     "frameworkPlaceholder": "Select a migration method",
     "agentName": "Agent name",

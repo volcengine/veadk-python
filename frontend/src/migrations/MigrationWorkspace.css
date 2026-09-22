@@ -518,8 +518,7 @@
 }
 
 .migration-activity__stream {
-  display: grid;
-  gap: 8px;
+  display: block;
 }
 
 .migration-activity__error {

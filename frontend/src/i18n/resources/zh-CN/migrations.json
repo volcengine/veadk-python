@@ -225,7 +225,6 @@
   "confirmation": {
     "ariaLabel": "确认迁移方式",
     "title": "确认迁移方式",
-    "description": "确认后才会执行实际迁移",
     "framework": "迁移方式",
     "frameworkPlaceholder": "选择迁移方式",
     "agentName": "Agent 名称",

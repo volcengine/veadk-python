@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
 import "./new-chat-workspace.css";
 
@@ -10,6 +10,13 @@ export interface NewChatCompactSelectOption {
 
 const HOVER_OPEN_DELAY_MS = 120;
 const HOVER_CLOSE_DELAY_MS = 180;
+// A list that cannot fit below the trigger opens upwards and shrinks to the room it has,
+// so a select near the bottom of a card never pushes its options past the card edge.
+const MENU_PREFERRED_HEIGHT_PX = 260;
+const MENU_MAX_LIST_HEIGHT_PX = 240;
+const MENU_MIN_LIST_HEIGHT_PX = 96;
+const MENU_VIEWPORT_GAP_PX = 12;
+const MENU_CHROME_HEIGHT_PX = 16;
 
 interface NewChatCompactSelectProps {
   label: string;
@@ -56,6 +63,8 @@ export function NewChatCompactSelect({
 }: NewChatCompactSelectProps) {
   const { t } = useTranslation("newChat");
   const [open, setOpen] = useState(false);
+  const [menuPlacement, setMenuPlacement] = useState<"down" | "up">("down");
+  const [menuListHeight, setMenuListHeight] = useState(MENU_MAX_LIST_HEIGHT_PX);
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -110,6 +119,35 @@ export function NewChatCompactSelect({
     if (hoverCloseTimerRef.current !== null) window.clearTimeout(hoverCloseTimerRef.current);
   }, []);
 
+  const measureMenu = useCallback(() => {
+    const trigger = triggerRef.current;
+    if (!trigger) return;
+    const rect = trigger.getBoundingClientRect();
+    const viewport = window.innerHeight || rect.bottom + MENU_PREFERRED_HEIGHT_PX;
+    const below = viewport - rect.bottom - MENU_VIEWPORT_GAP_PX;
+    const above = rect.top - MENU_VIEWPORT_GAP_PX;
+    const dropUp = below < MENU_PREFERRED_HEIGHT_PX && above > below;
+    const room = (dropUp ? above : below) - MENU_CHROME_HEIGHT_PX;
+    setMenuPlacement(dropUp ? "up" : "down");
+    setMenuListHeight(
+      Math.max(
+        MENU_MIN_LIST_HEIGHT_PX,
+        Math.min(MENU_MAX_LIST_HEIGHT_PX, Math.floor(room)),
+      ),
+    );
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    const remeasure = () => measureMenu();
+    window.addEventListener("resize", remeasure);
+    window.addEventListener("scroll", remeasure, true);
+    return () => {
+      window.removeEventListener("resize", remeasure);
+      window.removeEventListener("scroll", remeasure, true);
+    };
+  }, [measureMenu, open]);
+
   function openMenu(focusSearch: boolean) {
     if (hoverOpenTimerRef.current !== null) {
       window.clearTimeout(hoverOpenTimerRef.current);
@@ -120,6 +158,7 @@ export function NewChatCompactSelect({
       hoverCloseTimerRef.current = null;
     }
     focusSearchOnOpenRef.current = focusSearch;
+    measureMenu();
     setQuery("");
     setActiveIndex(Math.max(0, options.findIndex((option) => option.value === value)));
     setOpen(true);
@@ -236,7 +275,12 @@ export function NewChatCompactSelect({
       </button>
 
       {open ? (
-        <div className="new-chat-compact-select__menu">
+        <div
+          className={`new-chat-compact-select__menu${menuPlacement === "up" ? " is-dropup" : ""}`}
+          style={{
+            "--new-chat-compact-select-list-height": `${menuListHeight}px`,
+          } as CSSProperties}
+        >
           {searchable && options.length > 0 ? (
             <label className="new-chat-compact-select__search">
               <span className="sr-only">{t("compactSelect.searchLabel", { label })}</span>
