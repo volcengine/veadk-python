@@ -19,6 +19,8 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import pathlib
+import shlex
 import subprocess
 import sys
 import threading
@@ -190,9 +192,17 @@ class FakeAppServer:
     way the CLI drives it.
     """
 
-    def __init__(self, *, model: str = MODEL, status: str = "completed") -> None:
+    def __init__(
+        self,
+        *,
+        model: str = MODEL,
+        status: str = "completed",
+        step_seconds: int = 0,
+    ) -> None:
         self.model = model
         self.status = status
+        self.step_seconds = step_seconds
+        self.turns = 0
         self.requests: list[dict[str, object]] = []
         self.port = 0
         self._ready = threading.Event()
@@ -250,6 +260,9 @@ class FakeAppServer:
             await websocket.send(json.dumps({"id": message["id"], "result": result}))
 
     async def _play_turn(self, websocket: object) -> None:
+        self.turns += 1
+        shift = self.step_seconds * (self.turns - 1)
+
         async def notify(method: str, params: dict[str, object]) -> None:
             await websocket.send(json.dumps({"method": method, "params": params}))
 
@@ -293,8 +306,8 @@ class FakeAppServer:
                 "turn": {
                     "id": TURN_ID,
                     "status": self.status,
-                    "startedAt": 1790078632,
-                    "completedAt": 1790078642,
+                    "startedAt": 1790078632 + shift,
+                    "completedAt": 1790078642 + shift,
                     "durationMs": 9111,
                 }
             },
@@ -392,6 +405,182 @@ def test_the_shim_log_becomes_the_pages_turn_summary(
     rows = [item for item in items if item["kind"] == "command"]
     assert [row["durationMs"] for row in rows] == [2854]
     assert rows[0]["itemType"] == "commandExecution"
+
+
+CONTRACT_FINDINGS = json.dumps(
+    {
+        "status": "failed",
+        "summary": {"fatal": 0, "repairable": 1, "degraded": 0, "info": 0},
+        "fatal": [],
+        "repairable": [
+            {
+                "name": "config:stability",
+                "status": "failed",
+                "severity": "repairable",
+                "detail": "configuration matches the ak init baseline",
+            }
+        ],
+        "degraded": [],
+    },
+    ensure_ascii=False,
+)
+
+
+def install_contract(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    failures: int,
+    judged: bool = True,
+) -> pathlib.Path:
+    """A stand-in for the CLI's contract script, with a fixed number of bad runs.
+
+    The shim reads the same two variables the migration prompt tells the model to use,
+    so a fake validator only has to answer in the same shape: the CLI's own
+    ``Validation finished:`` line and the findings file it leaves behind.
+    """
+    asset = tmp_path / "skills" / "source-to-veadk"
+    scripts = asset / "scripts"
+    scripts.mkdir(parents=True)
+    output = tmp_path / "output"
+    output.mkdir()
+    counter = tmp_path / "contract-runs.txt"
+    script = scripts / "validate_runtime.sh"
+    script.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -u\n"
+        f"counter={shlex.quote(str(counter))}\n"
+        f"findings={shlex.quote(str(output / 'validation_findings.json'))}\n"
+        "runs=0\n"
+        '[ -f "$counter" ] && runs="$(cat "$counter")"\n'
+        "runs=$((runs + 1))\n"
+        'printf "%s" "$runs" > "$counter"\n'
+        f'if [ "$runs" -le {failures} ]; then\n'
+        '  if [ "$VERDICT" = 1 ]; then\n'
+        "    printf 'Validation finished: local=passed release=Failed blocking=true\\n'\n"
+        "    printf 'Validation failed: configuration matches the ak init baseline\\n' >&2\n"
+        "  fi\n"
+        f"  printf '%s\\n' {shlex.quote(CONTRACT_FINDINGS)} > \"$findings\"\n"
+        "  exit 1\n"
+        "fi\n"
+        "printf 'Validation finished: local=passed release=Passed blocking=false\\n'\n"
+        'printf \'%s\\n\' \'{"status":"passed","fatal":[],"repairable":[],"degraded":[]}\' > "$findings"\n'
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+    monkeypatch.setenv("AGENTKIT_MIGRATE_ASSET_DIR", str(asset))
+    monkeypatch.setenv("AGENTKIT_MIGRATE_OUTPUT_DIR", str(output))
+    monkeypatch.setenv("VERDICT", "1" if judged else "0")
+    return counter
+
+
+def contract_rows(lines: list[dict[str, object]]) -> list[dict[str, object]]:
+    return [
+        line["item"]
+        for line in lines
+        if line["type"] == "item.completed"
+        and isinstance(line.get("item"), dict)
+        and line["item"].get("name") == shim._CONTRACT_ROW_NAME
+    ]
+
+
+def test_a_blocked_contract_is_repaired_inside_the_same_turn(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    install_contract(tmp_path, monkeypatch, failures=1)
+    with FakeAppServer() as server:
+        code, lines = run_shim_turn(server, monkeypatch, tmp_path)
+        requests = list(server.requests)
+    turns = [r for r in requests if r["method"] == "turn/start"]
+    assert code == 0
+    assert len(turns) == 2, "the repair has to stay in this one exec"
+    assert all(r["params"]["threadId"] == THREAD_ID for r in turns)
+    repair = turns[1]["params"]["input"][0]["text"]
+    assert "确定性校验未通过" in repair
+    assert "config:stability" in repair
+    assert "validation_findings.json" in repair
+    assert [line["type"] for line in lines].count("thread.started") == 1
+    assert [line["type"] for line in lines].count("turn.completed") == 1
+    rows = contract_rows(lines)
+    assert [row["status"] for row in rows] == ["failed", "completed"]
+    assert [row["exit_code"] for row in rows] == [1, 0]
+    assert "Validation failed" in rows[0]["aggregated_output"]
+    assert rows[1]["name"] == shim._CONTRACT_ROW_NAME
+    assert (tmp_path / "last.txt").read_text(encoding="utf-8") == "DONE"
+
+
+def test_a_passing_contract_leaves_the_turn_alone(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    install_contract(tmp_path, monkeypatch, failures=0)
+    with FakeAppServer() as server:
+        code, lines = run_shim_turn(server, monkeypatch, tmp_path)
+        turns = [r for r in server.requests if r["method"] == "turn/start"]
+    assert code == 0
+    assert len(turns) == 1
+    rows = contract_rows(lines)
+    assert [row["status"] for row in rows] == ["completed"]
+
+
+def test_a_contract_without_a_verdict_never_holds_the_turn(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """A validator the shim cannot read a verdict from is the CLI's business."""
+    install_contract(tmp_path, monkeypatch, failures=1, judged=False)
+    with FakeAppServer() as server:
+        code, lines = run_shim_turn(server, monkeypatch, tmp_path)
+        turns = [r for r in server.requests if r["method"] == "turn/start"]
+    assert code == 0
+    assert len(turns) == 1
+    assert [row["status"] for row in contract_rows(lines)] == ["failed"]
+
+
+def test_the_repair_budget_stops_the_loop(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    install_contract(tmp_path, monkeypatch, failures=99)
+    with FakeAppServer() as server:
+        code, lines = run_shim_turn(server, monkeypatch, tmp_path)
+        turns = [r for r in server.requests if r["method"] == "turn/start"]
+    assert code == 0
+    assert len(turns) == shim._MAX_CONTRACT_REPAIRS + 1
+    assert len(contract_rows(lines)) == shim._MAX_CONTRACT_REPAIRS + 1
+
+
+def test_one_exec_with_several_sub_turns_reports_the_whole_window(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    install_contract(tmp_path, monkeypatch, failures=1)
+    with FakeAppServer(step_seconds=20) as server:
+        _, lines = run_shim_turn(server, monkeypatch, tmp_path)
+    summary = next(line for line in lines if line["type"] == "turn.completed")
+    assert summary["turn"]["startedAt"] == 1790078632
+    assert summary["turn"]["completedAt"] == 1790078662
+    assert summary["turn"]["durationMs"] == 30_000
+
+
+def test_the_page_settles_the_repaired_exec_as_one_turn(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    install_contract(tmp_path, monkeypatch, failures=1)
+    with FakeAppServer() as server:
+        _, lines = run_shim_turn(server, monkeypatch, tmp_path)
+    content = (
+        "\n".join(json.dumps(line, ensure_ascii=False) for line in lines)
+    ).encode()
+    items = _parse_activity_log(content, 1, phase="migration")
+    summaries = [item for item in items if item["id"] == "migration:1:turn-summary"]
+    assert len(summaries) == 1
+    assert summaries[0]["status"] == "completed"
+    rows = [item for item in items if item["kind"] == "command"]
+    assert [row["tool"]["name"] for row in rows] == [
+        "运行命令",
+        shim._CONTRACT_ROW_NAME,
+        shim._CONTRACT_ROW_NAME,
+    ]
+    assert summaries[0]["turn"]["toolCalls"] == 3
+    assert summaries[0]["turn"]["toolDurationComplete"] is True
 
 
 def test_the_shim_install_block_puts_the_shim_ahead_of_the_real_codex() -> None:

@@ -32,8 +32,11 @@ import asyncio
 import json
 import os
 import shlex
+import subprocess
 import sys
+import time
 from pathlib import Path
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import IO, Any, Callable, Iterable
 
@@ -43,6 +46,23 @@ _STATE_ENV = "STUDIO_MIGRATION_SHIM_STATE"
 _DEFAULT_APP_SERVER = "ws://127.0.0.1:8199"
 _DEFAULT_REAL_CODEX = "/usr/local/libexec/codex-real"
 _DEFAULT_STATE_PATH = "/tmp/studio-codex-shim-state.json"
+
+# The migration CLI settles an attempt with its own deterministic contract and opens
+# another attempt when a finding blocks that contract, which is why a migration turn
+# could claim success and still be followed by a second one.  The shim runs the same
+# contract inside the exec it already owns and hands the blocking findings back to the
+# same thread, so the repair lands in the turn that made the claim.
+_CONTRACT_OUTPUT_ENV = "AGENTKIT_MIGRATE_OUTPUT_DIR"
+_CONTRACT_ASSET_ENV = "AGENTKIT_MIGRATE_ASSET_DIR"
+_CONTRACT_SKILL_ENV = "AGENTKIT_MIGRATE_SKILL_PATH"
+_CONTRACT_SCRIPT = "scripts/validate_runtime.sh"
+_CONTRACT_SKILL_DIR = "source-to-veadk"
+_DEFAULT_SKILL_PATH = "/home/gem/.codex/skills"
+_CONTRACT_ROW_NAME = "确定性校验"
+_CONTRACT_JUDGED_MARKER = "Validation finished:"
+_MAX_CONTRACT_REPAIRS = 2
+_CONTRACT_TIMEOUT_SECONDS = 300.0
+_CONTRACT_OUTPUT_CHARS = 4_000
 
 # Codex' own labels, kept identical to the ones the app-server driver writes so a
 # migration turn reads like an intelligent-build turn.
@@ -174,6 +194,163 @@ def sandbox_policy(invocation: Invocation) -> dict[str, object]:
     if mode == "workspace-write":
         return {"type": "workspaceWrite"}
     return {"type": "readOnly"}
+
+
+@dataclass(frozen=True)
+class ContractVerdict:
+    """One run of the CLI's deterministic contract, as the shim read it."""
+
+    passed: bool
+    judged: bool
+    command: str
+    output: str
+    exit_code: int
+    duration_ms: int
+    findings: tuple[str, ...] = ()
+
+
+def contract_target(environ: Mapping[str, str]) -> tuple[str, str] | None:
+    """The CLI's validation script and the output directory it judges, if any.
+
+    The CLI exports both to the Codex process whose prompt tells the model to run
+    that script, so the shim reads the same two variables instead of guessing at the
+    layout.  A CLI that exports neither (or a script that is not there) keeps its own
+    attempt loop: the shim only ever adds a check it can actually run.
+    """
+    output = str(environ.get(_CONTRACT_OUTPUT_ENV) or "").strip()
+    asset = str(environ.get(_CONTRACT_ASSET_ENV) or "").strip()
+    if not asset:
+        skill = (
+            str(environ.get(_CONTRACT_SKILL_ENV) or "").strip() or _DEFAULT_SKILL_PATH
+        )
+        asset = os.path.join(skill, _CONTRACT_SKILL_DIR)
+    if not output or not asset or not os.path.isdir(output):
+        return None
+    script = os.path.join(asset, _CONTRACT_SCRIPT)
+    if not os.path.isfile(script):
+        return None
+    return script, output
+
+
+def blocking_findings(output_dir: str, *, limit: int = 6) -> tuple[str, ...]:
+    """The fatal and repairable findings one validation run left behind."""
+    try:
+        with open(
+            os.path.join(output_dir, "validation_findings.json"), encoding="utf-8"
+        ) as handle:
+            value = json.load(handle)
+    except (OSError, ValueError):
+        return ()
+    if not isinstance(value, dict):
+        return ()
+    lines: list[str] = []
+    for severity in ("fatal", "repairable"):
+        entries = value.get(severity)
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            name = str(entry.get("name") or "").strip()
+            detail = str(entry.get("detail") or "").strip()
+            if name or detail:
+                lines.append(f"- {name} [{severity}] {detail}".strip())
+            if len(lines) >= limit:
+                return tuple(lines)
+    return tuple(lines)
+
+
+def _tail(text: str, limit: int) -> str:
+    """The end of a command's output, which is where a validator puts its verdict."""
+    text = text.strip()
+    return text if len(text) <= limit else text[-limit:]
+
+
+def run_contract(script: str, output_dir: str) -> ContractVerdict:
+    """Run the CLI's deterministic contract the way the migration prompt does.
+
+    A verdict counts only when the validator reported one: a script that could not
+    run at all must not cost the CLI a turn, so ``judged`` gates the repair loop.
+    """
+    command = 'bash "$AGENTKIT_MIGRATE_ASSET_DIR/scripts/validate_runtime.sh"'
+    started = time.monotonic()
+    try:
+        completed = subprocess.run(
+            ["bash", script],
+            cwd=output_dir,
+            capture_output=True,
+            text=True,
+            timeout=_CONTRACT_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        return ContractVerdict(
+            passed=False,
+            judged=False,
+            command=command,
+            output=str(error),
+            exit_code=-1,
+            duration_ms=int((time.monotonic() - started) * 1000),
+        )
+    text = "\n".join(part for part in (completed.stdout, completed.stderr) if part)
+    judged = _CONTRACT_JUDGED_MARKER in (completed.stdout or "")
+    return ContractVerdict(
+        passed=judged and completed.returncode == 0,
+        judged=judged,
+        command=command,
+        output=_tail(text, _CONTRACT_OUTPUT_CHARS),
+        exit_code=completed.returncode,
+        duration_ms=int((time.monotonic() - started) * 1000),
+        findings=blocking_findings(output_dir),
+    )
+
+
+def contract_row(verdict: ContractVerdict, *, index: int) -> dict[str, object]:
+    """One validation run as the command row the migration page already draws."""
+    return {
+        "type": "item.completed",
+        "item": {
+            "id": f"studio-contract-{index}",
+            "type": "command_execution",
+            "name": _CONTRACT_ROW_NAME,
+            "command": verdict.command,
+            "aggregated_output": verdict.output,
+            "exit_code": verdict.exit_code,
+            "duration_ms": verdict.duration_ms,
+            "status": "completed" if verdict.passed else "failed",
+        },
+    }
+
+
+def contract_feedback(verdict: ContractVerdict) -> str:
+    """The repair instructions handed back into the same turn."""
+    findings = "\n".join(verdict.findings) or "- 见校验输出。"
+    return "\n".join(
+        [
+            "# 确定性校验未通过：在本回合内修复",
+            "",
+            "CLI 的迁移契约刚刚在这个输出目录上失败，所以这次迁移还不能结束。",
+            "不要重开迁移，也不要改写 CLI 初始化生成的 `.agentkit/agentkit.yaml`：",
+            "它的 sha256 就是 `migration_metadata.json` 里记录的配置基线，",
+            "应用名由已确认的迁移设置决定，不是本回合可以更改的内容。",
+            "在当前输出目录里修掉下面的阻断项，然后重跑校验，直到它通过。",
+            "",
+            "## 阻断项",
+            findings,
+            "",
+            "## 校验输出（末尾）",
+            "```",
+            verdict.output or "（校验脚本没有输出）",
+            "```",
+            "",
+            "## 完成条件",
+            '- 重跑 `bash "$AGENTKIT_MIGRATE_ASSET_DIR/scripts/validate_runtime.sh"`，',
+            "  退出码为 0，且 `validation_findings.json` 的 `fatal`、`repairable` 都为空",
+            "  （`degraded` 可以保留，但要在报告里如实说明）。",
+            "- 没有通过校验之前，不要输出迁移完成的结论。",
+            "",
+        ]
+    )
 
 
 def read_output_schema(path: str) -> object:
@@ -403,6 +580,32 @@ def add_usage(left: dict[str, int], right: dict[str, int]) -> dict[str, int]:
     return total
 
 
+def _second(value: object) -> float | None:
+    """An app-server timestamp in seconds, or ``None`` when it is not one."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    return number if number >= 0 else None
+
+
+def span_turns(turns: list[dict[str, object]], turn: dict[str, object]) -> None:
+    """Report a whole exec as one turn when the contract kept it open.
+
+    A repaired contract makes one `codex exec` carry several app-server turns, but
+    the migration page draws one turn per exec, so its elapsed time has to cover the
+    model work of every sub-turn and the validation between them.
+    """
+    if len(turns) < 2:
+        return
+    started = _second(turns[0].get("startedAt"))
+    completed = _second(turns[-1].get("completedAt"))
+    if started is None or completed is None or completed < started:
+        return
+    turn["startedAt"] = turns[0]["startedAt"]
+    turn["completedAt"] = turns[-1]["completedAt"]
+    turn["durationMs"] = int(round((completed - started) * 1000))
+
+
 def turn_line(
     turn: dict[str, object],
     *,
@@ -474,6 +677,7 @@ class _AppServerTurn:
         self.failure = ""
         self._completed = asyncio.Event()
         self._turn: dict[str, object] = {}
+        self._turns: list[dict[str, object]] = []
         self._usage: dict[str, int] = {}
         self._thread_total: dict[str, int] | None = None
 
@@ -498,6 +702,10 @@ class _AppServerTurn:
     async def start(self) -> asyncio.Task[None]:
         """Start reading this connection: every request needs the reader running."""
         return asyncio.create_task(self._read())
+
+    def begin_turn(self) -> None:
+        """Arm the connection for another turn on the thread it already holds."""
+        self._completed = asyncio.Event()
 
     async def run_turn(
         self,
@@ -618,6 +826,7 @@ class _AppServerTurn:
             turn = payload.get("turn")
             if isinstance(turn, dict):
                 self._turn = turn
+                self._turns.append(dict(turn))
                 raw_status = turn.get("status")
                 if isinstance(raw_status, dict):
                     raw_status = raw_status.get("type")
@@ -668,6 +877,7 @@ class _AppServerTurn:
         reported = turn.get("model")
         if not model and isinstance(reported, str):
             model = reported
+        span_turns(self._turns, turn)
         return turn_line(turn, usage=self._usage, model=model or self.model)
 
 
@@ -787,6 +997,7 @@ async def _drive_turn(
         sandbox=sandbox_policy(invocation),
         output_schema=read_output_schema(invocation.output_schema_path),
     )
+    await settle_contract(turn, invocation, emit=emit)
     emit(turn.summary_line(invocation.model))
     if invocation.last_message_path and turn.final_text:
         try:
@@ -797,6 +1008,46 @@ async def _drive_turn(
     if turn.failure:
         print(f"studio codex shim: {turn.failure}", file=sys.stderr, flush=True)
     return 0 if turn.status in {"", "completed"} else 1
+
+
+async def settle_contract(
+    turn: _AppServerTurn,
+    invocation: Invocation,
+    *,
+    emit: Callable[[dict[str, object]], None],
+) -> None:
+    """Hold one exec inside a single turn until the CLI's own contract passes.
+
+    The migration CLI validates the output after Codex exits and opens a new attempt
+    when a finding blocks the delivery, so a turn could claim the migration was done
+    and still be followed by another one.  The contract is the deterministic script
+    the migration prompt already tells the model to run, so the shim runs that same
+    script inside the exec and hands the blocking findings back into the same thread:
+    the repair lands in the turn that made the claim, and the CLI's attempt loop
+    stays a backstop.
+
+    Every bail-out is deliberate.  A contract the shim cannot run or cannot read a
+    verdict from, a sub-turn that failed, and the repair budget all end the loop
+    without touching the turn, because a turn must never be held open by the shim.
+    """
+    target = contract_target(os.environ)
+    if target is None or turn.status not in {"", "completed"}:
+        return
+    script, output_dir = target
+    for repair in range(_MAX_CONTRACT_REPAIRS + 1):
+        verdict = await asyncio.to_thread(run_contract, script, output_dir)
+        emit(contract_row(verdict, index=repair + 1))
+        if verdict.passed or not verdict.judged or repair == _MAX_CONTRACT_REPAIRS:
+            return
+        turn.begin_turn()
+        await turn.run_turn(
+            thread_id=turn.turn_id,
+            prompt=contract_feedback(verdict),
+            model=invocation.model,
+            sandbox=sandbox_policy(invocation),
+        )
+        if turn.status not in {"", "completed"}:
+            return
 
 
 def read_state(path: str) -> dict[str, object]:

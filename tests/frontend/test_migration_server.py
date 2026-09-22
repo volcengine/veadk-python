@@ -3591,6 +3591,13 @@ def test_confirmed_migration_uses_the_one_cli_contract(
     )
     instruction_text = " ".join(instruction.split())
     assert "missing source credentials or environment variables" in instruction_text
+    assert "Treat the deterministic migration contract as blocking" in instruction_text
+    assert "no completion may be reported" in instruction_text
+    assert (
+        "Never rewrite the .agentkit/agentkit.yaml that ak init recorded"
+        in instruction_text
+    )
+    assert "sha256 is the config baseline" in instruction_text
     assert "Never replace or monkeypatch Agent/root_agent run" in instruction_text
     assert "assignments to Agent/root_agent run or run_async" in instruction_text
     assert "Keep ENABLE_APMPLUS enabled by default" in instruction_text
