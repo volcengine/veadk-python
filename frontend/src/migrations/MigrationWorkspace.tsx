@@ -305,6 +305,27 @@ function isTerminalState(state: MigrationTask["state"]): boolean {
   ].includes(state);
 }
 
+/**
+ * What the collapsed process header says while Codex is working, the way the
+ * intelligent build reports its run phase there. Settled migrations still have a
+ * closing turn to describe, so their status is the delivery review.
+ */
+function migrationLiveStatus(task: MigrationTask): string {
+  if (task.state === "analyzing") return migrationText("activity.liveAnalyzing");
+  if (task.state === "migrating") return migrationText("activity.liveMigrating");
+  if (task.state === "validating") return migrationText("activity.liveValidating");
+  if (task.state === "packaging") return migrationText("activity.livePackaging");
+  if (
+    task.state === "succeeded" ||
+    task.state === "succeeded_with_warnings" ||
+    task.state === "partial" ||
+    task.state === "failed"
+  ) {
+    return migrationText("activity.liveDelivery");
+  }
+  return "";
+}
+
 function shouldShowCodexActivity(task: MigrationTask): boolean {
   return (
     task.state === "analyzing" ||
@@ -524,15 +545,21 @@ function MigrationActivityFeed({
   loading,
   error,
   analyzing,
+  status,
 }: {
   activity: MigrationActivity | null;
   loading: boolean;
   error: string;
   analyzing: boolean;
+  status: string;
 }) {
   const { t } = useTranslation("migrations");
   const items = activity?.items ?? [];
   const blocks = migrationActivityBlocks(items);
+  // A closing turn keeps working after the task has settled, so the feed is still
+  // live whenever Codex still has a running item.
+  const streaming =
+    !activity?.complete || items.some((item) => item.status === "running");
 
   return (
     <section
@@ -552,7 +579,8 @@ function MigrationActivityFeed({
           <Blocks
             blocks={blocks}
             groupProcess
-            streaming={!activity?.complete}
+            streaming={streaming}
+            liveStatus={status}
             onAction={ignoreMigrationAction}
           />
         </div>
@@ -2509,6 +2537,7 @@ export function MigrationWorkspace({
                       loading={activityLoading}
                       error={activityError}
                       analyzing={task.state === "analyzing"}
+                      status={migrationLiveStatus(task)}
                     />
                   ) : null}
                 </div>

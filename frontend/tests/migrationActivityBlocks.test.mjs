@@ -22,6 +22,27 @@ const moduleUrl = `data:text/javascript;base64,${Buffer.from(
 ).toString("base64")}`;
 const { migrationActivityBlocks } = await import(moduleUrl);
 
+/** The shared presentation module, compiled the same way the page consumes it. */
+async function loadDevelopmentPresentation() {
+  const presentation = await build({
+    entryPoints: [
+      fileURLToPath(
+        new URL("../src/create/developmentPresentation.ts", import.meta.url),
+      ),
+    ],
+    bundle: true,
+    format: "esm",
+    platform: "node",
+    target: "node20",
+    write: false,
+  });
+  return import(
+    `data:text/javascript;base64,${Buffer.from(
+      presentation.outputFiles[0].contents,
+    ).toString("base64")}`
+  );
+}
+
 test("maps ordered Codex activity into the shared block contract", () => {
   const blocks = migrationActivityBlocks([
     {
@@ -30,6 +51,8 @@ test("maps ordered Codex activity into the shared block contract", () => {
       status: "running",
       title: "Codex 思考",
       detail: "检查项目结构",
+      itemType: "reasoning",
+      durationMs: 1200,
     },
     {
       id: "message",
@@ -37,6 +60,8 @@ test("maps ordered Codex activity into the shared block contract", () => {
       status: "completed",
       title: "Codex 更新",
       detail: "已识别入口。",
+      itemType: "agentMessage",
+      phase: "commentary",
     },
     {
       id: "plan",
@@ -61,6 +86,8 @@ test("maps ordered Codex activity into the shared block contract", () => {
         error: "exit failed",
         exitCode: 1,
       },
+      itemType: "commandExecution",
+      durationMs: 800,
     },
     {
       id: "status",
@@ -80,12 +107,22 @@ test("maps ordered Codex activity into the shared block contract", () => {
   assert.deepEqual(blocks, [
     {
       kind: "thinking",
+      id: "reasoning",
+      itemType: "reasoning",
+      durationMs: 1200,
       text: "检查项目结构",
       done: false,
     },
-    { kind: "text", text: "已识别入口。" },
+    {
+      kind: "text",
+      id: "message",
+      itemType: "agentMessage",
+      phase: "commentary",
+      text: "已识别入口。",
+    },
     {
       kind: "plan",
+      id: "plan",
       title: "项目迁移计划",
       summary: "已完成 1/2 项",
       items: [
@@ -96,15 +133,24 @@ test("maps ordered Codex activity into the shared block contract", () => {
     },
     {
       kind: "tool",
+      id: "command",
+      itemType: "commandExecution",
+      durationMs: 800,
       name: "命令执行未完成",
       args: { command: "python migrate.py" },
-      response: { output: "trace", error: "exit failed", exitCode: 1 },
+      response: {
+        status: "failed",
+        exitCode: 1,
+        output: "trace",
+        error: "exit failed",
+      },
       done: true,
       status: "failed",
       defaultOpen: true,
     },
     {
       kind: "tool",
+      id: "status",
       name: "Codex 事件流异常",
       response: "connection closed",
       done: true,
@@ -159,6 +205,7 @@ test("keeps legacy activity useful without inventing missing details", () => {
   assert.deepEqual(blocks, [
     {
       kind: "plan",
+      id: "legacy-plan",
       title: "项目分析计划",
       summary: "已完成 2/2 项",
       items: [],
@@ -166,6 +213,7 @@ test("keeps legacy activity useful without inventing missing details", () => {
     },
     {
       kind: "tool",
+      id: "legacy-command",
       name: "已检查项目结构",
       args: undefined,
       response: undefined,
@@ -174,18 +222,75 @@ test("keeps legacy activity useful without inventing missing details", () => {
     },
     {
       kind: "tool",
+      id: "output-command",
       name: "已验证迁移结果",
       args: undefined,
-      response: "passed",
+      response: { status: "completed", output: "passed" },
       done: true,
       status: "completed",
     },
     {
       kind: "tool",
+      id: "running-status",
       name: "正在处理",
       response: undefined,
       done: false,
       status: "running",
     },
   ]);
+});
+
+test("renders a migration command as the intelligent build's native row", async () => {
+  const { developmentToolLabel, isDevelopmentProcess } = await loadDevelopmentPresentation();
+
+  const [command] = migrationActivityBlocks([
+    {
+      id: "delivery:1:call_1",
+      kind: "command",
+      status: "completed",
+      title: "已拉取迁移产物并核对字节",
+      itemType: "dynamicToolCall",
+      durationMs: 2400,
+      tool: { name: "已拉取迁移产物并核对字节", input: { path: "migration-result.zip" } },
+    },
+  ]);
+
+  // Without itemType the shared renderer falls back to a generic row: another icon and
+  // an output truncated at 2000 characters. The native fields are what make a
+  // migration turn render like the intelligent build's own.
+  assert.equal(command.itemType, "dynamicToolCall");
+  assert.equal(command.durationMs, 2400);
+  assert.equal(isDevelopmentProcess(command), true);
+  assert.equal(developmentToolLabel(command), "已拉取迁移产物并核对字节");
+});
+
+test("labels a migration command with the same name the app-server gave it", async () => {
+  const { developmentToolLabel } = await loadDevelopmentPresentation();
+
+  // The app-server names its own tool rows and the intelligent build labels them from
+  // that name; the migration row carries the same name, so it reads the same instead of
+  // falling back to the migration's own status copy.
+  const native = migrationActivityBlocks([
+    {
+      id: "migration:1:call_1",
+      kind: "command",
+      status: "completed",
+      itemType: "commandExecution",
+      title: "命令执行完成",
+      tool: { name: "运行命令", input: { command: "ak migrate any source" } },
+    },
+  ])[0];
+  assert.equal(developmentToolLabel(native), "运行命令");
+
+  const scripted = migrationActivityBlocks([
+    {
+      id: "migration:1:call_2",
+      kind: "command",
+      status: "completed",
+      itemType: "commandExecution",
+      title: "命令执行完成",
+      tool: { name: "命令执行完成", input: { command: "ak migrate any source" } },
+    },
+  ])[0];
+  assert.equal(developmentToolLabel(scripted), "命令执行完成");
 });

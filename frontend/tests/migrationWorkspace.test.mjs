@@ -553,8 +553,18 @@ test("renders Codex migration events through one shared block stream", () => {
   assert.match(source, /<Blocks[\s\S]*?blocks=\{blocks\}/);
   assert.match(
     source,
-    /<Blocks[\s\S]*?groupProcess[\s\S]*?streaming=\{!activity\?\.complete\}/,
+    /<Blocks[\s\S]*?groupProcess[\s\S]*?streaming=\{streaming\}[\s\S]*?liveStatus=\{status\}/,
     "the Codex output renders as the intelligent build's grouped process stream",
+  );
+  assert.match(
+    source,
+    /const streaming =\s*!activity\?\.complete \|\| items\.some\(\(item\) => item\.status === "running"\)/,
+    "a closing turn keeps the stream live after the task has settled",
+  );
+  assert.match(
+    source,
+    /status=\{migrationLiveStatus\(task\)\}/,
+    "the process header reports what Codex is doing, like the intelligent build's",
   );
   assert.doesNotMatch(source, /migration-activity__status/);
   assert.doesNotMatch(styles, /\.migration-activity__status/);

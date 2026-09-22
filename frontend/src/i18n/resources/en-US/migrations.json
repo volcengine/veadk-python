@@ -98,7 +98,12 @@
     "title": "Codex activity",
     "startingAnalysis": "Codex is starting the analysis…",
     "startingMigration": "Codex is starting the migration…",
-    "loadError": "Codex activity is temporarily unavailable. The current task is unaffected."
+    "loadError": "Codex activity is temporarily unavailable. The current task is unaffected.",
+    "liveAnalyzing": "Analyzing the project",
+    "liveMigrating": "Running the migration",
+    "liveValidating": "Verifying the migration",
+    "livePackaging": "Packaging the migration",
+    "liveDelivery": "Reviewing the delivery"
   },
   "artifact": {
     "title": "Migration output",

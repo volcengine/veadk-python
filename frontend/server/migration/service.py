@@ -528,6 +528,63 @@ def _analysis_result_message(value: str) -> bool:
     return True
 
 
+# 页面按智能构建同一套 Codex 事件渲染工具行（原生图标、标签、耗时），所以活动项要
+# 带上原生 itemType；缺了它，同一段 Codex 输出会变成另一套行样式。
+_ACTIVITY_NATIVE_ITEM_TYPES = {
+    "reasoning": "reasoning",
+    "agent_message": "agentMessage",
+    "command_execution": "commandExecution",
+    "file_change": "fileChange",
+    "mcp_tool_call": "mcpToolCall",
+    "dynamic_tool_call": "dynamicToolCall",
+    "collab_tool_call": "collabToolCall",
+    "web_search": "webSearch",
+}
+
+
+def _activity_native_fields(
+    item_type: str,
+    item: dict[str, object],
+) -> dict[str, object]:
+    """The fields the shared row renderer reads off a Codex item.
+
+    ``itemType`` selects Codex' own row (icon, computed label, untruncated output) and
+    ``durationMs`` is what the collapsed process header reports, so a migration turn
+    that ran for minutes does not read like one that ran instantly.
+    """
+    fields: dict[str, object] = {}
+    native = _ACTIVITY_NATIVE_ITEM_TYPES.get(item_type)
+    if native:
+        fields["itemType"] = native
+    duration = item.get("duration_ms")
+    if isinstance(duration, int) and not isinstance(duration, bool) and duration >= 0:
+        fields["durationMs"] = duration
+    phase = item.get("phase")
+    if isinstance(phase, str) and phase:
+        fields["phase"] = phase
+    return fields
+
+
+def _activity_row_name(
+    item: dict[str, object],
+    fallback: str,
+    *,
+    secret_values: tuple[str, ...],
+) -> str:
+    """The label the shared row renderer shows for a tool call.
+
+    The app-server already names its own rows (运行命令 / 修改文件 / 网络搜索 /
+    ``MCP · server/tool``) and the intelligent build labels them from exactly that
+    name, so a migration turn reads the same. A log written before the app-server
+    path recorded the name, or the scripted ``codex exec`` driver that never has one,
+    keeps the migration's own wording.
+    """
+    name = item.get("name")
+    if isinstance(name, str) and name.strip():
+        return _redact_activity_text(name, secret_values=secret_values)
+    return fallback
+
+
 def _parse_activity_log(
     content: bytes,
     attempt: int,
@@ -590,6 +647,7 @@ def _parse_activity_log(
                     "status": status,
                     "title": "Codex 思考" if item_type == "reasoning" else "Codex 更新",
                     "detail": detail,
+                    **_activity_native_fields(item_type, item),
                 }
             )
             continue
@@ -665,10 +723,18 @@ def _parse_activity_log(
                 "completed": "命令执行完成",
                 "failed": "命令执行失败",
             }[status]
-            tool: dict[str, object] = {"name": title}
+            tool: dict[str, object] = {
+                "name": _activity_row_name(item, title, secret_values=secret_values)
+            }
+            command_input: dict[str, object] = {}
             if command_text:
+                command_input["command"] = command_text
+            actions = item.get("command_actions")
+            if _has_activity_payload(actions):
+                command_input["commandActions"] = actions
+            if command_input:
                 tool["input"] = _activity_payload(
-                    {"command": command_text},
+                    command_input,
                     secret_values=secret_values,
                 )
             output = item.get("aggregated_output")
@@ -687,6 +753,7 @@ def _parse_activity_log(
                     "status": status,
                     "title": title,
                     "tool": tool,
+                    **_activity_native_fields(item_type, item),
                 }
             )
             continue
@@ -725,6 +792,7 @@ def _parse_activity_log(
                     "status": row_status,
                     "title": title,
                     "tool": tool,
+                    **_activity_native_fields(item_type, item),
                 }
             )
             continue
@@ -738,7 +806,9 @@ def _parse_activity_log(
                 "completed": f"已更新{subject}",
                 "failed": f"更新{subject}失败",
             }[status]
-            tool: dict[str, object] = {"name": title}
+            tool: dict[str, object] = {
+                "name": _activity_row_name(item, title, secret_values=secret_values)
+            }
             if isinstance(changes, list):
                 tool["input"] = _activity_payload(
                     {"changes": changes},
@@ -751,6 +821,7 @@ def _parse_activity_log(
                     "status": status,
                     "title": title,
                     "tool": tool,
+                    **_activity_native_fields(item_type, item),
                 }
             )
             continue
@@ -770,7 +841,9 @@ def _parse_activity_log(
                 "completed": f"已调用工具 {label}",
                 "failed": f"工具 {label} 调用未完成",
             }[status]
-            tool = {"name": title}
+            tool = {
+                "name": _activity_row_name(item, title, secret_values=secret_values)
+            }
             arguments = item.get("arguments")
             if _has_activity_payload(arguments):
                 tool["input"] = _activity_payload(
@@ -796,6 +869,7 @@ def _parse_activity_log(
                     "status": status,
                     "title": title,
                     "tool": tool,
+                    **_activity_native_fields(item_type, item),
                 }
             )
             continue
@@ -856,6 +930,7 @@ def _parse_activity_log(
                     "status": status,
                     "title": title,
                     "tool": tool,
+                    **_activity_native_fields(item_type, item),
                 }
             )
             continue
@@ -871,7 +946,9 @@ def _parse_activity_log(
                 for key in ("query", "action")
                 if _has_activity_payload(item.get(key))
             }
-            tool = {"name": title}
+            tool = {
+                "name": _activity_row_name(item, title, secret_values=secret_values)
+            }
             if input_value:
                 tool["input"] = _activity_payload(
                     input_value,
@@ -884,6 +961,7 @@ def _parse_activity_log(
                     "status": status,
                     "title": title,
                     "tool": tool,
+                    **_activity_native_fields(item_type, item),
                 }
             )
             continue

@@ -892,6 +892,7 @@ def test_agentic_activity_is_owner_scoped_and_redacts_codex_events() -> None:
             "status": "completed",
             "title": "Codex 思考",
             "detail": "正在分析源项目结构。",
+            "itemType": "reasoning",
         },
         {
             "id": "migration:1:plan-1",
@@ -909,6 +910,7 @@ def test_agentic_activity_is_owner_scoped_and_redacts_codex_events() -> None:
             "kind": "command",
             "status": "completed",
             "title": "命令执行完成",
+            "itemType": "commandExecution",
             "tool": {
                 "name": "命令执行完成",
                 "input": {"command": "API_KEY=[已隐藏] bash validate_runtime.sh"},
@@ -922,6 +924,7 @@ def test_agentic_activity_is_owner_scoped_and_redacts_codex_events() -> None:
             "status": "completed",
             "title": "Codex 更新",
             "detail": "正在修复配置，API_KEY=[已隐藏]",
+            "itemType": "agentMessage",
         },
     ]
     serialized = json.dumps(activity, ensure_ascii=False)
@@ -1035,6 +1038,7 @@ def test_agentic_activity_handles_incremental_and_malformed_events() -> None:
         "kind": "command",
         "status": "failed",
         "title": "命令执行失败",
+        "itemType": "commandExecution",
         "tool": {
             "name": "命令执行失败",
             "input": {"command": "zip result.zip output"},
@@ -1212,6 +1216,7 @@ def test_activity_parser_preserves_useful_codex_events_and_redacts_payloads() ->
         "kind": "command",
         "status": "failed",
         "title": "命令执行失败",
+        "itemType": "commandExecution",
         "tool": {
             "name": "命令执行失败",
             "input": {"command": "custom-tool --token=[已隐藏]"},
@@ -1219,6 +1224,14 @@ def test_activity_parser_preserves_useful_codex_events_and_redacts_payloads() ->
             "exitCode": 7,
         },
     }
+    # 页面按智能构建同一套 Codex 行渲染这些工具项，所以每一项都要带原生 itemType。
+    assert [item.get("itemType") for item in items[1:6]] == [
+        "fileChange",
+        "mcpToolCall",
+        "mcpToolCall",
+        "collabToolCall",
+        "webSearch",
+    ]
     assert items[1]["tool"] == {
         "name": "已更新2个项目文件",
         "input": {
@@ -1369,6 +1382,7 @@ def test_analysis_activity_is_visible_before_route_confirmation() -> None:
                 "kind": "message",
                 "status": "completed",
                 "title": "Codex 更新",
+                "itemType": "agentMessage",
                 "detail": "发现项目包含两个独立入口，正在核对调用关系。",
             },
             {
@@ -1376,6 +1390,7 @@ def test_analysis_activity_is_visible_before_route_confirmation() -> None:
                 "kind": "command",
                 "status": "completed",
                 "title": "命令执行完成",
+                "itemType": "commandExecution",
                 "tool": {
                     "name": "命令执行完成",
                     "input": {"command": "rg -n 'Agent|Workflow' ."},
@@ -1386,6 +1401,7 @@ def test_analysis_activity_is_visible_before_route_confirmation() -> None:
                 "kind": "command",
                 "status": "failed",
                 "title": "命令执行失败",
+                "itemType": "commandExecution",
                 "tool": {
                     "name": "命令执行失败",
                     "input": {"command": "cat pyproject.toml"},
@@ -1396,6 +1412,7 @@ def test_analysis_activity_is_visible_before_route_confirmation() -> None:
                 "kind": "command",
                 "status": "running",
                 "title": "正在执行命令",
+                "itemType": "commandExecution",
                 "tool": {
                     "name": "正在执行命令",
                     "input": {"command": "python3 scripts/inspect_project.py"},
@@ -1406,6 +1423,7 @@ def test_analysis_activity_is_visible_before_route_confirmation() -> None:
                 "kind": "command",
                 "status": "completed",
                 "title": "命令执行完成",
+                "itemType": "commandExecution",
                 "tool": {
                     "name": "命令执行完成",
                     "input": {"command": "custom-tool --run"},
@@ -1547,6 +1565,35 @@ def test_structured_activity_stops_after_route_confirmation() -> None:
         "complete": False,
         "items": [],
     }
+
+
+def test_a_tool_row_is_labelled_the_way_the_app_server_named_it() -> None:
+    def parse(item: dict[str, object]) -> dict[str, object]:
+        return _parse_activity_log(
+            json.dumps({"type": "item.completed", "item": item}).encode(),
+            1,
+            phase="migration",
+        )[0]
+
+    def command_item(**extra: object) -> dict[str, object]:
+        return {
+            "id": "command",
+            "type": "command_execution",
+            "status": "completed",
+            "command": "ak migrate any source",
+            "exit_code": 0,
+            **extra,
+        }
+
+    # app-server 驱动会把行名写进日志（codex_app_server 给工具行起的名字），页面就
+    # 按智能构建同一套标签规则显示；脚本驱动（codex exec --json）没有这个名字，才
+    # 用迁移自己的状态标题。
+    named = parse(command_item(name="运行命令"))
+    assert named["tool"]["name"] == "运行命令"
+    assert named["title"] == "命令执行完成"
+
+    unnamed = parse(command_item())
+    assert unnamed["tool"]["name"] == "命令执行完成"
 
 
 @pytest.mark.parametrize(

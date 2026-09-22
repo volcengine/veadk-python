@@ -105,6 +105,8 @@ class AnalysisActivityLog:
         self._dirty = False
         self._texts: dict[str, str] = {}
         self._outputs: dict[str, str] = {}
+        self._names: dict[str, str] = {}
+        self._commands: dict[str, str] = {}
 
     @property
     def lines(self) -> list[str]:
@@ -205,26 +207,55 @@ class AnalysisActivityLog:
     def _item(self, event: CodexAppServerEvent) -> dict[str, object] | None:
         item_id = str(event.item_id or "")
         kind = str(event.kind or "")
+        item: dict[str, object] | None
         if kind == "thinking":
-            return self._message_item(item_id, "reasoning", event.text, append=False)
-        if kind == "commentary":
-            return self._message_item(
+            item = self._message_item(item_id, "reasoning", event.text, append=False)
+        elif kind == "commentary":
+            item = self._message_item(
                 item_id, "agent_message", event.text, append=False
             )
-        if kind == "text":
+        elif kind == "text":
             # Live deltas: the reader keeps the last text it saw for an item.
-            return self._message_item(item_id, "agent_message", event.text, append=True)
-        if kind in {"text_snapshot", "assistant_final"}:
-            return self._message_item(
+            item = self._message_item(item_id, "agent_message", event.text, append=True)
+        elif kind in {"text_snapshot", "assistant_final"}:
+            item = self._message_item(
                 item_id, "agent_message", event.text, append=False
             )
-        if kind == "tool":
-            return self._tool_item(item_id, event)
-        if kind == "tool_output":
-            return self._output_item(item_id, event)
-        if kind == "plan":
-            return self._plan_item(event)
-        return None
+        elif kind == "tool":
+            item = self._tool_item(item_id, event)
+        elif kind == "tool_output":
+            item = self._output_item(item_id, event)
+        elif kind == "plan":
+            item = self._plan_item(event)
+        else:
+            return None
+        return self._timed(item, event)
+
+    @staticmethod
+    def _timed(
+        item: dict[str, object] | None,
+        event: CodexAppServerEvent,
+    ) -> dict[str, object] | None:
+        """Carry the app-server's own phase and timing onto the log line.
+
+        The page renders these lines the way the intelligent build renders its own
+        Codex activity, and that rendering reads ``phase`` and ``duration_ms`` off the
+        item: a line that drops them turns a call that ran for minutes into one that
+        looks like it never took any time.
+        """
+        if item is None:
+            return None
+        phase = str(event.phase or "")
+        if phase:
+            item["phase"] = phase
+        duration = event.duration_ms
+        if (
+            isinstance(duration, int)
+            and not isinstance(duration, bool)
+            and duration >= 0
+        ):
+            item["duration_ms"] = duration
+        return item
 
     def _message_item(
         self,
@@ -251,12 +282,22 @@ class AnalysisActivityLog:
             return None
         if item_id:
             value = self._append(self._outputs, item_id, value)
-        return {
+        item: dict[str, object] = {
             "id": item_id,
             "type": "command_execution",
             "status": str(event.status or "running") or "running",
             "aggregated_output": value,
         }
+        # 输出增量常常是这一条 id 的最后一行，而它只带增量文本。页面要从行名认这条
+        # 命令、从命令本身算标签，所以把这条调用已有的身份字段补齐，让最后读到的那
+        # 一行和 app-server 报完成时那一行是同一件事。
+        name = self._names.get(item_id, "") if item_id else ""
+        if name:
+            item["name"] = name
+        command = self._commands.get(item_id, "") if item_id else ""
+        if command:
+            item["command"] = command
+        return item
 
     @staticmethod
     def _append(store: dict[str, str], key: str, value: str) -> str:
@@ -282,10 +323,19 @@ class AnalysisActivityLog:
         response = event.response if isinstance(event.response, dict) else {}
         status = str(event.status or "running") or "running"
         item: dict[str, object] = {"id": item_id, "type": item_type, "status": status}
+        # The app-server names its own rows; the page labels them from that name so a
+        # migration turn reads exactly like the intelligent build's turn.
+        name = _text(event.name, 100)
+        if name:
+            item["name"] = name
+            if item_id:
+                self._names[item_id] = name
         if item_type == "command_execution":
             command = _text(arguments.get("command"), 20_000)
             if command:
                 item["command"] = command
+                if item_id:
+                    self._commands[item_id] = command
             output = response.get("output")
             if output not in (None, ""):
                 item["aggregated_output"] = _bounded(output)
@@ -294,6 +344,9 @@ class AnalysisActivityLog:
                 item["exit_code"] = exit_code
             if output in (None, ""):
                 item["aggregated_output"] = self._outputs.get(item_id, "")
+            actions = arguments.get("commandActions")
+            if actions:
+                item["command_actions"] = _bounded(actions)
             return item
         if item_type == "file_change":
             item["changes"] = _bounded(arguments.get("changes"))

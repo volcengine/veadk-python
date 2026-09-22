@@ -291,6 +291,12 @@ export interface MigrationActivityItem {
   detail?: string;
   tool?: MigrationActivityTool;
   plan?: MigrationActivityPlanItem[];
+  /** Codex' own item type: the shared row renderer keys its native look off it. */
+  itemType?: string;
+  /** How long Codex spent on the item; the process header sums these. */
+  durationMs?: number;
+  /** Codex' message phase (commentary / final_answer) when it reports one. */
+  phase?: string;
 }
 
 export interface MigrationActivity {
