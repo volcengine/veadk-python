@@ -82,6 +82,11 @@ class AnalysisActivityLog:
     the Sandbox file is replaced as a whole by ``flush``, which the caller runs on a
     timer and once more when the turn ends.  A flush is best-effort by design — an
     activity feed must never fail an analysis.
+
+    Studio's own dynamic tools are normally the turn's contract rather than page
+    content.  The delivery turn is the exception: its ``publishArtifact`` call *is* the
+    hand-over of the deliverable, so ``include_dynamic_tools`` records it the way the
+    intelligent build records its result tool.
     """
 
     def __init__(
@@ -90,10 +95,12 @@ class AnalysisActivityLog:
         *,
         flush_seconds: float = DEFAULT_FLUSH_SECONDS,
         max_bytes: int = DEFAULT_MAX_BYTES,
+        include_dynamic_tools: bool = False,
     ) -> None:
         self._write = write
         self._flush_seconds = max(0.1, flush_seconds)
         self._max_bytes = max(1, max_bytes)
+        self._include_dynamic_tools = include_dynamic_tools
         self._lines: list[str] = []
         self._dirty = False
         self._texts: dict[str, str] = {}
@@ -125,6 +132,41 @@ class AnalysisActivityLog:
             return
         self._write(self._content())
         self._dirty = False
+
+    def complete_dynamic_tools(self) -> None:
+        """Close Studio tool rows the turn ended on.
+
+        A turn that finishes as soon as its verdict arrives can be interrupted before
+        the app-server reports the call as completed, which would leave the page
+        showing a running row for a delivery that already landed. Callers invoke this
+        only once they accepted the turn's outcome, so a still-running row really is a
+        call that succeeded.
+        """
+        if not self._include_dynamic_tools:
+            return
+        lines: list[str] = []
+        for line in self._lines:
+            try:
+                event = json.loads(line)
+            except ValueError:
+                lines.append(line)
+                continue
+            item = event.get("item") if isinstance(event, dict) else None
+            raw_status = (
+                str(item.get("status") or "").lower() if isinstance(item, dict) else ""
+            )
+            if (
+                isinstance(item, dict)
+                and item.get("type") == "dynamic_tool_call"
+                and raw_status not in _COMPLETED_STATUSES
+                and raw_status not in _FAILED_STATUSES
+            ):
+                item["status"] = "completed"
+                self._dirty = True
+                lines.append(json.dumps(event, ensure_ascii=False))
+                continue
+            lines.append(line)
+        self._lines = lines
 
     def close(self) -> None:
         try:
@@ -229,8 +271,11 @@ class AnalysisActivityLog:
         item_id: str,
         event: CodexAppServerEvent,
     ) -> dict[str, object] | None:
-        item_type = _TOOL_ITEM_TYPES.get(str(event.item_type or ""))
+        raw_type = str(event.item_type or "")
+        item_type = _TOOL_ITEM_TYPES.get(raw_type)
         if item_type is None:
+            if raw_type == "dynamicToolCall" and self._include_dynamic_tools:
+                return self._dynamic_tool_item(item_id, event)
             # Studio's own dynamic tools are the turn's contract, not page content.
             return None
         arguments = event.arguments if isinstance(event.arguments, dict) else {}
@@ -264,6 +309,26 @@ class AnalysisActivityLog:
                 item["result"] = _bounded(response)
             return item
         item["query"] = _text(arguments.get("query"), 4_000)
+        return item
+
+    @staticmethod
+    def _dynamic_tool_item(
+        item_id: str,
+        event: CodexAppServerEvent,
+    ) -> dict[str, object] | None:
+        """One Studio tool call, in the same item shape the reader already parses."""
+        item: dict[str, object] = {
+            "id": item_id,
+            "type": "dynamic_tool_call",
+            "status": str(event.status or "running") or "running",
+            "name": _text(event.name, 100) or "studio_tool",
+        }
+        arguments = event.arguments if isinstance(event.arguments, dict) else {}
+        if arguments:
+            item["arguments"] = _bounded(arguments)
+        response = event.response if isinstance(event.response, dict) else {}
+        if response:
+            item["result"] = _bounded(response)
         return item
 
     def _plan_item(self, event: CodexAppServerEvent) -> dict[str, object] | None:

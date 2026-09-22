@@ -306,7 +306,7 @@ async def run_delivery_turn(
             cwd=cwd,
             tool_name=DELIVERY_TOOL_NAME,
             tool_description=DELIVERY_TOOL_DESCRIPTION,
-            tool_schema=delivery_schema(),
+            tool_schema=delivery_schema(expected_state),
             handler=recorder.report,
             has_result=lambda: recorder.ready,
             model=model,
@@ -353,7 +353,14 @@ def artifact_schema() -> dict[str, object]:
     }
 
 
-def delivery_schema() -> dict[str, object]:
+def delivery_schema(expected_state: str = "") -> dict[str, object]:
+    """The verdict schema, narrowed to the state the Sandbox already published.
+
+    Offering all four states invites a wrong pick - a successful delivery that carries a
+    warning looks like ``succeeded_with_warnings`` - and a rejected verdict costs the
+    whole attempt. The handler keeps checking the state as the server-side guard.
+    """
+    known = expected_state in DELIVERY_STATES
     return {
         "type": "object",
         "additionalProperties": False,
@@ -361,8 +368,12 @@ def delivery_schema() -> dict[str, object]:
         "properties": {
             "state": {
                 "type": "string",
-                "enum": sorted(DELIVERY_STATES),
-                "description": "本次交付的终态，必须与沙箱里的交付状态一致。",
+                "enum": [expected_state] if known else sorted(DELIVERY_STATES),
+                "description": (
+                    f"本次交付的终态已经确定为 {expected_state}，只能是这个值。"
+                    if known
+                    else "本次交付的终态，必须与沙箱里的交付状态一致。"
+                ),
             },
             "message": {
                 "type": "string",

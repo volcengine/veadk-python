@@ -198,6 +198,140 @@ def test_events_without_page_content_are_not_recorded() -> None:
     assert recorder.writes == []
 
 
+def test_the_delivery_turn_shows_the_studio_tool_it_called() -> None:
+    recorder = Recorder()
+    log = AnalysisActivityLog(recorder, flush_seconds=0.01, include_dynamic_tools=True)
+
+    log.record(
+        CodexAppServerEvent(
+            kind="tool",
+            item_id="tool-1",
+            item_type="dynamicToolCall",
+            status="in_progress",
+            name="publishArtifact",
+            arguments={"path": "migration-result.zip"},
+        )
+    )
+    log.record(
+        CodexAppServerEvent(
+            kind="tool",
+            item_id="tool-1",
+            item_type="dynamicToolCall",
+            status="completed",
+            name="publishArtifact",
+            arguments={"path": "migration-result.zip"},
+            response={
+                "success": True,
+                "contentItems": [
+                    {
+                        "type": "inputText",
+                        "text": "产物已核对：path=migration-result.zip sha256=abc size=18。",
+                    }
+                ],
+            },
+        )
+    )
+    log.flush()
+
+    items = recorder.items(phase="delivery")
+    assert len(items) == 1
+    assert items[0]["id"] == "delivery:1:tool-1"
+    assert items[0]["kind"] == "command"
+    assert items[0]["title"] == "已拉取迁移产物并核对字节"
+    assert items[0]["status"] == "completed"
+    assert items[0]["tool"]["input"] == {"path": "migration-result.zip"}
+    assert items[0]["tool"]["output"].startswith("产物已核对：")
+    assert "error" not in items[0]["tool"]
+
+
+def test_a_rejected_delivery_verdict_is_rendered_as_the_failure_it_is() -> None:
+    recorder = Recorder()
+    log = AnalysisActivityLog(recorder, flush_seconds=0.01, include_dynamic_tools=True)
+
+    log.record(
+        CodexAppServerEvent(
+            kind="tool",
+            item_id="tool-2",
+            item_type="dynamicToolCall",
+            status="completed",
+            name="reportDelivery",
+            arguments={"state": "succeeded_with_warnings"},
+            response={
+                "success": False,
+                "contentItems": [
+                    {
+                        "type": "inputText",
+                        "text": "这次交付的 state 已经确定为 succeeded，请按沙箱里的交付证据重新调用。",
+                    }
+                ],
+            },
+        )
+    )
+    log.flush()
+
+    items = recorder.items(phase="delivery")
+    assert items[0]["title"] == "提交交付结论未完成"
+    assert items[0]["tool"]["error"].startswith("这次交付的 state 已经确定为 succeeded")
+    assert "output" not in items[0]["tool"]
+
+
+def test_an_unknown_studio_tool_still_gets_a_readable_row() -> None:
+    recorder = Recorder()
+    log = AnalysisActivityLog(recorder, flush_seconds=0.01, include_dynamic_tools=True)
+
+    log.record(
+        CodexAppServerEvent(
+            kind="tool",
+            item_id="tool-3",
+            item_type="dynamicToolCall",
+            status="completed",
+            name="studio_write_artifact",
+        )
+    )
+    log.flush()
+
+    items = recorder.items(phase="delivery")
+    assert items[0]["title"] == "已调用工具 studio_write_artifact"
+    assert items[0]["tool"]["name"] == "已调用工具 studio_write_artifact"
+
+
+def test_a_turn_that_ends_on_its_verdict_closes_the_studio_tool_row() -> None:
+    """结算式收尾：Studio 拿到结论就打断回合，工具行不能停在「进行中」。"""
+    recorder = Recorder()
+    log = AnalysisActivityLog(recorder, flush_seconds=0.01, include_dynamic_tools=True)
+
+    log.record(
+        CodexAppServerEvent(
+            kind="tool",
+            item_id="tool-4",
+            item_type="dynamicToolCall",
+            status="in_progress",
+            name="reportDelivery",
+            arguments={"state": "succeeded"},
+        )
+    )
+    log.flush()
+    assert recorder.items(phase="delivery")[0]["status"] == "running"
+
+    log.complete_dynamic_tools()
+    log.flush()
+
+    row = recorder.items(phase="delivery")[0]
+    assert row["status"] == "completed"
+    assert row["title"] == "已提交交付结论"
+    assert row["tool"]["input"] == {"state": "succeeded"}
+
+
+def test_closing_studio_tool_rows_needs_the_delivery_flag() -> None:
+    recorder = Recorder()
+    log = AnalysisActivityLog(recorder, flush_seconds=0.01)
+
+    log.complete_dynamic_tools()
+
+    assert log.lines == []
+    assert recorder.writes == []
+
+
 def test_the_log_is_written_once_per_change_and_bounded() -> None:
     recorder = Recorder()
     log = AnalysisActivityLog(recorder, max_bytes=400, flush_seconds=0.01)

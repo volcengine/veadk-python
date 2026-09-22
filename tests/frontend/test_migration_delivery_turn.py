@@ -245,6 +245,23 @@ def test_the_schemas_describe_what_the_handlers_accept() -> None:
     }
 
 
+def test_the_verdict_schema_offers_only_the_settled_state() -> None:
+    """只给一个选项：模型在 succeeded / succeeded_with_warnings 之间猜错就等于烧掉一次收尾回合。"""
+    narrowed = delivery_schema("succeeded")
+    state = narrowed["properties"]["state"]
+    assert state["enum"] == ["succeeded"]
+    assert "succeeded" in state["description"]
+
+    unknown = delivery_schema("mystery")
+    assert unknown["properties"]["state"]["enum"] == sorted(
+        delivery_turn.DELIVERY_STATES
+    )
+
+    assert delivery_schema()["properties"]["state"]["enum"] == sorted(
+        delivery_turn.DELIVERY_STATES
+    )
+
+
 def test_the_turn_registers_both_tools_and_returns_the_report(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
