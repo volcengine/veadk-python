@@ -548,7 +548,13 @@ function MigrationActivityFeed({
       </div>
       {blocks.length > 0 ? (
         <div className="migration-activity__stream">
-          <Blocks blocks={blocks} onAction={ignoreMigrationAction} />
+          {/* The intelligent build's stream: tool calls fold into expandable process rows. */}
+          <Blocks
+            blocks={blocks}
+            groupProcess
+            streaming={!activity?.complete}
+            onAction={ignoreMigrationAction}
+          />
         </div>
       ) : loading || !activity?.complete ? (
         <TextShimmer>
@@ -2652,7 +2658,6 @@ export function MigrationWorkspace({
             >
               <div className="migration-confirmation__heading">
                 <strong>{t("confirmation.title")}</strong>
-                <span>{t("confirmation.description")}</span>
               </div>
               <div className="migration-confirmation__grid">
                 <div className="migration-confirmation__row">
