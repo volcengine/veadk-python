@@ -380,3 +380,91 @@ async def test_the_timer_writes_progress_while_the_turn_runs() -> None:
         flusher.cancel()
         with pytest.raises(asyncio.CancelledError):
             await flusher
+
+
+def test_rows_keep_the_timing_and_shape_the_shared_renderer_reads() -> None:
+    recorder = Recorder()
+    log = AnalysisActivityLog(recorder.__call__, include_dynamic_tools=True)
+    log.record(
+        CodexAppServerEvent(
+            kind="tool",
+            item_id="call_1",
+            item_type="commandExecution",
+            phase="commentary",
+            duration_ms=2_400,
+            status="completed",
+            name="运行命令",
+            arguments={
+                "command": "cat migration-result.json",
+                "commandActions": [{"type": "read", "path": "migration-result.json"}],
+            },
+            response={"status": "completed", "exitCode": 0, "output": "{}"},
+        )
+    )
+    log.flush()
+
+    item = recorder.items(phase="delivery")[0]
+    # 页面用智能构建同一套行渲染工具项：itemType 决定原生图标与不截断的输出，
+    # durationMs 是折叠头里的耗时，commandActions 让标签能说清这条命令在做什么。
+    assert item["itemType"] == "commandExecution"
+    assert item["durationMs"] == 2_400
+    assert item["phase"] == "commentary"
+    assert item["tool"]["input"] == {
+        "command": "cat migration-result.json",
+        "commandActions": [{"type": "read", "path": "migration-result.json"}],
+    }
+    assert item["tool"]["exitCode"] == 0
+    assert item["tool"]["output"] == "{}"
+    # 行名用 app-server 自己的名字，和智能构建同一套标签规则；迁移自己的状态标题
+    # 只是 codex exec 那一侧（日志里没有 name）的兜底。
+    assert item["tool"]["name"] == "运行命令"
+    assert item["title"] == "命令执行完成"
+
+
+def test_an_output_only_line_still_carries_the_call_it_belongs_to() -> None:
+    _, recorder = log_with(
+        CodexAppServerEvent(
+            kind="tool",
+            item_id="cmd-live",
+            item_type="commandExecution",
+            status="running",
+            name="运行命令",
+            arguments={"command": "python -m compileall output"},
+        ),
+        CodexAppServerEvent(
+            kind="tool_output", item_id="cmd-live", text="Listing files"
+        ),
+    )
+
+    item = recorder.items(phase="migration")[0]
+    # 输出增量是这条 id 的最后一行，页面仍要能认出这是哪条命令：否则命令跑着的时候
+    # 行名退回迁移的措辞、标签也算不出来，跑完又变回 app-server 的名字。
+    assert item["tool"]["name"] == "运行命令"
+    assert item["tool"]["input"] == {"command": "python -m compileall output"}
+    assert item["tool"]["output"] == "Listing files"
+
+
+def test_a_studio_tool_row_keeps_its_native_type_and_timing() -> None:
+    recorder = Recorder()
+    log = AnalysisActivityLog(recorder.__call__, include_dynamic_tools=True)
+    log.record(
+        CodexAppServerEvent(
+            kind="tool",
+            item_id="call_2",
+            item_type="dynamicToolCall",
+            duration_ms=90,
+            status="completed",
+            name="publishArtifact",
+            arguments={"path": "migration-result.zip"},
+            response={"success": True, "contentItems": [{"text": "产物已核对。"}]},
+        )
+    )
+    log.flush()
+
+    item = recorder.items(phase="delivery")[0]
+    assert item["kind"] == "command"
+    assert item["status"] == "completed"
+    assert item["title"] == "已拉取迁移产物并核对字节"
+    assert item["itemType"] == "dynamicToolCall"
+    assert item["durationMs"] == 90
+    assert item["id"] == "delivery:1:call_2"

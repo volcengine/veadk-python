@@ -98,7 +98,12 @@
     "title": "Codex 执行动态",
     "startingAnalysis": "Codex 正在开始分析…",
     "startingMigration": "Codex 正在开始迁移…",
-    "loadError": "暂时无法读取 Codex 执行动态，不影响当前任务。"
+    "loadError": "暂时无法读取 Codex 执行动态，不影响当前任务。",
+    "liveAnalyzing": "正在分析项目",
+    "liveMigrating": "正在执行迁移",
+    "liveValidating": "正在校验迁移结果",
+    "livePackaging": "正在整理迁移产物",
+    "liveDelivery": "正在核对交付产物"
   },
   "artifact": {
     "title": "迁移产物",
