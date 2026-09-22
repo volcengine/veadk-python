@@ -74,6 +74,38 @@ function activityPayload() {
         status: "completed",
         title: "read the source tree",
         tool: { name: "shell", exitCode: 0 },
+        // Codex' own row fields and the turn summary are what the shared renderer
+        // reads, so normalization has to carry them through untouched.
+        itemType: "commandExecution",
+        durationMs: 1_200,
+        phase: "commentary",
+      },
+    ],
+  };
+}
+
+function summaryPayload() {
+  return {
+    available: true,
+    complete: true,
+    items: [
+      {
+        id: `analysis:1:turn-summary`,
+        kind: "summary",
+        status: "completed",
+        title: "本轮执行完成",
+        turn: {
+          turnId: "turn-1",
+          status: "completed",
+          model: "codex-mini",
+          durationMs: 8_000,
+          startedAt: 1_000,
+          completedAt: 9_000,
+          toolCalls: 3,
+          toolDurationMs: 1_200,
+          toolDurationComplete: true,
+          usage: { totalTokens: 900, inputTokens: 800, outputTokens: 100 },
+        },
       },
     ],
   };
@@ -150,6 +182,36 @@ test("parses task, activity, error and done frames", () => {
   );
   assert.equal(done.kind, "done");
   assert.equal(done.state, "analysis_ready");
+});
+
+test("keeps the native row fields and the turn summary the shared renderer reads", () => {
+  const activity = parseMigrationStreamFrame(
+    frame("activity", { seq: 8, taskId: "task-1", ...activityPayload() }),
+  );
+  const [item] = activity.activity.items;
+  assert.equal(item.itemType, "commandExecution");
+  assert.equal(item.durationMs, 1_200);
+  assert.equal(item.phase, "commentary");
+
+  const summary = parseMigrationStreamFrame(
+    frame("activity", { seq: 9, taskId: "task-1", ...summaryPayload() }),
+  );
+  const [row] = summary.activity.items;
+  assert.equal(row.kind, "summary");
+  assert.equal(row.turn.status, "completed");
+  assert.equal(row.turn.durationMs, 8_000);
+  assert.equal(row.turn.toolCalls, 3);
+  assert.equal(row.turn.usage.totalTokens, 900);
+
+  const broken = summaryPayload();
+  broken.items[0].turn = { turnId: "turn-1" };
+  assert.throws(
+    () =>
+      parseMigrationStreamFrame(
+        frame("activity", { seq: 10, taskId: "task-1", ...broken }),
+      ),
+    Error,
+  );
 });
 
 test("ignores heartbeats, comments and event names this build does not know", () => {

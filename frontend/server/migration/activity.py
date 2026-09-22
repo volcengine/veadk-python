@@ -44,6 +44,17 @@ _TRUNCATED_MARKER = "\n…内容已截断"
 _COMPLETED_STATUSES = {"completed", "done"}
 _FAILED_STATUSES = {"failed", "error", "declined"}
 
+# The turn's own verdict, which the reader renders as one summary row the way the
+# intelligent build renders its ``turn-summary`` block.
+_TERMINAL_TURN_STATUSES = {"completed", "failed", "cancelled", "interrupted"}
+_TURN_EVENT_TYPES = {
+    "completed": "turn.completed",
+    "failed": "turn.failed",
+    "cancelled": "turn.interrupted",
+    "interrupted": "turn.interrupted",
+}
+_TURN_FIELDS = ("startedAt", "completedAt", "durationMs", "model")
+
 _TOOL_ITEM_TYPES = {
     "commandExecution": "command_execution",
     "fileChange": "file_change",
@@ -60,6 +71,13 @@ _TODO_STATUSES = {
     "failed": "failed",
     "error": "failed",
 }
+
+
+def _turn_status(value: object) -> str:
+    """Read the turn status the app-server reports as a string or a tagged object."""
+    if isinstance(value, dict):
+        value = value.get("type")
+    return str(value or "").strip().lower()
 
 
 def _text(value: object, limit: int = _MAX_TEXT_CHARS) -> str:
@@ -107,6 +125,8 @@ class AnalysisActivityLog:
         self._outputs: dict[str, str] = {}
         self._names: dict[str, str] = {}
         self._commands: dict[str, str] = {}
+        self._turn: dict[str, object] = {}
+        self._usage: dict[str, object] = {}
 
     @property
     def lines(self) -> list[str]:
@@ -114,6 +134,9 @@ class AnalysisActivityLog:
 
     def line(self, event: CodexAppServerEvent) -> dict[str, object] | None:
         """One ``codex exec --json`` line for ``event``; ``None`` when it has no item."""
+        turn = self._turn_line(event)
+        if turn is not None:
+            return turn
         item = self._item(event)
         if item is None:
             return None
@@ -195,6 +218,49 @@ class AnalysisActivityLog:
         while lines and size > self._max_bytes:
             size -= len(lines.pop(0)) + 1
         return ("\n".join(lines) + "\n").encode("utf-8") if lines else b""
+
+    def _turn_line(self, event: CodexAppServerEvent) -> dict[str, object] | None:
+        """One line for the turn's own cost, written when the turn settles.
+
+        The page reports the same turn metrics the intelligent build does — how long
+        the turn took, how many tools it ran, what it cost in tokens — and the
+        intelligent build reads them off the app-server's turn lifecycle and usage
+        events rather than off any item.  Items never carry them, so they are
+        accumulated here and written as one ``turn.*`` line that the reader turns into
+        a summary of everything logged before it.
+        """
+        kind = str(event.kind or "")
+        if kind == "usage":
+            if event.usage is not None:
+                self._usage["usage"] = event.usage.public_dict()
+            if event.thread_total is not None:
+                self._usage["thread_total"] = event.thread_total.public_dict()
+            window = event.model_context_window
+            if isinstance(window, int) and not isinstance(window, bool):
+                self._usage["model_context_window"] = window
+            return None
+        if kind not in {"turn_started", "turn_completed"}:
+            return None
+        response = event.response if isinstance(event.response, dict) else {}
+        turn = {**self._turn, **response}
+        if event.turn_id:
+            turn["id"] = event.turn_id
+        status = _turn_status(event.status or turn.get("status"))
+        if kind == "turn_started" or status not in _TERMINAL_TURN_STATUSES:
+            self._turn = turn
+            return None
+        summary: dict[str, object] = {
+            "type": _TURN_EVENT_TYPES.get(status, "turn.completed"),
+            "turn": {
+                "id": str(turn.get("id") or ""),
+                "status": status,
+                **{key: turn[key] for key in _TURN_FIELDS if key in turn},
+            },
+        }
+        summary.update(self._usage)
+        self._turn = {}
+        self._usage = {}
+        return summary
 
     def _event_type(self, event: CodexAppServerEvent) -> str:
         status = str(event.status or "").lower()

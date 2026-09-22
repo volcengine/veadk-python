@@ -3073,3 +3073,37 @@ async def test_queue_overload_gives_up_after_the_retry_budget(
 
     assert websocket.overload_count == codex_app_server._OVERLOAD_RETRY_ATTEMPTS + 1
     await session.close()
+
+
+@pytest.mark.asyncio
+async def test_a_caller_without_a_task_can_ask_for_the_turn_lifecycle() -> None:
+    """Migration turns are not Studio tasks but still report their own cost."""
+
+    async def run(*, emit_turn_lifecycle: bool) -> list[object]:
+        terminal = _TerminalTurnWebSocket("completed", has_final=True)
+        session = CodexAppServerSession(
+            "https://sandbox.example?Authorization=secret",
+            websocket_factory=lambda _url: _ready(terminal),
+        )
+        try:
+            return [
+                event
+                async for event in session.stream_turn(
+                    "hello", emit_turn_lifecycle=emit_turn_lifecycle
+                )
+            ]
+        finally:
+            await session.close()
+
+    asked = await run(emit_turn_lifecycle=True)
+    kinds = [event.kind for event in asked]
+    assert kinds[0] == "turn_started"
+    assert kinds[-1] == "turn_completed"
+    # 生命周期事件带回合的权威计时，页面才有本轮耗时可报。
+    assert "model" in asked[-1].response
+
+    # 没要的时候行为不变：任务流之外的多余事件不会冒出来。
+    default = await run(emit_turn_lifecycle=False)
+    assert [event.kind for event in default] == [
+        kind for kind in kinds if kind not in {"turn_started", "turn_completed"}
+    ]

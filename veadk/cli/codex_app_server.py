@@ -802,8 +802,15 @@ class CodexAppServerSession:
         client_user_message_id: str = "",
         resume_turn_id: str = "",
         interrupt_on_cancel: bool = True,
+        emit_turn_lifecycle: bool = False,
     ) -> AsyncIterator[CodexAppServerEvent]:
-        """Start one Codex turn and stream its public events."""
+        """Start one Codex turn and stream its public events.
+
+        ``emit_turn_lifecycle`` asks for the ``turn_started`` / ``turn_completed``
+        events without a task identity.  They are the turn's authoritative timing
+        (``startedAt`` / ``completedAt`` / ``durationMs`` / ``model``), which a caller
+        that does not run turns as a Studio task still needs to report its own cost.
+        """
         if self.active:
             raise CodexAppServerError("当前 Codex 任务仍在运行。")
         turn_timeout = (
@@ -812,6 +819,7 @@ class CodexAppServerSession:
         if turn_timeout <= 0 or not math.isfinite(turn_timeout):
             raise CodexAppServerError("Codex Turn 超时时间无效。")
         task_observer = bool(client_user_message_id or resume_turn_id)
+        observe_turn = task_observer or emit_turn_lifecycle
         if not self.thread_id:
             await self.connect()
         else:
@@ -902,13 +910,13 @@ class CodexAppServerSession:
                 )
                 return events
 
-            if task_observer:
+            if observe_turn:
                 yield self.turn_lifecycle_event("turn_started", turn)
             if resume_turn_id:
                 stored = await self.read_turn(resume_turn_id)
                 if stored is None:
                     raise CodexAppServerError("原执行轮次暂时无法确认，请稍后恢复。")
-                if task_observer:
+                if observe_turn:
                     yield self.turn_lifecycle_event("turn_started", stored)
                 for event in hydrate(stored):
                     yield event
@@ -1037,7 +1045,7 @@ class CodexAppServerSession:
             if isinstance(raw_status, dict):
                 raw_status = raw_status.get("type")
             status = str(raw_status or "completed")
-            if task_observer:
+            if observe_turn:
                 yield self.turn_lifecycle_event(
                     "turn_completed",
                     {**turn_result, "id": turn["id"], "status": status},

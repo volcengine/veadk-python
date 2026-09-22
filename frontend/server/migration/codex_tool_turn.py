@@ -25,6 +25,7 @@ tools, because one analysis can both ask the user a question and report its resu
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 
@@ -38,6 +39,15 @@ ToolHandler = Callable[
     [dict[str, object]],
     "CodexDynamicToolResult | Awaitable[CodexDynamicToolResult]",
 ]
+
+logger = logging.getLogger(__name__)
+
+# A turn that is interrupted the moment its result lands needs its own settlement, and
+# the app-server needs a moment to record the interruption before the turn reads back
+# as terminal.
+_TURN_SETTLE_ATTEMPTS = 6
+_TURN_SETTLE_SECONDS = 0.5
+_TERMINAL_TURN_STATUSES = {"completed", "failed", "interrupted", "cancelled"}
 
 __all__ = [
     "DynamicTool",
@@ -126,6 +136,7 @@ async def run_tool_turn(
             tool.handler,
         )
     used_thread = thread_id
+    turn_id = ""
     loop = asyncio.get_running_loop()
     try:
         try:
@@ -144,7 +155,11 @@ async def run_tool_turn(
             async for event in session.stream_turn(
                 prompt,
                 timeout_seconds=idle_timeout,
+                # 本轮耗时/模型要跟智能构建一样报给页面，所以即使这不是 Studio
+                # 任务回合也要收生命周期事件。
+                emit_turn_lifecycle=True,
             ):
+                turn_id = str(getattr(event, "turn_id", "") or "") or turn_id
                 if event_sink is not None:
                     event_sink(event)
                 if has_result():
@@ -170,5 +185,83 @@ async def run_tool_turn(
                 raise ToolTurnUnavailable(str(error)) from error
         used_thread = session.thread_id or thread_id
     finally:
+        # 结果一到手就打断的回合（以及超时收尾的回合）都走不到 app-server 的
+        # turn_completed，而本轮耗时/模型只挂在那条事件上：会话还在的时候回读这一轮，
+        # 替它补一条结算，页面才能像智能构建那样报出本轮的成本。
+        await _settle_turn(
+            session,
+            event_sink,
+            turn_id=turn_id or str(getattr(session, "active_turn_id", "") or ""),
+            accepted=has_result(),
+        )
         await session.close()
     return used_thread
+
+
+def _turn_status(turn: dict[str, object]) -> str:
+    status = turn.get("status")
+    if isinstance(status, dict):
+        status = status.get("type")
+    return str(status or "").strip().lower()
+
+
+async def _settle_turn(
+    session: CodexAppServerSession,
+    event_sink: Callable[[object], None] | None,
+    *,
+    turn_id: str,
+    accepted: bool,
+) -> None:
+    """Report a turn's own timing when the caller stopped it before the app-server did.
+
+    Breaking out of the stream once the result arrives (or at the caller's deadline)
+    leaves the turn without a ``turn_completed`` event, so codex' native timing
+    (``startedAt`` / ``completedAt`` / ``durationMs`` / ``model``) never reaches the
+    page.  Reading the turn back keeps those numbers, and ``accepted`` says the caller
+    took the result: the turn delivered what it was asked for, whatever codex calls the
+    interruption the caller requested.
+
+    Settlement is decoration on top of the turn's real outcome, so it never raises.
+    """
+    if event_sink is None or not turn_id:
+        return
+    try:
+        read_turn = getattr(session, "read_turn", None)
+        lifecycle = getattr(session, "turn_lifecycle_event", None)
+        if not callable(read_turn) or not callable(lifecycle):
+            return
+        turn: dict[str, object] | None = None
+        for attempt in range(_TURN_SETTLE_ATTEMPTS):
+            candidate = await read_turn(turn_id)
+            if not isinstance(candidate, dict):
+                return
+            turn = candidate
+            if _turn_status(turn) in _TERMINAL_TURN_STATUSES:
+                break
+            if attempt + 1 < _TURN_SETTLE_ATTEMPTS:
+                await asyncio.sleep(_TURN_SETTLE_SECONDS)
+        if turn is None:
+            return
+        status = _turn_status(turn)
+        if accepted:
+            turn = {**turn, "status": "completed"}
+        elif status not in _TERMINAL_TURN_STATUSES:
+            # 既没拿到结果、这一轮又还在跑：没有可以报的终态，不编一个。
+            return
+        if "durationMs" not in turn:
+            # 回合自己的时间戳就是权威值，缺 durationMs 时由它俩相减得出。
+            started, completed = turn.get("startedAt"), turn.get("completedAt")
+            if (
+                isinstance(started, (int, float))
+                and not isinstance(started, bool)
+                and isinstance(completed, (int, float))
+                and not isinstance(completed, bool)
+                and completed >= started
+            ):
+                turn = {**turn, "durationMs": completed - started}
+        event_sink(lifecycle("turn_completed", turn))
+    except Exception as error:  # noqa: BLE001 - 读数是装饰，不能改变回合结果
+        logger.warning(
+            "Studio migration turn settlement failed error_type=%s",
+            type(error).__name__,
+        )
