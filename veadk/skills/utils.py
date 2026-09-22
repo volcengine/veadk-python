@@ -22,6 +22,11 @@ from google.adk.tools import BaseTool, ToolContext
 from typing import Any, Dict, Optional, Callable
 
 from veadk.skills.skill import Skill
+from veadk.skills.policy import (
+    SKILL_SPACE_POLICY_ENV,
+    SkillSpacePolicyError,
+    parse_skill_space_policy,
+)
 from veadk.utils.logger import get_logger
 from veadk.utils.volcengine_sign import ve_request, volcengine_signed_request
 
@@ -140,6 +145,18 @@ def load_skills_from_cloud(
     skill_space_ids_list = [x.strip() for x in skill_space_ids.split(",") if x.strip()]
     logger.info(f"Load skills from cloud skill sources: {skill_space_ids_list}")
 
+    raw_policy = os.getenv(SKILL_SPACE_POLICY_ENV)
+    policy = None
+    if raw_policy is not None:
+        try:
+            policy = parse_skill_space_policy(raw_policy)
+        except SkillSpacePolicyError as exc:
+            logger.error(
+                f"Invalid {SKILL_SPACE_POLICY_ENV}; remote Skill Space skills "
+                f"are disabled for this session: {exc}"
+            )
+            return []
+
     skills = []
 
     for skill_space_id in skill_space_ids_list:
@@ -160,7 +177,15 @@ def load_skills_from_cloud(
                 )
             )
 
-    return skills
+    if policy is None:
+        return skills
+
+    filtered_skills = [skill for skill in skills if policy.allows(skill.id)]
+    logger.info(
+        f"Applied {SKILL_SPACE_POLICY_ENV} mode={policy.mode}: "
+        f"kept {len(filtered_skills)} of {len(skills)} remote skills"
+    )
+    return filtered_skills
 
 
 def _get_cloud_credentials() -> tuple[str, str, str]:

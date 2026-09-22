@@ -19,6 +19,7 @@ from typing import Optional
 
 from google.adk.tools import ToolContext
 
+from veadk.skills.policy import SKILL_SPACE_POLICY_ENV, parse_skill_space_policy
 from veadk.tools.builtin_tools._agentkit import invoke_agentkit_run_code
 from veadk.utils.logger import get_logger
 
@@ -202,6 +203,11 @@ def run_sandbox_agent(
     skill_space_id = os.getenv("SKILL_SPACE_ID", "")
     if skill_space_id:
         base_env_vars["SKILL_SPACE_ID"] = skill_space_id
+    raw_skill_space_policy = os.getenv(SKILL_SPACE_POLICY_ENV)
+    if raw_skill_space_policy is not None:
+        base_env_vars[SKILL_SPACE_POLICY_ENV] = parse_skill_space_policy(
+            raw_skill_space_policy
+        ).to_json()
     env_vars = _merge_execution_env_vars(base_env_vars, extra_env_vars)
 
     logger.debug(

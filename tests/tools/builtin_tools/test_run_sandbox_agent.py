@@ -15,6 +15,7 @@
 import importlib.util
 import hashlib
 import json
+import os
 import sys
 import types
 import unittest
@@ -222,6 +223,74 @@ class TestMergeExecutionEnvVars(unittest.TestCase):
         self.assertIn("env[key] = value", code)
         self.assertNotIn("if key not in env", code)
         self.assertIn('srv_pythonpath = env.get("SRV_PYTHONPATH")', code)
+
+    def test_run_sandbox_agent_forwards_compact_skill_space_policy(self):
+        invocation_context = types.SimpleNamespace(
+            session=types.SimpleNamespace(id="session-1"),
+            agent=types.SimpleNamespace(name="agent"),
+            user_id="user",
+        )
+        tool_context = types.SimpleNamespace(
+            _invocation_context=invocation_context,
+            state={},
+        )
+        response = {"Result": {"Result": "done"}}
+
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "SKILL_SPACE_ID": "ss-test",
+                    "SKILL_SPACE_POLICY": (
+                        '{"mode": "deny", "ids": ["skill-2", "skill-1", "skill-2"]}'
+                    ),
+                },
+            ),
+            patch.object(
+                self.module,
+                "invoke_agentkit_run_code",
+                return_value=response,
+            ) as invoke,
+        ):
+            self.module.run_sandbox_agent(
+                "do work",
+                "tool-1",
+                tool_context=tool_context,
+            )
+
+        runner_code = invoke.call_args.kwargs["code"]
+        self.assertIn("SKILL_SPACE_POLICY", runner_code)
+        self.assertIn('{"mode":"deny","ids":["skill-1","skill-2"]}', runner_code)
+
+    def test_run_sandbox_agent_rejects_unsupported_skill_space_policy(self):
+        invocation_context = types.SimpleNamespace(
+            session=types.SimpleNamespace(id="session-1"),
+            agent=types.SimpleNamespace(name="agent"),
+            user_id="user",
+        )
+        tool_context = types.SimpleNamespace(
+            _invocation_context=invocation_context,
+            state={},
+        )
+
+        with (
+            patch.dict(
+                os.environ,
+                {"SKILL_SPACE_POLICY": '{"mode":"allow","ids":[],"ref":"x"}'},
+            ),
+            patch.object(
+                self.module,
+                "invoke_agentkit_run_code",
+            ) as invoke,
+        ):
+            with self.assertRaisesRegex(ValueError, "exactly 'mode' and 'ids'"):
+                self.module.run_sandbox_agent(
+                    "do work",
+                    "tool-1",
+                    tool_context=tool_context,
+                )
+
+        invoke.assert_not_called()
 
 
 class TestExecuteSkillsSkillApi(unittest.TestCase):
