@@ -374,6 +374,57 @@ class TestEnsureAgentkitSessionEndpoint(unittest.TestCase):
             },
         )
 
+    def test_create_session_injects_compact_skill_space_policy(self):
+        captured = {}
+
+        class FakeClient:
+            def list_sessions(self, _request):
+                return types.SimpleNamespace(session_infos=[])
+
+            def create_session(self, request):
+                captured["request"] = request
+                return types.SimpleNamespace(session_id="session-1")
+
+        with patch.dict(
+            os.environ,
+            {
+                "SKILL_SPACE_POLICY": (
+                    '{"mode": "deny", "ids": ["skill-2", "skill-1", "skill-2"]}'
+                )
+            },
+        ):
+            self.agentkit_module._get_or_create_agentkit_session(
+                client=FakeClient(),
+                tool_id="tool-1",
+                tool_user_session_id="user-session-1",
+                ttl=900,
+            )
+
+        request = captured["request"]
+        assert len(request.envs) == 1
+        assert request.envs[0].key == "SKILL_SPACE_POLICY"
+        assert request.envs[0].value == '{"mode":"deny","ids":["skill-1","skill-2"]}'
+
+    def test_create_session_rejects_unsupported_skill_space_policy(self):
+        class FakeClient:
+            def list_sessions(self, _request):
+                return types.SimpleNamespace(session_infos=[])
+
+            def create_session(self, _request):
+                raise AssertionError("invalid policy must not reach CreateSession")
+
+        with patch.dict(
+            os.environ,
+            {"SKILL_SPACE_POLICY": '{"mode":"allow","ids":[],"ref":"x"}'},
+        ):
+            with self.assertRaisesRegex(ValueError, "exactly 'mode' and 'ids'"):
+                self.agentkit_module._get_or_create_agentkit_session(
+                    client=FakeClient(),
+                    tool_id="tool-1",
+                    tool_user_session_id="user-session-1",
+                    ttl=900,
+                )
+
     def test_uses_create_session_endpoint_without_waiting_by_default(self):
         captured = {"get_calls": 0}
 
