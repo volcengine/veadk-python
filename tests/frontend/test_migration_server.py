@@ -857,7 +857,12 @@ def test_agentic_activity_is_owner_scoped_and_redacts_codex_events() -> None:
                 "text": "正在修复配置，API_KEY=raw-secret。",
             },
         },
-        {"type": "turn.completed", "usage": {"input_tokens": 10}},
+        {"type": "thread.started", "thread_id": "thread-migration"},
+        {"type": "turn.started"},
+        {
+            "type": "turn.completed",
+            "usage": {"input_tokens": 10, "output_tokens": 4},
+        },
     ]
     gateway.files[
         (
@@ -925,6 +930,19 @@ def test_agentic_activity_is_owner_scoped_and_redacts_codex_events() -> None:
             "title": "Codex 更新",
             "detail": "正在修复配置，API_KEY=[已隐藏]",
             "itemType": "agentMessage",
+        },
+        {
+            "id": "migration:1:turn-summary",
+            "kind": "summary",
+            "status": "completed",
+            "title": "本轮执行完成",
+            "turn": {
+                "turnId": "thread-migration",
+                "status": "completed",
+                "toolCalls": 1,
+                "toolDurationComplete": False,
+                "usage": {"totalTokens": 14, "inputTokens": 10, "outputTokens": 4},
+            },
         },
     ]
     serialized = json.dumps(activity, ensure_ascii=False)
@@ -1051,6 +1069,18 @@ def test_agentic_activity_handles_incremental_and_malformed_events() -> None:
         "命令执行完成"
     )
     assert not any(item["id"] == "migration:2:plan" for item in items)
+    assert next(item for item in items if item["id"] == "migration:2:turn-summary") == {
+        "id": "migration:2:turn-summary",
+        "kind": "summary",
+        "status": "failed",
+        "title": "本轮执行未完成",
+        "turn": {
+            "turnId": "",
+            "status": "failed",
+            "toolCalls": 3,
+            "toolDurationComplete": False,
+        },
+    }
     assert items[-1]["title"] == "Codex 项目迁移未完成"
     assert items[-1]["detail"] == "Codex 本轮执行未完成。"
     assert "private-token-value" not in json.dumps(activity)
@@ -1210,7 +1240,11 @@ def test_activity_parser_preserves_useful_codex_events_and_redacts_payloads() ->
         "migration:1:plan",
         "migration:1:item-error",
         "migration:1:error-10",
+        "migration:1:turn-summary",
     ]
+    summary = next(item for item in items if item["id"] == "migration:1:turn-summary")
+    assert summary["turn"]["status"] == "completed"
+    assert summary["turn"]["usage"] == {"totalTokens": 10, "inputTokens": 10}
     assert items[0] == {
         "id": "migration:1:command",
         "kind": "command",
@@ -1427,6 +1461,18 @@ def test_analysis_activity_is_visible_before_route_confirmation() -> None:
                 "tool": {
                     "name": "命令执行完成",
                     "input": {"command": "custom-tool --run"},
+                },
+            },
+            {
+                "id": "analysis:1:turn-summary",
+                "kind": "summary",
+                "status": "completed",
+                "title": "本轮执行完成",
+                "turn": {
+                    "turnId": "",
+                    "status": "completed",
+                    "toolCalls": 4,
+                    "toolDurationComplete": False,
                 },
             },
         ],
@@ -1736,6 +1782,106 @@ def test_file_change_activity_summarizes_native_changes(
 
     assert items[0]["title"] == expected
     assert items[0]["tool"]["name"] == expected
+
+
+def test_the_sandbox_exec_turn_reports_tokens_without_double_settling() -> None:
+    """The migration main turn is written by `codex exec --json` in the Sandbox.
+
+    That stream carries no turn object and no timing, only the turn's token counts;
+    the page still gets the same summary row the intelligent build shows.
+    """
+
+    def parse(*events: dict[str, object]) -> list[dict[str, object]]:
+        return _parse_activity_log(
+            "\n".join(json.dumps(event) for event in events).encode(),
+            1,
+            phase="migration",
+        )
+
+    exec_turn = parse(
+        {"type": "thread.started", "thread_id": "thread-1"},
+        {"type": "turn.started"},
+        {
+            "type": "item.completed",
+            "item": {
+                "id": "command-1",
+                "type": "command_execution",
+                "command": "ak migrate any source",
+                "exit_code": 0,
+            },
+        },
+        {
+            "type": "turn.completed",
+            "usage": {
+                "input_tokens": 300,
+                "cached_input_tokens": 200,
+                "output_tokens": 40,
+                "reasoning_output_tokens": 7,
+            },
+        },
+    )
+
+    # 输入 + 输出就是总量，和 app-server 报的 totalTokens 是同一个数。
+    assert exec_turn[-1] == {
+        "id": "migration:1:turn-summary",
+        "kind": "summary",
+        "status": "completed",
+        "title": "本轮执行完成",
+        "turn": {
+            "turnId": "thread-1",
+            "status": "completed",
+            "toolCalls": 1,
+            "toolDurationComplete": False,
+            "usage": {
+                "totalTokens": 340,
+                "inputTokens": 300,
+                "outputTokens": 40,
+                "cachedInputTokens": 200,
+                "reasoningOutputTokens": 7,
+            },
+        },
+    }
+
+    reported = parse(
+        {
+            "type": "turn.completed",
+            "usage": {"total_tokens": 900, "input_tokens": 300, "output_tokens": 40},
+        }
+    )
+    assert reported[-1]["turn"]["usage"] == {
+        "totalTokens": 900,
+        "inputTokens": 300,
+        "outputTokens": 40,
+    }
+
+    # app-server 的回合行自带 turn 对象，同一行不会再结算出第二个回合。
+    app_server = parse(
+        {
+            "type": "item.completed",
+            "item": {
+                "id": "command-1",
+                "type": "command_execution",
+                "command": "ak migrate any source",
+                "exit_code": 0,
+            },
+        },
+        {
+            "type": "turn.completed",
+            "turn": {
+                "id": "turn-1",
+                "status": "completed",
+                "durationMs": 1000,
+                "model": "doubao-seed-2-1-pro-260628",
+            },
+            "usage": {"totalTokens": 5},
+        },
+    )
+    assert [item["id"] for item in app_server] == [
+        "migration:1:command-1",
+        "migration:1:turn-summary",
+    ]
+    assert app_server[-1]["turn"]["turnId"] == "turn-1"
+    assert app_server[-1]["turn"]["durationMs"] == 1000
 
 
 def test_analysis_result_message_only_matches_the_delivery_contract() -> None:

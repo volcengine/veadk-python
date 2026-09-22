@@ -37,6 +37,9 @@ function toolResponse(
 
 export function migrationActivityBlocks(items: MigrationActivityItem[]): Block[] {
   return items.flatMap<Block>((item) => {
+    if (item.kind === "summary" && item.turn) {
+      return [{ kind: "turn-summary", id: item.id, value: item.turn }];
+    }
     if (item.kind === "reasoning" && item.detail) {
       return [{
         kind: "thinking",

@@ -585,6 +585,155 @@ def _activity_row_name(
     return fallback
 
 
+# 回合自报的终态，和智能构建 turn-summary 的 status 是同一套取值。
+_ACTIVITY_TURN_STATUSES = {
+    "completed": "completed",
+    "failed": "failed",
+    "cancelled": "interrupted",
+    "interrupted": "interrupted",
+}
+
+_ACTIVITY_TURN_NUMBERS = ("startedAt", "completedAt", "durationMs")
+
+# 沙箱里的 `codex exec --json` 自己写的事件流（迁移主回合）只报蛇形 token 用量，
+# 没有回合对象；这两张表把它的终态行翻译成 app-server 那套形状。
+_ACTIVITY_EXEC_TURN_EVENT_TYPES = ("turn.completed", "turn.failed", "turn.interrupted")
+
+_ACTIVITY_EXEC_USAGE_KEYS = {
+    "totalTokens": ("totalTokens", "total_tokens"),
+    "inputTokens": ("inputTokens", "input_tokens"),
+    "outputTokens": ("outputTokens", "output_tokens"),
+    "cachedInputTokens": ("cachedInputTokens", "cached_input_tokens"),
+    "cacheWriteInputTokens": ("cacheWriteInputTokens", "cache_write_input_tokens"),
+    "reasoningOutputTokens": ("reasoningOutputTokens", "reasoning_output_tokens"),
+}
+
+_ACTIVITY_TURN_USAGE_KEYS = (
+    "totalTokens",
+    "inputTokens",
+    "outputTokens",
+    "cachedInputTokens",
+    "cacheWriteInputTokens",
+    "reasoningOutputTokens",
+)
+
+
+def _activity_turn_number(value: object) -> int | float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return value if value >= 0 else None
+
+
+def _activity_turn_usage(value: object) -> dict[str, int]:
+    """The token counts the shared summary renders, in the browser's own naming."""
+    if not isinstance(value, dict):
+        return {}
+    usage: dict[str, int] = {}
+    for key in _ACTIVITY_TURN_USAGE_KEYS:
+        count = value.get(key)
+        if isinstance(count, int) and not isinstance(count, bool) and count >= 0:
+            usage[key] = count
+    return usage
+
+
+def _activity_exec_turn_usage(value: object) -> dict[str, int]:
+    """Token usage of a `codex exec` turn, in the browser's own naming.
+
+    Codex reports input and output tokens and lets the reader add them up; the
+    app-server reports the same number ready-made, so it is completed here. This is
+    the only cost the in-Sandbox stream carries: it timestamps nothing.
+    """
+    if not isinstance(value, dict):
+        return {}
+    counts: dict[str, int] = {}
+    for key, aliases in _ACTIVITY_EXEC_USAGE_KEYS.items():
+        for alias in aliases:
+            candidate = _activity_turn_number(value.get(alias))
+            if candidate is not None:
+                counts[key] = int(candidate)
+                break
+    if "totalTokens" not in counts:
+        total = counts.get("inputTokens", 0) + counts.get("outputTokens", 0)
+        if total:
+            counts["totalTokens"] = total
+    return counts
+
+
+def _activity_turn_status(event_type: str, turn: dict[str, object]) -> str:
+    raw = turn.get("status")
+    if isinstance(raw, dict):
+        raw = raw.get("type")
+    status = _ACTIVITY_TURN_STATUSES.get(str(raw or "").strip().lower())
+    if status:
+        return status
+    if event_type == "turn.failed":
+        return "failed"
+    if event_type == "turn.interrupted":
+        return "interrupted"
+    return "completed"
+
+
+def _activity_tool_row(item: dict[str, object]) -> bool:
+    """Whether the page draws this item as a tool call.
+
+    Kept in step with the shared renderer's own mapping: a command row is a tool call,
+    and so is a status row the page only shows because it did not succeed.
+    """
+    kind = str(item.get("kind") or "")
+    return kind == "command" or (kind == "status" and item.get("status") != "completed")
+
+
+def _activity_turn_summary(
+    turn: dict[str, object],
+    *,
+    items: list[dict[str, object]],
+    phase: str,
+    attempt: int,
+    status: str,
+    usage: dict[str, int],
+    secret_values: tuple[str, ...],
+) -> dict[str, object]:
+    """One summary of everything the turn logged, in the app-server's own numbers.
+
+    The intelligent build reports a turn's wall-clock time, tool calls, tool time and
+    token usage from the turn's lifecycle and usage events; the migration log only
+    carries item lines, so the summary is built here out of the items logged before
+    the turn settled plus the usage the turn reported.
+    """
+    tools = [item for item in items if _activity_tool_row(item)]
+    measured = [
+        item
+        for item in tools
+        if isinstance(item.get("durationMs"), int)
+        and not isinstance(item.get("durationMs"), bool)
+    ]
+    detail: dict[str, object] = {
+        "turnId": str(turn.get("id") or ""),
+        "status": status,
+        "toolCalls": len(tools),
+        "toolDurationComplete": len(measured) == len(tools),
+    }
+    for key in _ACTIVITY_TURN_NUMBERS:
+        number = _activity_turn_number(turn.get(key))
+        if number is not None:
+            detail[key] = number
+    if measured or not tools:
+        detail["toolDurationMs"] = sum(int(item["durationMs"]) for item in measured)
+    model = turn.get("model")
+    if isinstance(model, str) and model.strip():
+        detail["model"] = _redact_activity_text(model, secret_values=secret_values)
+    if usage:
+        detail["usage"] = usage
+    failed = status in {"failed", "interrupted"}
+    return {
+        "id": f"{phase}:{attempt}:turn-summary",
+        "kind": "summary",
+        "status": "failed" if failed else "completed",
+        "title": "本轮执行未完成" if failed else "本轮执行完成",
+        "turn": detail,
+    }
+
+
 def _parse_activity_log(
     content: bytes,
     attempt: int,
@@ -593,6 +742,7 @@ def _parse_activity_log(
 ) -> list[dict[str, object]]:
     items: list[dict[str, object]] = []
     item_indexes: dict[str, int] = {}
+    thread_id = ""
 
     def upsert(item: dict[str, object]) -> None:
         item_id = str(item["id"])
@@ -626,6 +776,30 @@ def _parse_activity_log(
         activity_id = f"{phase}:{attempt}:{item_id}"
         status = _activity_status(event_type, item)
         secret_values = _activity_secret_values(event)
+
+        # 回合结算行只带回合自己的统计（耗时/模型/token 用量），没有 item：它汇总
+        # 的是这一份活动日志里此前记下的所有行。
+        raw_turn = event.get("turn")
+        if isinstance(raw_turn, dict):
+            upsert(
+                _activity_turn_summary(
+                    raw_turn,
+                    items=items,
+                    phase=phase,
+                    attempt=attempt,
+                    status=_activity_turn_status(event_type, raw_turn),
+                    usage=_activity_turn_usage(event.get("usage")),
+                    secret_values=secret_values,
+                )
+            )
+            continue
+
+        # 迁移主回合的第一行只说它开了哪个 thread，回合结算时用它当回合 ID。
+        if event_type == "thread.started":
+            raw_thread_id = event.get("thread_id")
+            if isinstance(raw_thread_id, str):
+                thread_id = raw_thread_id.strip()
+            continue
 
         if item_type in {"reasoning", "agent_message"}:
             raw_text = item.get("text")
@@ -983,6 +1157,23 @@ def _parse_activity_log(
                 }
             )
             continue
+
+        # 迁移主回合跑在沙箱里的 `codex exec --json` 上，它没有 app-server 的回合对象，
+        # 只写一条裸的终态行。这个回合的成本照智能构建的样式补齐：工具次数从上面记下
+        # 的行数出来，token 用量从这条终态行出来。（app-server 的回合带 turn 对象，
+        # 在本循环开头就已经结算，不会重复。）
+        if event_type in _ACTIVITY_EXEC_TURN_EVENT_TYPES:
+            upsert(
+                _activity_turn_summary(
+                    {"id": thread_id},
+                    items=items,
+                    phase=phase,
+                    attempt=attempt,
+                    status=_activity_turn_status(event_type, {}),
+                    usage=_activity_exec_turn_usage(event.get("usage")),
+                    secret_values=secret_values,
+                )
+            )
 
         if event_type == "error":
             raw_message = event.get("message")

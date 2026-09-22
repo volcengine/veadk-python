@@ -1,6 +1,7 @@
 import { withAuth } from "./auth";
 import { withLocalUser } from "./identity";
 import { adkT, withLocaleHeaders } from "./i18n";
+import type { SandboxTokenUsage } from "./sandbox";
 import {
   DEFAULT_REQUEST_TIMEOUT_MS,
   requestSignal,
@@ -268,7 +269,8 @@ export type MigrationActivityKind =
   | "message"
   | "plan"
   | "command"
-  | "status";
+  | "status"
+  | "summary";
 
 export interface MigrationActivityTool {
   name: string;
@@ -281,6 +283,21 @@ export interface MigrationActivityTool {
 export interface MigrationActivityPlanItem {
   text: string;
   status: "pending" | "in_progress" | "completed" | "failed";
+}
+
+/** One turn's own cost, in the shape the shared turn summary renders. */
+export interface MigrationActivityTurn {
+  turnId: string;
+  status: string;
+  model?: string;
+  durationMs?: number;
+  startedAt?: number;
+  completedAt?: number;
+  usage?: Partial<SandboxTokenUsage>;
+  usageIncomplete?: boolean;
+  toolCalls: number;
+  toolDurationMs?: number;
+  toolDurationComplete: boolean;
 }
 
 export interface MigrationActivityItem {
@@ -297,6 +314,8 @@ export interface MigrationActivityItem {
   durationMs?: number;
   /** Codex' message phase (commentary / final_answer) when it reports one. */
   phase?: string;
+  /** The turn's timing and token usage, on the item that summarizes a turn. */
+  turn?: MigrationActivityTurn;
 }
 
 export interface MigrationActivity {
@@ -434,7 +453,69 @@ const ACTIVITY_KINDS = new Set<MigrationActivityKind>([
   "plan",
   "command",
   "status",
+  "summary",
 ]);
+
+const TURN_USAGE_KEYS = [
+  "totalTokens",
+  "inputTokens",
+  "outputTokens",
+  "cachedInputTokens",
+  "cacheWriteInputTokens",
+  "reasoningOutputTokens",
+] as const;
+
+const TURN_NUMBER_KEYS = ["durationMs", "startedAt", "completedAt"] as const;
+
+/** A turn summary the page can hand to the shared component, or a contract error. */
+function normalizeActivityTurn(value: unknown): MigrationActivityTurn {
+  const turn = record(value, adkT("migrations.labels.activityItem"));
+  if (
+    typeof turn.turnId !== "string" ||
+    typeof turn.status !== "string" ||
+    !Number.isSafeInteger(turn.toolCalls) ||
+    (turn.toolCalls as number) < 0 ||
+    typeof turn.toolDurationComplete !== "boolean"
+  ) {
+    throw new Error(adkT("migrations.invalidActivityItem"));
+  }
+  const normalized: MigrationActivityTurn = {
+    turnId: turn.turnId,
+    status: turn.status,
+    toolCalls: turn.toolCalls as number,
+    toolDurationComplete: turn.toolDurationComplete,
+  };
+  if (typeof turn.model === "string" && turn.model) normalized.model = turn.model;
+  if (turn.usageIncomplete === true) normalized.usageIncomplete = true;
+  for (const key of TURN_NUMBER_KEYS) {
+    const number = turn[key];
+    if (number === undefined) continue;
+    if (!Number.isFinite(number) || (number as number) < 0) {
+      throw new Error(adkT("migrations.invalidActivityItem"));
+    }
+    normalized[key] = number as number;
+  }
+  if (turn.toolDurationMs !== undefined) {
+    if (!Number.isFinite(turn.toolDurationMs) || (turn.toolDurationMs as number) < 0) {
+      throw new Error(adkT("migrations.invalidActivityItem"));
+    }
+    normalized.toolDurationMs = turn.toolDurationMs as number;
+  }
+  if (turn.usage !== undefined) {
+    const usage = record(turn.usage, adkT("migrations.labels.activityItem"));
+    const counts: Partial<SandboxTokenUsage> = {};
+    for (const key of TURN_USAGE_KEYS) {
+      const count = usage[key];
+      if (count === undefined) continue;
+      if (!Number.isSafeInteger(count) || (count as number) < 0) {
+        throw new Error(adkT("migrations.invalidActivityItem"));
+      }
+      counts[key] = count as number;
+    }
+    normalized.usage = counts;
+  }
+  return normalized;
+}
 
 const ACTIVITY_STATES = new Set<MigrationActivityItem["status"]>([
   "running",
@@ -1062,6 +1143,15 @@ function normalizeActivity(value: unknown): MigrationActivity {
         ...(typeof item.detail === "string" ? { detail: item.detail } : {}),
         ...(tool ? { tool } : {}),
         ...(plan ? { plan } : {}),
+        // Codex' own row fields and the turn summary are what the shared renderer
+        // reads; a normalization that dropped them would hand the page a stream it
+        // renders as something else.
+        ...(typeof item.itemType === "string" ? { itemType: item.itemType } : {}),
+        ...(typeof item.durationMs === "number" ? { durationMs: item.durationMs } : {}),
+        ...(typeof item.phase === "string" ? { phase: item.phase } : {}),
+        ...(item.turn !== undefined
+          ? { turn: normalizeActivityTurn(item.turn) }
+          : {}),
       };
     }),
   };

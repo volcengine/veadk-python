@@ -294,3 +294,65 @@ test("labels a migration command with the same name the app-server gave it", asy
   ])[0];
   assert.equal(developmentToolLabel(scripted), "命令执行完成");
 });
+
+test("hands a settled turn's own cost to the shared turn summary", async () => {
+  const value = {
+    turnId: "turn-1",
+    status: "completed",
+    model: "codex-mini",
+    durationMs: 8_000,
+    startedAt: 1_000,
+    completedAt: 9_000,
+    toolCalls: 3,
+    toolDurationMs: 1_200,
+    toolDurationComplete: true,
+    usage: { totalTokens: 900, inputTokens: 800, outputTokens: 100 },
+  };
+  const blocks = migrationActivityBlocks([
+    {
+      id: "command",
+      kind: "command",
+      status: "completed",
+      title: "命令执行完成",
+      tool: { name: "运行命令", input: { command: "ls" } },
+      itemType: "commandExecution",
+      durationMs: 1_200,
+    },
+    {
+      id: "analysis:1:turn-summary",
+      kind: "summary",
+      status: "completed",
+      title: "本轮执行完成",
+      turn: value,
+    },
+  ]);
+
+  // 迁移页和智能构建用同一个 turn-summary 块与同一个组件：这里只交出读数，
+  // 不重算、不改写，否则两边的本轮耗时/token 会对不上。
+  assert.deepEqual(blocks[1], {
+    kind: "turn-summary",
+    id: "analysis:1:turn-summary",
+    value,
+  });
+
+  // 汇总不是「过程」块：它不会被折进可折叠的工具组里，而是单独一行亮出来。
+  const { developmentProcessGroups } = await loadDevelopmentPresentation();
+  const groups = developmentProcessGroups(blocks);
+  assert.equal(groups.length, 2);
+  assert.equal(groups[0].process, true);
+  assert.equal(groups[1].process, false);
+  assert.equal(groups[1].blocks.length, 1);
+});
+
+test("ignores a summary item that carries no numbers", () => {
+  const blocks = migrationActivityBlocks([
+    {
+      id: "analysis:1:turn-summary",
+      kind: "summary",
+      status: "completed",
+      title: "本轮执行完成",
+    },
+  ]);
+
+  assert.deepEqual(blocks, []);
+});

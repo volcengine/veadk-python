@@ -29,7 +29,7 @@ from frontend.server.migration.codex_tool_turn import (
     ToolTurnUnavailable,
     run_tool_turn,
 )
-from veadk.cli.codex_app_server import CodexAppServerError
+from veadk.cli.codex_app_server import CodexAppServerError, CodexAppServerSession
 
 
 class _FakeSession:
@@ -43,12 +43,22 @@ class _FakeSession:
         stream_error: Exception | None = None,
         forever: bool = False,
         thread_id: str = "thread-1",
+        turn_id: str = "",
+        settled_turn: dict[str, object] | None = None,
+        settled_turns: list[dict[str, object]] | None = None,
+        read_error: Exception | None = None,
     ) -> None:
         self.thread_id = thread_id
+        self.active_turn_id = turn_id
+        self.settled_turn = settled_turn
+        self.settled_turns = list(settled_turns or [])
+        self.read_error = read_error
+        self.reads: list[str] = []
         self.cwd = ""
         self.model = ""
         self.interrupted = 0
         self.closed = 0
+        self.lifecycle_requested = False
         self.attached: list[str] = []
         self.tools: list[str] = []
         self._events = events
@@ -77,8 +87,10 @@ class _FakeSession:
         _prompt: str,
         *,
         timeout_seconds: float,
+        emit_turn_lifecycle: bool = False,
     ) -> AsyncIterator[str]:
         assert timeout_seconds > 0
+        self.lifecycle_requested = emit_turn_lifecycle
         delivered = list(self._events)
         while True:
             for event in delivered:
@@ -90,6 +102,22 @@ class _FakeSession:
         if self._stream_error is not None:
             # 先交付事件，再让连接失败：结果已经到手时不能丢掉它。
             raise self._stream_error
+
+    async def read_turn(self, turn_id: str) -> dict[str, object] | None:
+        self.reads.append(turn_id)
+        if self.read_error is not None:
+            raise self.read_error
+        if self.settled_turns:
+            return (
+                self.settled_turns.pop(0)
+                if len(self.settled_turns) > 1
+                else self.settled_turns[0]
+            )
+        return self.settled_turn
+
+    def turn_lifecycle_event(self, kind: str, turn: dict[str, object]) -> object:
+        # 用真实会话的投影，测的就是页面最终要读的那份读数。
+        return CodexAppServerSession.turn_lifecycle_event(self, kind, turn)  # type: ignore[arg-type]
 
     async def interrupt(self) -> None:
         self.interrupted += 1
@@ -149,6 +177,20 @@ async def test_run_tool_turn_stops_as_soon_as_the_result_arrives(
     assert session.interrupted == 1
     assert session.closed == 1
     assert session.tools == ["reportEvaluation"]
+
+
+@pytest.mark.asyncio
+async def test_run_tool_turn_asks_for_the_turn_lifecycle_so_the_page_can_report_cost(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _install(monkeypatch, _FakeSession(["one"]))
+
+    await _run(session, has_result=lambda: True)
+
+    # 场景：迁移的 app-server 回合不是 Studio 任务回合，默认拿不到回合生命周期事件，
+    # 页面就没有本轮耗时/模型可报。既然迁移页要和智能构建报同样的读数，这个 helper
+    # 必须显式索取它们。
+    assert session.lifecycle_requested is True
 
 
 @pytest.mark.asyncio
@@ -278,3 +320,126 @@ async def test_run_tool_turn_keeps_a_result_delivered_before_the_stream_failed(
 
     assert await run() == "thread-delivered"
     assert session.interrupted == 1
+
+
+@pytest.mark.asyncio
+async def test_run_tool_turn_settles_a_turn_that_ended_on_its_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(codex_tool_turn, "_TURN_SETTLE_SECONDS", 0)
+    session = _install(
+        monkeypatch,
+        _FakeSession(
+            ["one", "two"],
+            turn_id="turn-9",
+            # 我们收下结果后要求打断，codex 记的就是 interrupted，耗时是它自己的。
+            settled_turn={
+                "id": "turn-9",
+                "status": "interrupted",
+                "startedAt": 1_000,
+                "completedAt": 9_000,
+                "model": "codex-mini",
+            },
+        ),
+    )
+    session.model = "codex-mini"
+    settled: list[object] = []
+
+    await _run(
+        session,
+        event_sink=settled.append,
+        has_result=lambda: True,
+    )
+
+    # 结果一到手就打断的回合没有 turn_completed：回读这一轮补一条结算，页面才有
+    # 本轮耗时/模型可报（智能构建正是靠这条事件显示读数的）。
+    lifecycle = [
+        event for event in settled if getattr(event, "kind", "") == "turn_completed"
+    ]
+    assert session.reads == ["turn-9"]
+    assert len(lifecycle) == 1
+    assert lifecycle[0].status == "completed"  # type: ignore[attr-defined]
+    assert lifecycle[0].response["durationMs"] == 8_000  # type: ignore[attr-defined]
+    assert lifecycle[0].response["model"] == "codex-mini"  # type: ignore[attr-defined]
+    assert session.closed == 1
+
+
+@pytest.mark.asyncio
+async def test_run_tool_turn_reports_the_status_of_a_turn_it_had_to_stop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(codex_tool_turn, "_TURN_SETTLE_SECONDS", 0)
+    session = _install(
+        monkeypatch,
+        _FakeSession(
+            ["one"],
+            turn_id="turn-9",
+            settled_turn={"id": "turn-9", "status": "interrupted"},
+        ),
+    )
+    settled: list[object] = []
+
+    # 没拿到结果、又是被窗口掐停的：读数照报，但状态是 codex 记的那个。
+    await _run(session, event_sink=settled.append, has_result=lambda: False)
+
+    lifecycle = [
+        event for event in settled if getattr(event, "kind", "") == "turn_completed"
+    ]
+    assert lifecycle[0].status == "interrupted"  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_run_tool_turn_waits_for_a_still_running_turn_to_settle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(codex_tool_turn, "_TURN_SETTLE_SECONDS", 0)
+    session = _install(
+        monkeypatch,
+        _FakeSession(
+            ["one"],
+            turn_id="turn-9",
+            settled_turns=[
+                {"id": "turn-9", "status": "inProgress"},
+                {
+                    "id": "turn-9",
+                    "status": "completed",
+                    "startedAt": 100,
+                    "completedAt": 1_100,
+                },
+            ],
+        ),
+    )
+    settled: list[object] = []
+
+    await _run(session, event_sink=settled.append, has_result=lambda: True)
+
+    # 打断和状态落定之间有竞态：还在跑就再读一次，而不是报一个没有终态的读数。
+    lifecycle = [
+        event for event in settled if getattr(event, "kind", "") == "turn_completed"
+    ]
+    assert session.reads == ["turn-9", "turn-9"]
+    assert lifecycle[0].response["durationMs"] == 1_000  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_run_tool_turn_never_fails_on_settlement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _install(
+        monkeypatch,
+        _FakeSession(
+            ["one"],
+            turn_id="turn-9",
+            read_error=CodexAppServerError("连接已断开"),
+        ),
+    )
+    settled: list[object] = []
+
+    returned = await _run(session, event_sink=settled.append, has_result=lambda: True)
+
+    # 读数是装饰：回读失败不能把已经拿到结果的回合变成失败。
+    assert returned == "thread-1"
+    assert [
+        event for event in settled if getattr(event, "kind", "") == "turn_completed"
+    ] == []
+    assert session.closed == 1

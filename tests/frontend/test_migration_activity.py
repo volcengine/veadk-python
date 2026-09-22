@@ -19,7 +19,7 @@ import json
 
 import pytest
 
-from veadk.cli.codex_app_server import CodexAppServerEvent
+from veadk.cli.codex_app_server import CodexAppServerEvent, CodexTokenUsage
 
 from frontend.server.migration.activity import AnalysisActivityLog
 from frontend.server.migration.service import _parse_activity_log
@@ -468,3 +468,131 @@ def test_a_studio_tool_row_keeps_its_native_type_and_timing() -> None:
     assert item["itemType"] == "dynamicToolCall"
     assert item["durationMs"] == 90
     assert item["id"] == "delivery:1:call_2"
+
+
+def test_a_settled_turn_reports_its_own_cost_the_way_the_build_does() -> None:
+    recorder = Recorder()
+    log = AnalysisActivityLog(recorder.__call__)
+    log.record(
+        CodexAppServerEvent(
+            kind="turn_started",
+            turn_id="turn-1",
+            status="inProgress",
+            response={"startedAt": 1_000, "model": "codex-mini"},
+        )
+    )
+    log.record(
+        CodexAppServerEvent(
+            kind="tool",
+            item_id="cmd-1",
+            item_type="commandExecution",
+            duration_ms=1_200,
+            status="completed",
+            name="运行命令",
+            arguments={"command": "ls -la"},
+        )
+    )
+    log.record(
+        CodexAppServerEvent(
+            kind="usage",
+            turn_id="turn-1",
+            usage=CodexTokenUsage(
+                total_tokens=900,
+                input_tokens=800,
+                cached_input_tokens=300,
+                output_tokens=100,
+                reasoning_output_tokens=20,
+            ),
+            thread_total=CodexTokenUsage(total_tokens=1_500),
+            model_context_window=272_000,
+        )
+    )
+    log.record(
+        CodexAppServerEvent(
+            kind="turn_completed",
+            turn_id="turn-1",
+            status="completed",
+            response={
+                "startedAt": 1_000,
+                "completedAt": 9_000,
+                "durationMs": 8_000,
+                "model": "codex-mini",
+            },
+        )
+    )
+    log.flush()
+
+    lines = [json.loads(line) for line in recorder.writes[-1].decode().splitlines()]
+    # 回合自己的账（耗时、模型、token）在 codex exec 行格式里没有对应行：它是
+    # app-server 生命周期与 usage 事件的合成，写在它汇总的那批行之后。
+    assert lines[-1]["type"] == "turn.completed"
+    assert lines[-1]["turn"]["durationMs"] == 8_000
+    assert lines[-1]["usage"]["totalTokens"] == 900
+    assert lines[-1]["thread_total"]["totalTokens"] == 1_500
+    assert lines[-1]["model_context_window"] == 272_000
+
+    summary = [item for item in recorder.items() if item["kind"] == "summary"]
+    assert len(summary) == 1
+    assert recorder.items()[-1]["kind"] == "summary"
+    turn = summary[0]["turn"]
+    # 页面拿这一项喂智能构建同一个 turn-summary 组件：本轮耗时、工具调用数、已记录
+    # 的工具耗时与 token 用量都要和智能构建报的是同一种读数。
+    assert turn["turnId"] == "turn-1"
+    assert turn["status"] == "completed"
+    assert turn["durationMs"] == 8_000
+    assert turn["startedAt"] == 1_000
+    assert turn["completedAt"] == 9_000
+    assert turn["model"] == "codex-mini"
+    assert turn["toolCalls"] == 1
+    assert turn["toolDurationMs"] == 1_200
+    assert turn["toolDurationComplete"] is True
+    assert turn["usage"]["cachedInputTokens"] == 300
+
+
+def test_a_turn_that_is_still_running_reports_no_cost_yet() -> None:
+    _, recorder = log_with(
+        CodexAppServerEvent(
+            kind="turn_started",
+            turn_id="turn-1",
+            status="inProgress",
+            response={"startedAt": 1_000},
+        ),
+        CodexAppServerEvent(
+            kind="usage",
+            turn_id="turn-1",
+            usage=CodexTokenUsage(
+                total_tokens=900, input_tokens=800, output_tokens=100
+            ),
+        ),
+    )
+
+    # 回合没结算就没有读数：智能构建也只在回合进入终态后才显示这一项。
+    assert [item for item in recorder.items() if item["kind"] == "summary"] == []
+    assert recorder.items() == []
+
+
+def test_a_failed_turn_is_summarized_as_the_failure_it_is() -> None:
+    _, recorder = log_with(
+        CodexAppServerEvent(
+            kind="tool",
+            item_id="cmd-1",
+            item_type="commandExecution",
+            status="failed",
+            name="运行命令",
+            arguments={"command": "python -m migrate"},
+        ),
+        CodexAppServerEvent(
+            kind="turn_completed",
+            turn_id="turn-2",
+            status="failed",
+            response={"durationMs": 4_000, "model": "codex-mini"},
+        ),
+    )
+
+    summary = [item for item in recorder.items() if item["kind"] == "summary"][0]
+    assert summary["status"] == "failed"
+    # 一个工具都没报耗时：累计耗时留给「已记录」的说法，而不是假装成 0。
+    assert summary["turn"]["status"] == "failed"
+    assert summary["turn"]["toolCalls"] == 1
+    assert "toolDurationMs" not in summary["turn"]
+    assert summary["turn"]["toolDurationComplete"] is False
