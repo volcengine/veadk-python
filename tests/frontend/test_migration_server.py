@@ -62,6 +62,7 @@ from frontend.server.migration.service import (
     _public_environment_defaults,
     validate_source_archive,
 )
+from veadk.cli.codex_app_server import CodexAppServerEvent
 from veadk.cli.frontend_skill_creator import _sandbox_model_config
 
 
@@ -5301,6 +5302,77 @@ def test_delivery_turn_closes_a_settled_agentic_delivery(
     # 收尾回合是叠加的：交付状态和产物仍然来自 CLI 的交付合同。
     assert closed["artifact"]["downloadReady"] is True
     assert service.drive_delivery_turn(task_id, "owner-1", task=closed) is False
+
+
+def test_delivery_turn_activity_shows_the_studio_tool_that_pulled_the_artifact(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """收尾回合拉产物这一步要像智能构建那样出现在迁移页的活动流里。"""
+    gateway = FakeMigrationGateway()
+    service = MigrationService(gateway)
+    task_id, artifact, digest = agentic_delivery_task(service, gateway)
+    session = service._session(task_id, "owner-1")
+
+    async def fake_turn(**kwargs: object) -> dict[str, object]:
+        sink = kwargs["event_sink"]
+        assert callable(sink)
+        sink(
+            CodexAppServerEvent(
+                kind="tool",
+                item_id="tool-1",
+                item_type="dynamicToolCall",
+                status="in_progress",
+                name="publishArtifact",
+                arguments={"path": "migration-result.zip"},
+            )
+        )
+        sink(
+            CodexAppServerEvent(
+                kind="tool",
+                item_id="tool-1",
+                item_type="dynamicToolCall",
+                status="completed",
+                name="publishArtifact",
+                arguments={"path": "migration-result.zip"},
+                response={
+                    "success": True,
+                    "contentItems": [
+                        {
+                            "type": "inputText",
+                            "text": "产物已核对：path=migration-result.zip。",
+                        }
+                    ],
+                },
+            )
+        )
+        sink(
+            CodexAppServerEvent(
+                kind="tool",
+                item_id="tool-2",
+                item_type="dynamicToolCall",
+                status="in_progress",
+                name="reportDelivery",
+                arguments={"state": "succeeded_with_warnings"},
+            )
+        )
+        return delivery_report_payload(task_id, artifact, digest)
+
+    monkeypatch.setattr(migration_service, "run_delivery_turn", fake_turn)
+
+    asyncio.run(
+        service._run_app_server_delivery_turn(session, target="succeeded_with_warnings")
+    )
+
+    activity = service.activity(task_id, "owner-1")
+    rows = [item for item in activity["items"] if item["id"].startswith("delivery:")]
+    assert [row["title"] for row in rows] == [
+        "已拉取迁移产物并核对字节",
+        "已提交交付结论",
+    ]
+    assert [row["status"] for row in rows] == ["completed", "completed"]
+    assert rows[0]["kind"] == "command"
+    assert rows[0]["tool"]["output"].startswith("产物已核对：path=migration-result.zip")
+    assert rows[1]["tool"]["input"] == {"state": "succeeded_with_warnings"}
 
 
 def test_delivery_turn_rejects_a_verdict_that_does_not_match_the_delivery(

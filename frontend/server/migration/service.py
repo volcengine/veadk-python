@@ -463,6 +463,51 @@ def _has_activity_payload(value: object) -> bool:
     return value is not None and value != ""
 
 
+# Studio's own tools on the delivery turn publish the deliverable, so their calls are
+# page content the way the intelligent build's result tool is.
+_ACTIVITY_DYNAMIC_TOOL_TITLES: dict[str, dict[str, str]] = {
+    "publishArtifact": {
+        "running": "正在拉取迁移产物并核对字节",
+        "completed": "已拉取迁移产物并核对字节",
+        "failed": "迁移产物核对未通过",
+    },
+    "reportDelivery": {
+        "running": "正在提交交付结论",
+        "completed": "已提交交付结论",
+        "failed": "提交交付结论未完成",
+    },
+    "askUser": {
+        "running": "正在等待用户回答",
+        "completed": "已收到用户回答",
+        "failed": "用户回答未收到",
+    },
+}
+
+
+def _activity_dynamic_tool_text(result: object) -> str:
+    """The sentence Studio's own tool returned, which is what the page shows."""
+    if not isinstance(result, dict):
+        return ""
+    content_items = result.get("contentItems")
+    texts = (
+        [
+            entry["text"]
+            for entry in content_items
+            if isinstance(entry, dict) and isinstance(entry.get("text"), str)
+        ]
+        if isinstance(content_items, list)
+        else []
+    )
+    joined = "\n".join(part for part in texts if part)
+    if joined:
+        return joined
+    if result.get("success") is True:
+        return "已接收。"
+    if result.get("success") is False:
+        return "调用被拒绝。"
+    return ""
+
+
 def _activity_status(event_type: str, item: dict[str, object]) -> str:
     status = str(item.get("status") or "").lower()
     if event_type.endswith(".failed") or status in {"failed", "error", "declined"}:
@@ -640,6 +685,44 @@ def _parse_activity_log(
                     "id": activity_id,
                     "kind": "command",
                     "status": status,
+                    "title": title,
+                    "tool": tool,
+                }
+            )
+            continue
+
+        if item_type == "dynamic_tool_call":
+            tool_name = _redact_activity_text(
+                str(item.get("name") or ""),
+                secret_values=secret_values,
+            )
+            unknown = {
+                "running": f"正在调用工具 {tool_name or 'Studio'}",
+                "completed": f"已调用工具 {tool_name or 'Studio'}",
+                "failed": f"工具 {tool_name or 'Studio'} 调用未完成",
+            }
+            # 调用本身完成、但 Studio 拒绝了参数：页面要按「没成功」显示，
+            # 这样被拒的那一次收尾在活动流里是看得见的。
+            result = item.get("result")
+            rejected = isinstance(result, dict) and result.get("success") is False
+            row_status = "failed" if rejected else status
+            title = _ACTIVITY_DYNAMIC_TOOL_TITLES.get(tool_name, unknown)[row_status]
+            tool: dict[str, object] = {"name": title}
+            arguments = item.get("arguments")
+            if _has_activity_payload(arguments):
+                tool["input"] = _activity_payload(
+                    arguments,
+                    secret_values=secret_values,
+                )
+            detail = _activity_dynamic_tool_text(result)
+            if detail:
+                detail = _redact_activity_text(detail, secret_values=secret_values)
+                tool["error" if rejected else "output"] = detail
+            upsert(
+                {
+                    "id": activity_id,
+                    "kind": "command",
+                    "status": row_status,
                     "title": title,
                     "tool": tool,
                 }
@@ -4083,13 +4166,16 @@ class MigrationService:
                 _DELIVERY_TURN_ACTIVITY_PATH,
                 content,
                 media_type="text/plain",
-            )
+            ),
+            # 交付回合的 publishArtifact 调用就是产物的交接，页面要看得见。
+            include_dynamic_tools=True,
         )
         waited_seconds = [0.0]
         heartbeat = asyncio.create_task(beat())
         flusher = asyncio.create_task(activity.run())
+        report: dict[str, object] | None = None
         try:
-            return await run_delivery_turn(
+            report = await run_delivery_turn(
                 endpoint=session.endpoint,
                 prompt=_delivery_prompt(
                     task_id=session.task_id,
@@ -4123,7 +4209,11 @@ class MigrationService:
                 ),
                 host_wait_seconds=lambda: waited_seconds[0],
             )
+            return report
         finally:
+            # 结论已落地：把「提交交付结论」这行收口，别让页面停在进行中。
+            if report is not None:
+                await asyncio.to_thread(activity.complete_dynamic_tools)
             flusher.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await flusher
