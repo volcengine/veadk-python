@@ -74,6 +74,7 @@ from .gateway import (
     MigrationSandboxSession,
 )
 from .activity import AnalysisActivityLog
+from .codex_exec_shim import shim_source as _codex_shim_source
 from .analysis_input import (
     ASK_TOOL_NAME,
     ASK_TOOL_SCHEMA,
@@ -216,6 +217,15 @@ _MIGRATION_DRIVER_PATH = f"{MIGRATION_ROOT}/control/migration-driver.json"
 _MIGRATION_DRIVER_SCRIPT_PATH = f"{MIGRATION_ROOT}/control/migration-driver.py"
 _MIGRATION_DRIVER_HEARTBEAT_SECONDS = 15.0
 _MIGRATION_DRIVER_STALE_SECONDS = 90.0
+# 迁移主回合的 Codex 事件源：沙箱里的迁移 CLI 自己调 `codex exec`，Studio 在这条
+# 命令的 PATH 前面装一个垫片，把那次 exec 接到沙箱已经托管的 Codex app-server 上。
+# `codex exec --json` 既不报工具耗时，也不报回合耗时和模型，app-server 两者都有，
+# 页面因此和智能构建一致。CLI 本身不动：垫片只接它认识的那条命令行，其余照旧。
+_MIGRATION_CODEX_SHIM_DIR = f"{MIGRATION_ROOT}/control/bin"
+_MIGRATION_CODEX_SHIM_PATH = f"{_MIGRATION_CODEX_SHIM_DIR}/studio-codex-shim.py"
+_MIGRATION_CODEX_SHIM_WRAPPER_PATH = f"{_MIGRATION_CODEX_SHIM_DIR}/codex"
+_MIGRATION_CODEX_SHIM_PYTHON_PATH = f"{_MIGRATION_CODEX_SHIM_DIR}/python"
+_MIGRATION_CODEX_SHIM_STATE_PATH = f"{MIGRATION_ROOT}/control/codex-shim-state.json"
 # 交付收尾回合：迁移 CLI 结束以后，Studio 驱动一个 app-server 回合核对并发布这次交付。
 # 产物由 Studio 自己读回、自己算摘要，失败也在这里变成一句能解释、能追问的结论。
 _DELIVERY_REPORT_PATH = f"{MIGRATION_ROOT}/delivery/delivery-report.json"
@@ -595,8 +605,10 @@ _ACTIVITY_TURN_STATUSES = {
 
 _ACTIVITY_TURN_NUMBERS = ("startedAt", "completedAt", "durationMs")
 
-# 沙箱里的 `codex exec --json` 自己写的事件流（迁移主回合）只报蛇形 token 用量，
-# 没有回合对象；这两张表把它的终态行翻译成 app-server 那套形状。
+# 迁移主回合正常由垫片跑在沙箱 app-server 上（见 codex_exec_shim.py），日志形状
+# 与 app-server 一致。垫片连不上时它把这一轮交回真正的 `codex exec --json`，那份
+# 事件流只报蛇形 token 用量、也没有回合对象；这两张表把那种终态行翻译成 app-server
+# 那套形状。
 _ACTIVITY_EXEC_TURN_EVENT_TYPES = ("turn.completed", "turn.failed", "turn.interrupted")
 
 _ACTIVITY_EXEC_USAGE_KEYS = {
@@ -696,9 +708,10 @@ def _activity_turn_summary(
     """One summary of everything the turn logged, in the app-server's own numbers.
 
     The intelligent build reports a turn's wall-clock time, tool calls, tool time and
-    token usage from the turn's lifecycle and usage events; the migration log only
-    carries item lines, so the summary is built here out of the items logged before
-    the turn settled plus the usage the turn reported.
+    token usage from the turn's lifecycle and usage events. A migration turn that ran
+    on the app-server reports the same numbers and they are carried over unchanged; a
+    turn whose log has no turn object (the fallback `codex exec --json` stream) still
+    settles here out of the items logged before it ended.
     """
     tools = [item for item in items if _activity_tool_row(item)]
     measured = [
@@ -1158,9 +1171,9 @@ def _parse_activity_log(
             )
             continue
 
-        # 迁移主回合跑在沙箱里的 `codex exec --json` 上，它没有 app-server 的回合对象，
-        # 只写一条裸的终态行。这个回合的成本照智能构建的样式补齐：工具次数从上面记下
-        # 的行数出来，token 用量从这条终态行出来。（app-server 的回合带 turn 对象，
+        # 垫片够不到 app-server 时会把这一轮交回真正的 `codex exec --json`，那份事件流
+        # 没有回合对象，只写一条裸的终态行。这个回合的成本照智能构建的样式补齐：工具次数
+        # 从上面记下的行数出来，token 用量从这条终态行出来。（垫片写的回合带 turn 对象，
         # 在本循环开头就已经结算，不会重复。）
         if event_type in _ACTIVITY_EXEC_TURN_EVENT_TYPES:
             upsert(
@@ -2782,6 +2795,48 @@ def _migration_driver_script() -> str:
     )
 
 
+def _migration_codex_shim_lines() -> list[str]:
+    """Install the Sandbox `codex` shim that the migration CLI picks up on PATH."""
+    return [
+        f"studio_codex_shim_dir={shlex.quote(_MIGRATION_CODEX_SHIM_DIR)}",
+        'mkdir -p "$studio_codex_shim_dir"',
+        f"cat > {shlex.quote(_MIGRATION_CODEX_SHIM_PATH)} <<'STUDIO_CODEX_SHIM'",
+        _codex_shim_source().rstrip("\n"),
+        "STUDIO_CODEX_SHIM",
+        # 垫片只要求一个能连 app-server 的解释器，取沙箱里第一个带 websockets 的。
+        "studio_codex_shim_python=$(command -v python3)",
+        'for studio_python_candidate in /usr/bin/python3 "$studio_codex_shim_python"; do',
+        '  if "$studio_python_candidate" -c "import websockets" >/dev/null 2>&1; then',
+        '    studio_codex_shim_python="$studio_python_candidate"',
+        "    break",
+        "  fi",
+        "done",
+        "printf '%s\\n' \"$studio_codex_shim_python\" > "
+        f"{shlex.quote(_MIGRATION_CODEX_SHIM_PYTHON_PATH)}",
+        f"cat > {shlex.quote(_MIGRATION_CODEX_SHIM_WRAPPER_PATH)} <<'STUDIO_CODEX_WRAPPER'",
+        "#!/bin/sh",
+        "set -eu",
+        'studio_codex_shim_dir="${STUDIO_CODEX_SHIM_DIR:-$(dirname "$0")}"',
+        'exec "$(cat "$studio_codex_shim_dir/python")" '
+        '"$studio_codex_shim_dir/studio-codex-shim.py" "$@"',
+        "STUDIO_CODEX_WRAPPER",
+        f"chmod 0755 {shlex.quote(_MIGRATION_CODEX_SHIM_WRAPPER_PATH)} "
+        f"{shlex.quote(_MIGRATION_CODEX_SHIM_PATH)}",
+        'export STUDIO_CODEX_SHIM_DIR="$studio_codex_shim_dir"',
+        "export STUDIO_MIGRATION_SHIM_STATE="
+        f"{shlex.quote(_MIGRATION_CODEX_SHIM_STATE_PATH)}",
+        # 真正的 codex 必须在改 PATH 之前解析出来：垫片回退时要用它。同一个 shell
+        # 里重复安装时，PATH 开头已经是垫片，此时保留上一次解析出的真 codex。
+        "studio_codex_shim_real=$(command -v codex)",
+        f'if [ "$studio_codex_shim_real" = {shlex.quote(_MIGRATION_CODEX_SHIM_WRAPPER_PATH)} ];',
+        '  then studio_codex_shim_real=""; fi',
+        'if [ -n "$studio_codex_shim_real" ]; then',
+        '  export STUDIO_MIGRATION_REAL_CODEX="$studio_codex_shim_real"',
+        "fi",
+        'export PATH="$studio_codex_shim_dir:$PATH"',
+    ]
+
+
 def _start_migration_command(
     task_id: str,
     confirmation: dict[str, object],
@@ -2836,6 +2891,7 @@ def _start_migration_command(
     inner = "\n".join(
         [
             "set +e",
+            *_migration_codex_shim_lines(),
             (
                 f"cat > {shlex.quote(_MIGRATION_DRIVER_SCRIPT_PATH)} "
                 "<<'STUDIO_MIGRATION_DRIVER'"
