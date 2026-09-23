@@ -17,20 +17,23 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
 from fastapi import HTTPException, Query, Request
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 
 from .evaluation.models import EvaluationDatasetBody, ResumeEvaluationBody
 from .evaluation.service import MigrationEvaluationService
+from .events import MigrationEventHub, MigrationSnapshot
 from .models import (
     ConfirmMigrationBody,
     CreateMigrationTaskBody,
     SubmitAnalysisAnswersBody,
+    SubmitAnalysisInputBody,
 )
 from .service import (
     MIGRATION_UPLOAD_MAX_BYTES,
@@ -42,10 +45,53 @@ logger = logging.getLogger(__name__)
 if TYPE_CHECKING:
     from frontend.server.source_projects import SourceProjectService
 
+
+def migration_activity_visible(task: dict[str, object]) -> bool:
+    """Whether the page shows the Codex activity feed for this task."""
+    if task.get("state") == "analyzing":
+        return True
+    if task.get("analysisRef") or task.get("confirmation"):
+        return True
+    error = task.get("error")
+    code = str(error.get("code") or "") if isinstance(error, dict) else ""
+    return code.startswith("MIGRATION_ANALYSIS_")
+
+
+def migration_task_settled(task: dict[str, object]) -> bool:
+    """Whether the task stops changing until the user acts on it.
+
+    The page used to decide this on its own and stop polling; owning the rule here lets
+    the stream close at the same moment instead of polling a parked task.
+    """
+    if str(task.get("state") or "") in _ACTIVE_TASK_STATES:
+        return False
+    persistence = task.get("persistence")
+    if isinstance(persistence, dict) and persistence.get("state") == "saving":
+        return False
+    evaluation = task.get("evaluation")
+    if (
+        isinstance(evaluation, dict)
+        and evaluation.get("enabled") is True
+        and str(evaluation.get("state") or "") in _POLLING_EVALUATION_STATES
+    ):
+        return False
+    return True
+
+
 _ZIP_CONTENT_TYPES = {
     "application/zip",
     "application/x-zip-compressed",
     "application/octet-stream",
+}
+# 这两组状态决定事件流什么时候可以收尾；页面以前自己复制了一份，现在由服务端拥有。
+_ACTIVE_TASK_STATES = {"analyzing", "migrating", "validating", "packaging"}
+_POLLING_EVALUATION_STATES = {
+    "pending",
+    "preparing",
+    "deploying",
+    "executing",
+    "judging",
+    "aggregating",
 }
 
 
@@ -61,6 +107,60 @@ def mount_migration_routes(
     persistence_results: dict[tuple[str, str], dict[str, object]] = {}
     persistence_tasks: dict[tuple[str, str], asyncio.Task[dict[str, object]]] = {}
     watchers: dict[tuple[str, str], asyncio.Task[None]] = {}
+
+    def migration_stream_reader(
+        key: tuple[str, str],
+    ) -> Callable[[], Awaitable[MigrationSnapshot]]:
+        """Read the same payloads the page used to poll for, once per stream tick."""
+        owner_id, task_id = key
+
+        async def read() -> MigrationSnapshot:
+            try:
+                task = await run_in_threadpool(service.get_task, task_id, owner_id)
+                # A background app-server analysis dies with the Studio process; the
+                # stream owns this recovery now that the page no longer polls.
+                await run_in_threadpool(
+                    service.recover_stalled_analysis,
+                    task_id,
+                    owner_id,
+                )
+                # 交付收尾回合同样活在 Studio 进程里：读任务的这条路径负责在交付落定后
+                # 补一次收尾，Studio 重启丢掉的那一轮也能在这里接回来。
+                await run_in_threadpool(
+                    service.drive_delivery_turn,
+                    task_id,
+                    owner_id,
+                    task=task,
+                )
+                decorated = await with_evaluation(task, owner_id)
+                activity = None
+                if migration_activity_visible(decorated):
+                    activity = await run_in_threadpool(
+                        service.activity,
+                        task_id,
+                        owner_id,
+                    )
+                settled = migration_task_settled(decorated)
+                evaluation = decorated.get("evaluation")
+                if (
+                    not settled
+                    and isinstance(evaluation, dict)
+                    and evaluation.get("enabled") is True
+                ):
+                    start_watcher(task_id, owner_id)
+                return MigrationSnapshot(
+                    task=decorated,
+                    activity=activity,
+                    settled=settled,
+                )
+            except MigrationError as error:
+                if error.retryable:
+                    raise
+                return MigrationSnapshot(error=error.detail(), settled=True)
+
+        return read
+
+    event_hub = MigrationEventHub(migration_stream_reader)
 
     async def invoke(
         operation: str,
@@ -316,6 +416,14 @@ def mount_migration_routes(
                             continue
                         return
                     state = task.get("state")
+                    # 交付落定后由 Studio 收尾一次，所以看护循环也要给收尾回合机会，
+                    # 不能只在页面打开的时候才收尾。
+                    await run_in_threadpool(
+                        service.drive_delivery_turn,
+                        task_id,
+                        owner_id,
+                        task=task,
+                    )
                     if state in {
                         "succeeded",
                         "succeeded_with_warnings",
@@ -503,6 +611,20 @@ def mount_migration_routes(
             lambda: service.get_task(task_id, owner_id),
             task_id=task_id,
         )
+        # A background app-server analysis dies with the Studio process; while a
+        # client keeps polling, hand its attempt back to the in-Sandbox script.
+        await invoke(
+            "recover_stalled_analysis",
+            lambda: service.recover_stalled_analysis(task_id, owner_id),
+            task_id=task_id,
+        )
+        # 交付落定以后由 Studio 收尾一次：成功时核对并发布产物，失败时把日志读成
+        # 一句能解释的结论。回合跑在后台线程里，所以这次调用只做一次廉价判断。
+        await invoke(
+            "drive_delivery_turn",
+            lambda: service.drive_delivery_turn(task_id, owner_id, task=task),
+            task_id=task_id,
+        )
         decorated = await with_evaluation(task, owner_id)
         evaluation = decorated.get("evaluation")
         if isinstance(evaluation, dict) and evaluation.get("enabled") is True:
@@ -519,6 +641,20 @@ def mount_migration_routes(
         task = await invoke(
             "submit_answers",
             lambda: service.submit_answers(task_id, owner_id, body),
+            task_id=task_id,
+        )
+        return await with_evaluation(task, owner_id)
+
+    @app.post("/web/agent-migrations/tasks/{task_id}/input")
+    async def submit_analysis_input(
+        task_id: str,
+        body: SubmitAnalysisInputBody,
+        request: Request,
+    ) -> dict[str, object]:
+        owner_id = owner_resolver(request)
+        task = await invoke(
+            "submit_analysis_input",
+            lambda: service.submit_analysis_input(task_id, owner_id, body),
             task_id=task_id,
         )
         return await with_evaluation(task, owner_id)
@@ -731,6 +867,46 @@ def mount_migration_routes(
             "activity",
             lambda: service.activity(task_id, owner_id),
             task_id=task_id,
+        )
+
+    @app.get("/web/agent-migrations/tasks/{task_id}/events")
+    async def task_events(
+        task_id: str,
+        request: Request,
+        after: int = Query(0, ge=0),
+    ) -> StreamingResponse:
+        owner_id = owner_resolver(request)
+        # Authorize before the streaming response commits its headers, so a stranger
+        # gets a normal error instead of an empty 200 stream.
+        await invoke(
+            "get_task",
+            lambda: service.get_task(task_id, owner_id),
+            task_id=task_id,
+        )
+
+        async def frames() -> AsyncIterator[str]:
+            async with event_hub.subscription((owner_id, task_id)) as stream:
+                # A cursor from a stream that is gone (Studio restarted) would wait for
+                # events that will never come; the retained history re-syncs instead.
+                start = after if after <= stream.log.last_seq else 0
+                async for event in stream.follow(start):
+                    if event is None:
+                        yield ": heartbeat\n\n"
+                        continue
+                    payload = {
+                        **event.payload,
+                        "seq": event.seq,
+                        "taskId": task_id,
+                    }
+                    yield (
+                        f"id: {event.seq}\nevent: {event.type}\n"
+                        f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                    )
+
+        return StreamingResponse(
+            frames(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
         )
 
     @app.get("/web/agent-migrations/tasks/{task_id}/artifact")

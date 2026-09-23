@@ -16,14 +16,16 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import hashlib
 import io
 import json
-import logging
 import mimetypes
 import re
 import shlex
 import stat
+import threading
 import time
 import uuid
 import zipfile
@@ -37,6 +39,7 @@ from dotenv import dotenv_values
 from veadk.cli.studio_model_catalog import (
     provider_allows_studio_development_model,
 )
+from veadk.utils.logger import get_logger
 
 from frontend.server.deployment_source import (
     DeploymentSourceError,
@@ -51,10 +54,13 @@ from frontend.server.source_project_limits import (
 from .contracts import (
     MigrationContractError,
     validate_analysis_result,
+    validate_detection_report,
     validate_analysis_status,
     validate_confirmation,
+    validate_delivery_report,
     validate_delivery_result,
     validate_delivery_status,
+    validate_migration_driver,
     validate_migration_request,
     validate_process_exit,
     validate_source_status,
@@ -68,13 +74,53 @@ from .gateway import (
     MigrationRemoteFileNotFound,
     MigrationSandboxSession,
 )
+from .activity import AnalysisActivityLog
+from .analysis_contract import (
+    KIND_BY_STATUS,
+    RECOMMENDATION_KIND,
+    analysis_document_schema,
+    build_analysis_result,
+    detection_candidates,
+    is_model_document,
+)
+from .codex_exec_shim import shim_source as _codex_shim_source
+from .detection import detect_source
+from .analysis_input import (
+    ASK_TOOL_NAME,
+    ASK_TOOL_SCHEMA,
+    AnalysisAskError,
+    AnalysisInputRegistry,
+    ask_payload,
+    normalize_answers,
+)
+from .app_server import (
+    MigrationAnalysisUnavailable,
+    app_server_analysis_enabled,
+    ask_tool_handler,
+    run_route_analysis,
+)
+from .codex_tool_turn import DynamicTool
+from .delivery_recovery import (
+    recovery_source as delivery_recovery_source,
+)
+from .delivery_turn import (
+    ARTIFACT_PATH,
+    ARTIFACT_TOOL_NAME,
+    DELIVERY_ASK_TOOL_DESCRIPTION,
+    DELIVERY_TOOL_NAME,
+    DeliveryContractError,
+    DeliveryTurnUnavailable,
+    PublishedArtifact,
+    delivery_app_server_enabled,
+    run_delivery_turn,
+)
 from .models import (
     MIGRATION_FRAMEWORKS,
-    STRUCTURED_ENTRY_PATTERN,
     STRUCTURED_MIGRATION_FRAMEWORKS,
     ConfirmMigrationBody,
     CreateMigrationTaskBody,
     SubmitAnalysisAnswersBody,
+    SubmitAnalysisInputBody,
 )
 
 MIGRATION_ROOT = "/home/gem/.studio/migration/v1"
@@ -116,12 +162,48 @@ _REQUEST_PATH = f"{MIGRATION_ROOT}/request/task.json"
 _SOURCE_PATH = f"{MIGRATION_ROOT}/input/source.zip"
 _PROJECT_PATH = f"{MIGRATION_ROOT}/workspace/source"
 _SOURCE_STATUS_PATH = f"{MIGRATION_ROOT}/request/source.json"
+_DETECTION_PATH = f"{MIGRATION_ROOT}/request/detection.json"
 _CAPABILITIES_PATH = f"{MIGRATION_ROOT}/control/capabilities.json"
 _ANALYSIS_STATUS_PATH = f"{MIGRATION_ROOT}/control/task-status.json"
 _ANALYSIS_RESULT_PATH = f"{MIGRATION_ROOT}/analysis/route.json"
 _ANALYSIS_PROMPT_PATH = f"{MIGRATION_ROOT}/analysis/prompt.md"
+_ANALYSIS_RETRY_PROMPT_PATH = f"{MIGRATION_ROOT}/analysis/retry-prompt.md"
 _ANALYSIS_SCHEMA_PATH = f"{MIGRATION_ROOT}/analysis/route-schema.json"
 _ANALYSIS_PROCESS_EXIT_PATH = f"{MIGRATION_ROOT}/diagnostics/analysis/process-exit.json"
+_ANALYSIS_EXTRACTION_DIAGNOSTICS_PATH = (
+    f"{MIGRATION_ROOT}/diagnostics/analysis/result-extraction.json"
+)
+
+
+def _analysis_activity_path(attempt: int) -> str:
+    """Where an analysis attempt's Codex event log lives inside the Sandbox."""
+    return f"{MIGRATION_ROOT}/diagnostics/analysis/attempt-{attempt}.log"
+
+
+# The scripted ``codex exec`` fallback has no dynamic tools, so Codex writes one JSON
+# document.  It carries the judgement only: protocol bookkeeping is added by Studio.
+_ANALYSIS_CONTRACT_KEYS = ("status", "summary")
+_ANALYSIS_CONTRACT_STATUSES = ("needs_input", "recommendation_ready", "unsupported")
+_ANALYSIS_TURN_TIMEOUT_SECONDS = 600.0
+# 分析回合等待用户回答的窗口：等待期间没有 app-server 事件，所以空闲窗口必须
+# 覆盖它，否则客户端的空闲计时器会在用户作答前取消整个回合。
+_ANALYSIS_INPUT_WINDOW_SECONDS = 300.0
+_ANALYSIS_INPUT_IDLE_MARGIN_SECONDS = 60.0
+_ANALYSIS_DRIVER_PATH = f"{MIGRATION_ROOT}/control/analysis-driver.json"
+_ANALYSIS_DRIVER_APP_SERVER = "app-server"
+_ANALYSIS_DRIVER_SCRIPT = "codex-exec"
+_ANALYSIS_DRIVER_RUNNING = "running"
+_ANALYSIS_DRIVER_DONE = "done"
+# 后台驱动的租约：心跳过期说明持有它的 Studio 进程已经不在了。
+_ANALYSIS_DRIVER_HEARTBEAT_SECONDS = 20.0
+_ANALYSIS_DRIVER_STALE_SECONDS = 90.0
+# 标识写入租约的后台驱动属于哪个 Studio 进程，便于诊断跨进程接管。
+_STUDIO_PROCESS_ID = uuid.uuid4().hex
+_ANALYSIS_STATUS_MESSAGES = {
+    "ready": "项目分析完成，请确认迁移方式",
+    "needs_input": "需要补充少量信息后继续分析",
+}
+_ANALYSIS_UNSUPPORTED_MESSAGE = "当前项目不适用于已支持的迁移方式"
 _CONFIRMATION_PATH = f"{MIGRATION_ROOT}/control/route-selection.json"
 _INSTRUCTION_PATH = f"{MIGRATION_ROOT}/control/instruction.txt"
 _STOPPED_PATH = f"{MIGRATION_ROOT}/control/stopped.json"
@@ -129,6 +211,84 @@ _PROCESS_EXIT_PATH = f"{MIGRATION_ROOT}/diagnostics/migration/process-exit.json"
 _DELIVERY_STATUS_PATH = f"{MIGRATION_ROOT}/delivery/migration-status.json"
 _DELIVERY_RESULT_PATH = f"{MIGRATION_ROOT}/delivery/migration-result.json"
 _DELIVERY_ARTIFACT_PATH = f"{MIGRATION_ROOT}/delivery/migration-result.zip"
+# The delivery driver lease: the Sandbox launch script refreshes its heartbeat while
+# the migration CLI works and publishes the artifact digest once it exits.  Studio
+# reads it to tell "still working" from "the process is gone", so a driver that died
+# without writing any delivery state fails the task instead of hanging in migrating.
+_MIGRATION_DRIVER_PATH = f"{MIGRATION_ROOT}/control/migration-driver.json"
+_MIGRATION_CLI_PID_PATH = f"{MIGRATION_ROOT}/control/migration-cli.pid"
+_MIGRATION_DRIVER_SCRIPT_PATH = f"{MIGRATION_ROOT}/control/migration-driver.py"
+_MIGRATION_DRIVER_HEARTBEAT_SECONDS = 15.0
+_MIGRATION_DRIVER_STALE_SECONDS = 90.0
+# 迁移主回合的 Codex 事件源：沙箱里的迁移 CLI 自己调 `codex exec`，Studio 在这条
+# 命令的 PATH 前面装一个垫片，把那次 exec 接到沙箱已经托管的 Codex app-server 上。
+# `codex exec --json` 既不报工具耗时，也不报回合耗时和模型，app-server 两者都有，
+# 页面因此和智能构建一致。CLI 本身不动：垫片只接它认识的那条命令行，其余照旧。
+_MIGRATION_CODEX_SHIM_DIR = f"{MIGRATION_ROOT}/control/bin"
+_MIGRATION_CODEX_SHIM_PATH = f"{_MIGRATION_CODEX_SHIM_DIR}/studio-codex-shim.py"
+_MIGRATION_CODEX_SHIM_WRAPPER_PATH = f"{_MIGRATION_CODEX_SHIM_DIR}/codex"
+_MIGRATION_CODEX_SHIM_PYTHON_PATH = f"{_MIGRATION_CODEX_SHIM_DIR}/python"
+_MIGRATION_CODEX_SHIM_STATE_PATH = f"{MIGRATION_ROOT}/control/codex-shim-state.json"
+# 交付收尾回合：迁移 CLI 结束以后，Studio 驱动一个 app-server 回合核对并发布这次交付。
+# 产物由 Studio 自己读回、自己算摘要，失败也在这里变成一句能解释、能追问的结论。
+_DELIVERY_REPORT_PATH = f"{MIGRATION_ROOT}/delivery/delivery-report.json"
+_DELIVERY_TURN_PATH = f"{MIGRATION_ROOT}/control/delivery-turn.json"
+_DELIVERY_TURN_CWD = f"{MIGRATION_ROOT}/work/delivery"
+_DELIVERY_TURN_ACTIVITY_PATH = f"{MIGRATION_ROOT}/work/agentic/logs/delivery-turn.jsonl"
+_DELIVERY_TURN_DRIVER = "app-server"
+_DELIVERY_TURN_RUNNING = "running"
+_DELIVERY_TURN_DONE = "done"
+_DELIVERY_TURN_TIMEOUT_SECONDS = 300.0
+# 等待用户回答期间没有 app-server 事件，空闲窗口必须覆盖它，否则回合会被取消。
+_DELIVERY_TURN_INPUT_WINDOW_SECONDS = 300.0
+_DELIVERY_TURN_INPUT_IDLE_MARGIN_SECONDS = 60.0
+# 收尾回合的租约：心跳过期说明持有它的 Studio 进程已经不在了，可以重新收尾。
+_DELIVERY_TURN_HEARTBEAT_SECONDS = 20.0
+_DELIVERY_TURN_STALE_SECONDS = 90.0
+# 一个交付最多收尾几次：失败后每次读任务都重开回合会白白烧 token。
+_DELIVERY_TURN_MAX_ATTEMPTS = 2
+_DELIVERY_DIR = f"{MIGRATION_ROOT}/delivery"
+_DELIVERY_OUTPUT_DIR = f"{MIGRATION_ROOT}/output/veadk"
+# agent 自己写完项目时留下的终态，与 CLI 的 processState 一致。
+_AGENT_STATUS_PATH = f"{MIGRATION_ROOT}/work/agentic/state/status.json"
+_DELIVERED_AGENT_STATES = frozenset(
+    {
+        "Succeed",
+        "SucceedWithWarnings",
+        "Partial",
+        "succeeded",
+        "succeeded_with_warnings",
+        "partial",
+    }
+)
+# 交付复原：CLI 不在了，但 agent 已经把项目做完时，Studio 按 CLI 自己的规则重新打包
+# 一次，而不是让用户再等一个 15 分钟的 Codex 回合。打包是磁盘上文件的纯函数。
+_DELIVERY_RECOVERY_SCRIPT_PATH = f"{MIGRATION_ROOT}/control/delivery-recovery.py"
+_DELIVERY_RECOVERY_REQUEST_PATH = f"{MIGRATION_ROOT}/control/delivery-recovery.json"
+_DELIVERY_RECOVERY_RESULT_PATH = (
+    f"{MIGRATION_ROOT}/control/delivery-recovery-result.json"
+)
+_DELIVERY_RECOVERY_LOG_PATH = (
+    f"{MIGRATION_ROOT}/diagnostics/migration/delivery-recovery.log"
+)
+_DELIVERY_RECOVERY_LEASE_PATH = f"{MIGRATION_ROOT}/control/delivery-recovery-lease.json"
+_DELIVERY_RECOVERY_DRIVER = "studio"
+_DELIVERY_RECOVERY_RUNNING = "running"
+_DELIVERY_RECOVERY_DONE = "done"
+# 复原的租约：心跳过期说明持有它的 Studio 进程已经不在了，可以重新打包。
+_DELIVERY_RECOVERY_HEARTBEAT_SECONDS = 20.0
+_DELIVERY_RECOVERY_STALE_SECONDS = 90.0
+# 一个交付最多复原几次：结论已经落地就不再重开。
+_DELIVERY_RECOVERY_MAX_ATTEMPTS = 2
+# 打包是本地文件操作，但项目可能有几百 MB：给一个绝对上限，免得卡死读任务。
+_DELIVERY_RECOVERY_TIMEOUT_SECONDS = 900
+# 交付阶段已经落定的状态：只有落定的交付才需要收尾回合解释它。
+_DELIVERY_SETTLED_STATES = {
+    "succeeded",
+    "succeeded_with_warnings",
+    "partial",
+    "failed",
+}
 _MIGRATION_ACTIVITY_LOG_PATHS = tuple(
     f"{MIGRATION_ROOT}/work/agentic/logs/codex-attempt-{attempt}.jsonl"
     for attempt in range(1, 4)
@@ -173,7 +333,10 @@ _SENSITIVE_ENV_KEY_RE = re.compile(
 )
 _ENV_REFERENCE_RE = re.compile(r"\$\{|\$\(|`")
 
-logger = logging.getLogger(__name__)
+# Anchor the analysis diagnostics under the veadk logger: the Studio entrypoint
+# pins the root logger to ERROR, so a plain module logger would hide a silent
+# fallback from the app-server path to the scripted one.
+logger = get_logger(__name__)
 
 
 def _public_environment_defaults(
@@ -348,6 +511,51 @@ def _has_activity_payload(value: object) -> bool:
     return value is not None and value != ""
 
 
+# Studio's own tools on the delivery turn publish the deliverable, so their calls are
+# page content the way the intelligent build's result tool is.
+_ACTIVITY_DYNAMIC_TOOL_TITLES: dict[str, dict[str, str]] = {
+    "publishArtifact": {
+        "running": "正在拉取迁移产物并核对字节",
+        "completed": "已拉取迁移产物并核对字节",
+        "failed": "迁移产物核对未通过",
+    },
+    "reportDelivery": {
+        "running": "正在提交交付结论",
+        "completed": "已提交交付结论",
+        "failed": "提交交付结论未完成",
+    },
+    "askUser": {
+        "running": "正在等待用户回答",
+        "completed": "已收到用户回答",
+        "failed": "用户回答未收到",
+    },
+}
+
+
+def _activity_dynamic_tool_text(result: object) -> str:
+    """The sentence Studio's own tool returned, which is what the page shows."""
+    if not isinstance(result, dict):
+        return ""
+    content_items = result.get("contentItems")
+    texts = (
+        [
+            entry["text"]
+            for entry in content_items
+            if isinstance(entry, dict) and isinstance(entry.get("text"), str)
+        ]
+        if isinstance(content_items, list)
+        else []
+    )
+    joined = "\n".join(part for part in texts if part)
+    if joined:
+        return joined
+    if result.get("success") is True:
+        return "已接收。"
+    if result.get("success") is False:
+        return "调用被拒绝。"
+    return ""
+
+
 def _activity_status(event_type: str, item: dict[str, object]) -> str:
     status = str(item.get("status") or "").lower()
     if event_type.endswith(".failed") or status in {"failed", "error", "declined"}:
@@ -362,10 +570,218 @@ def _analysis_result_message(value: str) -> bool:
         return False
     try:
         candidate = json.loads(value)
-        validate_analysis_result(candidate)
-    except (MigrationContractError, ValueError):
+    except ValueError:
         return False
-    return True
+    return is_model_document(candidate)
+
+
+# 页面按智能构建同一套 Codex 事件渲染工具行（原生图标、标签、耗时），所以活动项要
+# 带上原生 itemType；缺了它，同一段 Codex 输出会变成另一套行样式。
+_ACTIVITY_NATIVE_ITEM_TYPES = {
+    "reasoning": "reasoning",
+    "agent_message": "agentMessage",
+    "command_execution": "commandExecution",
+    "file_change": "fileChange",
+    "mcp_tool_call": "mcpToolCall",
+    "dynamic_tool_call": "dynamicToolCall",
+    "collab_tool_call": "collabToolCall",
+    "web_search": "webSearch",
+}
+
+
+def _activity_native_fields(
+    item_type: str,
+    item: dict[str, object],
+) -> dict[str, object]:
+    """The fields the shared row renderer reads off a Codex item.
+
+    ``itemType`` selects Codex' own row (icon, computed label, untruncated output) and
+    ``durationMs`` is what the collapsed process header reports, so a migration turn
+    that ran for minutes does not read like one that ran instantly.
+    """
+    fields: dict[str, object] = {}
+    native = _ACTIVITY_NATIVE_ITEM_TYPES.get(item_type)
+    if native:
+        fields["itemType"] = native
+    duration = item.get("duration_ms")
+    if isinstance(duration, int) and not isinstance(duration, bool) and duration >= 0:
+        fields["durationMs"] = duration
+    phase = item.get("phase")
+    if isinstance(phase, str) and phase:
+        fields["phase"] = phase
+    return fields
+
+
+def _activity_row_name(
+    item: dict[str, object],
+    fallback: str,
+    *,
+    secret_values: tuple[str, ...],
+) -> str:
+    """The label the shared row renderer shows for a tool call.
+
+    The app-server already names its own rows (运行命令 / 修改文件 / 网络搜索 /
+    ``MCP · server/tool``) and the intelligent build labels them from exactly that
+    name, so a migration turn reads the same. A log written before the app-server
+    path recorded the name, or the scripted ``codex exec`` driver that never has one,
+    keeps the migration's own wording.
+    """
+    name = item.get("name")
+    if isinstance(name, str) and name.strip():
+        return _redact_activity_text(name, secret_values=secret_values)
+    return fallback
+
+
+# 回合自报的终态，和智能构建 turn-summary 的 status 是同一套取值。
+_ACTIVITY_TURN_STATUSES = {
+    "completed": "completed",
+    "failed": "failed",
+    "cancelled": "interrupted",
+    "interrupted": "interrupted",
+}
+
+_ACTIVITY_TURN_NUMBERS = ("startedAt", "completedAt", "durationMs")
+
+# 迁移主回合正常由垫片跑在沙箱 app-server 上（见 codex_exec_shim.py），日志形状
+# 与 app-server 一致。垫片连不上时它把这一轮交回真正的 `codex exec --json`，那份
+# 事件流只报蛇形 token 用量、也没有回合对象；这两张表把那种终态行翻译成 app-server
+# 那套形状。
+_ACTIVITY_EXEC_TURN_EVENT_TYPES = ("turn.completed", "turn.failed", "turn.interrupted")
+
+_ACTIVITY_EXEC_USAGE_KEYS = {
+    "totalTokens": ("totalTokens", "total_tokens"),
+    "inputTokens": ("inputTokens", "input_tokens"),
+    "outputTokens": ("outputTokens", "output_tokens"),
+    "cachedInputTokens": ("cachedInputTokens", "cached_input_tokens"),
+    "cacheWriteInputTokens": ("cacheWriteInputTokens", "cache_write_input_tokens"),
+    "reasoningOutputTokens": ("reasoningOutputTokens", "reasoning_output_tokens"),
+}
+
+_ACTIVITY_TURN_USAGE_KEYS = (
+    "totalTokens",
+    "inputTokens",
+    "outputTokens",
+    "cachedInputTokens",
+    "cacheWriteInputTokens",
+    "reasoningOutputTokens",
+)
+
+
+def _activity_turn_number(value: object) -> int | float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return value if value >= 0 else None
+
+
+def _activity_turn_usage(value: object) -> dict[str, int]:
+    """The token counts the shared summary renders, in the browser's own naming."""
+    if not isinstance(value, dict):
+        return {}
+    usage: dict[str, int] = {}
+    for key in _ACTIVITY_TURN_USAGE_KEYS:
+        count = value.get(key)
+        if isinstance(count, int) and not isinstance(count, bool) and count >= 0:
+            usage[key] = count
+    return usage
+
+
+def _activity_exec_turn_usage(value: object) -> dict[str, int]:
+    """Token usage of a `codex exec` turn, in the browser's own naming.
+
+    Codex reports input and output tokens and lets the reader add them up; the
+    app-server reports the same number ready-made, so it is completed here. This is
+    the only cost the in-Sandbox stream carries: it timestamps nothing.
+    """
+    if not isinstance(value, dict):
+        return {}
+    counts: dict[str, int] = {}
+    for key, aliases in _ACTIVITY_EXEC_USAGE_KEYS.items():
+        for alias in aliases:
+            candidate = _activity_turn_number(value.get(alias))
+            if candidate is not None:
+                counts[key] = int(candidate)
+                break
+    if "totalTokens" not in counts:
+        total = counts.get("inputTokens", 0) + counts.get("outputTokens", 0)
+        if total:
+            counts["totalTokens"] = total
+    return counts
+
+
+def _activity_turn_status(event_type: str, turn: dict[str, object]) -> str:
+    raw = turn.get("status")
+    if isinstance(raw, dict):
+        raw = raw.get("type")
+    status = _ACTIVITY_TURN_STATUSES.get(str(raw or "").strip().lower())
+    if status:
+        return status
+    if event_type == "turn.failed":
+        return "failed"
+    if event_type == "turn.interrupted":
+        return "interrupted"
+    return "completed"
+
+
+def _activity_tool_row(item: dict[str, object]) -> bool:
+    """Whether the page draws this item as a tool call.
+
+    Kept in step with the shared renderer's own mapping: a command row is a tool call,
+    and so is a status row the page only shows because it did not succeed.
+    """
+    kind = str(item.get("kind") or "")
+    return kind == "command" or (kind == "status" and item.get("status") != "completed")
+
+
+def _activity_turn_summary(
+    turn: dict[str, object],
+    *,
+    items: list[dict[str, object]],
+    phase: str,
+    attempt: int,
+    status: str,
+    usage: dict[str, int],
+    secret_values: tuple[str, ...],
+) -> dict[str, object]:
+    """One summary of everything the turn logged, in the app-server's own numbers.
+
+    The intelligent build reports a turn's wall-clock time, tool calls, tool time and
+    token usage from the turn's lifecycle and usage events. A migration turn that ran
+    on the app-server reports the same numbers and they are carried over unchanged; a
+    turn whose log has no turn object (the fallback `codex exec --json` stream) still
+    settles here out of the items logged before it ended.
+    """
+    tools = [item for item in items if _activity_tool_row(item)]
+    measured = [
+        item
+        for item in tools
+        if isinstance(item.get("durationMs"), int)
+        and not isinstance(item.get("durationMs"), bool)
+    ]
+    detail: dict[str, object] = {
+        "turnId": str(turn.get("id") or ""),
+        "status": status,
+        "toolCalls": len(tools),
+        "toolDurationComplete": len(measured) == len(tools),
+    }
+    for key in _ACTIVITY_TURN_NUMBERS:
+        number = _activity_turn_number(turn.get(key))
+        if number is not None:
+            detail[key] = number
+    if measured or not tools:
+        detail["toolDurationMs"] = sum(int(item["durationMs"]) for item in measured)
+    model = turn.get("model")
+    if isinstance(model, str) and model.strip():
+        detail["model"] = _redact_activity_text(model, secret_values=secret_values)
+    if usage:
+        detail["usage"] = usage
+    failed = status in {"failed", "interrupted"}
+    return {
+        "id": f"{phase}:{attempt}:turn-summary",
+        "kind": "summary",
+        "status": "failed" if failed else "completed",
+        "title": "本轮执行未完成" if failed else "本轮执行完成",
+        "turn": detail,
+    }
 
 
 def _parse_activity_log(
@@ -376,6 +792,7 @@ def _parse_activity_log(
 ) -> list[dict[str, object]]:
     items: list[dict[str, object]] = []
     item_indexes: dict[str, int] = {}
+    thread_id = ""
 
     def upsert(item: dict[str, object]) -> None:
         item_id = str(item["id"])
@@ -410,6 +827,30 @@ def _parse_activity_log(
         status = _activity_status(event_type, item)
         secret_values = _activity_secret_values(event)
 
+        # 回合结算行只带回合自己的统计（耗时/模型/token 用量），没有 item：它汇总
+        # 的是这一份活动日志里此前记下的所有行。
+        raw_turn = event.get("turn")
+        if isinstance(raw_turn, dict):
+            upsert(
+                _activity_turn_summary(
+                    raw_turn,
+                    items=items,
+                    phase=phase,
+                    attempt=attempt,
+                    status=_activity_turn_status(event_type, raw_turn),
+                    usage=_activity_turn_usage(event.get("usage")),
+                    secret_values=secret_values,
+                )
+            )
+            continue
+
+        # 迁移主回合的第一行只说它开了哪个 thread，回合结算时用它当回合 ID。
+        if event_type == "thread.started":
+            raw_thread_id = event.get("thread_id")
+            if isinstance(raw_thread_id, str):
+                thread_id = raw_thread_id.strip()
+            continue
+
         if item_type in {"reasoning", "agent_message"}:
             raw_text = item.get("text")
             if not isinstance(raw_text, str):
@@ -430,6 +871,7 @@ def _parse_activity_log(
                     "status": status,
                     "title": "Codex 思考" if item_type == "reasoning" else "Codex 更新",
                     "detail": detail,
+                    **_activity_native_fields(item_type, item),
                 }
             )
             continue
@@ -505,10 +947,18 @@ def _parse_activity_log(
                 "completed": "命令执行完成",
                 "failed": "命令执行失败",
             }[status]
-            tool: dict[str, object] = {"name": title}
+            tool: dict[str, object] = {
+                "name": _activity_row_name(item, title, secret_values=secret_values)
+            }
+            command_input: dict[str, object] = {}
             if command_text:
+                command_input["command"] = command_text
+            actions = item.get("command_actions")
+            if _has_activity_payload(actions):
+                command_input["commandActions"] = actions
+            if command_input:
                 tool["input"] = _activity_payload(
-                    {"command": command_text},
+                    command_input,
                     secret_values=secret_values,
                 )
             output = item.get("aggregated_output")
@@ -527,6 +977,46 @@ def _parse_activity_log(
                     "status": status,
                     "title": title,
                     "tool": tool,
+                    **_activity_native_fields(item_type, item),
+                }
+            )
+            continue
+
+        if item_type == "dynamic_tool_call":
+            tool_name = _redact_activity_text(
+                str(item.get("name") or ""),
+                secret_values=secret_values,
+            )
+            unknown = {
+                "running": f"正在调用工具 {tool_name or 'Studio'}",
+                "completed": f"已调用工具 {tool_name or 'Studio'}",
+                "failed": f"工具 {tool_name or 'Studio'} 调用未完成",
+            }
+            # 调用本身完成、但 Studio 拒绝了参数：页面要按「没成功」显示，
+            # 这样被拒的那一次收尾在活动流里是看得见的。
+            result = item.get("result")
+            rejected = isinstance(result, dict) and result.get("success") is False
+            row_status = "failed" if rejected else status
+            title = _ACTIVITY_DYNAMIC_TOOL_TITLES.get(tool_name, unknown)[row_status]
+            tool: dict[str, object] = {"name": title}
+            arguments = item.get("arguments")
+            if _has_activity_payload(arguments):
+                tool["input"] = _activity_payload(
+                    arguments,
+                    secret_values=secret_values,
+                )
+            detail = _activity_dynamic_tool_text(result)
+            if detail:
+                detail = _redact_activity_text(detail, secret_values=secret_values)
+                tool["error" if rejected else "output"] = detail
+            upsert(
+                {
+                    "id": activity_id,
+                    "kind": "command",
+                    "status": row_status,
+                    "title": title,
+                    "tool": tool,
+                    **_activity_native_fields(item_type, item),
                 }
             )
             continue
@@ -540,7 +1030,9 @@ def _parse_activity_log(
                 "completed": f"已更新{subject}",
                 "failed": f"更新{subject}失败",
             }[status]
-            tool: dict[str, object] = {"name": title}
+            tool: dict[str, object] = {
+                "name": _activity_row_name(item, title, secret_values=secret_values)
+            }
             if isinstance(changes, list):
                 tool["input"] = _activity_payload(
                     {"changes": changes},
@@ -553,6 +1045,7 @@ def _parse_activity_log(
                     "status": status,
                     "title": title,
                     "tool": tool,
+                    **_activity_native_fields(item_type, item),
                 }
             )
             continue
@@ -572,7 +1065,9 @@ def _parse_activity_log(
                 "completed": f"已调用工具 {label}",
                 "failed": f"工具 {label} 调用未完成",
             }[status]
-            tool = {"name": title}
+            tool = {
+                "name": _activity_row_name(item, title, secret_values=secret_values)
+            }
             arguments = item.get("arguments")
             if _has_activity_payload(arguments):
                 tool["input"] = _activity_payload(
@@ -598,6 +1093,7 @@ def _parse_activity_log(
                     "status": status,
                     "title": title,
                     "tool": tool,
+                    **_activity_native_fields(item_type, item),
                 }
             )
             continue
@@ -658,6 +1154,7 @@ def _parse_activity_log(
                     "status": status,
                     "title": title,
                     "tool": tool,
+                    **_activity_native_fields(item_type, item),
                 }
             )
             continue
@@ -673,7 +1170,9 @@ def _parse_activity_log(
                 for key in ("query", "action")
                 if _has_activity_payload(item.get(key))
             }
-            tool = {"name": title}
+            tool = {
+                "name": _activity_row_name(item, title, secret_values=secret_values)
+            }
             if input_value:
                 tool["input"] = _activity_payload(
                     input_value,
@@ -686,6 +1185,7 @@ def _parse_activity_log(
                     "status": status,
                     "title": title,
                     "tool": tool,
+                    **_activity_native_fields(item_type, item),
                 }
             )
             continue
@@ -707,6 +1207,23 @@ def _parse_activity_log(
                 }
             )
             continue
+
+        # 垫片够不到 app-server 时会把这一轮交回真正的 `codex exec --json`，那份事件流
+        # 没有回合对象，只写一条裸的终态行。这个回合的成本照智能构建的样式补齐：工具次数
+        # 从上面记下的行数出来，token 用量从这条终态行出来。（垫片写的回合带 turn 对象，
+        # 在本循环开头就已经结算，不会重复。）
+        if event_type in _ACTIVITY_EXEC_TURN_EVENT_TYPES:
+            upsert(
+                _activity_turn_summary(
+                    {"id": thread_id},
+                    items=items,
+                    phase=phase,
+                    attempt=attempt,
+                    status=_activity_turn_status(event_type, {}),
+                    usage=_activity_exec_turn_usage(event.get("usage")),
+                    secret_values=secret_values,
+                )
+            )
 
         if event_type == "error":
             raw_message = event.get("message")
@@ -1127,201 +1644,208 @@ for path, value in (
 
 
 def _analysis_schema() -> dict[str, object]:
-    evidence = {
-        "type": "object",
-        "additionalProperties": False,
-        "required": ["path", "line", "reason"],
-        "properties": {
-            "path": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 4_096,
-                "pattern": (
-                    r"^(?!/)(?!.*(?:^|/)\.{1,2}(?:/|$))"
-                    r"(?!.*//)(?!.*\\)[^\x00-\x1f\x7f]+$"
-                ),
-            },
-            "line": {"type": "integer", "minimum": 1},
-            "reason": {"type": "string", "minLength": 1, "maxLength": 4_000},
+    """The document Codex writes when only the scripted driver is available.
+
+    Protocol bookkeeping (schema_version, attempt, input_sha256) is not part of it:
+    Studio injects those while storing the result, so the model is only asked for its
+    own judgement.  Narrowing what the model must produce is what makes a shape drift
+    a quality problem instead of a lost analysis.
+    """
+    return analysis_document_schema()
+
+
+def _interactive_analysis_context() -> str:
+    """The ask-by-tool section, only for turns that registered ``askUser``."""
+    return """
+## 交互提问（本回合可用）
+
+- 本轮已注册 askUser 工具。当项目内容无法回答、且答案会改变迁移方式、入口或范围时，
+  必须先用 askUser 直接询问用户，不要先把结论交付出去。
+- 一次提问 1-3 个问题，每个问题给出简短 header 和完整 question；有自然选择时给出
+  2-3 个 options（每项含 label 和 description，第一项为推荐项），没有自然选择时省略 options。
+- 用户回答会在同一次分析中返回。拿到回答后继续完成分析，并用 reportRoute 交付最终结论，
+  不要重复提问已经问过的问题。
+- 只有 askUser 返回 unanswered（用户没有在时限内回答）时，才用 status=needs_input
+  交付这些问题，让用户之后在页面上补充。
+- 能从项目文件确认的事实必须自己查证，禁止为了省事而提问。
+
+"""
+
+
+_ANALYSIS_OUTCOME_PATH = f"{MIGRATION_ROOT}/diagnostics/analysis/model-turn.json"
+_CONSERVATIVE_SUMMARY = (
+    "本轮没有取得可用的模型分析结论。以下结论由 Studio 依据项目文件清单与确定性"
+    "检测直接生成：推荐按 {framework} 迁移，范围覆盖项目内全部文件。"
+    "可以直接确认并开始迁移；如需更精确的迁移方式，请重新发起一次分析。"
+)
+_CONSERVATIVE_WARNING = (
+    "保守结论：模型分析未给出可用结果，本结论由 Studio 依据项目文件清单与确定性"
+    "检测直接生成，未经模型复核，请在使用前核对迁移范围。"
+)
+
+
+def _analysis_failure_reason(outcome: dict[str, object]) -> str:
+    """One sentence explaining why the model layer produced nothing usable."""
+    refusals = outcome.get("refusals")
+    if isinstance(refusals, list) and refusals:
+        return "模型提交的结论未通过校验：" + "；".join(
+            str(item) for item in refusals[-3:]
+        )
+    if outcome.get("events"):
+        return "模型回合结束但没有提交任何结论。"
+    return "模型回合没有得到可用输出。"
+
+
+def _conservative_analysis(
+    detection: dict[str, object] | None,
+    *,
+    attempt: int,
+    input_sha256: str,
+    reason: str,
+) -> tuple[dict[str, object], list[str]]:
+    """Build a usable conclusion without any model output.
+
+    The point of the fallback is that "analysis" must produce something a user can act
+    on.  Any is always an executable route, and the verified candidates stay selectable,
+    so the confirmation page keeps offering what detection proved.
+    """
+    candidates = detection_candidates(detection)
+    frameworks = [item["id"] for item in candidates]
+    recommended = frameworks[0] if frameworks else "any"
+    warnings = [_CONSERVATIVE_WARNING]
+    if reason:
+        warnings.append(f"模型分析未交付可用结论的原因：{reason}")
+    for item in (detection or {}).get("candidates", []):
+        if isinstance(item, dict) and item.get("id"):
+            evidence = item.get("evidence")
+            if isinstance(evidence, list):
+                for entry in evidence:
+                    if isinstance(entry, dict) and entry.get("path"):
+                        warnings.append(
+                            f"检测证据：{entry.get('path')}:{entry.get('line') or 1}"
+                            f" — {entry.get('reason') or ''}"
+                        )
+    return build_analysis_result(
+        RECOMMENDATION_KIND,
+        {
+            "summary": _CONSERVATIVE_SUMMARY.format(framework=recommended),
+            "frameworks": [
+                {
+                    "id": item["id"],
+                    "confidence": item.get("confidence"),
+                    "evidence": item.get("evidence"),
+                }
+                for item in candidates
+            ]
+            or [{"id": "any", "confidence": "low", "evidence": []}],
+            "recommended": {"framework": recommended, "entry": None, "reason": ""},
+            "boundary": {"include": ["项目内全部文件"], "exclude": []},
+            "warnings": warnings,
         },
-    }
+        attempt=attempt,
+        input_sha256=input_sha256,
+        detection=detection,
+    )
+
+
+def _empty_detection_report() -> dict[str, object]:
+    """Detection that could not run.
+
+    Analysis still proceeds; the report only says that the file inventory is unknown,
+    so nothing downstream may treat an empty inventory as "the project has no files".
+    """
     return {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "type": "object",
-        "additionalProperties": False,
-        "required": [
-            "schema_version",
-            "status",
-            "attempt",
-            "input_sha256",
-            "summary",
-            "frameworks",
-            "recommended",
-            "entries",
-            "boundary",
-            "assumptions",
-            "questions",
-            "warnings",
-        ],
-        "properties": {
-            "schema_version": {"const": 1},
-            "status": {
-                "enum": [
-                    "needs_input",
-                    "recommendation_ready",
-                    "unsupported",
-                ]
-            },
-            "attempt": {"type": "integer", "minimum": 1, "maximum": 100},
-            "input_sha256": {
-                "type": "string",
-                "pattern": "^[0-9a-f]{64}$",
-            },
-            "summary": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 20_000,
-            },
-            "frameworks": {
-                "type": "array",
-                "maxItems": 20,
-                "items": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "required": ["id", "confidence", "evidence"],
-                    "properties": {
-                        "id": {
-                            "enum": list(MIGRATION_FRAMEWORKS),
-                        },
-                        "confidence": {"enum": ["high", "medium", "low"]},
-                        "evidence": {
-                            "type": "array",
-                            "maxItems": 100,
-                            "items": evidence,
-                        },
-                    },
-                },
-            },
-            "recommended": {
-                "anyOf": [
-                    {
-                        "type": "object",
-                        "additionalProperties": False,
-                        "required": ["framework", "entry", "reason"],
-                        "properties": {
-                            "framework": {"enum": _STRUCTURED_FRAMEWORKS},
-                            "entry": {
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 512,
-                                "pattern": STRUCTURED_ENTRY_PATTERN,
-                            },
-                            "reason": {"type": "string", "maxLength": 4_000},
-                        },
-                    },
-                    {
-                        "type": "object",
-                        "additionalProperties": False,
-                        "required": ["framework", "entry", "reason"],
-                        "properties": {
-                            "framework": {"enum": ["dify", "any"]},
-                            "entry": {"type": "null"},
-                            "reason": {"type": "string", "maxLength": 4_000},
-                        },
-                    },
-                    {"type": "null"},
-                ],
-            },
-            "entries": {
-                "type": "array",
-                "maxItems": 100,
-                "items": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "required": ["value", "framework", "evidence"],
-                    "properties": {
-                        "value": {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": 512,
-                            "pattern": STRUCTURED_ENTRY_PATTERN,
-                        },
-                        "framework": {"enum": _STRUCTURED_FRAMEWORKS},
-                        "evidence": {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": 4_000,
-                        },
-                    },
-                },
-            },
-            "boundary": {
-                "type": "object",
-                "additionalProperties": False,
-                "required": ["include", "exclude"],
-                "properties": {
-                    "include": {
-                        "type": "array",
-                        "maxItems": 200,
-                        "items": {"type": "string", "maxLength": 4_000},
-                    },
-                    "exclude": {
-                        "type": "array",
-                        "maxItems": 200,
-                        "items": {"type": "string", "maxLength": 4_000},
-                    },
-                },
-            },
-            "assumptions": {
-                "type": "array",
-                "maxItems": 100,
-                "items": {"type": "string", "maxLength": 4_000},
-            },
-            "questions": {
-                "type": "array",
-                "maxItems": 50,
-                "items": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "required": ["id", "prompt", "required"],
-                    "properties": {
-                        "id": {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": 128,
-                        },
-                        "prompt": {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": 4_000,
-                        },
-                        "required": {"type": "boolean"},
-                    },
-                },
-            },
-            "warnings": {
-                "type": "array",
-                "maxItems": 100,
-                "items": {"type": "string", "maxLength": 4_000},
-            },
-        },
-        "allOf": [
-            {
-                "if": {
-                    "properties": {"status": {"const": "unsupported"}},
-                    "required": ["status"],
-                },
-                "then": {
-                    "properties": {
-                        "recommended": {"type": "null"},
-                        "entries": {"maxItems": 0},
-                        "questions": {"maxItems": 0},
-                    }
-                },
-                "else": {"properties": {"recommended": {"not": {"type": "null"}}}},
-            }
-        ],
+        "schema_version": 1,
+        "files": {"count": 0, "listed": []},
+        "documents": [],
+        "candidates": [],
+        "unreadable": [],
+        "degraded": True,
+        "degraded_reason": "detection_missing",
     }
+
+
+def _detection_report(content: bytes) -> dict[str, object]:
+    """Run the model-free detection and validate its own output before storing it."""
+    return validate_detection_report(detect_source(content))
+
+
+def _detection_prompt_context(detection: dict[str, object]) -> str:
+    """Render the verified facts Codex may rely on instead of rediscovering them."""
+    files = detection.get("files")
+    listed = files.get("listed") if isinstance(files, dict) else []
+    view = {
+        "files": {
+            "count": files.get("count") if isinstance(files, dict) else 0,
+            "listed": listed if isinstance(listed, list) else [],
+        },
+        "documents": [
+            {
+                "path": str(item.get("path") or ""),
+                "status": str(item.get("status") or ""),
+                "dsl": str(item.get("dsl") or ""),
+            }
+            for item in detection.get("documents", [])
+            if isinstance(item, dict)
+        ],
+        "candidates": detection.get("candidates", []),
+        "unreadable": detection.get("unreadable", []),
+        "degraded": detection.get("degraded"),
+        "degraded_reason": detection.get("degraded_reason"),
+    }
+    return f"""## 已核实的项目事实（Studio 免模型检测）
+
+以下内容由 Studio 在分析开始前用确定性程序核实，可直接作为事实使用，不必再用命令
+重复验证；你的结论必须与之一致，不一致时必须在 summary 里说明原因。
+
+```json
+{json.dumps(view, ensure_ascii=False, indent=2)}
+```
+
+- files.count 是 ZIP 内真实文件数，files.listed 是文件名清单（最多 200 条；超出部分
+  需要时自行读取）。
+- candidates 是检测器已确认的框架候选，附带文件与行号。candidates 非空时，你的
+  frameworks 必须包含这些候选；在没有任何新证据的情况下给出 unsupported 会被拒绝。
+- unreadable 列出检测器无法读取的文件及原因；degraded 为 true 时，把 degraded_reason
+  视作分析限制写入 warnings，不要据此判定项目材料不足。
+
+"""
+
+
+def _tool_protocol_context() -> str:
+    """The delivery protocol for turns that registered the analysis tools."""
+    return """## 输出协议
+
+- 分析结束后调用下面三个工具之一交付结论，调用一次即可，不要重复提交：
+  - `reportRecommendation`：推荐一种可执行的迁移方式（summary 必填，其余尽量给）。
+  - `reportNeedsInput`：必须先由用户补充信息才能决定迁移方式，把问题写进 questions。
+  - `reportUnsupported`：项目无法迁移。只用于材料不足或证据完整的高风险行为链，
+    必须给出 summary 和至少两条指向项目内真实文件的证据（path、line、reason），
+    引用不存在的文件会被拒绝。
+- Studio 会补齐 schema_version、attempt、input_sha256 等簿记字段，你不要输出它们。
+- 字段缺失、类型不对、层级不对都不会导致失败：Studio 会取默认值或忽略多余内容，
+  只有在结论本身无法成立时才会拒绝，并在返回值里指出具体字段。
+- 只有 summary 是必填的。summary 用简体中文写给用户看，说明结论和理由。
+- Dify/Any 的推荐入口必须为空；Structured 入口必须是相对项目根目录的文件入口，
+  例如 `agent.py:agent`、`langgraph.json:graph_id`。
+- 不要输出 Markdown 表格，也不要在总结里重复分析过程。"""
+
+
+def _document_protocol_context() -> str:
+    """The delivery protocol when only the scripted ``codex exec`` driver is free."""
+    return """## 输出协议
+
+- 最终响应只输出一个 JSON 对象，不要输出 Markdown 围栏、解释或额外文字。
+- 必填字段只有 status 和 summary：
+  - status 取 recommendation_ready、needs_input 或 unsupported；
+  - summary 用简体中文写给用户看，说明结论和理由。
+- 另外尽量给出这些可选字段：frameworks（候选，每项含 id、confidence、evidence）、
+  recommended（含 framework、entry、reason）、entries、boundary、assumptions、
+  warnings、questions（status=needs_input 时给出必答问题）。
+- 不要输出 schema_version、attempt、input_sha256 等簿记字段，Studio 会自己补齐。
+- 给出 unsupported 时必须带至少两条指向项目内真实文件的证据（path、line、reason）；
+  evidence 引用不存在的文件会被拒绝。
+- 字段缺失或层级不对不会导致失败：Studio 会取默认值或忽略多余内容。"""
 
 
 def _analysis_prompt(
@@ -1331,8 +1855,30 @@ def _analysis_prompt(
     input_sha256: str,
     previous_analysis: dict[str, object] | None = None,
     answers: dict[str, str] | None = None,
+    protocol_retry: bool = False,
+    interactive: bool = False,
+    detection: dict[str, object] | None = None,
 ) -> str:
     instruction = str(request.get("instruction") or "").strip()
+    # 只有 app-server 驱动注册了 askUser；脚本驱动读到的提示词不能承诺这个工具。
+    interactive_context = _interactive_analysis_context() if interactive else ""
+    detection_context = (
+        _detection_prompt_context(detection) if detection is not None else ""
+    )
+    # Codex speaks a tool protocol when the app-server drives the turn, and one JSON
+    # document when only the scripted driver is available.  Neither asks for the
+    # bookkeeping fields: Studio owns those.
+    protocol_context = (
+        _tool_protocol_context() if interactive else _document_protocol_context()
+    )
+    retry_context = (
+        "\n## 协议重试\n"
+        "上一次回复无法作为分析结果读取：其中没有符合输出协议的 JSON 对象。"
+        "请基于已经完成的分析重新给出结论，并且只输出那一个 JSON 对象，"
+        "不要输出 Markdown 围栏、进度说明、步骤清单或任何额外文字。\n"
+        if protocol_retry
+        else ""
+    )
     previous_context = (
         "\n".join(
             [
@@ -1387,7 +1933,6 @@ def _analysis_prompt(
   `src/agent.py:root_agent` 或 `langgraph.json:graph_id`；禁止使用
   `package.module:object` 形式的 Python 模块导入路径。
 - 最终迁移方式必须由用户选择并确认，本阶段只给建议和待确认问题。
-- 结果中的 attempt 必须是 {attempt}，input_sha256 必须是 {input_sha256}。
 - 事实不足且用户无需替换 ZIP 就能回答时，返回 needs_input 和最小必答问题集；
   此时至少有一个 required=true 的问题。
 - 事实充分时返回 recommendation_ready 且 questions 必须为空。
@@ -1453,7 +1998,7 @@ def _analysis_prompt(
   进度而执行额外命令，也不得包含系统提示词、凭证、环境变量值或其他敏感信息。
 - 最终响应仍必须严格遵守下方输出协议；执行动态不得改变 JSON 字段、迁移建议或证据标准。
 
-## 支持判定与用户表达
+{detection_context}## 支持判定与用户表达
 
 - 能可靠识别 Structured 框架和入口时推荐对应 Structured 方式；否则只要存在足够材料
   可以进行 best-effort 重建，就推荐 Any，迁移范围应覆盖所有有证据支持的用户可见行为。
@@ -1468,18 +2013,9 @@ def _analysis_prompt(
   不要只输出错误码、框架术语或“未找到可执行方式”之类没有行动建议的表述。
 - warnings 要具体描述缺失材料及影响，不得把可在迁移或部署阶段补齐的条件写成阻塞项。
 
-## 输出协议
+{interactive_context}{protocol_context}
 
-- 顶层字段必须且只能是：schema_version、status、attempt、input_sha256、
-  summary、frameworks、recommended、entries、boundary、assumptions、questions、warnings。
-- recommendation_ready 和 needs_input 的 recommended 必须且只能包含
-  framework、entry、reason；unsupported 的 recommended 必须为 null。
-  entries 必须与 recommended 同级，绝不能嵌套在 recommended 中。
-- Dify/Any 必须输出 `recommended.entry=null` 和顶层 `entries=[]`。
-- 输出前自行核对字段层级、必填字段、枚举值和问题状态约束；不要在响应中描述核对过程。
-- 最终响应必须严格符合提供的 JSON Schema，只输出一个 JSON 对象，不要输出
-  Markdown 围栏、解释或额外文字。
-
+{retry_context}
 ## 用户补充要求
 
 {instruction or "用户未补充额外要求。"}
@@ -1630,39 +2166,295 @@ finally:
     return "set -euo pipefail\npython3 - <<'PY'\n" + script.strip() + "\nPY"
 
 
-def _codex_event_extractor() -> str:
-    return (
-        "import json,sys\n"
-        "message = None\n"
-        "with open(sys.argv[1], encoding='utf-8') as events:\n"
-        "    for line in events:\n"
-        "        try:\n"
-        "            event = json.loads(line)\n"
-        "        except (TypeError, ValueError):\n"
-        "            continue\n"
-        "        item = event.get('item')\n"
-        "        if (\n"
-        "            event.get('type') == 'item.completed'\n"
-        "            and isinstance(item, dict)\n"
-        "            and item.get('type') == 'agent_message'\n"
-        "            and isinstance(item.get('text'), str)\n"
-        "            and item['text'].strip()\n"
-        "        ):\n"
-        "            message = item['text']\n"
-        "if message is None:\n"
-        "    raise SystemExit('Codex agent_message event is missing')\n"
-        "with open(sys.argv[2], 'w', encoding='utf-8') as output:\n"
-        "    output.write(message)\n"
+def _analysis_result_extractor_script() -> str:
+    """Return the in-Sandbox script that recovers one analysis result object.
+
+    Codex interleaves progress updates with its final answer, may deliver that answer as
+    commentary, and may wrap it in Markdown.  Selecting the last agent message blindly
+    therefore fails whenever a progress update arrives last, which is exactly what the
+    analysis protocol asks Codex to emit.  This script instead scans every agent message
+    from newest to oldest and keeps the first JSON object that satisfies the analysis
+    contract, so non-contract progress text is skipped instead of being fatal.
+    """
+    return f"""
+import json
+import sys
+
+_CONTRACT_KEYS = {list(_ANALYSIS_CONTRACT_KEYS)!r}
+_CONTRACT_STATUSES = {list(_ANALYSIS_CONTRACT_STATUSES)!r}
+_NEWLINE = chr(10)
+
+
+def _objects(text):
+    stripped = text.strip()
+    try:
+        value = json.loads(stripped)
+    except ValueError:
+        pass
+    else:
+        if isinstance(value, dict):
+            yield value
+    for block in stripped.split("```")[1::2]:
+        body = block.split(_NEWLINE, 1)[1] if _NEWLINE in block else ""
+        try:
+            value = json.loads(body.strip())
+        except ValueError:
+            continue
+        if isinstance(value, dict):
+            yield value
+    decoder = json.JSONDecoder()
+    for index, character in enumerate(stripped):
+        if character != "{{":
+            continue
+        try:
+            value, _ = decoder.raw_decode(stripped[index:])
+        except ValueError:
+            continue
+        if isinstance(value, dict):
+            yield value
+
+
+def _contract(value):
+    if not isinstance(value, dict):
+        return None
+    if value.get("status") not in _CONTRACT_STATUSES:
+        return None
+    if any(key not in value for key in _CONTRACT_KEYS):
+        return None
+    summary = value.get("summary")
+    if not isinstance(summary, str) or not summary.strip():
+        return None
+    return value
+
+
+def main(argv):
+    if len(argv) < 3:
+        raise SystemExit("usage: extractor <events> <result> [diagnostics]")
+    answers = []
+    commentary = []
+    with open(argv[1], encoding="utf-8") as events:
+        for line in events:
+            try:
+                event = json.loads(line)
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(event, dict) or event.get("type") != "item.completed":
+                continue
+            item = event.get("item")
+            if not isinstance(item, dict) or item.get("type") != "agent_message":
+                continue
+            text = item.get("text")
+            if not isinstance(text, str) or not text.strip():
+                continue
+            if item.get("phase") == "commentary":
+                commentary.append(text)
+            else:
+                answers.append(text)
+    reason = (
+        "no_agent_message"
+        if not answers and not commentary
+        else "no_contract_object"
     )
+    found = None
+    for text in list(reversed(answers)) + list(reversed(commentary)):
+        for value in _objects(text):
+            contract = _contract(value)
+            if contract is not None:
+                found = contract
+                break
+        if found is not None:
+            break
+    if found is not None:
+        reason = "extracted"
+    if len(argv) > 3:
+        with open(argv[3], "w", encoding="utf-8") as diagnostics:
+            json.dump(
+                {{
+                    "reason": reason,
+                    "answer_messages": len(answers),
+                    "commentary_messages": len(commentary),
+                }},
+                diagnostics,
+                ensure_ascii=False,
+            )
+    if found is None:
+        raise SystemExit("Codex analysis result is unavailable: " + reason)
+    with open(argv[2], "w", encoding="utf-8") as output:
+        json.dump(found, output, ensure_ascii=False)
 
 
-def _start_analysis_command(task_id: str, attempt: int) -> str:
-    running_status = {
+if __name__ == "__main__":
+    main(sys.argv)
+"""
+
+
+def _analysis_running_status(attempt: int) -> dict[str, object]:
+    """The analysis status while Codex works, shared by both analysis drivers."""
+    return {
         "schema_version": 1,
         "attempt": attempt,
         "state": "analyzing",
         "message": "正在分析项目框架、入口与迁移边界",
     }
+
+
+def _clear_analysis_status_command() -> str:
+    """Return the command that drops driver state before a takeover start."""
+    return "\n".join(
+        [
+            "set -euo pipefail",
+            f"rm -f {shlex.quote(_ANALYSIS_STATUS_PATH)}",
+            f"rm -f {shlex.quote(_ANALYSIS_DRIVER_PATH)}",
+        ]
+    )
+
+
+def _analysis_driver_marker(
+    *,
+    driver: str,
+    attempt: int,
+    input_sha256: str = "",
+    started_at: float | None = None,
+    heartbeat_at: float | None = None,
+    owner_process: str = "",
+    state: str = _ANALYSIS_DRIVER_RUNNING,
+) -> dict[str, object]:
+    """Describe which driver owns the analysis attempt currently in flight."""
+    started = time.time() if started_at is None else started_at
+    return {
+        "schema_version": 1,
+        "driver": driver,
+        "state": state,
+        "attempt": attempt,
+        "input_sha256": input_sha256,
+        "started_at": started,
+        "heartbeat_at": started if heartbeat_at is None else heartbeat_at,
+        "owner_process": owner_process,
+    }
+
+
+def _delivery_turn_marker(
+    *,
+    state: str,
+    attempts: int = 1,
+    verdict: bool | None = None,
+    started_at: float | None = None,
+    heartbeat_at: float | None = None,
+) -> dict[str, object]:
+    """Describe the Studio worker that owns the closing delivery turn.
+
+    ``verdict`` says whether the turn that ended published a report, so a delivery that
+    was already tried is not retried on every later read of the same task.
+    """
+    started = time.time() if started_at is None else started_at
+    return {
+        "schema_version": 1,
+        "driver": _DELIVERY_TURN_DRIVER,
+        "state": state,
+        "attempts": attempts,
+        "verdict": verdict,
+        "started_at": started,
+        "heartbeat_at": started if heartbeat_at is None else heartbeat_at,
+        "owner_process": _STUDIO_PROCESS_ID,
+    }
+
+
+def _delivery_recovery_marker(
+    *,
+    state: str,
+    attempts: int = 1,
+    verdict: bool | None = None,
+    files: int | None = None,
+    started_at: float | None = None,
+    heartbeat_at: float | None = None,
+) -> dict[str, object]:
+    """Describe the Studio worker that rebuilds a delivery the CLI never packaged.
+
+    ``verdict`` records whether that attempt produced a delivery, so a task whose
+    packaging cannot be rebuilt is written off once instead of on every later read.
+    """
+    started = time.time() if started_at is None else started_at
+    return {
+        "schema_version": 1,
+        "driver": _DELIVERY_RECOVERY_DRIVER,
+        "state": state,
+        "attempts": attempts,
+        "verdict": verdict,
+        "files": files,
+        "started_at": started,
+        "heartbeat_at": started if heartbeat_at is None else heartbeat_at,
+        "owner_process": _STUDIO_PROCESS_ID,
+    }
+
+
+def _recovery_verdict(stdout: str) -> dict[str, object] | None:
+    """The JSON line the rebuild program answers with, if it answered with one."""
+    for line in reversed(stdout.strip().splitlines()):
+        candidate = line.strip()
+        if not candidate.startswith("{"):
+            continue
+        try:
+            value = json.loads(candidate)
+        except ValueError:
+            continue
+        if isinstance(value, dict):
+            return value
+    return None
+
+
+def _delivery_prompt(
+    *,
+    task_id: str,
+    framework: str,
+    expected_state: str,
+    exit_code: object,
+) -> str:
+    """The instructions for the turn that closes one finished delivery."""
+    logs = f"{MIGRATION_ROOT}/work/agentic/logs"
+    exit_code_text = str(exit_code) if exit_code is not None else "未知"
+    return "\n".join(
+        [
+            "# 迁移交付收尾",
+            "",
+            "沙箱里的迁移命令已经结束，现在由你核对这次迁移实际交付了什么，",
+            "并把结论发布给用户。交付状态由 AgentKit CLI 决定，你只负责解释它。",
+            "",
+            f"- 运行 ID：{task_id}",
+            f"- 迁移框架：{framework}（agentic）",
+            f"- 迁移命令退出码：{exit_code_text}",
+            f"- 这次交付的状态已经确定为：{expected_state}",
+            "",
+            "## 证据文件（沙箱内绝对路径）",
+            f"- 交付状态：`{_DELIVERY_STATUS_PATH}`",
+            f"- 产物清单：`{_DELIVERY_RESULT_PATH}`",
+            f"- 交付产物：`{_DELIVERY_ARTIFACT_PATH}`",
+            f"- 迁移任务日志：`{logs}/task.log`",
+            f"- 校验日志：`{logs}/validation-attempt-1.log`",
+            f"- Codex 事件流：`{logs}/codex-attempt-1.jsonl`",
+            f"- 迁移命令日志：`{MIGRATION_ROOT}/diagnostics/migration/migration.log`",
+            "",
+            "## 执行顺序",
+            "1. 读上面的证据文件，弄清这次交付的结果：产物包含什么、有哪些提示、",
+            "   如果是失败，失败发生在哪一步（Codex 尝试、校验、打包）。",
+            f"2. 调用 `{ARTIFACT_TOOL_NAME}`，参数 `path` 固定为 `{ARTIFACT_PATH}`，",
+            "   由 Studio 读取并核对产物字节。交付失败时跳过这一步。",
+            f"3. 调用 `{DELIVERY_TOOL_NAME}` 提交结论，参数严格按给定 Schema：",
+            f"   - `state` 必须等于 {expected_state}，其它取值会被拒绝；",
+            "   - `message` 是给用户看的一句中文结论：成功时说清产物内容，",
+            "     失败时说清失败在哪一步、日志里的关键证据、用户下一步可以做什么；",
+            "   - `warnings` 是用户需要知道的迁移提示，没有就留空数组。",
+            "",
+            "## 约束",
+            "- 不要修改产物、不要重跑迁移、不要执行会改变沙箱状态的命令。",
+            "- 失败原因如果只有用户能提供（例如缺失的模型密钥、部署目标、是否接受降级），",
+            "  可以调用 `askUser` 提问，然后按回答给出结论。",
+            "- 不要输出 Markdown 表格，不要贴大段日志原文。",
+        ]
+    )
+
+
+def _start_analysis_command(task_id: str, attempt: int) -> str:
+    running_status = _analysis_running_status(attempt)
     ready_status = {
         "schema_version": 1,
         "attempt": attempt,
@@ -1684,6 +2476,17 @@ def _start_analysis_command(task_id: str, attempt: int) -> str:
             "code": "MIGRATION_ANALYSIS_FAILED",
             "message": "Codex 未能完成只读项目分析。",
             "retryable": False,
+        },
+    }
+    protocol_failed_status = {
+        "schema_version": 1,
+        "attempt": attempt,
+        "state": "failed",
+        "message": "Codex 未返回可解析的分析结果，请重试",
+        "error": {
+            "code": "MIGRATION_ANALYSIS_RESULT_MISSING",
+            "message": "Codex 未产出符合分析协议的 JSON 结果。",
+            "retryable": True,
         },
     }
     start_failed_status = {
@@ -1709,7 +2512,7 @@ def _start_analysis_command(task_id: str, attempt: int) -> str:
         },
     }
     result_tmp = f"{_ANALYSIS_RESULT_PATH}.{attempt}.tmp"
-    log_path = f"{MIGRATION_ROOT}/diagnostics/analysis/attempt-{attempt}.log"
+    log_path = _analysis_activity_path(attempt)
     pid_path = f"{MIGRATION_ROOT}/control/analysis.pid"
     lock_path = f"{MIGRATION_ROOT}/control/analysis-start-{attempt}.lock"
     validate_json = shlex.quote(
@@ -1723,22 +2526,49 @@ def _start_analysis_command(task_id: str, attempt: int) -> str:
         "import json,sys; "
         f"raise SystemExit(0 if json.load(open(sys.argv[1])).get('attempt') == {attempt} else 1)"
     )
-    extract_agent_message = shlex.quote(_codex_event_extractor())
+    extract_analysis_result = shlex.quote(_analysis_result_extractor_script())
+    retry_log_path = (
+        f"{MIGRATION_ROOT}/diagnostics/analysis/attempt-{attempt}-retry.log"
+    )
+    extraction_diagnostics = f"{_ANALYSIS_EXTRACTION_DIAGNOSTICS_PATH}.{attempt}"
     inner = "\n".join(
         [
             "set +e",
+            "run_analysis() {",
             (
-                "codex exec --json --sandbox read-only --skip-git-repo-check "
+                "  codex exec --json --sandbox read-only --skip-git-repo-check "
                 f"--cd {shlex.quote(_PROJECT_PATH)} "
                 f"--output-schema {shlex.quote(_ANALYSIS_SCHEMA_PATH)} "
-                f"- < {shlex.quote(_ANALYSIS_PROMPT_PATH)} "
-                f"> {shlex.quote(log_path)} 2>&1"
+                '- < "$1" > "$2" 2>&1'
+            ),
+            "}",
+            (
+                f"run_analysis {shlex.quote(_ANALYSIS_PROMPT_PATH)} "
+                f"{shlex.quote(log_path)}"
             ),
             "code=$?",
+            "extracted=0",
             (
-                f"if python3 -c {extract_agent_message} "
-                f"{shlex.quote(log_path)} {shlex.quote(result_tmp)} && "
-                f"python3 -c {validate_json} "
+                f"if python3 -c {extract_analysis_result} "
+                f"{shlex.quote(log_path)} {shlex.quote(result_tmp)} "
+                f"{shlex.quote(extraction_diagnostics)}; then extracted=1; fi"
+            ),
+            # 协议重试：上一轮回复无法作为分析结果读取时，在同一项目内再要一次纯
+            # JSON 结论，避免一次格式偏差就让整个迁移任务失败。
+            'if [ "$extracted" -ne 1 ]; then',
+            (
+                f"  run_analysis {shlex.quote(_ANALYSIS_RETRY_PROMPT_PATH)} "
+                f"{shlex.quote(retry_log_path)}"
+            ),
+            "  code=$?",
+            (
+                f"  if python3 -c {extract_analysis_result} "
+                f"{shlex.quote(retry_log_path)} {shlex.quote(result_tmp)} "
+                f"{shlex.quote(extraction_diagnostics)}; then extracted=1; fi"
+            ),
+            "fi",
+            (
+                f'if [ "$extracted" -eq 1 ] && python3 -c {validate_json} '
                 f"{shlex.quote(result_tmp)}; then"
             ),
             (
@@ -1760,7 +2590,11 @@ def _start_analysis_command(task_id: str, attempt: int) -> str:
             "else",
             '  if [ "$code" -eq 0 ]; then code=1; fi',
             f"  rm -f {shlex.quote(result_tmp)}",
-            f"  {_atomic_json_command(_ANALYSIS_STATUS_PATH, failed_status)}",
+            '  if [ "$extracted" -eq 1 ]; then',
+            f"    {_atomic_json_command(_ANALYSIS_STATUS_PATH, failed_status)}",
+            "  else",
+            f"    {_atomic_json_command(_ANALYSIS_STATUS_PATH, protocol_failed_status)}",
+            "  fi",
             "fi",
             "finished_at=$(python3 -c 'import time; print(int(time.time()))')",
             (
@@ -1862,6 +2696,16 @@ def _migration_instruction(
             "Treat missing source credentials or environment variables as explicit ",
             "deployment requirements or validation warnings; do not rewrite runtime ",
             "behavior merely to make validation pass.",
+            "Treat the deterministic migration contract as blocking: while ",
+            "validation_findings.json still lists a fatal or repairable finding, the ",
+            "migration is not finished and no completion may be reported. Fix those ",
+            "findings in the same turn and rerun scripts/validate_runtime.sh until it ",
+            "passes; a degraded finding may remain only when the report states it ",
+            "honestly.",
+            "Never rewrite the .agentkit/agentkit.yaml that ak init recorded: its ",
+            "sha256 is the config baseline that contract checks, and the application ",
+            "name comes from the confirmed migration settings, not from the source ",
+            "project.",
             "Keep the generated project compatible with AgentkitAgentServerApp. ",
             "Never replace or monkeypatch Agent/root_agent run or run_async methods; ",
             "configure the Agent through supported constructor arguments and callbacks.",
@@ -1947,6 +2791,156 @@ def _ak_command(
     return " ".join(shlex.quote(item) for item in common)
 
 
+_MIGRATION_DRIVER_TEMPLATE = '''"""Publish the migration driver lease and the artifact manifest.
+
+Written into the Sandbox by the launch script and run twice: in the background to
+keep the heartbeat fresh while the migration CLI works, and once after it exits to
+publish the finished record with the artifact digest.
+
+The background copy also watches the CLI it speaks for.  A migration that loses only
+its CLI -- the launch shell survives, the agent's own work is already on disk -- would
+otherwise keep a fresh heartbeat forever, and a fresh heartbeat is exactly what tells
+Studio the run is still alive.  Watching the pid turns that into a `lost` record, which
+is the one state Studio can still rebuild a delivery from.
+"""
+
+import hashlib
+import json
+import os
+import sys
+import time
+from pathlib import Path
+
+__HEARTBEAT_SECONDS__
+
+path = Path(sys.argv[1])
+artifact = Path(sys.argv[2])
+run_id = sys.argv[3]
+mode = sys.argv[4]
+cli_pid_path = Path(sys.argv[5])
+
+
+def publish(value):
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
+    os.replace(temporary, path)
+
+
+def lease(state, heartbeat_at, finished_at=None, exit_code=None, artifact_entry=None):
+    return {
+        "schema_version": 1,
+        "run_id": run_id,
+        "state": state,
+        "heartbeat_at": heartbeat_at,
+        "finished_at": finished_at,
+        "exit_code": exit_code,
+        "artifact": artifact_entry,
+    }
+
+
+def manifest():
+    """Return the artifact descriptor, or None when the CLI produced no archive."""
+    if not artifact.is_file():
+        return None
+    digest = hashlib.sha256()
+    size = 0
+    with artifact.open("rb") as handle:
+        while True:
+            chunk = handle.read(1024 * 1024)
+            if not chunk:
+                break
+            size += len(chunk)
+            digest.update(chunk)
+    return {"path": artifact.name, "sha256": digest.hexdigest(), "size": size}
+
+
+def cli_is_gone():
+    """Whether the CLI this heartbeat speaks for has left the Sandbox."""
+    try:
+        cli_pid = int(cli_pid_path.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return False
+    try:
+        os.kill(cli_pid, 0)
+    except ProcessLookupError:
+        return True
+    except OSError:
+        return False
+    return False
+
+
+if mode == "heartbeat":
+    publish(lease("running", int(time.time())))
+    while True:
+        time.sleep(HEARTBEAT_SECONDS)
+        if cli_is_gone():
+            publish(lease("lost", int(time.time())))
+            break
+        publish(lease("running", int(time.time())))
+else:
+    now = int(time.time())
+    publish(
+        lease(
+            "finished",
+            now,
+            finished_at=now,
+            exit_code=int(sys.argv[6]),
+            artifact_entry=manifest(),
+        )
+    )
+'''
+
+
+def _migration_driver_script() -> str:
+    """The Sandbox-side script that publishes the delivery driver lease."""
+    return _MIGRATION_DRIVER_TEMPLATE.replace(
+        "__HEARTBEAT_SECONDS__",
+        f"HEARTBEAT_SECONDS = {_MIGRATION_DRIVER_HEARTBEAT_SECONDS}",
+    )
+
+
+def _migration_codex_shim_lines() -> list[str]:
+    """Install the Sandbox `codex` shim that the migration CLI picks up on PATH."""
+    return [
+        f"studio_codex_shim_dir={shlex.quote(_MIGRATION_CODEX_SHIM_DIR)}",
+        'mkdir -p "$studio_codex_shim_dir"',
+        f"cat > {shlex.quote(_MIGRATION_CODEX_SHIM_PATH)} <<'STUDIO_CODEX_SHIM'",
+        _codex_shim_source().rstrip("\n"),
+        "STUDIO_CODEX_SHIM",
+        # 垫片只要求一个能连 app-server 的解释器，取沙箱里第一个带 websockets 的。
+        "studio_codex_shim_python=$(command -v python3)",
+        'for studio_python_candidate in /usr/bin/python3 "$studio_codex_shim_python"; do',
+        '  if "$studio_python_candidate" -c "import websockets" >/dev/null 2>&1; then',
+        '    studio_codex_shim_python="$studio_python_candidate"',
+        "    break",
+        "  fi",
+        "done",
+        "printf '%s\\n' \"$studio_codex_shim_python\" > "
+        f"{shlex.quote(_MIGRATION_CODEX_SHIM_PYTHON_PATH)}",
+        f"cat > {shlex.quote(_MIGRATION_CODEX_SHIM_WRAPPER_PATH)} <<'STUDIO_CODEX_WRAPPER'",
+        "#!/bin/sh",
+        "set -eu",
+        'studio_codex_shim_dir="${STUDIO_CODEX_SHIM_DIR:-$(dirname "$0")}"',
+        'exec "$(cat "$studio_codex_shim_dir/python")" '
+        '"$studio_codex_shim_dir/studio-codex-shim.py" "$@"',
+        "STUDIO_CODEX_WRAPPER",
+        f"chmod 0755 {shlex.quote(_MIGRATION_CODEX_SHIM_WRAPPER_PATH)} "
+        f"{shlex.quote(_MIGRATION_CODEX_SHIM_PATH)}",
+        'export STUDIO_CODEX_SHIM_DIR="$studio_codex_shim_dir"',
+        "export STUDIO_MIGRATION_SHIM_STATE="
+        f"{shlex.quote(_MIGRATION_CODEX_SHIM_STATE_PATH)}",
+        # 真正的 codex 必须在改 PATH 之前解析出来：垫片回退时要用它。同一个 shell
+        # 里重复安装时，PATH 开头已经是垫片，此时保留上一次解析出的真 codex。
+        "studio_codex_shim_real=$(command -v codex)",
+        f'if [ "$studio_codex_shim_real" = {shlex.quote(_MIGRATION_CODEX_SHIM_WRAPPER_PATH)} ];',
+        '  then studio_codex_shim_real=""; fi',
+        'if [ -n "$studio_codex_shim_real" ]; then',
+        '  export STUDIO_MIGRATION_REAL_CODEX="$studio_codex_shim_real"',
+        "fi",
+        'export PATH="$studio_codex_shim_dir:$PATH"',
+    ]
+
+
 def _start_migration_command(
     task_id: str,
     confirmation: dict[str, object],
@@ -1989,16 +2983,47 @@ def _start_migration_command(
             ),
         ]
     )
+    driver = " ".join(
+        [
+            "python3",
+            shlex.quote(_MIGRATION_DRIVER_SCRIPT_PATH),
+            shlex.quote(_MIGRATION_DRIVER_PATH),
+            shlex.quote(_DELIVERY_ARTIFACT_PATH),
+            shlex.quote(task_id),
+        ]
+    )
     inner = "\n".join(
         [
             "set +e",
+            *_migration_codex_shim_lines(),
+            (
+                f"cat > {shlex.quote(_MIGRATION_DRIVER_SCRIPT_PATH)} "
+                "<<'STUDIO_MIGRATION_DRIVER'"
+            ),
+            _migration_driver_script(),
+            "STUDIO_MIGRATION_DRIVER",
+            f"{driver} heartbeat {shlex.quote(_MIGRATION_CLI_PID_PATH)} &",
+            "driver_pid=$!",
             "(",
             "set -e",
             *validation_model_env,
             *structured_copy,
             cli,
-            f") > {shlex.quote(log_path)} 2>&1",
+            f") > {shlex.quote(log_path)} 2>&1 &",
+            "cli_pid=$!",
+            (
+                f"printf '%s\\n' \"$cli_pid\" > "
+                f"{shlex.quote(_MIGRATION_CLI_PID_PATH)}.tmp"
+            ),
+            (
+                f"mv {shlex.quote(_MIGRATION_CLI_PID_PATH)}.tmp "
+                f"{shlex.quote(_MIGRATION_CLI_PID_PATH)}"
+            ),
+            'wait "$cli_pid"',
             "code=$?",
+            'kill "$driver_pid" 2>/dev/null',
+            'wait "$driver_pid" 2>/dev/null',
+            f'{driver} finish {shlex.quote(_MIGRATION_CLI_PID_PATH)} "$code"',
             "finished_at=$(python3 -c 'import time; print(int(time.time()))')",
             (
                 f'printf \'%s\\n\' "{{\\"schema_version\\":1,'
@@ -2132,6 +3157,51 @@ for name in ("analysis.pid", "migration.pid"):
     )
 
 
+def _normalized_analysis_document(
+    value: object,
+    *,
+    expected_attempt: int,
+    expected_input_sha256: str,
+) -> object:
+    """Turn whatever was stored into the state-file contract.
+
+    The app-server driver stores the assembled document.  The scripted fallback stores
+    the JSON document Codex wrote, which carries the judgement only, so it is accepted
+    here with no detection report: that path's shape is constrained while Codex decodes
+    it, and the destructive verdict still has to bring its own evidence.
+    """
+    if isinstance(value, dict) and "schema_version" in value and "boundary" in value:
+        recommended = value.get("recommended")
+        if (
+            "entries" not in value
+            and isinstance(recommended, dict)
+            and "entries" in recommended
+        ):
+            recommended = dict(recommended)
+            value = {
+                **value,
+                "recommended": recommended,
+                "entries": recommended.pop("entries"),
+            }
+        return {
+            **value,
+            "attempt": expected_attempt,
+            "input_sha256": expected_input_sha256,
+        }
+    if not is_model_document(value):
+        raise MigrationContractError(
+            "analysis document is neither a state file nor a judgement"
+        )
+    assert isinstance(value, dict)
+    document, _ = build_analysis_result(
+        KIND_BY_STATUS[str(value["status"])],
+        value,
+        attempt=expected_attempt,
+        input_sha256=expected_input_sha256,
+    )
+    return document
+
+
 class MigrationService:
     """Derive task state from remote Sessions and files without a local repository."""
 
@@ -2143,6 +3213,14 @@ class MigrationService:
     ) -> None:
         self._gateway = gateway
         self._clock = clock
+        # 进程内的后台分析驱动，键为 (session_id, attempt)，避免重复起同一轮分析。
+        self._analysis_drivers: dict[tuple[str, int], threading.Thread] = {}
+        # 正在等待用户回答的分析提问，由 HTTP 线程投递答案。
+        self._analysis_input = AnalysisInputRegistry()
+        # 进程内的交付收尾回合，键为 session_id，避免同一交付重复收尾。
+        self._delivery_turns: dict[str, threading.Thread] = {}
+        # 进程内的交付复原，键为 session_id，避免同一交付重复打包。
+        self._delivery_recoveries: dict[str, threading.Thread] = {}
 
     @staticmethod
     def _translate(error: MigrationGatewayError) -> MigrationError:
@@ -2259,6 +3337,25 @@ class MigrationService:
         except MigrationGatewayError as error:
             raise self._translate(error) from error
 
+    def _read_detection(
+        self,
+        session: MigrationSandboxSession,
+    ) -> dict[str, object]:
+        """Read the model-free detection report.
+
+        A missing or unreadable report never fails analysis: it degrades to "inventory
+        unknown", which keeps the verdict gate open instead of judging the project.
+        """
+        try:
+            value = self._read_json(session, _DETECTION_PATH, optional=True)
+            if value is not None:
+                return validate_detection_report(value)
+        except (MigrationError, MigrationContractError):
+            logger.warning(
+                "Studio migration detection report is unusable; continuing without it"
+            )
+        return _empty_detection_report()
+
     def _read_json(
         self,
         session: MigrationSandboxSession,
@@ -2301,25 +3398,13 @@ class MigrationService:
             )
         try:
             value = json.loads(content)
-            if isinstance(value, dict):
-                recommended = value.get("recommended")
-                if (
-                    "entries" not in value
-                    and isinstance(recommended, dict)
-                    and "entries" in recommended
-                ):
-                    recommended = dict(recommended)
-                    value = {
-                        **value,
-                        "recommended": recommended,
-                        "entries": recommended.pop("entries"),
-                    }
-                value = {
-                    **value,
-                    "attempt": expected_attempt,
-                    "input_sha256": expected_input_sha256,
-                }
-            analysis = validate_analysis_result(value)
+            analysis = validate_analysis_result(
+                _normalized_analysis_document(
+                    value,
+                    expected_attempt=expected_attempt,
+                    expected_input_sha256=expected_input_sha256,
+                )
+            )
         except (UnicodeDecodeError, ValueError, MigrationContractError) as error:
             raise MigrationError(
                 "MIGRATION_ANALYSIS_INVALID",
@@ -2619,6 +3704,65 @@ class MigrationService:
         age = self._clock() - finished_at
         return -_REMOTE_CLOCK_SKEW_SECONDS <= age < _REMOTE_STATE_SETTLE_SECONDS
 
+    def _read_migration_driver(
+        self,
+        session: MigrationSandboxSession,
+    ) -> dict[str, object] | None:
+        """Read the delivery driver lease, tolerating a missing or damaged record.
+
+        The lease is control-plane bookkeeping rather than a delivery contract, so a
+        record that cannot be read or validated is reported and ignored instead of
+        making every later read of the task fail.
+        """
+        try:
+            driver = self._read_json(
+                session,
+                _MIGRATION_DRIVER_PATH,
+                optional=True,
+            )
+        except MigrationError:
+            logger.warning(
+                "Studio migration driver lease is unreadable task_id=%s",
+                session.task_id,
+            )
+            return None
+        if driver is None:
+            return None
+        try:
+            return validate_migration_driver(
+                driver,
+                expected_run_id=session.task_id,
+            )
+        except MigrationContractError as error:
+            logger.warning(
+                "Studio migration driver lease is invalid task_id=%s error=%s",
+                session.task_id,
+                error,
+            )
+            return None
+
+    def _migration_driver_lost(
+        self,
+        driver: dict[str, object] | None,
+    ) -> bool:
+        """Whether the delivery driver behind a task is gone for good.
+
+        The heartbeat either says so itself, having watched the CLI it speaks for leave
+        the Sandbox, or stops advancing because the process group it lived in is gone.
+        Either way nothing will write the delivery state the task waits for.
+        """
+        if not isinstance(driver, dict) or driver.get("state") not in {
+            "running",
+            "lost",
+        }:
+            return False
+        if driver.get("state") == "lost":
+            return True
+        heartbeat = driver.get("heartbeat_at")
+        if isinstance(heartbeat, bool) or not isinstance(heartbeat, int):
+            return False
+        return self._clock() - float(heartbeat) >= _MIGRATION_DRIVER_STALE_SECONDS
+
     @staticmethod
     def _validate_request(
         existing: dict[str, object],
@@ -2691,6 +3835,15 @@ class MigrationService:
                 operation="prepare_source",
                 timeout_seconds=_FILE_OPERATION_TIMEOUT_SECONDS,
             )
+            # The verified facts the analysis may rely on are computed here, in
+            # Studio's own process, so no model ever authors the file inventory the
+            # unsupported verdict is measured against.
+            self._put(
+                session,
+                _DETECTION_PATH,
+                _json_bytes(_detection_report(content)),
+                media_type="application/json",
+            )
         request = self._read_json(session, _REQUEST_PATH, optional=True)
         if request is None:
             raise MigrationError(
@@ -2705,6 +3858,7 @@ class MigrationService:
             _json_bytes(_analysis_schema()),
             media_type="application/json",
         )
+        detection = self._read_detection(session)
         self._put(
             session,
             _ANALYSIS_PROMPT_PATH,
@@ -2712,16 +3866,1366 @@ class MigrationService:
                 request,
                 attempt=1,
                 input_sha256=digest,
+                detection=detection,
             ).encode("utf-8"),
             media_type="text/markdown",
         )
+        self._put(
+            session,
+            _ANALYSIS_RETRY_PROMPT_PATH,
+            _analysis_prompt(
+                request,
+                attempt=1,
+                input_sha256=digest,
+                protocol_retry=True,
+                detection=detection,
+            ).encode("utf-8"),
+            media_type="text/markdown",
+        )
+        if self._start_app_server_analysis(
+            session,
+            prompt=_analysis_prompt(
+                request,
+                attempt=1,
+                input_sha256=digest,
+                interactive=True,
+                detection=detection,
+            ),
+            attempt=1,
+            input_sha256=digest,
+            model_id=str(request.get("model_id") or ""),
+        ):
+            return self.get_task(task_id, owner_id)
+        self._start_scripted_analysis(session, task_id=task_id, attempt=1)
+        return self.get_task(task_id, owner_id)
+
+    def _start_scripted_analysis(
+        self,
+        session: MigrationSandboxSession,
+        *,
+        task_id: str,
+        attempt: int,
+        clear_status: bool = False,
+    ) -> None:
+        """Run the analysis inside the Sandbox with ``codex exec``.
+
+        The generated script owns its own background process, so Studio only launches
+        it.  A takeover start (``clear_status``) first drops the state left by the
+        previous driver, because the script refuses to start when a status for the
+        same attempt already exists.
+        """
+        if clear_status:
+            self._execute(
+                session,
+                _clear_analysis_status_command(),
+                operation="clear_analysis",
+                timeout_seconds=30,
+            )
+        self._put(
+            session,
+            _ANALYSIS_DRIVER_PATH,
+            _json_bytes(
+                _analysis_driver_marker(
+                    driver=_ANALYSIS_DRIVER_SCRIPT,
+                    attempt=attempt,
+                    owner_process=_STUDIO_PROCESS_ID,
+                )
+            ),
+            media_type="application/json",
+        )
         self._execute(
             session,
-            _start_analysis_command(task_id, 1),
+            _start_analysis_command(task_id, attempt),
             operation="start_analysis",
             timeout_seconds=30,
         )
-        return self.get_task(task_id, owner_id)
+
+    def _start_app_server_analysis(
+        self,
+        session: MigrationSandboxSession,
+        *,
+        prompt: str,
+        attempt: int,
+        input_sha256: str,
+        model_id: str = "",
+        timeout_seconds: float = _ANALYSIS_TURN_TIMEOUT_SECONDS,
+    ) -> bool:
+        """Analyse through the Sandbox app-server on a Studio background worker.
+
+        The turn must not run inside the HTTP request: an upload that waits for Codex
+        would be cut off by the gateway on a long analysis.  The worker keeps the same
+        file contract as the scripted path, so ``get_task`` reads both drivers alike.
+        Returns ``False`` when the caller must start the scripted path instead.
+        """
+        if not app_server_analysis_enabled():
+            return False
+        key = (session.session_id, attempt)
+        running = self._analysis_drivers.get(key)
+        if running is not None and running.is_alive():
+            return True
+        started_at = time.time()
+        self._put(
+            session,
+            _ANALYSIS_DRIVER_PATH,
+            _json_bytes(
+                _analysis_driver_marker(
+                    driver=_ANALYSIS_DRIVER_APP_SERVER,
+                    attempt=attempt,
+                    input_sha256=input_sha256,
+                    started_at=started_at,
+                    owner_process=_STUDIO_PROCESS_ID,
+                )
+            ),
+            media_type="application/json",
+        )
+        self._put(
+            session,
+            _ANALYSIS_STATUS_PATH,
+            _json_bytes(_analysis_running_status(attempt)),
+            media_type="application/json",
+        )
+        worker = threading.Thread(
+            target=self._app_server_analysis_worker,
+            args=(session, attempt, input_sha256, prompt, model_id, timeout_seconds),
+            name=f"migration-analysis-{attempt}",
+            daemon=True,
+        )
+        self._analysis_drivers[key] = worker
+        try:
+            worker.start()
+        except Exception:  # noqa: BLE001 - a failed start must fall back to the script
+            self._analysis_drivers.pop(key, None)
+            logger.exception(
+                "Studio migration analysis worker could not start task_id=%s",
+                session.task_id,
+            )
+            return False
+        return True
+
+    def _app_server_analysis_worker(
+        self,
+        session: MigrationSandboxSession,
+        attempt: int,
+        input_sha256: str,
+        prompt: str,
+        model_id: str,
+        timeout_seconds: float,
+    ) -> None:
+        """Run one app-server turn and persist it, or hand over to the script."""
+        key = (session.session_id, attempt)
+        diagnostics: dict[str, object] = {}
+        try:
+            try:
+                analysis = asyncio.run(
+                    self._run_app_server_turn(
+                        session,
+                        attempt=attempt,
+                        input_sha256=input_sha256,
+                        prompt=prompt,
+                        model_id=model_id,
+                        timeout_seconds=timeout_seconds,
+                        diagnostics=diagnostics,
+                    )
+                )
+            except MigrationAnalysisUnavailable as error:
+                logger.warning(
+                    "Studio migration app-server analysis unavailable task_id=%s "
+                    "attempt=%s error_type=%s",
+                    session.task_id,
+                    attempt,
+                    type(error).__name__,
+                )
+                analysis = None
+            self._persist_analysis_outcome(
+                session, attempt=attempt, outcome=diagnostics
+            )
+            if analysis is None and diagnostics.get("events"):
+                # The turn reached Codex and Codex produced output, but nothing
+                # acceptable arrived.  That is a result-production problem, not a
+                # verdict about the project, so Studio concludes for itself instead of
+                # spending another model run: the analysis still has to produce
+                # something the user can act on.
+                logger.warning(
+                    "Studio migration analysis turn delivered no acceptable result; "
+                    "persisting the conservative conclusion task_id=%s attempt=%s "
+                    "refusals=%s",
+                    session.task_id,
+                    attempt,
+                    len(diagnostics.get("refusals") or []),
+                )
+                try:
+                    conservative, notes = _conservative_analysis(
+                        self._read_detection(session),
+                        attempt=attempt,
+                        input_sha256=input_sha256,
+                        reason=_analysis_failure_reason(diagnostics),
+                    )
+                except Exception:  # noqa: BLE001 - never lose the task to a fallback bug
+                    logger.exception(
+                        "Studio migration conservative analysis failed task_id=%s "
+                        "attempt=%s",
+                        session.task_id,
+                        attempt,
+                    )
+                else:
+                    logger.info(
+                        "Studio migration conservative conclusion stored task_id=%s "
+                        "attempt=%s notes=%s",
+                        session.task_id,
+                        attempt,
+                        notes,
+                    )
+                    self._persist_app_server_analysis(
+                        session,
+                        attempt=attempt,
+                        analysis=conservative,
+                    )
+                    return
+            if analysis is None:
+                # The turn can also end without ever delivering the contract, which is
+                # why the driver switches here as well; say so, or an operator only
+                # sees a scripted log with no explanation of where it came from.
+                logger.warning(
+                    "Studio migration app-server analysis returned no result; "
+                    "continuing with the scripted driver task_id=%s attempt=%s",
+                    session.task_id,
+                    attempt,
+                )
+                self._start_scripted_analysis(
+                    session,
+                    task_id=session.task_id,
+                    attempt=attempt,
+                    clear_status=True,
+                )
+                return
+            self._persist_app_server_analysis(
+                session,
+                attempt=attempt,
+                analysis=analysis,
+            )
+        except Exception:  # noqa: BLE001 - the worker must never kill the process
+            logger.exception(
+                "Studio migration app-server analysis worker failed task_id=%s "
+                "attempt=%s",
+                session.task_id,
+                attempt,
+            )
+        finally:
+            if self._analysis_drivers.get(key) is threading.current_thread():
+                self._analysis_drivers.pop(key, None)
+
+    async def _run_app_server_turn(
+        self,
+        session: MigrationSandboxSession,
+        *,
+        attempt: int,
+        input_sha256: str,
+        prompt: str,
+        model_id: str,
+        timeout_seconds: float,
+        diagnostics: dict[str, object] | None = None,
+    ) -> dict[str, object] | None:
+        """Run the app-server turn while refreshing the background driver lease."""
+
+        async def beat() -> None:
+            warned = False
+            while True:
+                await asyncio.sleep(_ANALYSIS_DRIVER_HEARTBEAT_SECONDS)
+                try:
+                    await asyncio.to_thread(
+                        self._put,
+                        session,
+                        _ANALYSIS_DRIVER_PATH,
+                        _json_bytes(
+                            _analysis_driver_marker(
+                                driver=_ANALYSIS_DRIVER_APP_SERVER,
+                                attempt=attempt,
+                                input_sha256=input_sha256,
+                                owner_process=_STUDIO_PROCESS_ID,
+                            )
+                        ),
+                        media_type="application/json",
+                    )
+                except Exception as error:  # noqa: BLE001 - lease refresh is advisory
+                    if not warned:
+                        warned = True
+                        logger.warning(
+                            "Studio migration analysis lease refresh failed "
+                            "task_id=%s error_type=%s",
+                            session.task_id,
+                            type(error).__name__,
+                        )
+
+        # The scripted driver's activity log is written inside the Sandbox by
+        # ``codex exec --json``; an app-server turn only exists on the wire, so its
+        # events are recorded into the very same file.  One reader then serves both
+        # drivers, and the page shows what Codex is doing on either path.
+        activity = AnalysisActivityLog(
+            lambda content: self._put(
+                session,
+                _analysis_activity_path(attempt),
+                content,
+                media_type="text/plain",
+            )
+        )
+        # 用户在回合内作答的时间不算 Codex 的工作时间，从墙钟预算里扣除。
+        waited_seconds = [0.0]
+
+        async def questioner(
+            questions: tuple[dict[str, object], ...],
+        ) -> dict[str, tuple[str, ...]] | None:
+            """Publish one question set and wait for the page to answer it."""
+            return await self._ask_user(
+                session,
+                questions=questions,
+                attempt=attempt,
+                window_seconds=_ANALYSIS_INPUT_WINDOW_SECONDS,
+                waited_seconds=waited_seconds,
+            )
+
+        heartbeat = asyncio.create_task(beat())
+        flusher = asyncio.create_task(activity.run())
+        try:
+            return await run_route_analysis(
+                endpoint=session.endpoint,
+                prompt=prompt,
+                cwd=_PROJECT_PATH,
+                attempt=attempt,
+                input_sha256=input_sha256,
+                model=model_id,
+                timeout_seconds=timeout_seconds,
+                event_sink=activity.record,
+                questioner=questioner,
+                detection=self._read_detection(session),
+                diagnostics=diagnostics,
+                idle_timeout_seconds=(
+                    timeout_seconds
+                    + _ANALYSIS_INPUT_WINDOW_SECONDS
+                    + _ANALYSIS_INPUT_IDLE_MARGIN_SECONDS
+                ),
+                host_wait_seconds=lambda: waited_seconds[0],
+            )
+        finally:
+            flusher.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await flusher
+            await activity.aclose()
+            heartbeat.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await heartbeat
+
+    def _persist_analysis_outcome(
+        self,
+        session: MigrationSandboxSession,
+        *,
+        attempt: int,
+        outcome: dict[str, object],
+    ) -> None:
+        """Record what the model layer produced. Never fails the worker."""
+        if not outcome:
+            return
+        try:
+            self._put(
+                session,
+                _ANALYSIS_OUTCOME_PATH,
+                _json_bytes({"schema_version": 1, "attempt": attempt, **outcome}),
+                media_type="application/json",
+            )
+        except Exception:  # noqa: BLE001 - diagnostics must not break analysis
+            logger.warning(
+                "Studio migration analysis outcome could not be stored task_id=%s "
+                "attempt=%s",
+                session.task_id,
+                attempt,
+            )
+
+    def _persist_app_server_analysis(
+        self,
+        session: MigrationSandboxSession,
+        *,
+        attempt: int,
+        analysis: dict[str, object],
+    ) -> None:
+        """Store the contract delivered by the dynamic tool and close the lease."""
+        status = str(analysis.get("status") or "")
+        if status == "unsupported":
+            payload: dict[str, object] = {
+                "schema_version": 1,
+                "attempt": attempt,
+                "state": "failed",
+                "message": _ANALYSIS_UNSUPPORTED_MESSAGE,
+                "error": {
+                    "code": "MIGRATION_ANALYSIS_UNSUPPORTED",
+                    "message": "项目分析未找到可执行的迁移方式。",
+                    "retryable": False,
+                },
+            }
+        else:
+            payload = {
+                "schema_version": 1,
+                "attempt": attempt,
+                "state": "ready" if status == "recommendation_ready" else status,
+                "message": _ANALYSIS_STATUS_MESSAGES.get(
+                    "ready" if status == "recommendation_ready" else status,
+                    "项目分析已更新",
+                ),
+            }
+        self._put(
+            session,
+            _ANALYSIS_RESULT_PATH,
+            _json_bytes(analysis),
+            media_type="application/json",
+        )
+        self._put(
+            session,
+            _ANALYSIS_STATUS_PATH,
+            _json_bytes(payload),
+            media_type="application/json",
+        )
+        self._put(
+            session,
+            _ANALYSIS_DRIVER_PATH,
+            _json_bytes(
+                _analysis_driver_marker(
+                    driver=_ANALYSIS_DRIVER_APP_SERVER,
+                    attempt=attempt,
+                    owner_process=_STUDIO_PROCESS_ID,
+                    state=_ANALYSIS_DRIVER_DONE,
+                )
+            ),
+            media_type="application/json",
+        )
+        logger.info(
+            "Studio migration app-server analysis completed task_id=%s "
+            "attempt=%s status=%s",
+            session.task_id,
+            attempt,
+            status,
+        )
+
+    def recover_stalled_analysis(self, task_id: str, owner_id: str) -> bool:
+        """Hand a stalled app-server analysis back to the scripted driver.
+
+        A Studio restart drops the worker that owned the turn while the task still
+        reads as analysing.  The lease written by the worker says who owns it and how
+        fresh it is, so a request may take over once that lease goes stale.
+        """
+        try:
+            session = self._session(task_id, owner_id)
+            marker = self._read_json(
+                session,
+                _ANALYSIS_DRIVER_PATH,
+                optional=True,
+            )
+        except Exception as error:  # noqa: BLE001 - recovery must never fail a read
+            logger.warning(
+                "Studio migration analysis recovery skipped task_id=%s error_type=%s",
+                task_id,
+                type(error).__name__,
+            )
+            return False
+        if not isinstance(marker, dict):
+            return False
+        if str(marker.get("driver") or "") != _ANALYSIS_DRIVER_APP_SERVER:
+            return False
+        if str(marker.get("state") or _ANALYSIS_DRIVER_RUNNING) != (
+            _ANALYSIS_DRIVER_RUNNING
+        ):
+            return False
+        attempt = marker.get("attempt")
+        if not isinstance(attempt, int) or attempt < 1:
+            return False
+        running = self._analysis_drivers.get((session.session_id, attempt))
+        if running is not None and running.is_alive():
+            return False
+        heartbeat = marker.get("heartbeat_at")
+        age = (
+            time.time() - float(heartbeat)
+            if isinstance(heartbeat, (int, float))
+            else _ANALYSIS_DRIVER_STALE_SECONDS
+        )
+        if age < _ANALYSIS_DRIVER_STALE_SECONDS:
+            return False
+        logger.warning(
+            "Studio migration app-server analysis lease expired; restarting the "
+            "scripted driver task_id=%s attempt=%s",
+            task_id,
+            attempt,
+        )
+        try:
+            self._start_scripted_analysis(
+                session,
+                task_id=task_id,
+                attempt=attempt,
+                clear_status=True,
+            )
+        except Exception as error:  # noqa: BLE001 - recovery must never fail a read
+            logger.warning(
+                "Studio migration analysis recovery failed task_id=%s error_type=%s",
+                task_id,
+                type(error).__name__,
+            )
+            return False
+        return True
+
+    async def _ask_user(
+        self,
+        session: MigrationSandboxSession,
+        *,
+        questions: tuple[dict[str, object], ...],
+        attempt: int,
+        window_seconds: float,
+        waited_seconds: list[float],
+    ) -> dict[str, tuple[str, ...]] | None:
+        """Publish one question set and wait for the page to answer it.
+
+        The wait is host latency rather than Codex progress, so callers pass the
+        accumulator their turn uses to keep that time out of its own budget.
+        """
+        pending = self._analysis_input.open(
+            session.session_id,
+            attempt=attempt,
+            questions=questions,
+        )
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        try:
+            answers = await asyncio.to_thread(
+                pending.future.result,
+                window_seconds,
+            )
+        # 线程里等的是 concurrent.futures.Future：3.10 跨回 asyncio 时它的
+        # TimeoutError 会被换成 asyncio 自己的类（3.11+ 才同为内置类），
+        # 因此两种都收，别退回单个 TimeoutError。
+        except (TimeoutError, asyncio.TimeoutError):
+            logger.info(
+                "Studio migration question timed out task_id=%s attempt=%s "
+                "window_seconds=%s",
+                session.task_id,
+                attempt,
+                window_seconds,
+            )
+            answers = None
+        finally:
+            waited_seconds[0] += loop.time() - started
+            self._analysis_input.discard(
+                session.session_id,
+                request_id=pending.request_id,
+            )
+        return answers
+
+    def drive_delivery_turn(
+        self,
+        task_id: str,
+        owner_id: str,
+        *,
+        task: dict[str, object] | None = None,
+    ) -> bool:
+        """Close one settled delivery on a Studio app-server turn.
+
+        Cheap enough for a watcher tick or a read: with the task payload in hand it only
+        looks at the delivery phase's own bookkeeping, and the turn itself runs on a
+        background worker because a Codex turn must never sit inside a request.
+        """
+        if not delivery_app_server_enabled():
+            return False
+        try:
+            session = self._session(task_id, owner_id)
+            target = self._delivery_turn_target(session, task)
+            if target is None or not self._delivery_turn_needed(session):
+                return False
+            return self._start_app_server_delivery(session, target=target)
+        except Exception:  # noqa: BLE001 - closing a delivery never fails a read
+            logger.exception(
+                "Studio migration delivery turn could not start task_id=%s",
+                task_id,
+            )
+            return False
+
+    def _delivery_turn_target(
+        self,
+        session: MigrationSandboxSession,
+        task: dict[str, object] | None,
+    ) -> str | None:
+        """The settled delivery state a closing turn has to explain, if any.
+
+        A closing turn explains how a delivery ended, so it starts on a settled
+        delivery only: an unfinished run has nothing to report yet, and a structured
+        migration has no agent work whose outcome needs reading.
+        """
+        if isinstance(task, dict):
+            state = str(task.get("state") or "")
+            confirmation = task.get("confirmation")
+            if (
+                state in _DELIVERY_SETTLED_STATES
+                and isinstance(confirmation, dict)
+                and confirmation.get("execution_model") == "agentic"
+            ):
+                return state
+            return None
+        confirmation = self._read_json(session, _CONFIRMATION_PATH, optional=True)
+        if (
+            not isinstance(confirmation, dict)
+            or confirmation.get("execution_model") != "agentic"
+        ):
+            return None
+        delivery = self._read_json(session, _DELIVERY_STATUS_PATH, optional=True)
+        if isinstance(delivery, dict):
+            state = str(delivery.get("state") or "")
+            if state in _DELIVERY_SETTLED_STATES:
+                return state
+        driver = self._read_migration_driver(session)
+        if self._migration_driver_lost(driver):
+            return "failed"
+        process_exit = self._read_json(session, _PROCESS_EXIT_PATH, optional=True)
+        if process_exit is None:
+            return None
+        try:
+            settled = not self._process_exit_is_settling(
+                self._validated_process_exit(process_exit)
+            )
+        except MigrationError:
+            return "failed"
+        return "failed" if settled else None
+
+    def _delivery_turn_needed(self, session: MigrationSandboxSession) -> bool:
+        """Whether this delivery still waits for its closing turn.
+
+        The report makes the turn idempotent, and the lease keeps two Studio processes
+        from closing the same delivery at once: only a lease whose heartbeat stopped
+        is treated as gone.
+        """
+        running = self._delivery_turns.get(session.session_id)
+        if running is not None and running.is_alive():
+            return False
+        report = self._read_delivery_report(session)
+        if isinstance(report, dict):
+            return False
+        lease = self._read_delivery_turn_lease(session)
+        if not isinstance(lease, dict):
+            return True
+        if lease.get("state") == _DELIVERY_TURN_RUNNING:
+            heartbeat = lease.get("heartbeat_at")
+            age = (
+                time.time() - float(heartbeat)
+                if isinstance(heartbeat, (int, float))
+                and not isinstance(heartbeat, bool)
+                else _DELIVERY_TURN_STALE_SECONDS
+            )
+            if age < _DELIVERY_TURN_STALE_SECONDS:
+                return False
+        attempts = lease.get("attempts")
+        if (
+            isinstance(attempts, int)
+            and not isinstance(attempts, bool)
+            and attempts >= _DELIVERY_TURN_MAX_ATTEMPTS
+            and lease.get("verdict") is not True
+        ):
+            return False
+        return True
+
+    def _read_delivery_turn_lease(
+        self,
+        session: MigrationSandboxSession,
+    ) -> dict[str, object] | None:
+        """Read the closing turn's lease, tolerating a missing or damaged record."""
+        try:
+            lease = self._read_json(session, _DELIVERY_TURN_PATH, optional=True)
+        except MigrationError:
+            logger.warning(
+                "Studio delivery turn lease is unreadable task_id=%s",
+                session.task_id,
+            )
+            return None
+        if (
+            not isinstance(lease, dict)
+            or lease.get("schema_version") != 1
+            or lease.get("driver") != _DELIVERY_TURN_DRIVER
+        ):
+            return None
+        return lease
+
+    def _read_delivery_report(
+        self,
+        session: MigrationSandboxSession,
+    ) -> dict[str, object] | None:
+        """Read the closing turn's verdict, tolerating a damaged record.
+
+        The report is an explanation layer on top of the delivery contract, so a record
+        that cannot be read or validated is ignored rather than failing every later read
+        of the task.
+        """
+        try:
+            report = self._read_json(session, _DELIVERY_REPORT_PATH, optional=True)
+        except MigrationError:
+            logger.warning(
+                "Studio delivery report is unreadable task_id=%s",
+                session.task_id,
+            )
+            return None
+        if not isinstance(report, dict):
+            return None
+        state = str(report.get("state") or "")
+        if state not in _DELIVERY_SETTLED_STATES:
+            return None
+        try:
+            return validate_delivery_report(
+                report,
+                expected_run_id=session.task_id,
+                expected_state=state,
+            )
+        except MigrationContractError as error:
+            logger.warning(
+                "Studio delivery report is invalid task_id=%s error=%s",
+                session.task_id,
+                error,
+            )
+            return None
+
+    def _drive_delivery_recovery(self, session: MigrationSandboxSession) -> bool:
+        """Rebuild the packaging half of a delivery whose CLI never finished.
+
+        The AgentKit CLI settles an agentic delivery in one place: once the Codex turn
+        reports a terminal state, it turns the files on disk into an artifact and a
+        manifest.  None of that needs a model, so a run that lost its CLI after the
+        agent finished leaves a complete project that nothing will ever package.
+
+        Returns True while a rebuild is in flight, which is what keeps the read path
+        from writing the task off in the same breath.
+        """
+        worker = self._delivery_recoveries.get(session.session_id)
+        if worker is not None and worker.is_alive():
+            return True
+        lease = self._read_delivery_recovery_lease(session)
+        if isinstance(lease, dict):
+            if lease.get("state") == _DELIVERY_RECOVERY_RUNNING:
+                heartbeat = lease.get("heartbeat_at")
+                age = (
+                    self._clock() - float(heartbeat)
+                    if isinstance(heartbeat, (int, float))
+                    and not isinstance(heartbeat, bool)
+                    else _DELIVERY_RECOVERY_STALE_SECONDS
+                )
+                if age < _DELIVERY_RECOVERY_STALE_SECONDS:
+                    return True
+            if lease.get("state") == _DELIVERY_RECOVERY_DONE:
+                # 结论已经落地：不再重开，否则每次读任务都要重跑一遍打包。
+                return False
+            attempts = lease.get("attempts")
+            if (
+                isinstance(attempts, int)
+                and not isinstance(attempts, bool)
+                and attempts >= _DELIVERY_RECOVERY_MAX_ATTEMPTS
+            ):
+                return False
+        request = self._delivery_recovery_request(session)
+        if request is None:
+            return False
+        return self._start_delivery_recovery(session, lease, request)
+
+    def _read_delivery_recovery_lease(
+        self,
+        session: MigrationSandboxSession,
+    ) -> dict[str, object] | None:
+        """Read the rebuild's lease, tolerating a missing or damaged record."""
+        try:
+            lease = self._read_json(
+                session,
+                _DELIVERY_RECOVERY_LEASE_PATH,
+                optional=True,
+            )
+        except MigrationError:
+            logger.warning(
+                "Studio delivery recovery lease is unreadable task_id=%s",
+                session.task_id,
+            )
+            return None
+        if not isinstance(lease, dict) or lease.get("schema_version") != 1:
+            return None
+        return lease
+
+    def _delivery_recovery_request(
+        self,
+        session: MigrationSandboxSession,
+    ) -> dict[str, object] | None:
+        """The bindings a rebuild has to be handed, or None when there is nothing to
+        rebuild.
+
+        A delivery is only rebuildable once the agent wrote a terminal state of its
+        own, which is also what separates "the CLI died on a finished project" from
+        "the CLI died mid-run".  The second one stays a failure.
+        """
+        try:
+            status = self._read_json(session, _AGENT_STATUS_PATH, optional=True)
+        except MigrationError:
+            logger.warning(
+                "Studio migration agent state is unreadable task_id=%s",
+                session.task_id,
+            )
+            return None
+        if (
+            not isinstance(status, dict)
+            or str(status.get("state") or "") not in _DELIVERED_AGENT_STATES
+        ):
+            return None
+        try:
+            confirmation_content = self._read(
+                session,
+                _CONFIRMATION_PATH,
+                max_bytes=_MAX_PROVENANCE_BYTES,
+                optional=True,
+            )
+            source = self._read_json(session, _SOURCE_STATUS_PATH, optional=True)
+            capabilities = self._read_json(session, _CAPABILITIES_PATH, optional=True)
+        except MigrationError:
+            return None
+        if confirmation_content is None or not isinstance(source, dict):
+            return None
+        try:
+            confirmation = json.loads(confirmation_content)
+        except (UnicodeDecodeError, ValueError):
+            return None
+        if not isinstance(confirmation, dict):
+            return None
+        cli = capabilities.get("cli") if isinstance(capabilities, dict) else None
+        cli_version = str(cli.get("version") or "") if isinstance(cli, dict) else ""
+        source_sha256 = str(source.get("sha256") or "")
+        if not cli_version or len(source_sha256) != 64:
+            return None
+        return {
+            "output_dir": _DELIVERY_OUTPUT_DIR,
+            "delivery_dir": _DELIVERY_DIR,
+            "status_path": _AGENT_STATUS_PATH,
+            "run_id": session.task_id,
+            "framework": str(confirmation.get("framework") or ""),
+            "source_sha256": source_sha256,
+            "provenance_sha256": hashlib.sha256(confirmation_content).hexdigest(),
+            "cli_version": cli_version,
+        }
+
+    def _start_delivery_recovery(
+        self,
+        session: MigrationSandboxSession,
+        previous: dict[str, object] | None,
+        request: dict[str, object],
+    ) -> bool:
+        """Hand one rebuildable delivery to a Studio background worker."""
+        attempts = 1
+        if isinstance(previous, dict) and isinstance(previous.get("attempts"), int):
+            attempts = int(previous["attempts"]) + 1
+        self._put(
+            session,
+            _DELIVERY_RECOVERY_LEASE_PATH,
+            _json_bytes(
+                _delivery_recovery_marker(
+                    state=_DELIVERY_RECOVERY_RUNNING,
+                    attempts=attempts,
+                )
+            ),
+            media_type="application/json",
+        )
+        worker = threading.Thread(
+            target=self._delivery_recovery_worker,
+            args=(session, attempts, request),
+            name=f"migration-recovery-{session.session_id[-8:]}",
+            daemon=True,
+        )
+        self._delivery_recoveries[session.session_id] = worker
+        try:
+            worker.start()
+        except Exception:  # noqa: BLE001 - a failed start keeps the task's own state
+            self._delivery_recoveries.pop(session.session_id, None)
+            logger.exception(
+                "Studio migration delivery recovery worker could not start task_id=%s",
+                session.task_id,
+            )
+            return False
+        return True
+
+    def _delivery_recovery_worker(
+        self,
+        session: MigrationSandboxSession,
+        attempts: int,
+        request: dict[str, object],
+    ) -> None:
+        """Rebuild one delivery, and leave the lease saying how that went."""
+        verdict = False
+        files: int | None = None
+        stop = threading.Event()
+        heartbeat = threading.Thread(
+            target=self._keep_delivery_recovery_lease,
+            args=(session, attempts, stop),
+            name=f"migration-recovery-beat-{session.session_id[-8:]}",
+            daemon=True,
+        )
+        heartbeat.start()
+        try:
+            outcome = self._run_delivery_recovery(session, request)
+            verdict = isinstance(outcome, dict) and outcome.get("ok") is True
+            count = outcome.get("files") if isinstance(outcome, dict) else None
+            if isinstance(count, int) and not isinstance(count, bool):
+                files = count
+        except Exception:  # noqa: BLE001 - the worker must never kill the process
+            logger.exception(
+                "Studio migration delivery recovery failed task_id=%s",
+                session.task_id,
+            )
+        finally:
+            stop.set()
+            with contextlib.suppress(Exception):
+                heartbeat.join(timeout=_DELIVERY_RECOVERY_HEARTBEAT_SECONDS)
+            if (
+                self._delivery_recoveries.get(session.session_id)
+                is threading.current_thread()
+            ):
+                self._delivery_recoveries.pop(session.session_id, None)
+            with contextlib.suppress(Exception):
+                self._put(
+                    session,
+                    _DELIVERY_RECOVERY_LEASE_PATH,
+                    _json_bytes(
+                        _delivery_recovery_marker(
+                            state=_DELIVERY_RECOVERY_DONE,
+                            attempts=attempts,
+                            verdict=verdict,
+                            files=files,
+                        )
+                    ),
+                    media_type="application/json",
+                )
+
+    def _keep_delivery_recovery_lease(
+        self,
+        session: MigrationSandboxSession,
+        attempts: int,
+        stop: threading.Event,
+    ) -> None:
+        """Hold the rebuild's lease open while it runs, so only one of them runs."""
+        started = time.time()
+        while not stop.wait(_DELIVERY_RECOVERY_HEARTBEAT_SECONDS):
+            try:
+                self._put(
+                    session,
+                    _DELIVERY_RECOVERY_LEASE_PATH,
+                    _json_bytes(
+                        _delivery_recovery_marker(
+                            state=_DELIVERY_RECOVERY_RUNNING,
+                            attempts=attempts,
+                            started_at=started,
+                        )
+                    ),
+                    media_type="application/json",
+                )
+            except Exception:  # noqa: BLE001 - a missed beat must not stop the rebuild
+                logger.warning(
+                    "Studio migration delivery recovery lease is unreadable task_id=%s",
+                    session.task_id,
+                )
+
+    def _run_delivery_recovery(
+        self,
+        session: MigrationSandboxSession,
+        request: dict[str, object],
+    ) -> dict[str, object] | None:
+        """Install the rebuild in the Sandbox and run it there.
+
+        The program that runs is this repository's own module, shipped as source, so
+        the rules it packages by are the rules the tests exercise rather than a second
+        copy of them living in the Sandbox.
+        """
+        self._put(
+            session,
+            _DELIVERY_RECOVERY_SCRIPT_PATH,
+            delivery_recovery_source().encode("utf-8"),
+            media_type="text/x-python",
+        )
+        self._put(
+            session,
+            _DELIVERY_RECOVERY_REQUEST_PATH,
+            _json_bytes(request),
+            media_type="application/json",
+        )
+        inner = "\n".join(
+            [
+                "python3 "
+                f"{shlex.quote(_DELIVERY_RECOVERY_SCRIPT_PATH)} "
+                f"{shlex.quote(_DELIVERY_RECOVERY_REQUEST_PATH)} "
+                f"> {shlex.quote(_DELIVERY_RECOVERY_RESULT_PATH)} "
+                f"2> {shlex.quote(_DELIVERY_RECOVERY_LOG_PATH)}",
+                "code=$?",
+                f"cat {shlex.quote(_DELIVERY_RECOVERY_RESULT_PATH)}",
+                'if [ "$code" -ne 0 ]; then',
+                f"  tail -c 4000 {shlex.quote(_DELIVERY_RECOVERY_LOG_PATH)} >&2",
+                "fi",
+                "exit 0",
+            ]
+        )
+        result = self._execute(
+            session,
+            f"bash -c {shlex.quote(inner)}",
+            operation="delivery_recovery",
+            timeout_seconds=_DELIVERY_RECOVERY_TIMEOUT_SECONDS,
+        )
+        stdout = result.get("stdout") if isinstance(result, dict) else None
+        verdict = _recovery_verdict(stdout) if isinstance(stdout, str) else None
+        if isinstance(verdict, dict) and verdict.get("ok") is True:
+            logger.info(
+                "Studio migration delivery rebuilt task_id=%s files=%s bytes=%s "
+                "manifest_sha256=%s",
+                session.task_id,
+                verdict.get("files"),
+                verdict.get("bytes"),
+                verdict.get("manifest_sha256"),
+            )
+        else:
+            stderr = result.get("stderr") if isinstance(result, dict) else None
+            logger.warning(
+                "Studio migration delivery could not be rebuilt task_id=%s "
+                "verdict=%s stderr=%s",
+                session.task_id,
+                verdict,
+                str(stderr or "")[:1000],
+            )
+        return verdict
+
+    def _start_app_server_delivery(
+        self,
+        session: MigrationSandboxSession,
+        *,
+        target: str,
+    ) -> bool:
+        """Hand one settled delivery to a Studio background worker."""
+        previous = self._read_delivery_turn_lease(session)
+        attempts = 1
+        if isinstance(previous, dict) and isinstance(previous.get("attempts"), int):
+            attempts = int(previous["attempts"]) + 1
+        self._put(
+            session,
+            _DELIVERY_TURN_PATH,
+            _json_bytes(
+                _delivery_turn_marker(state=_DELIVERY_TURN_RUNNING, attempts=attempts)
+            ),
+            media_type="application/json",
+        )
+        worker = threading.Thread(
+            target=self._app_server_delivery_worker,
+            args=(session, target, attempts),
+            name=f"migration-delivery-{session.session_id[-8:]}",
+            daemon=True,
+        )
+        self._delivery_turns[session.session_id] = worker
+        try:
+            worker.start()
+        except Exception:  # noqa: BLE001 - a failed start keeps the CLI's own state
+            self._delivery_turns.pop(session.session_id, None)
+            logger.exception(
+                "Studio migration delivery turn worker could not start task_id=%s",
+                session.task_id,
+            )
+            return False
+        return True
+
+    def _app_server_delivery_worker(
+        self,
+        session: MigrationSandboxSession,
+        target: str,
+        attempts: int,
+    ) -> None:
+        """Close one delivery on an app-server turn, or keep the CLI's own record."""
+        verdict = False
+        try:
+            try:
+                report = asyncio.run(
+                    self._run_app_server_delivery_turn(session, target=target)
+                )
+            except DeliveryTurnUnavailable as error:
+                logger.warning(
+                    "Studio migration delivery turn unavailable task_id=%s "
+                    "expected_state=%s error_type=%s",
+                    session.task_id,
+                    target,
+                    type(error).__name__,
+                )
+                report = None
+            if report is None:
+                # 没有结论就保留 CLI 自己的交付状态；租约记下这一次没有结论，
+                # 免得之后每次读任务都重开一个回合。
+                logger.warning(
+                    "Studio migration delivery turn returned no verdict; keeping the "
+                    "CLI delivery state task_id=%s expected_state=%s attempts=%s",
+                    session.task_id,
+                    target,
+                    attempts,
+                )
+            else:
+                verdict = self._persist_delivery_report(
+                    session,
+                    report,
+                    expected_state=target,
+                )
+        except Exception:  # noqa: BLE001 - the worker must never kill the process
+            logger.exception(
+                "Studio migration delivery turn failed task_id=%s expected_state=%s",
+                session.task_id,
+                target,
+            )
+        finally:
+            if (
+                self._delivery_turns.get(session.session_id)
+                is threading.current_thread()
+            ):
+                self._delivery_turns.pop(session.session_id, None)
+            with contextlib.suppress(Exception):
+                self._put(
+                    session,
+                    _DELIVERY_TURN_PATH,
+                    _json_bytes(
+                        _delivery_turn_marker(
+                            state=_DELIVERY_TURN_DONE,
+                            attempts=attempts,
+                            verdict=verdict,
+                        )
+                    ),
+                    media_type="application/json",
+                )
+
+    async def _run_app_server_delivery_turn(
+        self,
+        session: MigrationSandboxSession,
+        *,
+        target: str,
+    ) -> dict[str, object] | None:
+        """Run the closing turn while refreshing its lease and recording its events."""
+
+        async def beat() -> None:
+            warned = False
+            while True:
+                await asyncio.sleep(_DELIVERY_TURN_HEARTBEAT_SECONDS)
+                try:
+                    await asyncio.to_thread(
+                        self._put,
+                        session,
+                        _DELIVERY_TURN_PATH,
+                        _json_bytes(
+                            _delivery_turn_marker(state=_DELIVERY_TURN_RUNNING)
+                        ),
+                        media_type="application/json",
+                    )
+                except Exception as error:  # noqa: BLE001 - lease refresh is advisory
+                    if not warned:
+                        warned = True
+                        logger.warning(
+                            "Studio migration delivery turn lease refresh failed "
+                            "task_id=%s error_type=%s",
+                            session.task_id,
+                            type(error).__name__,
+                        )
+
+        async def questioner(
+            questions: tuple[dict[str, object], ...],
+        ) -> dict[str, tuple[str, ...]] | None:
+            """Publish one question set and wait for the page to answer it."""
+            return await self._ask_user(
+                session,
+                questions=questions,
+                attempt=1,
+                window_seconds=_DELIVERY_TURN_INPUT_WINDOW_SECONDS,
+                waited_seconds=waited_seconds,
+            )
+
+        request = None
+        try:
+            request = self._read_json(session, _REQUEST_PATH, optional=True)
+        except MigrationError:
+            request = None
+        model_id = str((request or {}).get("model_id") or "")
+        framework = ""
+        exit_code: object = None
+        try:
+            confirmation = self._read_json(session, _CONFIRMATION_PATH, optional=True)
+            if isinstance(confirmation, dict):
+                framework = str(confirmation.get("framework") or "")
+            process_exit = self._read_json(session, _PROCESS_EXIT_PATH, optional=True)
+            if isinstance(process_exit, dict):
+                exit_code = process_exit.get("exit_code")
+        except MigrationError:
+            logger.warning(
+                "Studio migration delivery turn evidence is incomplete task_id=%s",
+                session.task_id,
+            )
+        await asyncio.to_thread(self._prepare_delivery_turn_cwd, session)
+        activity = AnalysisActivityLog(
+            lambda content: self._put(
+                session,
+                _DELIVERY_TURN_ACTIVITY_PATH,
+                content,
+                media_type="text/plain",
+            ),
+            # 交付回合的 publishArtifact 调用就是产物的交接，页面要看得见。
+            include_dynamic_tools=True,
+        )
+        waited_seconds = [0.0]
+        heartbeat = asyncio.create_task(beat())
+        flusher = asyncio.create_task(activity.run())
+        report: dict[str, object] | None = None
+        try:
+            report = await run_delivery_turn(
+                endpoint=session.endpoint,
+                prompt=_delivery_prompt(
+                    task_id=session.task_id,
+                    framework=framework,
+                    expected_state=target,
+                    exit_code=exit_code,
+                ),
+                cwd=_DELIVERY_TURN_CWD,
+                run_id=session.task_id,
+                expected_state=target,
+                publisher=lambda path: self._publish_delivery_artifact(
+                    session,
+                    path,
+                    expected_state=target,
+                ),
+                model=model_id,
+                timeout_seconds=_DELIVERY_TURN_TIMEOUT_SECONDS,
+                event_sink=activity.record,
+                extra_tools=(
+                    DynamicTool(
+                        name=ASK_TOOL_NAME,
+                        description=DELIVERY_ASK_TOOL_DESCRIPTION,
+                        schema=ASK_TOOL_SCHEMA,
+                        handler=ask_tool_handler(questioner),
+                    ),
+                ),
+                idle_timeout_seconds=(
+                    _DELIVERY_TURN_TIMEOUT_SECONDS
+                    + _DELIVERY_TURN_INPUT_WINDOW_SECONDS
+                    + _DELIVERY_TURN_INPUT_IDLE_MARGIN_SECONDS
+                ),
+                host_wait_seconds=lambda: waited_seconds[0],
+            )
+            return report
+        finally:
+            # 结论已落地：把「提交交付结论」这行收口，别让页面停在进行中。
+            if report is not None:
+                await asyncio.to_thread(activity.complete_dynamic_tools)
+            flusher.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await flusher
+            await activity.aclose()
+            heartbeat.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await heartbeat
+
+    def _prepare_delivery_turn_cwd(self, session: MigrationSandboxSession) -> None:
+        """Make sure the turn has a working directory that is not the deliverable."""
+        try:
+            self._execute(
+                session,
+                f"mkdir -p {shlex.quote(_DELIVERY_TURN_CWD)}",
+                operation="prepare_delivery_turn",
+                timeout_seconds=30,
+            )
+        except Exception as error:  # noqa: BLE001 - a cwd is a convenience, not a gate
+            logger.warning(
+                "Studio migration delivery turn cwd unavailable task_id=%s "
+                "error_type=%s",
+                session.task_id,
+                type(error).__name__,
+            )
+
+    def _publish_delivery_artifact(
+        self,
+        session: MigrationSandboxSession,
+        path: str,
+        *,
+        expected_state: str,
+    ) -> PublishedArtifact:
+        """Read the delivered artifact back and require it to match the CLI manifest.
+
+        This is why the delivery closes on a Studio turn at all: Studio hashes the bytes
+        it pulled itself, so a manifest describing some other archive than the one on
+        disk cannot become this migration's published artifact.
+        """
+        if path != ARTIFACT_PATH:
+            raise DeliveryContractError(f"产物路径必须是 {ARTIFACT_PATH}")
+        content = self._read(
+            session,
+            _DELIVERY_ARTIFACT_PATH,
+            max_bytes=_MAX_ARTIFACT_BYTES,
+        )
+        assert content is not None
+        digest = hashlib.sha256(content).hexdigest()
+        size = len(content)
+        manifest = self._read_json(session, _DELIVERY_RESULT_PATH, optional=True)
+        if not isinstance(manifest, dict):
+            raise DeliveryContractError("迁移产物清单不存在，无法核对产物")
+        try:
+            validated = validate_delivery_result(
+                manifest,
+                expected_run_id=session.task_id,
+                expected_status=expected_state,
+            )
+        except MigrationContractError as error:
+            raise DeliveryContractError(f"迁移产物清单无效（{error}）") from error
+        artifact = validated["artifact"]
+        assert isinstance(artifact, dict)
+        if artifact.get("sha256") != digest or artifact.get("size") != size:
+            raise DeliveryContractError("产物字节与迁移产物清单不一致")
+        return PublishedArtifact(path=ARTIFACT_PATH, sha256=digest, size=size)
+
+    def _persist_delivery_report(
+        self,
+        session: MigrationSandboxSession,
+        report: dict[str, object],
+        *,
+        expected_state: str,
+    ) -> bool:
+        """Keep the closing turn's verdict beside the delivery it explains."""
+        try:
+            validated = validate_delivery_report(
+                report,
+                expected_run_id=session.task_id,
+                expected_state=expected_state,
+            )
+        except MigrationContractError as error:
+            logger.warning(
+                "Studio migration delivery report rejected task_id=%s error=%s",
+                session.task_id,
+                error,
+            )
+            return False
+        self._put(
+            session,
+            _DELIVERY_REPORT_PATH,
+            _json_bytes(validated),
+            media_type="application/json",
+        )
+        warnings = validated.get("warnings")
+        logger.info(
+            "Studio migration delivery turn completed task_id=%s state=%s warnings=%s",
+            session.task_id,
+            expected_state,
+            len(warnings) if isinstance(warnings, list) else 0,
+        )
+        return True
+
+    def _with_delivery_report(
+        self,
+        session: MigrationSandboxSession,
+        task: dict[str, object],
+    ) -> dict[str, object]:
+        """Let the closing turn's verdict stand in for the generic CLI sentence.
+
+        The state still comes from the delivery contract; the turn only supplies the
+        sentence the user reads, and only when it explains that same state.
+        """
+        state = str(task.get("state") or "")
+        if state not in _DELIVERY_SETTLED_STATES:
+            return task
+        report = self._read_delivery_report(session)
+        if not isinstance(report, dict) or report.get("state") != state:
+            return task
+        return {**task, "message": str(report["message"])}
 
     def list_tasks(self, owner_id: str) -> dict[str, list[dict[str, object]]]:
         try:
@@ -2778,7 +5282,8 @@ class MigrationService:
         return {"items": tasks}
 
     def get_task(self, task_id: str, owner_id: str) -> dict[str, object]:
-        return self._task_from_session(self._session(task_id, owner_id))
+        session = self._session(task_id, owner_id)
+        return self._with_delivery_report(session, self._task_from_session(session))
 
     @staticmethod
     def _artifact_status(
@@ -2850,6 +5355,17 @@ class MigrationService:
             "canStop": state in _STOPPABLE_STATES,
             "artifact": artifact_status,
         }
+        # 分析回合和交付收尾回合共用同一张提问卡片：注册表里还有活着的提问，
+        # 页面就必须看到它。任务状态本身不受影响——分析提问时任务仍是分析中，
+        # 交付提问时任务已经落定，卡片同样要出现。
+        pending_input = self._analysis_input.pending(session.session_id)
+        if pending_input is not None:
+            payload["pendingInput"] = ask_payload(pending_input)
+            payload["message"] = (
+                "分析正在等待你的回答"
+                if state == "analyzing"
+                else "交付说明正在等待你的回答"
+            )
         if request.get("model_id"):
             payload["modelId"] = str(request["model_id"])
         if isinstance(request.get("evaluation"), dict):
@@ -2924,6 +5440,9 @@ class MigrationService:
                 confirmation,
                 session.task_id,
             )
+        driver = (
+            self._read_migration_driver(session) if confirmation is not None else None
+        )
         delivery = self._read_json(session, _DELIVERY_STATUS_PATH, optional=True)
         delivery_state = ""
         if delivery is not None:
@@ -2999,6 +5518,36 @@ class MigrationService:
                 error={
                     "code": "MIGRATION_DELIVERY_MISSING",
                     "message": "AgentKit CLI 未生成完整的迁移交付状态。",
+                    "retryable": False,
+                },
+            )
+        if self._migration_driver_lost(driver):
+            assert driver is not None
+            # CLI 不在了，但 agent 可能已经把项目做完：先把打包补上，补不上才是失败。
+            if self._drive_delivery_recovery(session):
+                return self._task_payload(
+                    session,
+                    request,
+                    state="migrating",
+                    message="正在整理迁移结果",
+                    confirmation=confirmation,
+                )
+            logger.warning(
+                "Studio migration delivery driver stopped without a result "
+                "task_id=%s heartbeat_at=%s stale_seconds=%s",
+                session.task_id,
+                driver.get("heartbeat_at"),
+                _MIGRATION_DRIVER_STALE_SECONDS,
+            )
+            return self._task_payload(
+                session,
+                request,
+                state="failed",
+                message="迁移执行进程已中断，请重新发起迁移。",
+                confirmation=confirmation,
+                error={
+                    "code": "MIGRATION_DELIVERY_INTERRUPTED",
+                    "message": "迁移执行进程已中断，未生成完整的迁移交付。",
                     "retryable": False,
                 },
             )
@@ -3311,6 +5860,7 @@ class MigrationService:
             _json_bytes(_analysis_schema()),
             media_type="application/json",
         )
+        detection = self._read_detection(session)
         self._put(
             session,
             _ANALYSIS_PROMPT_PATH,
@@ -3320,15 +5870,100 @@ class MigrationService:
                 input_sha256=str(source["sha256"]),
                 previous_analysis=analysis,
                 answers=body.answers,
+                detection=detection,
             ).encode("utf-8"),
             media_type="text/markdown",
         )
-        self._execute(
+        self._put(
             session,
-            _start_analysis_command(task_id, next_attempt),
-            operation="start_analysis",
-            timeout_seconds=30,
+            _ANALYSIS_RETRY_PROMPT_PATH,
+            _analysis_prompt(
+                request,
+                attempt=next_attempt,
+                input_sha256=str(source["sha256"]),
+                previous_analysis=analysis,
+                answers=body.answers,
+                protocol_retry=True,
+                detection=detection,
+            ).encode("utf-8"),
+            media_type="text/markdown",
         )
+        if self._start_app_server_analysis(
+            session,
+            prompt=_analysis_prompt(
+                request,
+                attempt=next_attempt,
+                input_sha256=str(source["sha256"]),
+                previous_analysis=analysis,
+                answers=body.answers,
+                interactive=True,
+                detection=detection,
+            ),
+            attempt=next_attempt,
+            input_sha256=str(source["sha256"]),
+            model_id=str(request.get("model_id") or ""),
+        ):
+            return self.get_task(task_id, owner_id)
+        self._start_scripted_analysis(session, task_id=task_id, attempt=next_attempt)
+        return self.get_task(task_id, owner_id)
+
+    def submit_analysis_input(
+        self,
+        task_id: str,
+        owner_id: str,
+        body: SubmitAnalysisInputBody,
+    ) -> dict[str, object]:
+        """Hand the answers for an in-turn question back to the waiting analysis.
+
+        This is deliberately not the ``needs_input`` re-run: the questions came from the
+        running app-server turn, so the answers unblock that same turn, which keeps the
+        project exploration it already paid for.
+        """
+        session = self._session(task_id, owner_id)
+        pending = self._analysis_input.pending(session.session_id)
+        if pending is None or pending.request_id != body.request_id:
+            raise MigrationError(
+                "MIGRATION_ANALYSIS_INPUT_GONE",
+                "这次提问已经结束，请刷新页面后按当前分析状态继续。",
+                status_code=409,
+            )
+        question_ids = [str(question["id"]) for question in pending.questions]
+        if set(body.answers) - set(question_ids):
+            raise MigrationError(
+                "MIGRATION_ANALYSIS_INPUT_INVALID",
+                "回答与当前分析问题不匹配，请刷新后重试。",
+                status_code=409,
+            )
+        if any(
+            not body.answers.get(question_id, "").strip()
+            for question_id in question_ids
+        ):
+            raise MigrationError(
+                "MIGRATION_ANALYSIS_INPUT_REQUIRED",
+                "请先回答当前分析的全部问题。",
+                status_code=422,
+            )
+        try:
+            answers = normalize_answers(
+                {question_id: body.answers[question_id] for question_id in question_ids}
+            )
+        except AnalysisAskError as error:
+            # 请求体已经校验过，这里只是兜底：回答不接受就走同一类错误码。
+            raise MigrationError(
+                "MIGRATION_ANALYSIS_INPUT_INVALID",
+                f"回答无法提交（{error}）。",
+                status_code=409,
+            ) from error
+        if not self._analysis_input.resolve(
+            session.session_id,
+            request_id=body.request_id,
+            answers=answers,
+        ):
+            raise MigrationError(
+                "MIGRATION_ANALYSIS_INPUT_GONE",
+                "这次提问已经结束，请刷新页面后按当前分析状态继续。",
+                status_code=409,
+            )
         return self.get_task(task_id, owner_id)
 
     def confirm(
@@ -3546,6 +6181,16 @@ class MigrationService:
                     items.extend(
                         _parse_activity_log(content, attempt, phase="migration")
                     )
+            # 交付收尾回合只在 app-server 上存在，它的事件同样写回 codex exec 行格式，
+            # 这样迁移页在 CLI 收尾之后还能继续看到 Codex 在做什么。
+            turn_log = self._read(
+                session,
+                _DELIVERY_TURN_ACTIVITY_PATH,
+                max_bytes=_MAX_ACTIVITY_LOG_BYTES,
+                optional=True,
+            )
+            if turn_log is not None:
+                items.extend(_parse_activity_log(turn_log, 1, phase="delivery"))
             return {
                 "available": True,
                 "complete": task["state"] in _ACTIVITY_COMPLETE_STATES,
@@ -3574,7 +6219,7 @@ class MigrationService:
         items: list[dict[str, object]] = []
         analysis_log = self._read(
             session,
-            f"{MIGRATION_ROOT}/diagnostics/analysis/attempt-{analysis_attempt}.log",
+            _analysis_activity_path(analysis_attempt),
             max_bytes=_MAX_ACTIVITY_LOG_BYTES,
             optional=True,
         )
@@ -3901,7 +6546,35 @@ class MigrationService:
                 "迁移产物完整性校验失败。",
                 status_code=502,
             )
+        self._verify_driver_attestation(session, descriptor)
         return content
+
+    def _verify_driver_attestation(
+        self,
+        session: MigrationSandboxSession,
+        descriptor: dict[str, object],
+    ) -> None:
+        """Require the published driver digest to agree with the delivery manifest.
+
+        The manifest is produced by the CLI, the digest by the launch script that
+        supervised it.  When both are present they must describe the same archive,
+        otherwise the bytes changed after the run that produced them.
+        """
+        driver = self._read_migration_driver(session)
+        if not isinstance(driver, dict) or driver.get("state") != "finished":
+            return
+        published = driver.get("artifact")
+        if not isinstance(published, dict):
+            return
+        if (
+            published.get("sha256") != descriptor["sha256"]
+            or published.get("size") != descriptor["size"]
+        ):
+            raise MigrationError(
+                "MIGRATION_ARTIFACT_INTEGRITY_FAILED",
+                "迁移产物与交付发布清单不一致。",
+                status_code=502,
+            )
 
     def materialize_deployment(
         self,

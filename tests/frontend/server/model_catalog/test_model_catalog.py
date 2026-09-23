@@ -46,7 +46,8 @@ from veadk.cli.studio_model_catalog import (
 
 def test_studio_development_model_allowlists_are_provider_specific() -> None:
     assert VOLCENGINE_STUDIO_DEVELOPMENT_MODEL_IDS == {
-        "doubao-seed-2-1-pro-260628",
+        "doubao-seed-2-1-pro-260915",
+        "deepseek-v4-1-flash-260910",
         "deepseek-v4-pro-ga-260813",
         "doubao-seed-evolving",
     }
@@ -439,7 +440,8 @@ async def test_route_uses_camel_case_response() -> None:
         (
             "volcengine",
             [
-                "doubao-seed-2-1-pro-260628",
+                "doubao-seed-2-1-pro-260915",
+                "deepseek-v4-1-flash-260910",
                 "deepseek-v4-pro-ga-260813",
                 "doubao-seed-evolving",
             ],
@@ -455,8 +457,9 @@ async def test_development_scope_filters_models_by_provider_allowlist(
     expected_ids: list[str],
 ) -> None:
     model_ids = [
-        "doubao-seed-2-1-pro-260628",
+        "doubao-seed-2-1-pro-260915",
         "dola-seed-2-1-turbo-260628",
+        "deepseek-v4-1-flash-260910",
         "deepseek-v4-pro-ga-260813",
         "doubao-seed-evolving",
         "unlisted-model",

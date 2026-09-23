@@ -98,7 +98,12 @@
     "title": "Codex activity",
     "startingAnalysis": "Codex is starting the analysis…",
     "startingMigration": "Codex is starting the migration…",
-    "loadError": "Codex activity is temporarily unavailable. The current task is unaffected."
+    "loadError": "Codex activity is temporarily unavailable. The current task is unaffected.",
+    "liveAnalyzing": "Analyzing the project",
+    "liveMigrating": "Running the migration",
+    "liveValidating": "Verifying the migration",
+    "livePackaging": "Packaging the migration",
+    "liveDelivery": "Reviewing the delivery"
   },
   "artifact": {
     "title": "Migration output",
@@ -213,10 +218,18 @@
     "submitting": "Continuing analysis…",
     "submit": "Submit and continue analysis"
   },
+  "pendingInput": {
+    "ariaLabel": "Answer the questions the migration needs you to decide",
+    "title": "The migration needs your answer",
+    "description": "Your answer continues the current step instead of restarting it",
+    "other": "Other",
+    "otherPlaceholder": "Or type your own answer",
+    "submitting": "Submitting your answer…",
+    "submit": "Submit answer and continue"
+  },
   "confirmation": {
     "ariaLabel": "Confirm migration method",
     "title": "Confirm migration method",
-    "description": "Migration starts only after confirmation",
     "framework": "Migration method",
     "frameworkPlaceholder": "Select a migration method",
     "agentName": "Agent name",

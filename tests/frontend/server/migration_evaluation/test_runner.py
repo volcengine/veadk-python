@@ -22,6 +22,16 @@ from typing import Any
 
 import pytest
 
+from frontend.server.migration.evaluation.judge_app_server import (
+    JudgeContractError,
+    validate_judge_cases,
+)
+from frontend.server.migration.evaluation.judge_channel import (
+    JUDGE_APP_SERVER_ENV,
+    JUDGE_CHANNEL_SCHEMA_VERSION,
+    JUDGE_TOOL_NAME,
+    judge_channel_paths,
+)
 from frontend.server.migration.evaluation.runner import (
     AGENTKIT_CONFIG_MAX_BYTES,
     AgentkitConfigError,
@@ -140,7 +150,10 @@ def test_uploaded_runner_source_compiles_and_has_bounded_security_contracts() ->
     assert "cloud_credential_path" in source
 
 
-def test_start_uploads_non_secret_assets_and_background_command() -> None:
+def test_start_uploads_non_secret_assets_and_background_command(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(JUDGE_APP_SERVER_ENV, raising=False)
     gateway = FakeGateway()
     role_calls: list[dict[str, object]] = []
 
@@ -175,6 +188,15 @@ def test_start_uploads_non_secret_assets_and_background_command() -> None:
     assert config["execution_results_path"].endswith(
         "/attempt-1/execution-results.jsonl"
     )
+    judge_request_path, judge_response_path = judge_channel_paths(
+        EVALUATION_ROOT,
+        1,
+    )
+    assert config["judge_channel"] == {
+        "request_path": judge_request_path,
+        "response_path": judge_response_path,
+        "tool_name": JUDGE_TOOL_NAME,
+    }
     assert config["dimension_definitions"][0]["default_weight"] == 1
     assert config["remote_write_not_after"] == 1_788_777_600.0
     assert config["agentkit_config_protocol"] == "legacy"
@@ -198,6 +220,33 @@ def test_start_uploads_non_secret_assets_and_background_command() -> None:
     assert "VEADK_MIGRATION_EVALUATION_STARTED_V1" in gateway.commands[1][1]
     assert "import yaml" not in gateway.commands[1][1]
     assert all("cloud-sk" not in command for _, command, _ in gateway.commands)
+
+
+def test_start_pins_the_scripted_judge_when_the_channel_is_switched_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(JUDGE_APP_SERVER_ENV, "0")
+    gateway = FakeGateway()
+    runner = SandboxMigrationEvaluationRunner(  # type: ignore[arg-type]
+        gateway,
+        resolve_credentials=lambda: ("cloud-ak", "cloud-sk", "cloud-token"),
+        provider="byteplus",
+        resolve_runtime_role=lambda **_kwargs: SHARED_RUNTIME_ROLE,
+    )
+
+    runner.start(
+        _session(),
+        task_id=TASK_ID,
+        attempt=1,
+        runtime_name="migration-eval-111111111111-a1",
+        dimensions=["semantic_fidelity"],
+        dataset_sha256=DATASET_SHA256,
+        artifact_sha256=ARTIFACT_SHA256,
+        secret_path=None,
+    )
+
+    config = json.loads(gateway.files[f"{EVALUATION_ROOT}/control/runner-1.json"])
+    assert config["judge_channel"] is None
 
 
 def test_start_localizes_english_judge_configuration() -> None:
@@ -547,6 +596,542 @@ def _observation(text: str) -> dict[str, object]:
             "captured_bytes": len(text.encode("utf-8")) + 13,
         },
     }
+
+
+def _channel_config(tmp_path: Path, config: dict[str, Any]) -> dict[str, Any]:
+    """Point one runner config at a judge channel on disk."""
+    channel = tmp_path / "judge"
+    channel.mkdir(exist_ok=True)
+    request = channel / "request.json"
+    response = channel / "response.json"
+    config["judge_channel"] = {
+        "request_path": str(request),
+        "response_path": str(response),
+        "tool_name": JUDGE_TOOL_NAME,
+    }
+    return config
+
+
+def _judged_case(case_id: str) -> dict[str, Any]:
+    return {
+        "case_id": case_id,
+        "dimensions": [
+            {
+                "id": "semantic_fidelity",
+                "score": 0.8,
+                "reason": "输出与期望一致",
+                "evidence": ["输出证据"],
+                "evidence_sources": ["observed_output"],
+                "severity": "low",
+            }
+        ],
+    }
+
+
+def _judge_response(
+    request_id: str,
+    cases: list[dict[str, Any]],
+    *,
+    thread_id: str = "thread-channel",
+) -> bytes:
+    return json.dumps(
+        {
+            "schema_version": JUDGE_CHANNEL_SCHEMA_VERSION,
+            "request_id": request_id,
+            "ok": True,
+            "thread_id": thread_id,
+            "cases": cases,
+            "created_at": "2026-09-07T10:00:00Z",
+        }
+    ).encode("utf-8")
+
+
+def _judge_error_response(
+    request_id: str, code: str = "judge_turn_unavailable"
+) -> bytes:
+    return json.dumps(
+        {
+            "schema_version": JUDGE_CHANNEL_SCHEMA_VERSION,
+            "request_id": request_id,
+            "ok": False,
+            "thread_id": "",
+            "error": {"code": code, "message": "裁判回合不可用"},
+            "created_at": "2026-09-07T10:00:00Z",
+        }
+    ).encode("utf-8")
+
+
+def _diagnostics(config: dict[str, Any]) -> list[str]:
+    path = Path(config["diagnostic_path"])
+    if not path.is_file():
+        return []
+    return [json.loads(line)["event"] for line in path.read_text().splitlines()]
+
+
+def test_runner_source_keeps_the_channel_contract_in_step() -> None:
+    namespace = _runner_namespace()
+
+    assert namespace["JUDGE_CHANNEL_SCHEMA_VERSION"] == JUDGE_CHANNEL_SCHEMA_VERSION
+
+
+def test_judge_channel_delivers_the_batch_without_running_codex(
+    tmp_path: Path,
+) -> None:
+    namespace = _runner_namespace()
+    config = _channel_config(tmp_path, _judge_config(tmp_path))
+    commands: list[list[str]] = []
+
+    def run_capped(args: list[str], **_kwargs: object) -> tuple[int, bytes, int]:
+        commands.append(args)
+        raise AssertionError("the channel must not fall back to codex exec")
+
+    namespace["run_capped"] = run_capped
+    Path(config["judge_channel"]["response_path"]).write_bytes(
+        _judge_response("batch-001-001-attempt-1", [_judged_case("case-1")])
+    )
+
+    judged = namespace["judge_batch"](
+        config,
+        0,
+        [_case("case-1")],
+        {"case-1": _observation("hello")},
+        None,
+        {},
+    )
+
+    assert [item["case_id"] for item in judged] == ["case-1"]
+    assert commands == []
+    request = json.loads(
+        Path(config["judge_channel"]["request_path"]).read_text(encoding="utf-8")
+    )
+    assert request["request_id"] == "batch-001-001-attempt-1"
+    assert request["batch_start"] == 0
+    assert request["batch_end"] == 1
+    assert request["case_ids"] == ["case-1"]
+    assert request["dimensions"] == ["semantic_fidelity"]
+    assert request["prompt_version"] == namespace["JUDGE_PROMPT_VERSION"]
+    assert request["budget_seconds"] == namespace["JUDGE_CHANNEL_TIMEOUT"]
+    assert request["thread_id"] == ""
+    assert request["case_context"] == [
+        {
+            "case_id": "case-1",
+            "state": "succeeded",
+            "criteria": False,
+            "contract": False,
+            "runtime_observation": True,
+        }
+    ]
+    assert JUDGE_TOOL_NAME in request["prompt"]
+    assert "评测用例与观察结果" in request["prompt"]
+    thread_record = json.loads(Path(config["thread_path"]).read_text())
+    assert thread_record["thread_id"] == "thread-channel"
+    batch_record = json.loads(
+        (Path(config["batch_root_path"]) / "batch-001-001.json").read_text()
+    )
+    assert batch_record["case_ids"] == ["case-1"]
+    assert _diagnostics(config) == []
+
+
+def test_judge_channel_resumes_and_rebinds_the_bound_thread(tmp_path: Path) -> None:
+    namespace = _runner_namespace()
+    config = _channel_config(tmp_path, _judge_config(tmp_path))
+    config["dimensions"] = ["semantic_fidelity"]
+    namespace["run_capped"] = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        AssertionError("no codex exec")
+    )
+    response_path = Path(config["judge_channel"]["response_path"])
+    response_path.write_bytes(
+        _judge_response(
+            "batch-001-001-attempt-1",
+            [_judged_case("case-1")],
+            thread_id="thread-first",
+        )
+    )
+    observations = {
+        "case-1": _observation("one"),
+        "case-2": _observation("two"),
+    }
+
+    namespace["judge_batch"](config, 0, [_case("case-1")], observations, None, {})
+    response_path.write_bytes(
+        _judge_response(
+            "batch-002-002-attempt-1",
+            [_judged_case("case-2")],
+            thread_id="thread-second",
+        )
+    )
+    namespace["judge_batch"](config, 1, [_case("case-2")], observations, None, {})
+
+    request = json.loads(
+        Path(config["judge_channel"]["request_path"]).read_text(encoding="utf-8")
+    )
+    assert request["thread_id"] == "thread-first"
+    thread_record = json.loads(Path(config["thread_path"]).read_text())
+    assert thread_record["thread_id"] == "thread-second"
+
+
+def test_judge_channel_falls_back_to_codex_exec_on_an_error_envelope(
+    tmp_path: Path,
+) -> None:
+    namespace = _runner_namespace()
+    config = _channel_config(tmp_path, _judge_config(tmp_path))
+    commands: list[list[str]] = []
+
+    def run_capped(args: list[str], **_kwargs: object) -> tuple[int, bytes, int]:
+        commands.append(args)
+        events = _judge_events("thread-123", ["case-1"])
+        return 0, events, len(events)
+
+    namespace["run_capped"] = run_capped
+    Path(config["judge_channel"]["response_path"]).write_bytes(
+        _judge_error_response("batch-001-001-attempt-1")
+    )
+
+    judged = namespace["judge_batch"](
+        config,
+        0,
+        [_case("case-1")],
+        {"case-1": _observation("hello")},
+        None,
+        {},
+    )
+
+    assert judged[0]["case_id"] == "case-1"
+    assert [command[0] for command in commands] == ["codex"]
+    assert _diagnostics(config) == ["judge_channel_unavailable"]
+    assert json.loads(Path(config["thread_path"]).read_text())["thread_id"] == (
+        "thread-123"
+    )
+
+
+def test_judge_channel_rejects_a_verdict_that_is_not_a_case_list(
+    tmp_path: Path,
+) -> None:
+    """Studio must send the case list itself, not the whole tool-call arguments."""
+    namespace = _runner_namespace()
+    config = _channel_config(tmp_path, _judge_config(tmp_path))
+    namespace["run_capped"] = lambda *_args, **_kwargs: (
+        0,
+        _judge_events("thread-123", ["case-1"]),
+        0,
+    )
+    Path(config["judge_channel"]["response_path"]).write_bytes(
+        _judge_response(
+            "batch-001-001-attempt-1",
+            {"cases": [_judged_case("case-1")]},  # type: ignore[arg-type]
+        )
+    )
+
+    judged = namespace["judge_batch"](
+        config,
+        0,
+        [_case("case-1")],
+        {"case-1": _observation("hello")},
+        None,
+        {},
+    )
+
+    assert judged[0]["case_id"] == "case-1"
+    assert "judge_channel_output_rejected" in _diagnostics(config)
+
+
+def test_runner_and_studio_agree_on_the_judge_payload_contract(tmp_path: Path) -> None:
+    """The channel's in-turn validator and the runner's authority must not drift.
+
+    Studio rejects a bad payload inside the turn so Codex can correct itself, and the
+    runner repeats the checks before caching the batch.  A payload both sides disagree
+    about would either waste a whole batch or cache a verdict the runner refuses.
+    """
+    namespace = _runner_namespace()
+    config = _judge_config(tmp_path)
+    config["dimensions"] = ["semantic_fidelity"]
+    cases = [_case("case-1")]
+    observations = {"case-1": _observation("hello")}
+    case_context = namespace["judge_case_context"](cases, observations, None)
+    valid = _judged_case("case-1")
+
+    def mutate(**changes: Any) -> dict[str, Any]:
+        payload = json.loads(json.dumps(valid))
+        payload["dimensions"][0].update(changes)
+        return payload
+
+    def studio_accepts(payload: dict[str, Any]) -> bool:
+        try:
+            validate_judge_cases(
+                {"cases": [payload]},
+                case_context=case_context,
+                dimensions=config["dimensions"],
+            )
+        except JudgeContractError:
+            return False
+        return True
+
+    def runner_accepts(payload: dict[str, Any]) -> bool:
+        try:
+            namespace["validate_judged_cases"](
+                config,
+                cases,
+                [payload],
+                observations,
+                None,
+            )
+        except RuntimeError:
+            return False
+        return True
+
+    payloads = {
+        "valid": valid,
+        "score above one": mutate(score=1.5),
+        "score without severity": mutate(score=None),
+        "severity without score": mutate(severity="unknown"),
+        "unknown severity": mutate(severity="severe"),
+        "unknown evidence source": mutate(evidence_sources=["trust_me"]),
+        "duplicate evidence source": mutate(
+            evidence_sources=["observed_output", "observed_output"]
+        ),
+        "empty reason": mutate(reason="   "),
+        "evidence not a list": mutate(evidence="输出证据"),
+        "missing score": mutate(score=None, severity="unknown"),
+    }
+
+    for label, payload in payloads.items():
+        assert studio_accepts(payload) == runner_accepts(payload), label
+
+    assert studio_accepts(valid) is True
+    assert runner_accepts(valid) is True
+    assert studio_accepts(mutate(score=1.5)) is False
+    assert runner_accepts(mutate(evidence_sources=["trust_me"])) is False
+
+
+def test_runner_answers_an_unscored_workflow_dimension_with_na(tmp_path: Path) -> None:
+    """The runner rewrites an unsupported workflow verdict; Studio rejects it instead.
+
+    The rewrite only ever applies to the scripted judge, because Studio refuses such a
+    payload inside the turn and asks Codex to answer N/A itself.
+    """
+    namespace = _runner_namespace()
+    config = _judge_config(tmp_path)
+    config["dimensions"] = ["workflow_tool_fidelity"]
+    config["dimension_definitions"][0]["id"] = "workflow_tool_fidelity"
+    cases = [_case("case-1")]
+    observations = {"case-1": {**_observation("hello"), "runtime_observation": None}}
+    payload = _judged_case("case-1")
+    payload["dimensions"][0]["id"] = "workflow_tool_fidelity"
+
+    returned = namespace["validate_judged_cases"](
+        config,
+        cases,
+        [payload],
+        observations,
+        None,
+    )
+
+    dimension = returned[0]["dimensions"][0]
+    assert dimension["score"] is None
+    assert dimension["severity"] == "unknown"
+    assert dimension["evidence"] == []
+
+
+def test_judge_channel_stays_off_for_the_rest_of_the_run(tmp_path: Path) -> None:
+    namespace = _runner_namespace()
+    config = _channel_config(tmp_path, _judge_config(tmp_path))
+    namespace["JUDGE_CHANNEL_TIMEOUT"] = 0.05
+    namespace["JUDGE_CHANNEL_POLL_SECONDS"] = 0.01
+    commands: list[list[str]] = []
+
+    def run_capped(args: list[str], **_kwargs: object) -> tuple[int, bytes, int]:
+        commands.append(args)
+        case_id = "case-1" if len(commands) == 1 else "case-2"
+        events = _judge_events("thread-123", [case_id])
+        return 0, events, len(events)
+
+    namespace["run_capped"] = run_capped
+    Path(config["judge_channel"]["response_path"]).write_bytes(
+        _judge_error_response("batch-001-001-attempt-1")
+    )
+    observations = {
+        "case-1": _observation("one"),
+        "case-2": _observation("two"),
+    }
+
+    namespace["judge_batch"](config, 0, [_case("case-1")], observations, None, {})
+    Path(config["judge_channel"]["response_path"]).write_bytes(
+        _judge_response("batch-002-002-attempt-1", [_judged_case("case-2")])
+    )
+    namespace["judge_batch"](config, 1, [_case("case-2")], observations, None, {})
+
+    # 首批失败后，第二批不再尝试通道：既没有新的通道诊断，也没有第二次等待。
+    assert [command[0] for command in commands] == ["codex", "codex"]
+    assert _diagnostics(config) == ["judge_channel_unavailable"]
+
+
+def test_judge_channel_times_out_and_falls_back_to_codex_exec(tmp_path: Path) -> None:
+    namespace = _runner_namespace()
+    config = _channel_config(tmp_path, _judge_config(tmp_path))
+    namespace["JUDGE_CHANNEL_TIMEOUT"] = 0.05
+    namespace["JUDGE_CHANNEL_POLL_SECONDS"] = 0.01
+    commands: list[list[str]] = []
+
+    def run_capped(args: list[str], **_kwargs: object) -> tuple[int, bytes, int]:
+        commands.append(args)
+        events = _judge_events("thread-123", ["case-1"])
+        return 0, events, len(events)
+
+    namespace["run_capped"] = run_capped
+
+    judged = namespace["judge_batch"](
+        config,
+        0,
+        [_case("case-1")],
+        {"case-1": _observation("hello")},
+        None,
+        {},
+    )
+
+    assert judged[0]["case_id"] == "case-1"
+    assert [command[0] for command in commands] == ["codex"]
+    assert _diagnostics(config) == ["judge_channel_timeout"]
+
+
+def test_judge_channel_declares_the_smaller_of_the_two_windows(tmp_path: Path) -> None:
+    namespace = _runner_namespace()
+    config = _channel_config(tmp_path, _judge_config(tmp_path))
+    namespace["JUDGE_CHANNEL_TIMEOUT"] = 240
+    Path(config["judge_channel"]["response_path"]).write_bytes(
+        _judge_response("batch-001-001-attempt-1", [_judged_case("case-1")])
+    )
+
+    namespace["judge_batch"](
+        config,
+        0,
+        [_case("case-1")],
+        {"case-1": _observation("hello")},
+        None,
+        {},
+    )
+
+    request = json.loads(
+        Path(config["judge_channel"]["request_path"]).read_text(encoding="utf-8")
+    )
+    assert request["budget_seconds"] == 240
+
+
+def test_judge_fallback_uses_the_budget_left_after_the_channel(tmp_path: Path) -> None:
+    namespace = _runner_namespace()
+    config = _channel_config(tmp_path, _judge_config(tmp_path))
+    namespace["JUDGE_CHANNEL_TIMEOUT"] = 0.15
+    namespace["JUDGE_CHANNEL_POLL_SECONDS"] = 0.01
+    namespace["JUDGE_TIMEOUT"] = 0.2
+    timeouts: list[object] = []
+
+    def run_capped(_args: list[str], **kwargs: object) -> tuple[int, bytes, int]:
+        timeouts.append(kwargs["timeout"])
+        events = _judge_events("thread-123", ["case-1"])
+        return 0, events, len(events)
+
+    namespace["run_capped"] = run_capped
+
+    judged = namespace["judge_batch"](
+        config,
+        0,
+        [_case("case-1")],
+        {"case-1": _observation("hello")},
+        None,
+        {},
+    )
+
+    assert judged[0]["case_id"] == "case-1"
+    request = json.loads(
+        Path(config["judge_channel"]["request_path"]).read_text(encoding="utf-8")
+    )
+    # 声明的是两者中更小的那个：本批还剩 0.2s，通道上限 0.15s。
+    assert request["budget_seconds"] == namespace["JUDGE_CHANNEL_TIMEOUT"]
+    assert _diagnostics(config) == ["judge_channel_timeout"]
+    # 兜底拿到的是通道用完之后的时间，而不是进入本批时的 0.2s。
+    assert len(timeouts) == 1
+    assert 0 < float(timeouts[0]) < 0.1  # type: ignore[arg-type]
+
+
+def test_judge_channel_ignores_another_batch_response(tmp_path: Path) -> None:
+    namespace = _runner_namespace()
+    config = _channel_config(tmp_path, _judge_config(tmp_path))
+    namespace["JUDGE_CHANNEL_TIMEOUT"] = 0.05
+    namespace["JUDGE_CHANNEL_POLL_SECONDS"] = 0.01
+    namespace["run_capped"] = lambda *_args, **_kwargs: (
+        0,
+        _judge_events("thread-123", ["case-1"]),
+        0,
+    )
+    Path(config["judge_channel"]["response_path"]).write_bytes(
+        _judge_response("batch-009-009-attempt-1", [_judged_case("case-9")])
+    )
+
+    judged = namespace["judge_batch"](
+        config,
+        0,
+        [_case("case-1")],
+        {"case-1": _observation("hello")},
+        None,
+        {},
+    )
+
+    assert judged[0]["case_id"] == "case-1"
+    assert _diagnostics(config) == ["judge_channel_timeout"]
+
+
+def test_judge_channel_rejects_a_verdict_that_violates_the_batch_contract(
+    tmp_path: Path,
+) -> None:
+    namespace = _runner_namespace()
+    config = _channel_config(tmp_path, _judge_config(tmp_path))
+    namespace["run_capped"] = lambda *_args, **_kwargs: (
+        0,
+        _judge_events("thread-123", ["case-1"]),
+        0,
+    )
+    # 返回了别的用例：Studio 侧应当已经拒绝，这里必须再拒绝一次并回退。
+    Path(config["judge_channel"]["response_path"]).write_bytes(
+        _judge_response("batch-001-001-attempt-1", [_judged_case("case-2")])
+    )
+
+    judged = namespace["judge_batch"](
+        config,
+        0,
+        [_case("case-1")],
+        {"case-1": _observation("hello")},
+        None,
+        {},
+    )
+
+    assert judged[0]["case_id"] == "case-1"
+    assert "judge_channel_output_rejected" in _diagnostics(config)
+
+
+def test_judge_without_a_channel_still_uses_codex_exec(tmp_path: Path) -> None:
+    namespace = _runner_namespace()
+    config = _judge_config(tmp_path)
+    config["judge_channel"] = None
+    commands: list[list[str]] = []
+
+    def run_capped(args: list[str], **kwargs: object) -> tuple[int, bytes, int]:
+        commands.append(args)
+        events = _judge_events("thread-123", ["case-1"])
+        assert JUDGE_TOOL_NAME not in str(kwargs["input_text"])
+        return 0, events, len(events)
+
+    namespace["run_capped"] = run_capped
+
+    namespace["judge_batch"](
+        config,
+        0,
+        [_case("case-1")],
+        {"case-1": _observation("hello")},
+        None,
+        {},
+    )
+
+    assert [command[0] for command in commands] == ["codex"]
+    assert not Path(config["judge_channel"] or tmp_path / "judge").exists()
 
 
 def test_credential_file_requires_mode_600_and_is_one_shot(tmp_path: Path) -> None:
@@ -1125,7 +1710,7 @@ def test_judge_batches_resume_one_bound_thread_and_reuse_cached_batch(
     batch_record = json.loads(
         (Path(config["batch_root_path"]) / "batch-001-001.json").read_text()
     )
-    assert batch_record["prompt_version"] == 3
+    assert batch_record["prompt_version"] == 4
     assert batch_record["batch_start"] == 0
     assert batch_record["batch_end"] == 1
 
@@ -1250,7 +1835,10 @@ def test_judge_retries_share_one_total_time_budget(tmp_path: Path) -> None:
             {},
         )
 
-    assert timeouts == pytest.approx([300.0, 50.0])
+    # 两次重试共享同一个单批预算：第二次只剩第一次用剩的时间。
+    assert timeouts == pytest.approx(
+        [namespace["JUDGE_TIMEOUT"], namespace["JUDGE_TIMEOUT"] - 250.0]
+    )
 
 
 def test_judge_resumes_persisted_thread_after_runner_restart(tmp_path: Path) -> None:

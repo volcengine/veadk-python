@@ -19,6 +19,8 @@ from typing import Any
 
 import pytest
 
+from veadk.cli.studio_model_catalog import VOLCENGINE_STUDIO_AGENT_MODEL_NAME
+
 from frontend.server.environments import (
     _create_environment_tools_client,
     _environment_tool_model_env,
@@ -79,7 +81,7 @@ def test_environment_tools_client_is_provider_scoped(
         (
             "volcengine",
             "cn-beijing",
-            "doubao-seed-2-1-pro-260628",
+            VOLCENGINE_STUDIO_AGENT_MODEL_NAME,
             "https://ark.cn-beijing.volces.com/api/v3",
         ),
         (

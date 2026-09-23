@@ -98,7 +98,12 @@
     "title": "Codex 执行动态",
     "startingAnalysis": "Codex 正在开始分析…",
     "startingMigration": "Codex 正在开始迁移…",
-    "loadError": "暂时无法读取 Codex 执行动态，不影响当前任务。"
+    "loadError": "暂时无法读取 Codex 执行动态，不影响当前任务。",
+    "liveAnalyzing": "正在分析项目",
+    "liveMigrating": "正在执行迁移",
+    "liveValidating": "正在校验迁移结果",
+    "livePackaging": "正在整理迁移产物",
+    "liveDelivery": "正在核对交付产物"
   },
   "artifact": {
     "title": "迁移产物",
@@ -213,10 +218,18 @@
     "submitting": "正在继续分析…",
     "submit": "提交并继续分析"
   },
+  "pendingInput": {
+    "ariaLabel": "回答迁移需要你决定的问题",
+    "title": "迁移需要你的回答",
+    "description": "回答后会在当前这一步里继续，不需要重新开始",
+    "other": "其他",
+    "otherPlaceholder": "也可以直接输入你的答案",
+    "submitting": "正在提交回答…",
+    "submit": "提交回答并继续"
+  },
   "confirmation": {
     "ariaLabel": "确认迁移方式",
     "title": "确认迁移方式",
-    "description": "确认后才会执行实际迁移",
     "framework": "迁移方式",
     "frameworkPlaceholder": "选择迁移方式",
     "agentName": "Agent 名称",

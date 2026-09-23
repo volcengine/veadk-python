@@ -47,21 +47,35 @@ def _ctx(agent: LlmAgent, run_config: RunConfig) -> InvocationContext:
     )
 
 
+def _overlapped(windows: dict[str, tuple[float, float]]) -> bool:
+    """Whether both tool calls were in flight at the same time.
+
+    Two calls that are handed to a thread pool overlap by construction, and two that
+    run on the caller's thread cannot, so this is the property the tests are after —
+    a total wall-clock bound only says how loaded the machine was.
+    """
+    first, second = windows["a"], windows["b"]
+    return min(first[1], second[1]) > max(first[0], second[0])
+
+
 async def _run_two_sync_tool_calls(
     run_config: RunConfig,
     *,
     tool_name: str = "blocking_tool",
     agent_tool_thread_pool_config: ToolThreadPoolConfig | None = None,
-) -> tuple[float, float, dict[str, int | None]]:
+) -> tuple[float, float, dict[str, int | None], dict[str, tuple[float, float]]]:
     starts: dict[str, float] = {}
+    windows: dict[str, tuple[float, float]] = {}
     parallel_call_counts: dict[str, int | None] = {}
 
     def blocking_tool(label: str, delay: float, tool_context: ToolContext) -> dict:
-        starts[label] = time.perf_counter()
+        started = time.perf_counter()
+        starts[label] = started
         parallel_call_counts[label] = getattr(
             tool_context, "_veadk_parallel_tool_call_count", None
         )
         time.sleep(delay)
+        windows[label] = (started, time.perf_counter())
         return {"label": label}
 
     def run_code(label: str, delay: float, tool_context: ToolContext) -> dict:
@@ -110,7 +124,7 @@ async def _run_two_sync_tool_calls(
     assert set(starts) == {"a", "b"}
 
     start_gap = abs(starts["b"] - starts["a"])
-    return start_gap, elapsed, parallel_call_counts
+    return start_gap, elapsed, parallel_call_counts, windows
 
 
 @pytest.mark.asyncio
@@ -120,30 +134,33 @@ async def test_sync_tool_calls_stay_serial_without_thread_pool_config(
     monkeypatch.setenv("VEADK_TOOL_THREAD_POOL_MAX_WORKERS", "2")
     patch_adk_sync_tool_thread_pool()
 
-    start_gap, elapsed, _ = await _run_two_sync_tool_calls(RunConfig(max_llm_calls=5))
+    start_gap, elapsed, _, windows = await _run_two_sync_tool_calls(
+        RunConfig(max_llm_calls=5)
+    )
 
     assert start_gap >= 0.18
     assert elapsed >= 0.38
+    assert not _overlapped(windows)
 
 
 @pytest.mark.asyncio
 async def test_sync_tool_calls_use_agent_thread_pool_when_configured() -> None:
     patch_adk_sync_tool_thread_pool()
 
-    start_gap, elapsed, _ = await _run_two_sync_tool_calls(
+    start_gap, _, _, windows = await _run_two_sync_tool_calls(
         RunConfig(max_llm_calls=5),
         agent_tool_thread_pool_config=ToolThreadPoolConfig(max_workers=2),
     )
 
     assert start_gap < 0.1
-    assert elapsed < 0.35
+    assert _overlapped(windows)
 
 
 @pytest.mark.asyncio
 async def test_sync_tool_calls_use_thread_pool_when_configured() -> None:
     patch_adk_sync_tool_thread_pool()
 
-    start_gap, elapsed, _ = await _run_two_sync_tool_calls(
+    start_gap, _, _, windows = await _run_two_sync_tool_calls(
         RunConfig(
             max_llm_calls=5,
             tool_thread_pool_config=ToolThreadPoolConfig(max_workers=2),
@@ -151,7 +168,7 @@ async def test_sync_tool_calls_use_thread_pool_when_configured() -> None:
     )
 
     assert start_gap < 0.1
-    assert elapsed < 0.35
+    assert _overlapped(windows)
 
 
 @pytest.mark.asyncio
@@ -161,7 +178,7 @@ async def test_run_code_calls_stay_serial_without_thread_pool_config(
     monkeypatch.setenv("VEADK_RUN_CODE_THREAD_POOL_MAX_WORKERS", "4")
     patch_adk_sync_tool_thread_pool()
 
-    start_gap, elapsed, parallel_call_counts = await _run_two_sync_tool_calls(
+    start_gap, elapsed, parallel_call_counts, windows = await _run_two_sync_tool_calls(
         RunConfig(max_llm_calls=5),
         tool_name="run_code",
     )
@@ -169,18 +186,19 @@ async def test_run_code_calls_stay_serial_without_thread_pool_config(
     assert start_gap >= 0.18
     assert elapsed >= 0.38
     assert parallel_call_counts == {"a": None, "b": None}
+    assert not _overlapped(windows)
 
 
 @pytest.mark.asyncio
 async def test_run_code_uses_agent_thread_pool_when_configured() -> None:
     patch_adk_sync_tool_thread_pool()
 
-    start_gap, elapsed, parallel_call_counts = await _run_two_sync_tool_calls(
+    start_gap, _, parallel_call_counts, windows = await _run_two_sync_tool_calls(
         RunConfig(max_llm_calls=5),
         tool_name="run_code",
         agent_tool_thread_pool_config=ToolThreadPoolConfig(max_workers=2),
     )
 
     assert start_gap < 0.1
-    assert elapsed < 0.35
     assert parallel_call_counts == {"a": 2, "b": 2}
+    assert _overlapped(windows)

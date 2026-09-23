@@ -50,6 +50,16 @@ from tests.frontend.test_migration_server import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _pin_scripted_analysis(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These suites cover the in-Sandbox ``codex exec`` driver.
+
+    The app-server driver has its own suite and its own background-worker test; pin
+    the scripted driver here so every command assertion stays deterministic.
+    """
+    monkeypatch.setenv("AGENTKIT_MIGRATION_APP_SERVER", "0")
+
+
 def zip_bytes(files: dict[str, bytes]) -> bytes:
     output = io.BytesIO()
     with zipfile.ZipFile(output, "w") as archive:

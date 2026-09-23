@@ -518,8 +518,7 @@
 }
 
 .migration-activity__stream {
-  display: grid;
-  gap: 8px;
+  display: block;
 }
 
 .migration-activity__error {
@@ -855,6 +854,113 @@
   color: hsl(var(--destructive));
   font-size: 11.5px;
   font-weight: 400;
+}
+
+/* Questions asked inside the running analysis turn: options plus a free-text answer. */
+.migration-question {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+  overflow-wrap: anywhere;
+}
+
+.migration-question__header {
+  color: hsl(var(--foreground));
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.migration-question__prompt {
+  margin: 0;
+  color: hsl(var(--foreground));
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.55;
+}
+
+.migration-question__options {
+  display: grid;
+  gap: 6px;
+}
+
+.migration-question__option {
+  display: flex;
+  gap: 9px;
+  align-items: flex-start;
+  padding: 9px 11px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+  cursor: pointer;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+
+.migration-question__option:hover {
+  border-color: hsl(var(--ring) / 0.45);
+}
+
+.migration-question__option.is-selected {
+  border-color: hsl(var(--ring) / 0.7);
+  background: hsl(var(--accent) / 0.5);
+}
+
+.migration-question__option input {
+  flex: 0 0 auto;
+  width: 15px;
+  height: 15px;
+  margin: 2px 0 0;
+  accent-color: hsl(var(--primary));
+}
+
+.migration-question__option span {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.migration-question__option strong {
+  color: hsl(var(--foreground));
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.migration-question__option em {
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  font-style: normal;
+  line-height: 1.5;
+}
+
+.migration-question__other {
+  display: grid;
+  gap: 6px;
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+}
+
+.migration-question__other textarea {
+  width: 100%;
+  min-height: 40px;
+  box-sizing: border-box;
+  padding: 9px 11px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+  outline: 0;
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font: inherit;
+  font-size: 13.5px;
+  line-height: 1.55;
+  resize: vertical;
+}
+
+.migration-question__other textarea:focus {
+  border-color: hsl(var(--ring) / 0.7);
+  box-shadow: 0 0 0 2px hsl(var(--ring) / 0.12);
+}
+
+.migration-question__other textarea:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
 }
 
 .migration-confirmation__actions {

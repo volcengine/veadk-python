@@ -34,6 +34,12 @@ from ..gateway import (
     MigrationSandboxSession,
 )
 from ..service import MIGRATION_ROOT, MigrationError
+from .judge_channel import (
+    JUDGE_TOOL_NAME,
+    evaluation_result_root,
+    judge_app_server_enabled,
+    judge_channel_paths,
+)
 from .service import (
     EVALUATION_DATASET_PATH,
     EVALUATION_REPORT_PATH,
@@ -51,6 +57,8 @@ from veadk.utils.cloud_provider import (
 
 _RUNNER_PATH = f"{EVALUATION_ROOT}/assets/evaluation_runner.py"
 _JUDGE_SCHEMA_PATH = f"{EVALUATION_ROOT}/assets/judge-schema.json"
+# 评委回合也在迁移产物目录里执行，与旧版 codex exec 裁判的 --cd 保持一致。
+EVALUATION_PROJECT_PATH = f"{MIGRATION_ROOT}/output/veadk"
 _PROJECT_CONFIG_PATHS = (
     f"{MIGRATION_ROOT}/output/veadk/agentkit.yaml",
     f"{MIGRATION_ROOT}/output/veadk/.agentkit/agentkit.yaml",
@@ -250,8 +258,18 @@ def runner_source() -> str:
         RUNTIME_OBSERVATION_LIMIT = 16 * 1024
         RAW_LIMIT = 16 * 1024 * 1024
         INVOKE_TIMEOUT = 120
-        JUDGE_TIMEOUT = 300
-        JUDGE_PROMPT_VERSION = 3
+        # 单批总预算：先请 Studio 判定，失败时剩下的时间留给 codex exec 兜底。
+        # 必须盖住「通道等待上限 + 一次 codex exec（实测约 140s）」。
+        JUDGE_TIMEOUT = 540
+        # 等待 Studio 应答的上限。必须大于 Studio 回合上限加上它的落盘预留
+        # （judge_driver.JUDGE_TURN_TIMEOUT_SECONDS + JUDGE_TURN_RESERVE_SECONDS），
+        # 否则 runner 会先超时，Studio 递回来的信封就白写了。
+        JUDGE_CHANNEL_TIMEOUT = 360
+        JUDGE_CHANNEL_POLL_SECONDS = 3
+        JUDGE_CHANNEL_RESPONSE_LIMIT = 16 * 1024 * 1024
+        JUDGE_CHANNEL_SCHEMA_VERSION = 1
+        JUDGE_CHANNEL_DISABLED_RUNS = set()
+        JUDGE_PROMPT_VERSION = 4
         EXECUTION_RESULT_LIMIT = 12 * 1024 * 1024
         EVIDENCE_SOURCES = {
             "user_reference",
@@ -1039,6 +1057,187 @@ def runner_source() -> str:
             return thread_id, message
 
 
+        def judge_channel(config):
+            channel = config.get("judge_channel")
+            if not isinstance(channel, dict):
+                return None
+            if config.get("batch_root_path") in JUDGE_CHANNEL_DISABLED_RUNS:
+                return None
+            request_path = channel.get("request_path")
+            response_path = channel.get("response_path")
+            tool_name = channel.get("tool_name")
+            if not isinstance(request_path, str) or not request_path:
+                return None
+            if not isinstance(response_path, str) or not response_path:
+                return None
+            if not isinstance(tool_name, str) or not tool_name:
+                return None
+            return request_path, response_path, tool_name
+
+
+        def disable_judge_channel(config):
+            # 通道交付失败后，本轮剩余批次直接使用 codex exec，不再逐批白等预算。
+            JUDGE_CHANNEL_DISABLED_RUNS.add(config.get("batch_root_path"))
+
+
+        def judge_request_id(batch_start, cases, judge_attempt):
+            return "batch-{:03d}-{:03d}-attempt-{}".format(
+                batch_start + 1,
+                batch_start + len(cases),
+                judge_attempt,
+            )
+
+
+        def judge_case_context(cases, observations, contract):
+            # 只描述每个用例允许裁判依据什么，不重复携带用例负载。
+            context = []
+            for case in cases:
+                observation = observations.get(case["case_id"])
+                runtime_observation = (
+                    observation.get("runtime_observation")
+                    if isinstance(observation, dict)
+                    else None
+                )
+                context.append(
+                    {
+                        "case_id": case["case_id"],
+                        "state": (
+                            str(observation.get("state") or "")
+                            if isinstance(observation, dict)
+                            else ""
+                        ),
+                        "criteria": bool(case.get("criteria")),
+                        "contract": contract is not None,
+                        "runtime_observation": bool(
+                            isinstance(runtime_observation, dict)
+                            and str(runtime_observation.get("text") or "").strip()
+                        ),
+                    }
+                )
+            return context
+
+
+        def read_judge_response(response_path, request_id):
+            # 返回绑定到 request_id 的响应，尚未写好时返回 None。
+            # 撕裂或残留的响应与「还没写好」无法区分，两者都只是继续等待；
+            # 只有带同一 request_id 的完整响应才会被采用。
+            target = Path(response_path)
+            try:
+                if not target.is_file():
+                    return None
+                raw = target.read_bytes()
+            except OSError:
+                return None
+            if len(raw) > JUDGE_CHANNEL_RESPONSE_LIMIT:
+                return None
+            try:
+                value = json.loads(raw)
+            except ValueError:
+                return None
+            if not isinstance(value, dict) or value.get("request_id") != request_id:
+                return None
+            return value
+
+
+        def await_judge_response(response_path, request_id, deadline):
+            while True:
+                response = read_judge_response(response_path, request_id)
+                if response is not None:
+                    return response
+                if time.monotonic() >= deadline:
+                    return None
+                time.sleep(JUDGE_CHANNEL_POLL_SECONDS)
+
+
+        def judge_through_channel(
+            config,
+            channel,
+            prompt,
+            batch_start,
+            cases,
+            judge_attempt,
+            case_context,
+            thread_id,
+            observations,
+            contract,
+            remaining,
+        ):
+            # 请 Studio 裁判这一批；返回 None 表示本批要回退到 codex exec。
+            # 请求落盘即可重放：Studio 重启后会重新执行同一个回合，而不是丢掉这一批。
+            request_path, response_path, _tool_name = channel
+            request_id = judge_request_id(batch_start, cases, judge_attempt)
+            try:
+                atomic_json(
+                    request_path,
+                    {
+                        "schema_version": JUDGE_CHANNEL_SCHEMA_VERSION,
+                        "request_id": request_id,
+                        "batch_start": batch_start,
+                        "batch_end": batch_start + len(cases),
+                        "case_ids": [case["case_id"] for case in cases],
+                        "dimensions": config["dimensions"],
+                        "prompt_version": JUDGE_PROMPT_VERSION,
+                        # 把 runner 的等待窗口交给 Studio：回合必须早于它给出信封。
+                        "budget_seconds": round(
+                            min(remaining, JUDGE_CHANNEL_TIMEOUT), 3
+                        ),
+                        "thread_id": thread_id or "",
+                        "prompt": prompt,
+                        "case_context": case_context,
+                        "created_at": now(),
+                    },
+                )
+            except OSError as error:
+                diagnostic(
+                    config,
+                    "judge_channel_write_failed",
+                    error_type=type(error).__name__,
+                )
+                return None
+            deadline = time.monotonic() + min(remaining, JUDGE_CHANNEL_TIMEOUT)
+            response = await_judge_response(response_path, request_id, deadline)
+            if response is None:
+                diagnostic(config, "judge_channel_timeout", detail=request_id)
+                return None
+            if response.get("ok") is not True:
+                error = response.get("error")
+                diagnostic(
+                    config,
+                    "judge_channel_unavailable",
+                    detail=(
+                        str(error.get("code") or "unknown")
+                        if isinstance(error, dict)
+                        else "unknown"
+                    ),
+                )
+                return None
+            response_thread_id = response.get("thread_id")
+            if (
+                not isinstance(response_thread_id, str)
+                or not response_thread_id
+                or len(response_thread_id) > 256
+            ):
+                diagnostic(config, "judge_channel_thread_invalid")
+                return None
+            try:
+                returned = validate_judged_cases(
+                    config,
+                    cases,
+                    response.get("cases"),
+                    observations,
+                    contract,
+                )
+            except (ValueError, RuntimeError) as error:
+                diagnostic(
+                    config,
+                    "judge_channel_output_rejected",
+                    error_type=type(error).__name__,
+                    detail=str(error),
+                )
+                return None
+            return response_thread_id, returned
+
+
         def judge_binding(config):
             return {
                 "schema_version": 1,
@@ -1348,6 +1547,24 @@ def runner_source() -> str:
             thread_id = load_judge_thread(config)
             if thread_id is None and batch_start > 0:
                 raise RuntimeError("judge thread record is missing")
+            channel = judge_channel(config)
+            case_context = judge_case_context(cases, observations, contract)
+            if channel is not None:
+                tool_name = channel[2]
+                prompt = "\n".join(
+                    [
+                        localized(
+                            config,
+                            "必须通过调用 "
+                            + tool_name
+                            + " 工具一次性提交本批判定结果；不要用任何其他方式输出判定结果。",
+                            "Submit the batch verdict by calling the "
+                            + tool_name
+                            + " tool exactly once; do not report the verdict in any other way.",
+                        ),
+                        prompt,
+                    ]
+                )
             last_error = None
             deadline = time.monotonic() + JUDGE_TIMEOUT
             batch_number = batch_start // 10 + 1
@@ -1367,6 +1584,34 @@ def runner_source() -> str:
                     diagnostic(config, "judge_time_budget_exhausted")
                     last_error = RuntimeError("evaluation judge time budget exhausted")
                     break
+                if channel is not None:
+                    answer = judge_through_channel(
+                        config,
+                        channel,
+                        prompt,
+                        batch_start,
+                        cases,
+                        judge_attempt,
+                        case_context,
+                        thread_id,
+                        observations,
+                        contract,
+                        remaining,
+                    )
+                    if answer is not None:
+                        response_thread_id, returned = answer
+                        if response_thread_id != thread_id:
+                            # Studio 可能因为线程失效而换了新线程，跟随它继续对话。
+                            thread_id = response_thread_id
+                            save_judge_thread(config, thread_id)
+                        save_batch_result(config, batch_start, cases, returned)
+                        return returned
+                    # 通道这次没有交付：本批和本轮剩下的次数都走 codex exec 兜底。
+                    disable_judge_channel(config)
+                    channel = None
+                    # 通道已经消耗掉一段预算，兜底必须按剩余时间重算：
+                    # 沿用进入本批时的 remaining 会让一次慢通道把本批拖过 JUDGE_TIMEOUT。
+                    remaining = deadline - time.monotonic()
                 command = [
                     "codex",
                     "exec",
@@ -1972,7 +2217,11 @@ class SandboxMigrationEvaluationRunner:
     ) -> None:
         config_path = f"{EVALUATION_ROOT}/control/runner-{attempt}.json"
         work_path = f"{EVALUATION_ROOT}/attempts/{attempt}"
-        result_path = f"{EVALUATION_ROOT}/results/attempt-{attempt}"
+        result_path = evaluation_result_root(EVALUATION_ROOT, attempt)
+        judge_request_path, judge_response_path = judge_channel_paths(
+            EVALUATION_ROOT,
+            attempt,
+        )
         cloud_credential_path = self._cloud_credential_path(attempt)
         agentkit_config_protocol, agentkit_config = self._agentkit_config(session)
         access_key, secret_key, session_token, cloud_credentials = (
@@ -2034,10 +2283,20 @@ class SandboxMigrationEvaluationRunner:
             "status_path": EVALUATION_STATUS_PATH,
             "report_path": EVALUATION_REPORT_PATH,
             "judge_schema_path": _JUDGE_SCHEMA_PATH,
-            "project_path": f"{MIGRATION_ROOT}/output/veadk",
+            "project_path": EVALUATION_PROJECT_PATH,
             "work_path": work_path,
             "thread_path": f"{result_path}/thread.json",
             "batch_root_path": f"{result_path}/batches",
+            # 评测裁判的通道由 Studio 决定：关闭时脚本直接使用旧版 codex exec 裁判。
+            "judge_channel": (
+                {
+                    "request_path": judge_request_path,
+                    "response_path": judge_response_path,
+                    "tool_name": JUDGE_TOOL_NAME,
+                }
+                if judge_app_server_enabled()
+                else None
+            ),
             "execution_results_path": f"{result_path}/execution-results.jsonl",
             "diagnostic_path": f"{EVALUATION_ROOT}/diagnostics/evaluation.log",
             "secret_path": secret_path,
@@ -2397,6 +2656,7 @@ class SandboxMigrationEvaluationRunner:
 
 
 __all__ = [
+    "EVALUATION_PROJECT_PATH",
     "SandboxMigrationEvaluationRunner",
     "judge_schema",
     "runner_source",

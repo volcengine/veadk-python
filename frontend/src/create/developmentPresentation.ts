@@ -56,8 +56,11 @@ export function developmentToolLabel(block: Extract<Block, { kind: "tool" }>): s
       [/\b(?:curl|wget)\b/, "Send HTTP request"],
       [/\bcompileall\b/, "Check Python syntax"],
     ];
-    const summary = rules.find(([pattern]) => pattern.test(command))?.[1] || "Run shell command";
-    return adkT("developmentRuns.command", { target: summary });
+    const summary = rules.find(([pattern]) => pattern.test(command))?.[1];
+    // A caller that already names the row keeps its own wording: the migration
+    // publishes commands as native status ("命令执行完成") instead of guessing what
+    // the shell command does, and that decision must survive the native row.
+    return summary ? adkT("developmentRuns.command", { target: summary }) : block.name;
   }
   if (block.itemType === "fileChange") {
     const paths = Array.isArray(args.changes) ? args.changes.map((change) => short(record(change).path)).filter(Boolean) : [];

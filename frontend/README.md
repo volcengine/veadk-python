@@ -600,9 +600,22 @@ See [deployment and operation](service/studio_release_notifier/README.md).
   the framework, entry point, and open questions. Structured frameworks run the
   preinstalled `ak migrate`; Dify and Any projects run
   `ak migrate --execution in-place` with Codex in the same Session. Evaluation
-  deploys a temporary Runtime, checkpoints per-case execution as JSONL, judges
-  batches in one fresh resumable Codex thread, and always reconciles Runtime
-  cleanup before completing or cancelling. Reports show 0–100 display scores,
+  deploys a temporary Runtime, checkpoints per-case execution as JSONL, and
+  judges batches in one fresh resumable Codex thread. Analysis and judging both
+  deliver their contract through an app-server dynamic tool instead of parsing
+  free text, and the analysis turn runs on a Studio background worker so a long
+  analysis never waits inside the upload request. Each judged batch is a durable
+  request the runner writes into the Session: Studio answers it with one
+  app-server turn carrying the verdict, and the runner validates and caches that
+  verdict before the next batch. A request stays on disk until it is answered, so
+  a Studio restart replays the same batch; a request that cannot be answered
+  falls back to `codex exec` inside the same batch budget. The request declares
+  how long the runner will listen, and the turn is sized to answer inside that
+  window, so even a judge batch that is too slow comes back as an answered
+  failure rather than a timeout. Setting
+  `AGENTKIT_MIGRATION_JUDGE_APP_SERVER=0` pins that scripted judge for the
+  whole run instead of writing judge requests at all. Cleanup is always
+  reconciled before completing or cancelling. Reports show 0–100 display scores,
   execution success, evidence coverage, N/A counts, low-scoring and failed
   cases, versions, evidence severity, and cleanup status without a pass/fail
   verdict. Each raw judge score is rounded half up to a 0–100 integer before
