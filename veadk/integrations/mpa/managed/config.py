@@ -175,11 +175,28 @@ class Worker(Options):
     image: str = ""
     reference_id: str = ""
     role_name: str = "IDRoleForArkClawShareAgent"
+    tos_access_key: str = Field(default="", repr=False)
+    tos_secret_key: str = Field(default="", repr=False)
+    tos_bucket: str = ""
+
+    @property
+    def tos_mount_enabled(self) -> bool:
+        return bool(self.tos_access_key and self.tos_secret_key and self.tos_bucket)
+
+    @field_validator("tos_access_key", "tos_secret_key", "tos_bucket")
+    @classmethod
+    def strip_tos_values(cls, value: str) -> str:
+        return value.strip()
 
     @model_validator(mode="after")
     def validate_source(self):
         if bool(self.existing_id) == bool(self.image):
             raise ValueError("Select an existing worker or a worker image")
+        tos_values = (self.tos_access_key, self.tos_secret_key, self.tos_bucket)
+        if any(tos_values) and not all(tos_values):
+            raise ValueError("TOS access key, secret key, and bucket are all required")
+        if self.existing_id and all(tos_values):
+            raise ValueError("TOS mount settings require a newly created worker")
         return self
 
 
@@ -207,6 +224,8 @@ class Runtime(Options):
             "AGENTKIT_RUNTIME_ID",
             "AGENTKIT_TOOL_ID",
             "AGENTKIT_TOOL_REGION",
+            "MPA_CODEX_WORKER_TOS_MOUNT_ENABLED",
+            "MPA_CODEX_WORKER_TOS_BUCKET",
             "SKILL_SPACE_ID",
             "PGDATABASE",
             "A2A_PUBLIC_URL",
@@ -533,6 +552,24 @@ def load_profile(path: str | Path | None, *, region: str = "") -> Profile:
             isinstance(managed_values.get("postgres"), dict)
             and managed_values["postgres"].get("mode") == "auto"
         )
+        worker_values = managed_values.get("worker")
+        if isinstance(worker_values, dict):
+            worker_values = dict(worker_values)
+            flat_tos = _resolve(
+                {
+                    key: values.get(key, "")
+                    for key in ("tos-access-key", "tos-secret-key", "tos-bucket")
+                }
+            )
+            worker_values.update(
+                {key: value for key, value in flat_tos.items() if value}
+            )
+            tos_values = tuple(flat_tos.values())
+            if any(tos_values) and not all(tos_values):
+                raise ConfigurationError(
+                    "TOS access key, secret key, and bucket are all required"
+                )
+            managed_values["worker"] = worker_values
         if isinstance(managed_values.get("runtime"), dict):
             managed_values["runtime"] = dict(managed_values["runtime"])
             if "env" in managed_values["runtime"]:

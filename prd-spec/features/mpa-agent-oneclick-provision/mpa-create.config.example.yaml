@@ -46,6 +46,12 @@ tool-image: agentkit-platform-<account>-cn-beijing.cr.volces.com/agentkit/mpa_co
 # Tool is a template only; the CLI creates a new dedicated Tool for the agent.
 tool-reference-id: t-xxxxxxxx
 runtime-role-name: IDRoleForArkClawShareAgent
+# Optional per-session TOS output mount. Set all three values together. The
+# credentials are stored only on the created Tool; every new Session receives a
+# distinct bucket path mounted read-write at /data/output.
+# tos-access-key: "${MPA_TOS_ACCESS_KEY}"
+# tos-secret-key: "${MPA_TOS_SECRET_KEY}"
+# tos-bucket: mpa-session-output
 # tool-name and runtime-name are omitted: both derive from generated mpa-agent-id.
 # agentkit-tool-id: t-xxxxxxxx  # explicit debug/migration override only
 # AgentKit's shared Runtime endpoint does not expose a customer GatewayId.

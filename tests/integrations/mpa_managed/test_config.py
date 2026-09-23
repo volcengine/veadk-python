@@ -319,6 +319,61 @@ def test_creation_resources_reject_unsafe_or_incompatible_values(
         with_creation_resources(profile, resources)
 
 
+def test_flat_tos_tuple_is_resolved_into_worker_without_summary_disclosure(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("TEST_TOS_AK", "private-tos-ak")
+    monkeypatch.setenv("TEST_TOS_SK", "private-tos-sk")
+    path = profile_file(tmp_path, monkeypatch)
+    data = yaml.safe_load(path.read_text())
+    data["managed"]["worker"] = {"image": "worker:v1"}
+    data.update(
+        {
+            "tos-access-key": "${TEST_TOS_AK}",
+            "tos-secret-key": "${TEST_TOS_SK}",
+            "tos-bucket": " mpa-output ",
+        }
+    )
+    path.write_text(yaml.safe_dump(data))
+
+    profile = load_profile(path)
+
+    assert profile.managed.worker.tos_access_key == "private-tos-ak"
+    assert profile.managed.worker.tos_secret_key == "private-tos-sk"
+    assert profile.managed.worker.tos_bucket == "mpa-output"
+    assert profile.managed.worker.tos_mount_enabled is True
+    assert "private-tos" not in str(profile.summary())
+
+
+@pytest.mark.parametrize("field", ["tos-access-key", "tos-secret-key", "tos-bucket"])
+def test_partial_flat_tos_tuple_is_rejected_safely(tmp_path, monkeypatch, field):
+    path = profile_file(tmp_path, monkeypatch)
+    data = yaml.safe_load(path.read_text())
+    data["managed"]["worker"] = {"image": "worker:v1"}
+    data[field] = "private-value"
+    path.write_text(yaml.safe_dump(data))
+
+    with pytest.raises(ConfigurationError) as error:
+        load_profile(path)
+
+    assert "TOS access key, secret key, and bucket" in str(error.value)
+    assert "private-value" not in str(error.value)
+
+
+def test_worker_model_rejects_partial_tos_and_external_tool_mount() -> None:
+    from veadk.integrations.mpa.managed.config import Worker
+
+    with pytest.raises(ValueError, match="all required"):
+        Worker(image="worker:v1", tos_bucket="mpa-output")
+    with pytest.raises(ValueError, match="newly created worker"):
+        Worker(
+            existing_id="t-existing",
+            tos_access_key="ak",
+            tos_secret_key="sk",
+            tos_bucket="mpa-output",
+        )
+
+
 def test_invalid_profile_and_missing_secret_are_safe(tmp_path, monkeypatch):
     path = profile_file(tmp_path, monkeypatch, **{"provider-root": "/not-supported"})
     with pytest.raises(ConfigurationError):

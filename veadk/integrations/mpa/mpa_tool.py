@@ -36,6 +36,8 @@ CODEX_WORKER_TOOL_DEFAULTS: dict[str, Any] = {
     "memory_mb": 4096,
     "role_name": "IDRoleForArkClawShareAgent",
 }
+TOS_MOUNT_BASE_PATH = "/sandbox-session/default/default"
+TOS_MOUNT_LOCAL_PATH = "/data/output"
 
 _READY_TIMEOUT_SECONDS = 600.0
 _READY_POLL_SECONDS = 5.0
@@ -43,6 +45,65 @@ _READY_POLL_SECONDS = 5.0
 
 class MpaToolError(RuntimeError):
     """Raised when the Codex worker Tool cannot be resolved or created."""
+
+
+def tos_mount_enabled(
+    *, tos_access_key: str = "", tos_secret_key: str = "", tos_bucket: str = ""
+) -> bool:
+    """Validate the all-or-none TOS tuple and return whether it is enabled."""
+    values = tuple(
+        value.strip() for value in (tos_access_key, tos_secret_key, tos_bucket)
+    )
+    if any(values) and not all(values):
+        raise MpaToolError(
+            "tos-access-key, tos-secret-key, and tos-bucket must all be provided"
+        )
+    return all(values)
+
+
+def build_tos_mount_config(
+    *, tos_access_key: str, tos_secret_key: str, tos_bucket: str, region: str
+) -> Any:
+    """Build the Tool-level TOS configuration for per-session output paths."""
+    from agentkit.sdk.tools import types as t
+    from agentkit.toolkit.volcengine.services.tos_service import TOSService
+
+    return t.TosMountForCreateTool(
+        EnableTos=True,
+        CredentialType=t.CredentialType.TOS_CREDENTIAL_TYPE_ACCESS_KEY,
+        Credentials=t.TosMountCredentialsForCreateTool(
+            AccessKeyId=tos_access_key.strip(),
+            SecretAccessKey=tos_secret_key.strip(),
+        ),
+        MountPoints=[
+            t.TosMountMountPointsItemForCreateTool(
+                BucketName=tos_bucket.strip(),
+                BucketPath=TOS_MOUNT_BASE_PATH,
+                Endpoint=TOSService.build_mount_endpoint(region.strip()),
+                LocalMountPath=TOS_MOUNT_LOCAL_PATH,
+                ReadOnly=False,
+            )
+        ],
+    )
+
+
+def _validate_existing_tos_mount(client: Any, tool_id: str, bucket: str) -> None:
+    """Fail rather than silently reuse a Tool without the requested mount."""
+    from agentkit.sdk.tools import types as t
+
+    tool = client.get_tool(t.GetToolRequest(ToolId=tool_id))
+    config = getattr(tool, "tos_mount_config", None)
+    mounts = getattr(config, "mount_points", None) or []
+    if not getattr(config, "enable_tos", False) or not any(
+        getattr(mount, "bucket_name", "") == bucket.strip()
+        and getattr(mount, "bucket_path", "") == TOS_MOUNT_BASE_PATH
+        and getattr(mount, "local_mount_path", "") == TOS_MOUNT_LOCAL_PATH
+        and getattr(mount, "read_only", None) is False
+        for mount in mounts
+    ):
+        raise MpaToolError(
+            "existing tool does not have the requested TOS /data/output mount"
+        )
 
 
 def _find_tool_by_name(client: Any, name: str) -> str:
@@ -127,6 +188,10 @@ def ensure_codex_worker_tool(
     role_name: str = CODEX_WORKER_TOOL_DEFAULTS["role_name"],
     project_name: str = "default",
     extra_envs: dict[str, str] | None = None,
+    region: str = "cn-beijing",
+    tos_access_key: str = "",
+    tos_secret_key: str = "",
+    tos_bucket: str = "",
     wait_ready: bool = True,
     timeout: float = _READY_TIMEOUT_SECONDS,
     poll_interval: float = _READY_POLL_SECONDS,
@@ -154,10 +219,18 @@ def ensure_codex_worker_tool(
     if not name:
         raise MpaToolError("tool name is required")
 
+    mount_enabled = tos_mount_enabled(
+        tos_access_key=tos_access_key,
+        tos_secret_key=tos_secret_key,
+        tos_bucket=tos_bucket,
+    )
+
     existing = _find_tool_by_name(client, name)
     if existing:
         if wait_ready:
             _wait_ready(client, existing, timeout=timeout, poll_interval=poll_interval)
+        if mount_enabled:
+            _validate_existing_tos_mount(client, existing, tos_bucket)
         return existing
 
     if not image.strip():
@@ -192,6 +265,16 @@ def ensure_codex_worker_tool(
         NetworkConfiguration=t.NetworkForCreateTool(
             enable_public_network=True,
             enable_private_network=False,
+        ),
+        TosMountConfig=(
+            build_tos_mount_config(
+                tos_access_key=tos_access_key,
+                tos_secret_key=tos_secret_key,
+                tos_bucket=tos_bucket,
+                region=region,
+            )
+            if mount_enabled
+            else None
         ),
         Envs=envs or None,
     )

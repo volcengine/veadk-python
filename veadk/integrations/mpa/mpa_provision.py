@@ -75,6 +75,8 @@ class MpaProvisionParams:
     feishu_app_id: str = ""
     feishu_app_secret: str = ""
     selectable_models: tuple[str, ...] = ()
+    tos_mount_enabled: bool = False
+    tos_bucket: str = ""
     extra_env: dict[str, str] = field(default_factory=dict)
 
 
@@ -233,6 +235,10 @@ def build_runtime_env(
 
     if params.skill_space_id:
         env["SKILL_SPACE_ID"] = params.skill_space_id
+
+    if params.tos_mount_enabled:
+        env["MPA_CODEX_WORKER_TOS_MOUNT_ENABLED"] = "true"
+        env["MPA_CODEX_WORKER_TOS_BUCKET"] = params.tos_bucket
 
     if params.openviking_url:
         env["OPENVIKING_URL"] = params.openviking_url

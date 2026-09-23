@@ -462,6 +462,29 @@ def test_omitted_runtime_settings_preserve_source():
     assert source == original
 
 
+def test_tos_runtime_env_is_owned_and_contains_no_credentials():
+    env = {
+        "MPA_CODEX_WORKER_TOS_MOUNT_ENABLED": "stale",
+        "MPA_CODEX_WORKER_TOS_BUCKET": "stale",
+    }
+    service.apply_tos_runtime_env(env, Worker(existing_id="t-one"))
+    assert env == {}
+
+    service.apply_tos_runtime_env(
+        env,
+        Worker(
+            image="worker:v1",
+            tos_access_key="private-ak",
+            tos_secret_key="private-sk",
+            tos_bucket="mpa-output",
+        ),
+    )
+    assert env == {
+        "MPA_CODEX_WORKER_TOS_MOUNT_ENABLED": "true",
+        "MPA_CODEX_WORKER_TOS_BUCKET": "mpa-output",
+    }
+
+
 @pytest.mark.parametrize(
     "settings,source_values",
     [

@@ -441,6 +441,10 @@ def test_create_orchestration_order_runtime_plane(
         assert name == "mi_gen123def456"
         assert image == "registry.example.com/worker:tag"
         assert kw["role_name"] == "CustomMpaRole"
+        assert kw["tos_access_key"] == "tos-ak"
+        assert kw["tos_secret_key"] == "tos-sk"
+        assert kw["tos_bucket"] == "mpa-output"
+        assert kw["region"] == "cn-beijing"
         return "t-created"
 
     def _provision(client: Any, **kwargs: Any):
@@ -505,6 +509,9 @@ def test_create_orchestration_order_runtime_plane(
             tool_image="registry.example.com/worker:tag",
             tool_role_name="CustomMpaRole",
             skill_space_name="my-space",
+            tos_access_key="tos-ak",
+            tos_secret_key="tos-sk",
+            tos_bucket="mpa-output",
         ),
     )
     assert result.exit_code == 0, result.output
@@ -519,6 +526,64 @@ def test_create_orchestration_order_runtime_plane(
     ]
     assert "agent-card.json" in result.output
     assert "mpa-agent-id: mi-gen123def456" in result.output
+
+
+def test_create_rejects_partial_tos_before_identity_or_tool_side_effects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+    monkeypatch.setattr(cli_mpa, "_identity_client", lambda region: calls.append("id"))
+    monkeypatch.setattr(cli_mpa, "_tools_client", lambda region: calls.append("tool"))
+
+    result = CliRunner().invoke(
+        cli_mpa.mpa,
+        _base_args(tos_access_key="only-ak"),
+    )
+
+    assert result.exit_code != 0
+    assert "tos-access-key, tos-secret-key, and tos-bucket" in result.output
+    assert "only-ak" not in result.output
+    assert calls == []
+
+
+def test_create_rejects_tos_settings_for_external_tool_before_side_effects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+    monkeypatch.setattr(cli_mpa, "_identity_client", lambda region: calls.append("id"))
+
+    result = CliRunner().invoke(
+        cli_mpa.mpa,
+        _base_args(
+            tos_access_key="tos-ak",
+            tos_secret_key="tos-sk",
+            tos_bucket="mpa-output",
+        ),
+    )
+
+    assert result.exit_code != 0
+    assert "require Tool creation" in result.output
+    assert calls == []
+
+
+def test_create_tos_dry_run_shows_mount_but_masks_credentials() -> None:
+    result = CliRunner().invoke(
+        cli_mpa.mpa,
+        _base_args(
+            agentkit_tool_id="",
+            tool_image="worker:v1",
+            tos_access_key="private-tos-ak",
+            tos_secret_key="private-tos-sk",
+            tos_bucket="mpa-output",
+        )
+        + ["--dry-run"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "enabled at /data/output" in result.output
+    assert "MPA_CODEX_WORKER_TOS_BUCKET=mpa-output" in result.output
+    assert "private-tos-ak" not in result.output
+    assert "private-tos-sk" not in result.output
 
 
 def test_runtime_plane_without_gateway_id_fails_before_finalize(

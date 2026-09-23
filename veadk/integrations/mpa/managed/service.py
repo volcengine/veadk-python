@@ -149,6 +149,15 @@ def apply_identity_settings(template: dict, values: dict):
     template["Envs"] = [{"Key": key, "Value": value} for key, value in env.items()]
 
 
+def apply_tos_runtime_env(env: dict[str, str], worker) -> None:
+    """Set provisioner-owned, non-secret TOS Session mount metadata."""
+    env.pop("MPA_CODEX_WORKER_TOS_MOUNT_ENABLED", None)
+    env.pop("MPA_CODEX_WORKER_TOS_BUCKET", None)
+    if worker.tos_mount_enabled:
+        env["MPA_CODEX_WORKER_TOS_MOUNT_ENABLED"] = "true"
+        env["MPA_CODEX_WORKER_TOS_BUCKET"] = worker.tos_bucket
+
+
 async def provision(
     profile: Profile,
     *,
@@ -232,6 +241,7 @@ async def provision(
     if profile.managed.postgres:
         env.pop(profile.managed.postgres.admin_database_url_env, None)
     env["MPA_AGENT_ID"] = agent_id
+    apply_tos_runtime_env(env, profile.managed.worker)
     template["Envs"] = [{"Key": k, "Value": v} for k, v in env.items()]
     template["Description"] = description[:512]
     template["AuthorizerConfiguration"] = {

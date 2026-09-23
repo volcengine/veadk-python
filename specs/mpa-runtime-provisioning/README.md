@@ -2,11 +2,12 @@
 
 - **Component ID:** `mpa-runtime-provisioning`
 - **Status:** Draft; proposed changes are governed by the related PRD
-- **Revision:** 2026-09-20
+- **Revision:** 2026-09-23
 - **Chinese version:** [README.zh.md](README.zh.md)
 - **Related PRD:** [MPA Runtime Integration Hardening](../../prd-spec/bugfixes/mpa-runtime-integration/2026-09-12-mpa-runtime-integration-hardening.md)
 - **Related PRD:** [MPA Studio Workload Identity Provisioning](../../prd-spec/features/mpa-studio-workload-identity/2026-09-20-mpa-studio-workload-identity.md)
-- **Owned code:** `veadk/cli/cli_mpa.py`, `veadk/integrations/mpa/mpa_provision.py`, `veadk/integrations/mpa/mpa_runtime.py`
+- **Related PRD:** [MPA per-session TOS output mount](../../prd-spec/features/mpa-agent-oneclick-provision/2026-09-23-mpa-tos-output-mount.md)
+- **Owned code:** `veadk/cli/cli_mpa.py`, `veadk/integrations/mpa/mpa_provision.py`, `veadk/integrations/mpa/mpa_runtime.py`, `veadk/integrations/mpa/mpa_tool.py`, `veadk/integrations/mpa/managed/worker.py`
 
 ## Responsibility
 
@@ -72,7 +73,22 @@ These guarantees apply to both Studio and CLI through shared orchestration. The 
 Verification maps `CON-7` through `CON-12` to PRD `AC-1`, `AC-2`, `AC-9`, `AC-10`: fresh bootstrap with legacy endpoints blocked; missing/finalization failure and restart; unsafe overrides; credential rotation/retry; compatible rollback; active/shared-resource deletion. Reuse existing provisioning regression targets above and add failing tests for the new profile. All proposed runtime/live results are `not_run`.
 
 2026-09-15: profile drafted for functional migration without historical data import; implementation and live evidence pending.
-
 ### Automatic PG preparation
 
 Managed provisioning supports `managed.postgres.mode: auto`. It verifies deployment STS identity before AIDAP calls, prepares the two shared Workspaces and management database before network/APIG/Runtime provisioning, and overrides inherited PG host/port/user/password/TLS values with the resolved business connection. Agent database names and the existing account/region network/APIG sharing contract are unchanged. The bootstrap state, migration guards and API behavior are owned by [Studio creation CON-13](../studio-mpa-creation/README.md#con-13-automatic-shared-postgresql-workspaces). Automatic mode is opt-in; manual/legacy profiles are preserved.
+
+## Per-session TOS output mount extension
+
+When the private MPA YAML supplies the complete `tos-access-key`,
+`tos-secret-key`, and `tos-bucket` tuple, a newly created worker Tool MUST carry
+an access-key TOS mount with `/sandbox-session/default/default` as its base and
+`/data/output` as its read-write local path. Credentials MUST remain in the
+Tool request. The Runtime receives `MPA_CODEX_WORKER_TOS_MOUNT_ENABLED=true`
+and the non-secret bucket name, but never AK/SK.
+
+For every newly created Sandbox Session, mpa-agent MUST set
+`CreateSessionRequest.TosMountPoints` using AgentKit's
+canonical per-session path:
+`/sandbox-session/tool-{tool_id}/session-{session_id}/`. It MUST fail closed if
+the Runtime flag is enabled but the bucket is absent. Existing
+Sessions and externally supplied Tools are not mutated.
