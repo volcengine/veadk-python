@@ -485,6 +485,9 @@ def validate_migration_driver(
     migration CLI.  It lets Studio tell a driver that is still working from one whose
     process disappeared, and it carries the artifact digest computed right after the
     CLI exited, so the bytes Studio later pulls can be checked against it.
+
+    ``lost`` is the heartbeat's own verdict that the CLI it was watching is gone: the
+    run will never write its result, but the agent's work may still be on disk.
     """
     if not isinstance(value, dict):
         raise MigrationContractError("driver lease must be an object")
@@ -504,16 +507,16 @@ def validate_migration_driver(
     if (
         value.get("schema_version") != 1
         or value.get("run_id") != expected_run_id
-        or state not in {"running", "finished"}
+        or state not in {"running", "lost", "finished"}
     ):
         raise MigrationContractError("invalid driver lease identity")
     _bounded_integer(value.get("heartbeat_at"), maximum=10**12)
     finished_at = value.get("finished_at")
     exit_code = value.get("exit_code")
     artifact = value.get("artifact")
-    if state == "running":
+    if state != "finished":
         if finished_at is not None or exit_code is not None or artifact is not None:
-            raise MigrationContractError("running driver lease published a result")
+            raise MigrationContractError("unfinished driver lease published a result")
     else:
         _bounded_integer(finished_at, maximum=10**12)
         _bounded_integer(exit_code, maximum=255)

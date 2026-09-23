@@ -5302,9 +5302,13 @@ def test_confirmed_migration_supervises_the_run_with_a_driver_lease() -> None:
     assert f"{MIGRATION_ROOT}/control/migration-driver.json" in command
     assert f"{MIGRATION_ROOT}/delivery/migration-result.zip" in command
     assert "STUDIO_MIGRATION_DRIVER" in command
-    assert " heartbeat &" in command
-    assert 'finish "$code"' in command
+    assert f"{MIGRATION_ROOT}/control/migration-cli.pid" in command
+    assert " heartbeat " in command
+    assert f'finish {MIGRATION_ROOT}/control/migration-cli.pid "$code"' in command
     assert 'kill "$driver_pid" 2>/dev/null' in command
+    # 心跳要盯住 CLI 自己：CLI 先走了就必须说 lost，而不是一直替它报活。
+    assert "cli_pid=$!" in command
+    assert 'wait "$cli_pid"' in command
     syntax = subprocess.run(
         ["bash", "-n"],
         input=command,
@@ -5318,6 +5322,8 @@ def test_confirmed_migration_supervises_the_run_with_a_driver_lease() -> None:
     compile(script, "migration-driver.py", "exec")
     assert "HEARTBEAT_SECONDS = 15.0" in script
     assert 'publish(lease("running", int(time.time())))' in script
+    assert 'publish(lease("lost", int(time.time())))' in script
+    assert "os.kill(cli_pid, 0)" in script
     assert "artifact_entry=manifest()" in script
 
 

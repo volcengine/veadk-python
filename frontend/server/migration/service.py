@@ -100,6 +100,9 @@ from .app_server import (
     run_route_analysis,
 )
 from .codex_tool_turn import DynamicTool
+from .delivery_recovery import (
+    recovery_source as delivery_recovery_source,
+)
 from .delivery_turn import (
     ARTIFACT_PATH,
     ARTIFACT_TOOL_NAME,
@@ -213,6 +216,7 @@ _DELIVERY_ARTIFACT_PATH = f"{MIGRATION_ROOT}/delivery/migration-result.zip"
 # reads it to tell "still working" from "the process is gone", so a driver that died
 # without writing any delivery state fails the task instead of hanging in migrating.
 _MIGRATION_DRIVER_PATH = f"{MIGRATION_ROOT}/control/migration-driver.json"
+_MIGRATION_CLI_PID_PATH = f"{MIGRATION_ROOT}/control/migration-cli.pid"
 _MIGRATION_DRIVER_SCRIPT_PATH = f"{MIGRATION_ROOT}/control/migration-driver.py"
 _MIGRATION_DRIVER_HEARTBEAT_SECONDS = 15.0
 _MIGRATION_DRIVER_STALE_SECONDS = 90.0
@@ -243,6 +247,41 @@ _DELIVERY_TURN_HEARTBEAT_SECONDS = 20.0
 _DELIVERY_TURN_STALE_SECONDS = 90.0
 # 一个交付最多收尾几次：失败后每次读任务都重开回合会白白烧 token。
 _DELIVERY_TURN_MAX_ATTEMPTS = 2
+_DELIVERY_DIR = f"{MIGRATION_ROOT}/delivery"
+_DELIVERY_OUTPUT_DIR = f"{MIGRATION_ROOT}/output/veadk"
+# agent 自己写完项目时留下的终态，与 CLI 的 processState 一致。
+_AGENT_STATUS_PATH = f"{MIGRATION_ROOT}/work/agentic/state/status.json"
+_DELIVERED_AGENT_STATES = frozenset(
+    {
+        "Succeed",
+        "SucceedWithWarnings",
+        "Partial",
+        "succeeded",
+        "succeeded_with_warnings",
+        "partial",
+    }
+)
+# 交付复原：CLI 不在了，但 agent 已经把项目做完时，Studio 按 CLI 自己的规则重新打包
+# 一次，而不是让用户再等一个 15 分钟的 Codex 回合。打包是磁盘上文件的纯函数。
+_DELIVERY_RECOVERY_SCRIPT_PATH = f"{MIGRATION_ROOT}/control/delivery-recovery.py"
+_DELIVERY_RECOVERY_REQUEST_PATH = f"{MIGRATION_ROOT}/control/delivery-recovery.json"
+_DELIVERY_RECOVERY_RESULT_PATH = (
+    f"{MIGRATION_ROOT}/control/delivery-recovery-result.json"
+)
+_DELIVERY_RECOVERY_LOG_PATH = (
+    f"{MIGRATION_ROOT}/diagnostics/migration/delivery-recovery.log"
+)
+_DELIVERY_RECOVERY_LEASE_PATH = f"{MIGRATION_ROOT}/control/delivery-recovery-lease.json"
+_DELIVERY_RECOVERY_DRIVER = "studio"
+_DELIVERY_RECOVERY_RUNNING = "running"
+_DELIVERY_RECOVERY_DONE = "done"
+# 复原的租约：心跳过期说明持有它的 Studio 进程已经不在了，可以重新打包。
+_DELIVERY_RECOVERY_HEARTBEAT_SECONDS = 20.0
+_DELIVERY_RECOVERY_STALE_SECONDS = 90.0
+# 一个交付最多复原几次：结论已经落地就不再重开。
+_DELIVERY_RECOVERY_MAX_ATTEMPTS = 2
+# 打包是本地文件操作，但项目可能有几百 MB：给一个绝对上限，免得卡死读任务。
+_DELIVERY_RECOVERY_TIMEOUT_SECONDS = 900
 # 交付阶段已经落定的状态：只有落定的交付才需要收尾回合解释它。
 _DELIVERY_SETTLED_STATES = {
     "succeeded",
@@ -2320,6 +2359,49 @@ def _delivery_turn_marker(
     }
 
 
+def _delivery_recovery_marker(
+    *,
+    state: str,
+    attempts: int = 1,
+    verdict: bool | None = None,
+    files: int | None = None,
+    started_at: float | None = None,
+    heartbeat_at: float | None = None,
+) -> dict[str, object]:
+    """Describe the Studio worker that rebuilds a delivery the CLI never packaged.
+
+    ``verdict`` records whether that attempt produced a delivery, so a task whose
+    packaging cannot be rebuilt is written off once instead of on every later read.
+    """
+    started = time.time() if started_at is None else started_at
+    return {
+        "schema_version": 1,
+        "driver": _DELIVERY_RECOVERY_DRIVER,
+        "state": state,
+        "attempts": attempts,
+        "verdict": verdict,
+        "files": files,
+        "started_at": started,
+        "heartbeat_at": started if heartbeat_at is None else heartbeat_at,
+        "owner_process": _STUDIO_PROCESS_ID,
+    }
+
+
+def _recovery_verdict(stdout: str) -> dict[str, object] | None:
+    """The JSON line the rebuild program answers with, if it answered with one."""
+    for line in reversed(stdout.strip().splitlines()):
+        candidate = line.strip()
+        if not candidate.startswith("{"):
+            continue
+        try:
+            value = json.loads(candidate)
+        except ValueError:
+            continue
+        if isinstance(value, dict):
+            return value
+    return None
+
+
 def _delivery_prompt(
     *,
     task_id: str,
@@ -2714,6 +2796,12 @@ _MIGRATION_DRIVER_TEMPLATE = '''"""Publish the migration driver lease and the ar
 Written into the Sandbox by the launch script and run twice: in the background to
 keep the heartbeat fresh while the migration CLI works, and once after it exits to
 publish the finished record with the artifact digest.
+
+The background copy also watches the CLI it speaks for.  A migration that loses only
+its CLI -- the launch shell survives, the agent's own work is already on disk -- would
+otherwise keep a fresh heartbeat forever, and a fresh heartbeat is exactly what tells
+Studio the run is still alive.  Watching the pid turns that into a `lost` record, which
+is the one state Studio can still rebuild a delivery from.
 """
 
 import hashlib
@@ -2729,6 +2817,7 @@ path = Path(sys.argv[1])
 artifact = Path(sys.argv[2])
 run_id = sys.argv[3]
 mode = sys.argv[4]
+cli_pid_path = Path(sys.argv[5])
 
 
 def publish(value):
@@ -2765,10 +2854,28 @@ def manifest():
     return {"path": artifact.name, "sha256": digest.hexdigest(), "size": size}
 
 
+def cli_is_gone():
+    """Whether the CLI this heartbeat speaks for has left the Sandbox."""
+    try:
+        cli_pid = int(cli_pid_path.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return False
+    try:
+        os.kill(cli_pid, 0)
+    except ProcessLookupError:
+        return True
+    except OSError:
+        return False
+    return False
+
+
 if mode == "heartbeat":
     publish(lease("running", int(time.time())))
     while True:
         time.sleep(HEARTBEAT_SECONDS)
+        if cli_is_gone():
+            publish(lease("lost", int(time.time())))
+            break
         publish(lease("running", int(time.time())))
 else:
     now = int(time.time())
@@ -2777,7 +2884,7 @@ else:
             "finished",
             now,
             finished_at=now,
-            exit_code=int(sys.argv[5]),
+            exit_code=int(sys.argv[6]),
             artifact_entry=manifest(),
         )
     )
@@ -2895,18 +3002,28 @@ def _start_migration_command(
             ),
             _migration_driver_script(),
             "STUDIO_MIGRATION_DRIVER",
-            f"{driver} heartbeat &",
+            f"{driver} heartbeat {shlex.quote(_MIGRATION_CLI_PID_PATH)} &",
             "driver_pid=$!",
             "(",
             "set -e",
             *validation_model_env,
             *structured_copy,
             cli,
-            f") > {shlex.quote(log_path)} 2>&1",
+            f") > {shlex.quote(log_path)} 2>&1 &",
+            "cli_pid=$!",
+            (
+                f"printf '%s\\n' \"$cli_pid\" > "
+                f"{shlex.quote(_MIGRATION_CLI_PID_PATH)}.tmp"
+            ),
+            (
+                f"mv {shlex.quote(_MIGRATION_CLI_PID_PATH)}.tmp "
+                f"{shlex.quote(_MIGRATION_CLI_PID_PATH)}"
+            ),
+            'wait "$cli_pid"',
             "code=$?",
             'kill "$driver_pid" 2>/dev/null',
             'wait "$driver_pid" 2>/dev/null',
-            f'{driver} finish "$code"',
+            f'{driver} finish {shlex.quote(_MIGRATION_CLI_PID_PATH)} "$code"',
             "finished_at=$(python3 -c 'import time; print(int(time.time()))')",
             (
                 f'printf \'%s\\n\' "{{\\"schema_version\\":1,'
@@ -3102,6 +3219,8 @@ class MigrationService:
         self._analysis_input = AnalysisInputRegistry()
         # 进程内的交付收尾回合，键为 session_id，避免同一交付重复收尾。
         self._delivery_turns: dict[str, threading.Thread] = {}
+        # 进程内的交付复原，键为 session_id，避免同一交付重复打包。
+        self._delivery_recoveries: dict[str, threading.Thread] = {}
 
     @staticmethod
     def _translate(error: MigrationGatewayError) -> MigrationError:
@@ -3626,14 +3745,19 @@ class MigrationService:
         self,
         driver: dict[str, object] | None,
     ) -> bool:
-        """Whether a running delivery driver stopped reporting in.
+        """Whether the delivery driver behind a task is gone for good.
 
-        The Sandbox runs the AgentKit CLI and its heartbeat in one process group, so a
-        heartbeat that stops advancing means that run is gone and nothing will ever
-        write the delivery state the task is waiting for.
+        The heartbeat either says so itself, having watched the CLI it speaks for leave
+        the Sandbox, or stops advancing because the process group it lived in is gone.
+        Either way nothing will write the delivery state the task waits for.
         """
-        if not isinstance(driver, dict) or driver.get("state") != "running":
+        if not isinstance(driver, dict) or driver.get("state") not in {
+            "running",
+            "lost",
+        }:
             return False
+        if driver.get("state") == "lost":
+            return True
         heartbeat = driver.get("heartbeat_at")
         if isinstance(heartbeat, bool) or not isinstance(heartbeat, int):
             return False
@@ -4458,6 +4582,312 @@ class MigrationService:
             )
             return None
 
+    def _drive_delivery_recovery(self, session: MigrationSandboxSession) -> bool:
+        """Rebuild the packaging half of a delivery whose CLI never finished.
+
+        The AgentKit CLI settles an agentic delivery in one place: once the Codex turn
+        reports a terminal state, it turns the files on disk into an artifact and a
+        manifest.  None of that needs a model, so a run that lost its CLI after the
+        agent finished leaves a complete project that nothing will ever package.
+
+        Returns True while a rebuild is in flight, which is what keeps the read path
+        from writing the task off in the same breath.
+        """
+        worker = self._delivery_recoveries.get(session.session_id)
+        if worker is not None and worker.is_alive():
+            return True
+        lease = self._read_delivery_recovery_lease(session)
+        if isinstance(lease, dict):
+            if lease.get("state") == _DELIVERY_RECOVERY_RUNNING:
+                heartbeat = lease.get("heartbeat_at")
+                age = (
+                    self._clock() - float(heartbeat)
+                    if isinstance(heartbeat, (int, float))
+                    and not isinstance(heartbeat, bool)
+                    else _DELIVERY_RECOVERY_STALE_SECONDS
+                )
+                if age < _DELIVERY_RECOVERY_STALE_SECONDS:
+                    return True
+            if lease.get("state") == _DELIVERY_RECOVERY_DONE:
+                # 结论已经落地：不再重开，否则每次读任务都要重跑一遍打包。
+                return False
+            attempts = lease.get("attempts")
+            if (
+                isinstance(attempts, int)
+                and not isinstance(attempts, bool)
+                and attempts >= _DELIVERY_RECOVERY_MAX_ATTEMPTS
+            ):
+                return False
+        request = self._delivery_recovery_request(session)
+        if request is None:
+            return False
+        return self._start_delivery_recovery(session, lease, request)
+
+    def _read_delivery_recovery_lease(
+        self,
+        session: MigrationSandboxSession,
+    ) -> dict[str, object] | None:
+        """Read the rebuild's lease, tolerating a missing or damaged record."""
+        try:
+            lease = self._read_json(
+                session,
+                _DELIVERY_RECOVERY_LEASE_PATH,
+                optional=True,
+            )
+        except MigrationError:
+            logger.warning(
+                "Studio delivery recovery lease is unreadable task_id=%s",
+                session.task_id,
+            )
+            return None
+        if not isinstance(lease, dict) or lease.get("schema_version") != 1:
+            return None
+        return lease
+
+    def _delivery_recovery_request(
+        self,
+        session: MigrationSandboxSession,
+    ) -> dict[str, object] | None:
+        """The bindings a rebuild has to be handed, or None when there is nothing to
+        rebuild.
+
+        A delivery is only rebuildable once the agent wrote a terminal state of its
+        own, which is also what separates "the CLI died on a finished project" from
+        "the CLI died mid-run".  The second one stays a failure.
+        """
+        try:
+            status = self._read_json(session, _AGENT_STATUS_PATH, optional=True)
+        except MigrationError:
+            logger.warning(
+                "Studio migration agent state is unreadable task_id=%s",
+                session.task_id,
+            )
+            return None
+        if (
+            not isinstance(status, dict)
+            or str(status.get("state") or "") not in _DELIVERED_AGENT_STATES
+        ):
+            return None
+        try:
+            confirmation_content = self._read(
+                session,
+                _CONFIRMATION_PATH,
+                max_bytes=_MAX_PROVENANCE_BYTES,
+                optional=True,
+            )
+            source = self._read_json(session, _SOURCE_STATUS_PATH, optional=True)
+            capabilities = self._read_json(session, _CAPABILITIES_PATH, optional=True)
+        except MigrationError:
+            return None
+        if confirmation_content is None or not isinstance(source, dict):
+            return None
+        try:
+            confirmation = json.loads(confirmation_content)
+        except (UnicodeDecodeError, ValueError):
+            return None
+        if not isinstance(confirmation, dict):
+            return None
+        cli = capabilities.get("cli") if isinstance(capabilities, dict) else None
+        cli_version = str(cli.get("version") or "") if isinstance(cli, dict) else ""
+        source_sha256 = str(source.get("sha256") or "")
+        if not cli_version or len(source_sha256) != 64:
+            return None
+        return {
+            "output_dir": _DELIVERY_OUTPUT_DIR,
+            "delivery_dir": _DELIVERY_DIR,
+            "status_path": _AGENT_STATUS_PATH,
+            "run_id": session.task_id,
+            "framework": str(confirmation.get("framework") or ""),
+            "source_sha256": source_sha256,
+            "provenance_sha256": hashlib.sha256(confirmation_content).hexdigest(),
+            "cli_version": cli_version,
+        }
+
+    def _start_delivery_recovery(
+        self,
+        session: MigrationSandboxSession,
+        previous: dict[str, object] | None,
+        request: dict[str, object],
+    ) -> bool:
+        """Hand one rebuildable delivery to a Studio background worker."""
+        attempts = 1
+        if isinstance(previous, dict) and isinstance(previous.get("attempts"), int):
+            attempts = int(previous["attempts"]) + 1
+        self._put(
+            session,
+            _DELIVERY_RECOVERY_LEASE_PATH,
+            _json_bytes(
+                _delivery_recovery_marker(
+                    state=_DELIVERY_RECOVERY_RUNNING,
+                    attempts=attempts,
+                )
+            ),
+            media_type="application/json",
+        )
+        worker = threading.Thread(
+            target=self._delivery_recovery_worker,
+            args=(session, attempts, request),
+            name=f"migration-recovery-{session.session_id[-8:]}",
+            daemon=True,
+        )
+        self._delivery_recoveries[session.session_id] = worker
+        try:
+            worker.start()
+        except Exception:  # noqa: BLE001 - a failed start keeps the task's own state
+            self._delivery_recoveries.pop(session.session_id, None)
+            logger.exception(
+                "Studio migration delivery recovery worker could not start task_id=%s",
+                session.task_id,
+            )
+            return False
+        return True
+
+    def _delivery_recovery_worker(
+        self,
+        session: MigrationSandboxSession,
+        attempts: int,
+        request: dict[str, object],
+    ) -> None:
+        """Rebuild one delivery, and leave the lease saying how that went."""
+        verdict = False
+        files: int | None = None
+        stop = threading.Event()
+        heartbeat = threading.Thread(
+            target=self._keep_delivery_recovery_lease,
+            args=(session, attempts, stop),
+            name=f"migration-recovery-beat-{session.session_id[-8:]}",
+            daemon=True,
+        )
+        heartbeat.start()
+        try:
+            outcome = self._run_delivery_recovery(session, request)
+            verdict = isinstance(outcome, dict) and outcome.get("ok") is True
+            count = outcome.get("files") if isinstance(outcome, dict) else None
+            if isinstance(count, int) and not isinstance(count, bool):
+                files = count
+        except Exception:  # noqa: BLE001 - the worker must never kill the process
+            logger.exception(
+                "Studio migration delivery recovery failed task_id=%s",
+                session.task_id,
+            )
+        finally:
+            stop.set()
+            with contextlib.suppress(Exception):
+                heartbeat.join(timeout=_DELIVERY_RECOVERY_HEARTBEAT_SECONDS)
+            if (
+                self._delivery_recoveries.get(session.session_id)
+                is threading.current_thread()
+            ):
+                self._delivery_recoveries.pop(session.session_id, None)
+            with contextlib.suppress(Exception):
+                self._put(
+                    session,
+                    _DELIVERY_RECOVERY_LEASE_PATH,
+                    _json_bytes(
+                        _delivery_recovery_marker(
+                            state=_DELIVERY_RECOVERY_DONE,
+                            attempts=attempts,
+                            verdict=verdict,
+                            files=files,
+                        )
+                    ),
+                    media_type="application/json",
+                )
+
+    def _keep_delivery_recovery_lease(
+        self,
+        session: MigrationSandboxSession,
+        attempts: int,
+        stop: threading.Event,
+    ) -> None:
+        """Hold the rebuild's lease open while it runs, so only one of them runs."""
+        started = time.time()
+        while not stop.wait(_DELIVERY_RECOVERY_HEARTBEAT_SECONDS):
+            try:
+                self._put(
+                    session,
+                    _DELIVERY_RECOVERY_LEASE_PATH,
+                    _json_bytes(
+                        _delivery_recovery_marker(
+                            state=_DELIVERY_RECOVERY_RUNNING,
+                            attempts=attempts,
+                            started_at=started,
+                        )
+                    ),
+                    media_type="application/json",
+                )
+            except Exception:  # noqa: BLE001 - a missed beat must not stop the rebuild
+                logger.warning(
+                    "Studio migration delivery recovery lease is unreadable task_id=%s",
+                    session.task_id,
+                )
+
+    def _run_delivery_recovery(
+        self,
+        session: MigrationSandboxSession,
+        request: dict[str, object],
+    ) -> dict[str, object] | None:
+        """Install the rebuild in the Sandbox and run it there.
+
+        The program that runs is this repository's own module, shipped as source, so
+        the rules it packages by are the rules the tests exercise rather than a second
+        copy of them living in the Sandbox.
+        """
+        self._put(
+            session,
+            _DELIVERY_RECOVERY_SCRIPT_PATH,
+            delivery_recovery_source().encode("utf-8"),
+            media_type="text/x-python",
+        )
+        self._put(
+            session,
+            _DELIVERY_RECOVERY_REQUEST_PATH,
+            _json_bytes(request),
+            media_type="application/json",
+        )
+        inner = "\n".join(
+            [
+                "python3 "
+                f"{shlex.quote(_DELIVERY_RECOVERY_SCRIPT_PATH)} "
+                f"{shlex.quote(_DELIVERY_RECOVERY_REQUEST_PATH)} "
+                f"> {shlex.quote(_DELIVERY_RECOVERY_RESULT_PATH)} "
+                f"2> {shlex.quote(_DELIVERY_RECOVERY_LOG_PATH)}",
+                "code=$?",
+                f"cat {shlex.quote(_DELIVERY_RECOVERY_RESULT_PATH)}",
+                'if [ "$code" -ne 0 ]; then',
+                f"  tail -c 4000 {shlex.quote(_DELIVERY_RECOVERY_LOG_PATH)} >&2",
+                "fi",
+                "exit 0",
+            ]
+        )
+        result = self._execute(
+            session,
+            f"bash -c {shlex.quote(inner)}",
+            operation="delivery_recovery",
+            timeout_seconds=_DELIVERY_RECOVERY_TIMEOUT_SECONDS,
+        )
+        stdout = result.get("stdout") if isinstance(result, dict) else None
+        verdict = _recovery_verdict(stdout) if isinstance(stdout, str) else None
+        if isinstance(verdict, dict) and verdict.get("ok") is True:
+            logger.info(
+                "Studio migration delivery rebuilt task_id=%s files=%s bytes=%s "
+                "manifest_sha256=%s",
+                session.task_id,
+                verdict.get("files"),
+                verdict.get("bytes"),
+                verdict.get("manifest_sha256"),
+            )
+        else:
+            stderr = result.get("stderr") if isinstance(result, dict) else None
+            logger.warning(
+                "Studio migration delivery could not be rebuilt task_id=%s "
+                "verdict=%s stderr=%s",
+                session.task_id,
+                verdict,
+                str(stderr or "")[:1000],
+            )
+        return verdict
+
     def _start_app_server_delivery(
         self,
         session: MigrationSandboxSession,
@@ -5093,6 +5523,15 @@ class MigrationService:
             )
         if self._migration_driver_lost(driver):
             assert driver is not None
+            # CLI 不在了，但 agent 可能已经把项目做完：先把打包补上，补不上才是失败。
+            if self._drive_delivery_recovery(session):
+                return self._task_payload(
+                    session,
+                    request,
+                    state="migrating",
+                    message="正在整理迁移结果",
+                    confirmation=confirmation,
+                )
             logger.warning(
                 "Studio migration delivery driver stopped without a result "
                 "task_id=%s heartbeat_at=%s stale_seconds=%s",
