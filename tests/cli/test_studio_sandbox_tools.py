@@ -24,6 +24,7 @@ from agentkit.auth.errors import NetworkError
 from agentkit.toolkit.errors import ApiError
 
 import veadk.cli.studio_sandbox_tools as studio_sandbox_tools
+from veadk.cli.studio_model_catalog import VOLCENGINE_STUDIO_AGENT_MODEL_NAME
 from veadk.cli.studio_sandbox_tools import (
     ensure_studio_codex_model_environment,
     ensure_studio_agent_model_credential,
@@ -656,5 +657,5 @@ def test_byteplus_agent_model_configuration() -> None:
 
 def test_volcengine_agent_model_configuration() -> None:
     assert studio_sandbox_agent_model_name("volcengine") == (
-        "doubao-seed-2-1-pro-260628"
+        VOLCENGINE_STUDIO_AGENT_MODEL_NAME
     )

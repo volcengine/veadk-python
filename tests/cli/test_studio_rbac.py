@@ -51,6 +51,7 @@ from veadk.cli.cli_frontend import (
 )
 
 
+from veadk.cli.studio_model_catalog import VOLCENGINE_STUDIO_AGENT_MODEL_NAME
 from veadk.cli.studio_rbac import (
     StudioAccessPolicy,
     StudioPrincipal,
@@ -616,12 +617,12 @@ def test_server_credential_resource_lists_require_agent_management_role(
             "volcengine",
             "seed-2-0-lite-260228",
             "https://ark.ap-southeast.bytepluses.com/api/v3",
-            "doubao-seed-2-1-pro-260628",
+            VOLCENGINE_STUDIO_AGENT_MODEL_NAME,
             "https://ark.cn-beijing.volces.com/api/v3",
         ),
         (
             "byteplus",
-            "doubao-seed-2-1-pro-260628",
+            VOLCENGINE_STUDIO_AGENT_MODEL_NAME,
             "https://ark.cn-beijing.volces.com/api/v3/",
             "dola-seed-2-1-turbo-260628",
             "https://ark.ap-southeast.bytepluses.com/api/v3",
@@ -630,12 +631,12 @@ def test_server_credential_resource_lists_require_agent_management_role(
             "volcengine",
             "seed-2-0-lite-260228",
             "https://ark.cn-beijing.volces.com/api/v3",
-            "doubao-seed-2-1-pro-260628",
+            VOLCENGINE_STUDIO_AGENT_MODEL_NAME,
             "https://ark.cn-beijing.volces.com/api/v3",
         ),
         (
             "byteplus",
-            "doubao-seed-2-1-pro-260628",
+            VOLCENGINE_STUDIO_AGENT_MODEL_NAME,
             "https://ark.ap-southeast.bytepluses.com/api/v3",
             "dola-seed-2-1-turbo-260628",
             "https://ark.ap-southeast.bytepluses.com/api/v3",
@@ -2025,8 +2026,8 @@ def test_migration_deployment_materializes_owned_session_source_server_side(
     assert captured_config["common"]["entry_point"] == "bailian-test-workflow-agent.py"
     assert 'CMD ["python", "bailian-test-workflow-agent.py"]' in captured_dockerfile
     runtime_envs = captured_config["launch_types"]["cloud"]["runtime_envs"]
-    assert runtime_envs["MODEL_AGENT_NAME"] == "doubao-seed-2-1-pro-260628"
-    assert runtime_envs["MODEL_NAME"] == "doubao-seed-2-1-pro-260628"
+    assert runtime_envs["MODEL_AGENT_NAME"] == VOLCENGINE_STUDIO_AGENT_MODEL_NAME
+    assert runtime_envs["MODEL_NAME"] == VOLCENGINE_STUDIO_AGENT_MODEL_NAME
     assert runtime_envs["MODEL_AGENT_API_BASE"] == (
         "https://ark.cn-beijing.volces.com/api/v3"
     )

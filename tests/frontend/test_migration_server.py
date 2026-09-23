@@ -64,6 +64,11 @@ from frontend.server.migration.service import (
 )
 from veadk.cli.codex_app_server import CodexAppServerEvent
 from veadk.cli.frontend_skill_creator import _sandbox_model_config
+from veadk.cli.studio_model_catalog import VOLCENGINE_STUDIO_AGENT_MODEL_NAME
+
+# The model a site provisioned by this repository runs its Sandbox with, and therefore
+# the one every default-model fixture has to use.
+DEFAULT_MODEL_ID = VOLCENGINE_STUDIO_AGENT_MODEL_NAME
 
 
 @pytest.fixture(autouse=True)
@@ -206,7 +211,7 @@ class FakeMigrationGateway:
     def __init__(self) -> None:
         self.enabled = True
         self.provider = "volcengine"
-        self.model_id = "doubao-seed-2-1-pro-260628"
+        self.model_id = DEFAULT_MODEL_ID
         self.sessions: dict[str, MigrationSandboxSession] = {}
         self.files: dict[tuple[str, str], bytes] = {}
         self.commands: list[tuple[str, str, str]] = []
@@ -623,7 +628,7 @@ def test_migration_capability_and_session_contract_are_bounded() -> None:
         "enabled": True,
         "reason": "",
         "provider": "volcengine",
-        "model": {"configured": True, "id": "doubao-seed-2-1-pro-260628"},
+        "model": {"configured": True, "id": DEFAULT_MODEL_ID},
         "unsupportedModelIds": ["deepseek-v4-pro-260425"],
         "maxUploadBytes": 20 * 1024 * 1024,
         "sessionTtlSeconds": 3600,
@@ -711,7 +716,7 @@ def test_selected_model_is_immutable_session_configuration() -> None:
     created = service.create_task(
         CreateMigrationTaskBody(
             sourceFileName="support-agent.zip",
-            modelId="doubao-seed-2-1-pro-260628",
+            modelId=DEFAULT_MODEL_ID,
         ),
         "owner-1",
         "Owner",
@@ -721,9 +726,9 @@ def test_selected_model_is_immutable_session_configuration() -> None:
         gateway.files[(task_id, f"{MIGRATION_ROOT}/request/task.json")]
     )
 
-    assert request["model_id"] == "doubao-seed-2-1-pro-260628"
-    assert created["modelId"] == "doubao-seed-2-1-pro-260628"
-    assert gateway.created_models == ["doubao-seed-2-1-pro-260628"]
+    assert request["model_id"] == DEFAULT_MODEL_ID
+    assert created["modelId"] == DEFAULT_MODEL_ID
+    assert gateway.created_models == [DEFAULT_MODEL_ID]
     assert service.get_task(task_id, "owner-1")["modelId"] == request["model_id"]
 
 
@@ -1940,7 +1945,7 @@ def test_capabilities_expose_provider_model_and_per_session_runtime_checks() -> 
     assert capability["provider"] == "volcengine"
     assert capability["model"] == {
         "configured": True,
-        "id": "doubao-seed-2-1-pro-260628",
+        "id": DEFAULT_MODEL_ID,
     }
     assert capability["unsupportedModelIds"] == sorted(MIGRATION_UNSUPPORTED_MODEL_IDS)
     assert capability["cli"] == {
@@ -2032,7 +2037,7 @@ def test_create_task_is_idempotent_for_a_caller_owned_task_id() -> None:
                 taskId=task_id,
                 sourceFileName="support-agent.zip",
                 instruction="保留原有行为。",
-                modelId="doubao-seed-2-1-pro-260628",
+                modelId=DEFAULT_MODEL_ID,
             ),
             "owner-1",
             "Owner",

@@ -76,6 +76,7 @@ from veadk.cli.frontend_sandbox import (
     SandboxConversationService,
     SandboxSessionNotFoundError,
 )
+from veadk.cli.studio_model_catalog import VOLCENGINE_STUDIO_AGENT_MODEL_NAME
 
 
 def _gate(
@@ -224,7 +225,7 @@ class _FakeGateway:
             dict(tool_envs)
             if tool_envs is not None
             else {
-                "CODEX_MODEL": "doubao-seed-2-1-pro-260628",
+                "CODEX_MODEL": VOLCENGINE_STUDIO_AGENT_MODEL_NAME,
                 "CODEX_API_KEY": "codex-api-key",
                 "CODEX_BASE_URL": "https://ark.cn-beijing.volces.com/api/v3",
             }
@@ -800,7 +801,7 @@ def test_create_is_transient_and_public_contract_includes_expiry() -> None:
 
 def test_create_accepts_selected_model_as_session_env() -> None:
     gateway = _FakeGateway()
-    model_id = "doubao-seed-2-1-pro-260628"
+    model_id = VOLCENGINE_STUDIO_AGENT_MODEL_NAME
     with TestClient(_app(gateway)) as client:
         response = client.post(
             "/web/intelligent-development/sessions",
