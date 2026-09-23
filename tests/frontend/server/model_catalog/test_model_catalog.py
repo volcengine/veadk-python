@@ -53,7 +53,6 @@ def test_studio_development_model_allowlists_are_provider_specific() -> None:
     }
     assert BYTEPLUS_STUDIO_DEVELOPMENT_MODEL_IDS == {
         "dola-seed-2-1-turbo-260628",
-        "deepseek-v4-1-flash-260910",
         "deepseek-v4-pro-ga-260813",
     }
     assert studio_development_model_ids(" BYTEPLUS ") == (
@@ -449,11 +448,7 @@ async def test_route_uses_camel_case_response() -> None:
         ),
         (
             "byteplus",
-            [
-                "dola-seed-2-1-turbo-260628",
-                "deepseek-v4-1-flash-260910",
-                "deepseek-v4-pro-ga-260813",
-            ],
+            ["dola-seed-2-1-turbo-260628", "deepseek-v4-pro-ga-260813"],
         ),
     ],
 )

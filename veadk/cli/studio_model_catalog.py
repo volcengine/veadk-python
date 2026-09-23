@@ -97,7 +97,6 @@ VOLCENGINE_STUDIO_DEVELOPMENT_MODEL_IDS = frozenset(
 BYTEPLUS_STUDIO_DEVELOPMENT_MODEL_IDS = frozenset(
     {
         "dola-seed-2-1-turbo-260628",
-        "deepseek-v4-1-flash-260910",
         "deepseek-v4-pro-ga-260813",
     }
 )
