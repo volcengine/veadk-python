@@ -1,0 +1,15 @@
+.quality-error-details {
+  max-height: 360px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+  color: var(--studio-text-secondary);
+  padding-bottom: 12px;
+  scrollbar-gutter: stable;
+}
+
+.quality-error-details:focus-visible {
+  outline: 2px solid var(--studio-text-secondary);
+  outline-offset: -2px;
+}

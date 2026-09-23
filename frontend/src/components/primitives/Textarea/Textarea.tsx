@@ -4,13 +4,14 @@ import "./Textarea.css";
 
 export type TextareaProps = ComponentProps<"textarea"> & {
   counter?: ReactNode;
+  fullWidth?: boolean;
   /** 拖动调整大小时的最大高度，数字单位为 px，建议不小于初始高度 80px */
   maxHeight?: CSSProperties["maxHeight"];
 };
 
-export function Textarea({ className = "", counter, maxHeight, ...props }: TextareaProps) {
+export function Textarea({ className = "", counter, fullWidth, maxHeight, ...props }: TextareaProps) {
   return (
-    <div className={`studio-textarea ${className}`.trim()} data-counter={counter != null || undefined} style={{ maxHeight }}>
+    <div className={`studio-textarea ${className}`.trim()} data-counter={counter != null || undefined} data-full-width={fullWidth || undefined} style={{ maxHeight }}>
       <textarea {...props} className="studio-textarea__input" />
       {counter != null && <span className="studio-textarea__counter">{counter}</span>}
       <img className="studio-textarea__resizer" src={resizer} alt="" aria-hidden="true" />

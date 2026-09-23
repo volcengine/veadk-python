@@ -2,6 +2,7 @@ import type { ComponentProps, ReactNode } from "react";
 import "./InputWithTailIcon.css";
 
 export type InputWithTailIconProps = ComponentProps<"input"> & {
+  /** Use null to omit the trailing icon and its space */
   tailIcon?: ReactNode;
   tailIconLabel?: string;
   onTailIconClick?: () => void;
@@ -23,10 +24,11 @@ export function InputWithTailIcon({
   disabled,
   ...props
 }: InputWithTailIconProps) {
+  const hasTailIcon = tailIcon != null && typeof tailIcon !== "boolean";
   return (
     <div className={`studio-input-with-tail-icon ${className}`.trim()}>
       <input {...props} disabled={disabled} className="studio-input-with-tail-icon__input" />
-      {onTailIconClick ? (
+      {hasTailIcon && (onTailIconClick ? (
         <button
           className="studio-input-with-tail-icon__icon"
           type="button"
@@ -38,7 +40,7 @@ export function InputWithTailIcon({
         </button>
       ) : (
         <span className="studio-input-with-tail-icon__icon" aria-hidden="true">{tailIcon}</span>
-      )}
+      ))}
     </div>
   );
 }

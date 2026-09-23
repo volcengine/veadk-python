@@ -10938,6 +10938,16 @@ def _run_frontend_server(
             _authorize_agent_usage,
         )
 
+        from frontend.server.quality import mount_quality_routes
+
+        mount_quality_routes(
+            app,
+            provider=provider,
+            resolve_api_key=_resolve_ark_model_api_key,
+            authorize=_require_agent_management,
+            authorize_runtime=_authorize_agent_usage,
+        )
+
         from frontend.server.website_integration import (
             create_service as create_website_integration_service,
         )

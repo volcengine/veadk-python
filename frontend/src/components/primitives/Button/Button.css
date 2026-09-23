@@ -192,6 +192,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  gap: 4px;
   min-width: 0;
   overflow: hidden;
 }
