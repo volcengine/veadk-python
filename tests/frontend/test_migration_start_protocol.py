@@ -28,6 +28,7 @@ from pathlib import Path
 import shutil
 import signal
 import subprocess
+import sys
 import time
 
 import pytest
@@ -64,6 +65,7 @@ class DeliverySandbox:
                 "_MIGRATION_DRIVER_SCRIPT_PATH",
                 f"{self.root}/control/migration-driver.py",
             ),
+            ("_MIGRATION_CLI_PID_PATH", f"{self.root}/control/migration-cli.pid"),
             (
                 "_PROCESS_EXIT_PATH",
                 f"{self.root}/diagnostics/migration/process-exit.json",
@@ -225,6 +227,61 @@ def test_delivery_driver_publishes_the_artifact_manifest(
     exit_record = sandbox.wait_for_process_exit()
     assert exit_record["schema_version"] == 1
     assert exit_record["exit_code"] == 0
+
+
+@pytest.mark.skipif(
+    shutil.which("bash") is None,
+    reason="the delivery driver protocol needs bash",
+)
+def test_the_heartbeat_reports_a_cli_that_left_the_sandbox(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A heartbeat whose CLI is gone says so instead of beating on its behalf.
+
+    The reported failure had exactly this shape: the launch shell and its heartbeat
+    survived while the migration CLI was signalled away.  A heartbeat that kept
+    advancing told Studio the run was still alive, so the task never settled.
+    """
+    sandbox = DeliverySandbox(tmp_path, monkeypatch)
+    script = Path(migration_service._MIGRATION_DRIVER_SCRIPT_PATH)
+    script.parent.mkdir(parents=True, exist_ok=True)
+    script.write_text(migration_service._migration_driver_script(), encoding="utf-8")
+    lease_path = Path(migration_service._MIGRATION_DRIVER_PATH)
+    pid_path = Path(migration_service._MIGRATION_CLI_PID_PATH)
+    cli = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    beating = subprocess.Popen(
+        [
+            sys.executable,
+            str(script),
+            str(lease_path),
+            migration_service._DELIVERY_ARTIFACT_PATH,
+            TASK_ID,
+            "heartbeat",
+            str(pid_path),
+        ]
+    )
+    try:
+        pid_path.write_text(str(cli.pid), encoding="utf-8")
+
+        assert sandbox.wait_for_lease("running")["state"] == "running"
+        assert beating.poll() is None
+
+        cli.terminate()
+        cli.wait(timeout=10)
+
+        lost = sandbox.wait_for_lease("lost")
+        assert beating.wait(timeout=10) == 0
+        validate_migration_driver(lost, expected_run_id=TASK_ID)
+        assert lost["finished_at"] is None
+        assert lost["exit_code"] is None
+        assert lost["artifact"] is None
+    finally:
+        cli.kill()
+        cli.wait(timeout=10)
+        if beating.poll() is None:
+            beating.kill()
+            beating.wait(timeout=10)
 
 
 @pytest.mark.skipif(

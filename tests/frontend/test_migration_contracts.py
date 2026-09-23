@@ -772,7 +772,12 @@ def test_driver_lease_contract_bounds_the_heartbeat_and_the_published_artifact()
         {**driver_lease_payload(), "run_id": "migration-v1-" + "3" * 32},
         "identity",
     )
-    invalid(validate, {**driver_lease_payload(), "state": "lost"}, "identity")
+    # A heartbeat that watched its own CLI leave is unfinished rather than invalid, and
+    # it is the one record Studio can still rebuild a delivery from.
+    lost = {**driver_lease_payload(), "state": "lost"}
+    assert validate(lost)["state"] == "lost"
+    invalid(validate, {**lost, "exit_code": 0}, "published a result")
+    invalid(validate, {**driver_lease_payload(), "state": "gone"}, "identity")
     invalid(validate, {**driver_lease_payload(), "heartbeat_at": "now"}, "integer")
     invalid(
         validate,
