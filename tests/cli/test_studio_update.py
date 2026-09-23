@@ -1020,7 +1020,9 @@ def test_studio_update_supports_byteplus_provider(
     assert captured["offline_runtime"] is False
     assert captured["package_provider"] == "byteplus"
     assert captured["bundle_agentkit_cli"] is False
-    assert captured["package_requirements"] == "./veadk.whl\n./pydantic.whl\n"
+    assert captured["package_requirements"] == (
+        "--extra-index-url https://pypi.org/simple\n./veadk.whl\n./pydantic.whl\n"
+    )
     update = captured["update"]
     assert isinstance(update, dict)
     run_script = str(captured["run_script"])
