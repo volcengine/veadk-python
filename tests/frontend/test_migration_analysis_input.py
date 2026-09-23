@@ -232,7 +232,7 @@ def test_ask_tool_falls_back_when_nobody_answers() -> None:
     payload = json.loads(result.text)
     assert payload["answers"] == {}
     assert payload["unanswered"] is True
-    assert "needs_input" in payload["hint"]
+    assert "reportNeedsInput" in payload["hint"]
 
 
 def test_ask_tool_survives_a_broken_channel() -> None:

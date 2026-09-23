@@ -85,10 +85,11 @@ async def run_tool_turn(
     endpoint: str,
     prompt: str,
     cwd: str,
-    tool_name: str,
-    tool_description: str,
-    tool_schema: dict[str, object],
-    handler: ToolHandler,
+    tool_name: str = "",
+    tool_description: str = "",
+    tool_schema: dict[str, object] | None = None,
+    handler: ToolHandler | None = None,
+    tools: tuple[DynamicTool, ...] | None = None,
     has_result: Callable[[], bool],
     thread_id: str = "",
     model: str = "",
@@ -120,15 +121,18 @@ async def run_tool_turn(
     session.cwd = cwd
     if model:
         session.model = model
-    for tool in (
-        DynamicTool(
-            name=tool_name,
-            description=tool_description,
-            schema=tool_schema,
-            handler=handler,
-        ),
-        *extra_tools,
-    ):
+    if tools is None:
+        if not tool_name or tool_schema is None or handler is None:
+            raise ValueError("run_tool_turn needs either tools or one primary tool")
+        tools = (
+            DynamicTool(
+                name=tool_name,
+                description=tool_description,
+                schema=tool_schema,
+                handler=handler,
+            ),
+        )
+    for tool in (*tools, *extra_tools):
         session.register_dynamic_tool(
             tool.name,
             tool.description,

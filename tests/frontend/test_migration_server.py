@@ -3140,9 +3140,10 @@ def test_upload_starts_read_only_codex_analysis_without_cli_inspection() -> None
     assert "不得据此改用英文" in prompt
     assert "Dify 和 Any 的 recommended.entry 必须为 null" in prompt
     assert "entries 只能列出 Structured" in prompt
-    assert "顶层字段必须且只能是" in prompt
-    assert "entries 必须与" in prompt
-    assert "绝不能嵌套在 recommended 中" in prompt
+    # 交付协议：脚本驱动只输出一个 JSON，且不再要求模型回显协议字段。
+    assert "只输出一个 JSON 对象" in prompt
+    assert "不要输出 schema_version、attempt、input_sha256 等簿记字段" in prompt
+    assert "不要输出 schema_version" in prompt
     assert "用户补充要求明确使用其他语言时" in prompt
     assert "相对项目根目录的文件入口" in prompt
     assert "agent.py:agent" in prompt
@@ -3175,48 +3176,33 @@ def test_upload_starts_read_only_codex_analysis_without_cli_inspection() -> None
     assert "不得回显密钥" in prompt
     assert "不得判断或声称项目“违法”" in prompt
     assert "不得建议用户提交安全复核" in prompt
-    assert schema["properties"]["frameworks"]["maxItems"] == 20
-    assert (
-        schema["properties"]["frameworks"]["items"]["properties"]["evidence"][
-            "maxItems"
-        ]
-        == 100
-    )
-    assert (
-        schema["properties"]["frameworks"]["items"]["properties"]["evidence"]["items"][
-            "properties"
-        ]["path"]["maxLength"]
-        == 4096
-    )
-    recommended_variants = schema["properties"]["recommended"]["anyOf"]
-    assert recommended_variants[0]["properties"]["framework"]["enum"] == [
-        "langchain",
-        "langgraph",
-        "adk",
-        "strands",
-        "agentcore",
+    # 交付契约只要求模型给出它真正知道的判断：protocol 簿记由 Studio 注入。
+    assert schema["required"] == ["status", "summary"]
+    assert "schema_version" not in schema["properties"]
+    assert "attempt" not in schema["properties"]
+    assert "input_sha256" not in schema["properties"]
+    assert schema["properties"]["status"]["enum"] == [
+        "recommendation_ready",
+        "needs_input",
+        "unsupported",
     ]
-    structured_entry = recommended_variants[0]["properties"]["entry"]
-    assert structured_entry["type"] == "string"
-    assert structured_entry["pattern"] == (
-        r"^[A-Za-z0-9_./-]+\.(?:py|json)(?::[A-Za-z_][A-Za-z0-9_]*)?$"
-    )
-    assert recommended_variants[1]["properties"]["framework"]["enum"] == [
-        "dify",
-        "any",
+    # 三种结论各自的要求写在契约里，而不是靠散文约定：这也是 unsupported 必须带证据的地方。
+    branch_requirements = {
+        branch["if"]["properties"]["status"]["const"]: branch["then"]["required"]
+        for branch in schema["allOf"]
+    }
+    assert branch_requirements == {
+        "needs_input": ["questions"],
+        "unsupported": ["evidence"],
+    }
+    assert schema["properties"]["evidence"]["items"]["required"] == ["path", "reason"]
+    assert schema["properties"]["frameworks"]["items"]["required"] == ["id"]
+    assert schema["properties"]["entries"]["items"]["required"] == [
+        "value",
+        "framework",
+        "evidence",
     ]
-    assert recommended_variants[1]["properties"]["entry"]["type"] == "null"
-    assert recommended_variants[2] == {"type": "null"}
-    assert schema["allOf"][0]["then"]["properties"]["recommended"] == {"type": "null"}
-    assert schema["properties"]["entries"]["items"]["properties"]["framework"][
-        "enum"
-    ] == ["langchain", "langgraph", "adk", "strands", "agentcore"]
-    assert (
-        schema["properties"]["entries"]["items"]["properties"]["value"]["pattern"]
-        == structured_entry["pattern"]
-    )
-    assert schema["properties"]["questions"]["maxItems"] == 50
-    assert schema["properties"]["warnings"]["maxItems"] == 100
+    assert schema["properties"]["recommended"]["required"] == ["framework"]
 
 
 def test_codex_analysis_selects_the_result_that_matches_the_contract(

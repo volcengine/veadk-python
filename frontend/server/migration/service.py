@@ -54,6 +54,7 @@ from frontend.server.source_project_limits import (
 from .contracts import (
     MigrationContractError,
     validate_analysis_result,
+    validate_detection_report,
     validate_analysis_status,
     validate_confirmation,
     validate_delivery_report,
@@ -74,7 +75,16 @@ from .gateway import (
     MigrationSandboxSession,
 )
 from .activity import AnalysisActivityLog
+from .analysis_contract import (
+    KIND_BY_STATUS,
+    RECOMMENDATION_KIND,
+    analysis_document_schema,
+    build_analysis_result,
+    detection_candidates,
+    is_model_document,
+)
 from .codex_exec_shim import shim_source as _codex_shim_source
+from .detection import detect_source
 from .analysis_input import (
     ASK_TOOL_NAME,
     ASK_TOOL_SCHEMA,
@@ -103,7 +113,6 @@ from .delivery_turn import (
 )
 from .models import (
     MIGRATION_FRAMEWORKS,
-    STRUCTURED_ENTRY_PATTERN,
     STRUCTURED_MIGRATION_FRAMEWORKS,
     ConfirmMigrationBody,
     CreateMigrationTaskBody,
@@ -150,6 +159,7 @@ _REQUEST_PATH = f"{MIGRATION_ROOT}/request/task.json"
 _SOURCE_PATH = f"{MIGRATION_ROOT}/input/source.zip"
 _PROJECT_PATH = f"{MIGRATION_ROOT}/workspace/source"
 _SOURCE_STATUS_PATH = f"{MIGRATION_ROOT}/request/source.json"
+_DETECTION_PATH = f"{MIGRATION_ROOT}/request/detection.json"
 _CAPABILITIES_PATH = f"{MIGRATION_ROOT}/control/capabilities.json"
 _ANALYSIS_STATUS_PATH = f"{MIGRATION_ROOT}/control/task-status.json"
 _ANALYSIS_RESULT_PATH = f"{MIGRATION_ROOT}/analysis/route.json"
@@ -167,20 +177,9 @@ def _analysis_activity_path(attempt: int) -> str:
     return f"{MIGRATION_ROOT}/diagnostics/analysis/attempt-{attempt}.log"
 
 
-_ANALYSIS_CONTRACT_KEYS = (
-    "schema_version",
-    "status",
-    "attempt",
-    "input_sha256",
-    "summary",
-    "frameworks",
-    "recommended",
-    "entries",
-    "boundary",
-    "assumptions",
-    "questions",
-    "warnings",
-)
+# The scripted ``codex exec`` fallback has no dynamic tools, so Codex writes one JSON
+# document.  It carries the judgement only: protocol bookkeeping is added by Studio.
+_ANALYSIS_CONTRACT_KEYS = ("status", "summary")
 _ANALYSIS_CONTRACT_STATUSES = ("needs_input", "recommendation_ready", "unsupported")
 _ANALYSIS_TURN_TIMEOUT_SECONDS = 600.0
 # 分析回合等待用户回答的窗口：等待期间没有 app-server 事件，所以空闲窗口必须
@@ -532,10 +531,9 @@ def _analysis_result_message(value: str) -> bool:
         return False
     try:
         candidate = json.loads(value)
-        validate_analysis_result(candidate)
-    except (MigrationContractError, ValueError):
+    except ValueError:
         return False
-    return True
+    return is_model_document(candidate)
 
 
 # 页面按智能构建同一套 Codex 事件渲染工具行（原生图标、标签、耗时），所以活动项要
@@ -1607,201 +1605,14 @@ for path, value in (
 
 
 def _analysis_schema() -> dict[str, object]:
-    evidence = {
-        "type": "object",
-        "additionalProperties": False,
-        "required": ["path", "line", "reason"],
-        "properties": {
-            "path": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 4_096,
-                "pattern": (
-                    r"^(?!/)(?!.*(?:^|/)\.{1,2}(?:/|$))"
-                    r"(?!.*//)(?!.*\\)[^\x00-\x1f\x7f]+$"
-                ),
-            },
-            "line": {"type": "integer", "minimum": 1},
-            "reason": {"type": "string", "minLength": 1, "maxLength": 4_000},
-        },
-    }
-    return {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "type": "object",
-        "additionalProperties": False,
-        "required": [
-            "schema_version",
-            "status",
-            "attempt",
-            "input_sha256",
-            "summary",
-            "frameworks",
-            "recommended",
-            "entries",
-            "boundary",
-            "assumptions",
-            "questions",
-            "warnings",
-        ],
-        "properties": {
-            "schema_version": {"const": 1},
-            "status": {
-                "enum": [
-                    "needs_input",
-                    "recommendation_ready",
-                    "unsupported",
-                ]
-            },
-            "attempt": {"type": "integer", "minimum": 1, "maximum": 100},
-            "input_sha256": {
-                "type": "string",
-                "pattern": "^[0-9a-f]{64}$",
-            },
-            "summary": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 20_000,
-            },
-            "frameworks": {
-                "type": "array",
-                "maxItems": 20,
-                "items": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "required": ["id", "confidence", "evidence"],
-                    "properties": {
-                        "id": {
-                            "enum": list(MIGRATION_FRAMEWORKS),
-                        },
-                        "confidence": {"enum": ["high", "medium", "low"]},
-                        "evidence": {
-                            "type": "array",
-                            "maxItems": 100,
-                            "items": evidence,
-                        },
-                    },
-                },
-            },
-            "recommended": {
-                "anyOf": [
-                    {
-                        "type": "object",
-                        "additionalProperties": False,
-                        "required": ["framework", "entry", "reason"],
-                        "properties": {
-                            "framework": {"enum": _STRUCTURED_FRAMEWORKS},
-                            "entry": {
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 512,
-                                "pattern": STRUCTURED_ENTRY_PATTERN,
-                            },
-                            "reason": {"type": "string", "maxLength": 4_000},
-                        },
-                    },
-                    {
-                        "type": "object",
-                        "additionalProperties": False,
-                        "required": ["framework", "entry", "reason"],
-                        "properties": {
-                            "framework": {"enum": ["dify", "any"]},
-                            "entry": {"type": "null"},
-                            "reason": {"type": "string", "maxLength": 4_000},
-                        },
-                    },
-                    {"type": "null"},
-                ],
-            },
-            "entries": {
-                "type": "array",
-                "maxItems": 100,
-                "items": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "required": ["value", "framework", "evidence"],
-                    "properties": {
-                        "value": {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": 512,
-                            "pattern": STRUCTURED_ENTRY_PATTERN,
-                        },
-                        "framework": {"enum": _STRUCTURED_FRAMEWORKS},
-                        "evidence": {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": 4_000,
-                        },
-                    },
-                },
-            },
-            "boundary": {
-                "type": "object",
-                "additionalProperties": False,
-                "required": ["include", "exclude"],
-                "properties": {
-                    "include": {
-                        "type": "array",
-                        "maxItems": 200,
-                        "items": {"type": "string", "maxLength": 4_000},
-                    },
-                    "exclude": {
-                        "type": "array",
-                        "maxItems": 200,
-                        "items": {"type": "string", "maxLength": 4_000},
-                    },
-                },
-            },
-            "assumptions": {
-                "type": "array",
-                "maxItems": 100,
-                "items": {"type": "string", "maxLength": 4_000},
-            },
-            "questions": {
-                "type": "array",
-                "maxItems": 50,
-                "items": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "required": ["id", "prompt", "required"],
-                    "properties": {
-                        "id": {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": 128,
-                        },
-                        "prompt": {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": 4_000,
-                        },
-                        "required": {"type": "boolean"},
-                    },
-                },
-            },
-            "warnings": {
-                "type": "array",
-                "maxItems": 100,
-                "items": {"type": "string", "maxLength": 4_000},
-            },
-        },
-        "allOf": [
-            {
-                "if": {
-                    "properties": {"status": {"const": "unsupported"}},
-                    "required": ["status"],
-                },
-                "then": {
-                    "properties": {
-                        "recommended": {"type": "null"},
-                        "entries": {"maxItems": 0},
-                        "questions": {"maxItems": 0},
-                    }
-                },
-                "else": {"properties": {"recommended": {"not": {"type": "null"}}}},
-            }
-        ],
-    }
+    """The document Codex writes when only the scripted driver is available.
+
+    Protocol bookkeeping (schema_version, attempt, input_sha256) is not part of it:
+    Studio injects those while storing the result, so the model is only asked for its
+    own judgement.  Narrowing what the model must produce is what makes a shape drift
+    a quality problem instead of a lost analysis.
+    """
+    return analysis_document_schema()
 
 
 def _interactive_analysis_context() -> str:
@@ -1822,6 +1633,182 @@ def _interactive_analysis_context() -> str:
 """
 
 
+_ANALYSIS_OUTCOME_PATH = f"{MIGRATION_ROOT}/diagnostics/analysis/model-turn.json"
+_CONSERVATIVE_SUMMARY = (
+    "本轮没有取得可用的模型分析结论。以下结论由 Studio 依据项目文件清单与确定性"
+    "检测直接生成：推荐按 {framework} 迁移，范围覆盖项目内全部文件。"
+    "可以直接确认并开始迁移；如需更精确的迁移方式，请重新发起一次分析。"
+)
+_CONSERVATIVE_WARNING = (
+    "保守结论：模型分析未给出可用结果，本结论由 Studio 依据项目文件清单与确定性"
+    "检测直接生成，未经模型复核，请在使用前核对迁移范围。"
+)
+
+
+def _analysis_failure_reason(outcome: dict[str, object]) -> str:
+    """One sentence explaining why the model layer produced nothing usable."""
+    refusals = outcome.get("refusals")
+    if isinstance(refusals, list) and refusals:
+        return "模型提交的结论未通过校验：" + "；".join(
+            str(item) for item in refusals[-3:]
+        )
+    if outcome.get("events"):
+        return "模型回合结束但没有提交任何结论。"
+    return "模型回合没有得到可用输出。"
+
+
+def _conservative_analysis(
+    detection: dict[str, object] | None,
+    *,
+    attempt: int,
+    input_sha256: str,
+    reason: str,
+) -> tuple[dict[str, object], list[str]]:
+    """Build a usable conclusion without any model output.
+
+    The point of the fallback is that "analysis" must produce something a user can act
+    on.  Any is always an executable route, and the verified candidates stay selectable,
+    so the confirmation page keeps offering what detection proved.
+    """
+    candidates = detection_candidates(detection)
+    frameworks = [item["id"] for item in candidates]
+    recommended = frameworks[0] if frameworks else "any"
+    warnings = [_CONSERVATIVE_WARNING]
+    if reason:
+        warnings.append(f"模型分析未交付可用结论的原因：{reason}")
+    for item in (detection or {}).get("candidates", []):
+        if isinstance(item, dict) and item.get("id"):
+            evidence = item.get("evidence")
+            if isinstance(evidence, list):
+                for entry in evidence:
+                    if isinstance(entry, dict) and entry.get("path"):
+                        warnings.append(
+                            f"检测证据：{entry.get('path')}:{entry.get('line') or 1}"
+                            f" — {entry.get('reason') or ''}"
+                        )
+    return build_analysis_result(
+        RECOMMENDATION_KIND,
+        {
+            "summary": _CONSERVATIVE_SUMMARY.format(framework=recommended),
+            "frameworks": [
+                {
+                    "id": item["id"],
+                    "confidence": item.get("confidence"),
+                    "evidence": item.get("evidence"),
+                }
+                for item in candidates
+            ]
+            or [{"id": "any", "confidence": "low", "evidence": []}],
+            "recommended": {"framework": recommended, "entry": None, "reason": ""},
+            "boundary": {"include": ["项目内全部文件"], "exclude": []},
+            "warnings": warnings,
+        },
+        attempt=attempt,
+        input_sha256=input_sha256,
+        detection=detection,
+    )
+
+
+def _empty_detection_report() -> dict[str, object]:
+    """Detection that could not run.
+
+    Analysis still proceeds; the report only says that the file inventory is unknown,
+    so nothing downstream may treat an empty inventory as "the project has no files".
+    """
+    return {
+        "schema_version": 1,
+        "files": {"count": 0, "listed": []},
+        "documents": [],
+        "candidates": [],
+        "unreadable": [],
+        "degraded": True,
+        "degraded_reason": "detection_missing",
+    }
+
+
+def _detection_report(content: bytes) -> dict[str, object]:
+    """Run the model-free detection and validate its own output before storing it."""
+    return validate_detection_report(detect_source(content))
+
+
+def _detection_prompt_context(detection: dict[str, object]) -> str:
+    """Render the verified facts Codex may rely on instead of rediscovering them."""
+    files = detection.get("files")
+    listed = files.get("listed") if isinstance(files, dict) else []
+    view = {
+        "files": {
+            "count": files.get("count") if isinstance(files, dict) else 0,
+            "listed": listed if isinstance(listed, list) else [],
+        },
+        "documents": [
+            {
+                "path": str(item.get("path") or ""),
+                "status": str(item.get("status") or ""),
+                "dsl": str(item.get("dsl") or ""),
+            }
+            for item in detection.get("documents", [])
+            if isinstance(item, dict)
+        ],
+        "candidates": detection.get("candidates", []),
+        "unreadable": detection.get("unreadable", []),
+        "degraded": detection.get("degraded"),
+        "degraded_reason": detection.get("degraded_reason"),
+    }
+    return f"""## 已核实的项目事实（Studio 免模型检测）
+
+以下内容由 Studio 在分析开始前用确定性程序核实，可直接作为事实使用，不必再用命令
+重复验证；你的结论必须与之一致，不一致时必须在 summary 里说明原因。
+
+```json
+{json.dumps(view, ensure_ascii=False, indent=2)}
+```
+
+- files.count 是 ZIP 内真实文件数，files.listed 是文件名清单（最多 200 条；超出部分
+  需要时自行读取）。
+- candidates 是检测器已确认的框架候选，附带文件与行号。candidates 非空时，你的
+  frameworks 必须包含这些候选；在没有任何新证据的情况下给出 unsupported 会被拒绝。
+- unreadable 列出检测器无法读取的文件及原因；degraded 为 true 时，把 degraded_reason
+  视作分析限制写入 warnings，不要据此判定项目材料不足。
+
+"""
+
+
+def _tool_protocol_context() -> str:
+    """The delivery protocol for turns that registered the analysis tools."""
+    return """## 输出协议
+
+- 分析结束后调用下面三个工具之一交付结论，调用一次即可，不要重复提交：
+  - `reportRecommendation`：推荐一种可执行的迁移方式（summary 必填，其余尽量给）。
+  - `reportNeedsInput`：必须先由用户补充信息才能决定迁移方式，把问题写进 questions。
+  - `reportUnsupported`：项目无法迁移。只用于材料不足或证据完整的高风险行为链，
+    必须给出 summary 和至少两条指向项目内真实文件的证据（path、line、reason），
+    引用不存在的文件会被拒绝。
+- Studio 会补齐 schema_version、attempt、input_sha256 等簿记字段，你不要输出它们。
+- 字段缺失、类型不对、层级不对都不会导致失败：Studio 会取默认值或忽略多余内容，
+  只有在结论本身无法成立时才会拒绝，并在返回值里指出具体字段。
+- 只有 summary 是必填的。summary 用简体中文写给用户看，说明结论和理由。
+- Dify/Any 的推荐入口必须为空；Structured 入口必须是相对项目根目录的文件入口，
+  例如 `agent.py:agent`、`langgraph.json:graph_id`。
+- 不要输出 Markdown 表格，也不要在总结里重复分析过程。"""
+
+
+def _document_protocol_context() -> str:
+    """The delivery protocol when only the scripted ``codex exec`` driver is free."""
+    return """## 输出协议
+
+- 最终响应只输出一个 JSON 对象，不要输出 Markdown 围栏、解释或额外文字。
+- 必填字段只有 status 和 summary：
+  - status 取 recommendation_ready、needs_input 或 unsupported；
+  - summary 用简体中文写给用户看，说明结论和理由。
+- 另外尽量给出这些可选字段：frameworks（候选，每项含 id、confidence、evidence）、
+  recommended（含 framework、entry、reason）、entries、boundary、assumptions、
+  warnings、questions（status=needs_input 时给出必答问题）。
+- 不要输出 schema_version、attempt、input_sha256 等簿记字段，Studio 会自己补齐。
+- 给出 unsupported 时必须带至少两条指向项目内真实文件的证据（path、line、reason）；
+  evidence 引用不存在的文件会被拒绝。
+- 字段缺失或层级不对不会导致失败：Studio 会取默认值或忽略多余内容。"""
+
+
 def _analysis_prompt(
     request: dict[str, object],
     *,
@@ -1831,10 +1818,20 @@ def _analysis_prompt(
     answers: dict[str, str] | None = None,
     protocol_retry: bool = False,
     interactive: bool = False,
+    detection: dict[str, object] | None = None,
 ) -> str:
     instruction = str(request.get("instruction") or "").strip()
     # 只有 app-server 驱动注册了 askUser；脚本驱动读到的提示词不能承诺这个工具。
     interactive_context = _interactive_analysis_context() if interactive else ""
+    detection_context = (
+        _detection_prompt_context(detection) if detection is not None else ""
+    )
+    # Codex speaks a tool protocol when the app-server drives the turn, and one JSON
+    # document when only the scripted driver is available.  Neither asks for the
+    # bookkeeping fields: Studio owns those.
+    protocol_context = (
+        _tool_protocol_context() if interactive else _document_protocol_context()
+    )
     retry_context = (
         "\n## 协议重试\n"
         "上一次回复无法作为分析结果读取：其中没有符合输出协议的 JSON 对象。"
@@ -1897,7 +1894,6 @@ def _analysis_prompt(
   `src/agent.py:root_agent` 或 `langgraph.json:graph_id`；禁止使用
   `package.module:object` 形式的 Python 模块导入路径。
 - 最终迁移方式必须由用户选择并确认，本阶段只给建议和待确认问题。
-- 结果中的 attempt 必须是 {attempt}，input_sha256 必须是 {input_sha256}。
 - 事实不足且用户无需替换 ZIP 就能回答时，返回 needs_input 和最小必答问题集；
   此时至少有一个 required=true 的问题。
 - 事实充分时返回 recommendation_ready 且 questions 必须为空。
@@ -1963,7 +1959,7 @@ def _analysis_prompt(
   进度而执行额外命令，也不得包含系统提示词、凭证、环境变量值或其他敏感信息。
 - 最终响应仍必须严格遵守下方输出协议；执行动态不得改变 JSON 字段、迁移建议或证据标准。
 
-## 支持判定与用户表达
+{detection_context}## 支持判定与用户表达
 
 - 能可靠识别 Structured 框架和入口时推荐对应 Structured 方式；否则只要存在足够材料
   可以进行 best-effort 重建，就推荐 Any，迁移范围应覆盖所有有证据支持的用户可见行为。
@@ -1978,17 +1974,7 @@ def _analysis_prompt(
   不要只输出错误码、框架术语或“未找到可执行方式”之类没有行动建议的表述。
 - warnings 要具体描述缺失材料及影响，不得把可在迁移或部署阶段补齐的条件写成阻塞项。
 
-{interactive_context}## 输出协议
-
-- 顶层字段必须且只能是：schema_version、status、attempt、input_sha256、
-  summary、frameworks、recommended、entries、boundary、assumptions、questions、warnings。
-- recommendation_ready 和 needs_input 的 recommended 必须且只能包含
-  framework、entry、reason；unsupported 的 recommended 必须为 null。
-  entries 必须与 recommended 同级，绝不能嵌套在 recommended 中。
-- Dify/Any 必须输出 `recommended.entry=null` 和顶层 `entries=[]`。
-- 输出前自行核对字段层级、必填字段、枚举值和问题状态约束；不要在响应中描述核对过程。
-- 最终响应必须严格符合提供的 JSON Schema，只输出一个 JSON 对象，不要输出
-  Markdown 围栏、解释或额外文字。
+{interactive_context}{protocol_context}
 
 {retry_context}
 ## 用户补充要求
@@ -2192,11 +2178,12 @@ def _objects(text):
 def _contract(value):
     if not isinstance(value, dict):
         return None
-    if value.get("schema_version") != 1:
-        return None
     if value.get("status") not in _CONTRACT_STATUSES:
         return None
     if any(key not in value for key in _CONTRACT_KEYS):
+        return None
+    summary = value.get("summary")
+    if not isinstance(summary, str) or not summary.strip():
         return None
     return value
 
@@ -3053,6 +3040,51 @@ for name in ("analysis.pid", "migration.pid"):
     )
 
 
+def _normalized_analysis_document(
+    value: object,
+    *,
+    expected_attempt: int,
+    expected_input_sha256: str,
+) -> object:
+    """Turn whatever was stored into the state-file contract.
+
+    The app-server driver stores the assembled document.  The scripted fallback stores
+    the JSON document Codex wrote, which carries the judgement only, so it is accepted
+    here with no detection report: that path's shape is constrained while Codex decodes
+    it, and the destructive verdict still has to bring its own evidence.
+    """
+    if isinstance(value, dict) and "schema_version" in value and "boundary" in value:
+        recommended = value.get("recommended")
+        if (
+            "entries" not in value
+            and isinstance(recommended, dict)
+            and "entries" in recommended
+        ):
+            recommended = dict(recommended)
+            value = {
+                **value,
+                "recommended": recommended,
+                "entries": recommended.pop("entries"),
+            }
+        return {
+            **value,
+            "attempt": expected_attempt,
+            "input_sha256": expected_input_sha256,
+        }
+    if not is_model_document(value):
+        raise MigrationContractError(
+            "analysis document is neither a state file nor a judgement"
+        )
+    assert isinstance(value, dict)
+    document, _ = build_analysis_result(
+        KIND_BY_STATUS[str(value["status"])],
+        value,
+        attempt=expected_attempt,
+        input_sha256=expected_input_sha256,
+    )
+    return document
+
+
 class MigrationService:
     """Derive task state from remote Sessions and files without a local repository."""
 
@@ -3186,6 +3218,25 @@ class MigrationService:
         except MigrationGatewayError as error:
             raise self._translate(error) from error
 
+    def _read_detection(
+        self,
+        session: MigrationSandboxSession,
+    ) -> dict[str, object]:
+        """Read the model-free detection report.
+
+        A missing or unreadable report never fails analysis: it degrades to "inventory
+        unknown", which keeps the verdict gate open instead of judging the project.
+        """
+        try:
+            value = self._read_json(session, _DETECTION_PATH, optional=True)
+            if value is not None:
+                return validate_detection_report(value)
+        except (MigrationError, MigrationContractError):
+            logger.warning(
+                "Studio migration detection report is unusable; continuing without it"
+            )
+        return _empty_detection_report()
+
     def _read_json(
         self,
         session: MigrationSandboxSession,
@@ -3228,25 +3279,13 @@ class MigrationService:
             )
         try:
             value = json.loads(content)
-            if isinstance(value, dict):
-                recommended = value.get("recommended")
-                if (
-                    "entries" not in value
-                    and isinstance(recommended, dict)
-                    and "entries" in recommended
-                ):
-                    recommended = dict(recommended)
-                    value = {
-                        **value,
-                        "recommended": recommended,
-                        "entries": recommended.pop("entries"),
-                    }
-                value = {
-                    **value,
-                    "attempt": expected_attempt,
-                    "input_sha256": expected_input_sha256,
-                }
-            analysis = validate_analysis_result(value)
+            analysis = validate_analysis_result(
+                _normalized_analysis_document(
+                    value,
+                    expected_attempt=expected_attempt,
+                    expected_input_sha256=expected_input_sha256,
+                )
+            )
         except (UnicodeDecodeError, ValueError, MigrationContractError) as error:
             raise MigrationError(
                 "MIGRATION_ANALYSIS_INVALID",
@@ -3672,6 +3711,15 @@ class MigrationService:
                 operation="prepare_source",
                 timeout_seconds=_FILE_OPERATION_TIMEOUT_SECONDS,
             )
+            # The verified facts the analysis may rely on are computed here, in
+            # Studio's own process, so no model ever authors the file inventory the
+            # unsupported verdict is measured against.
+            self._put(
+                session,
+                _DETECTION_PATH,
+                _json_bytes(_detection_report(content)),
+                media_type="application/json",
+            )
         request = self._read_json(session, _REQUEST_PATH, optional=True)
         if request is None:
             raise MigrationError(
@@ -3686,6 +3734,7 @@ class MigrationService:
             _json_bytes(_analysis_schema()),
             media_type="application/json",
         )
+        detection = self._read_detection(session)
         self._put(
             session,
             _ANALYSIS_PROMPT_PATH,
@@ -3693,6 +3742,7 @@ class MigrationService:
                 request,
                 attempt=1,
                 input_sha256=digest,
+                detection=detection,
             ).encode("utf-8"),
             media_type="text/markdown",
         )
@@ -3704,6 +3754,7 @@ class MigrationService:
                 attempt=1,
                 input_sha256=digest,
                 protocol_retry=True,
+                detection=detection,
             ).encode("utf-8"),
             media_type="text/markdown",
         )
@@ -3714,6 +3765,7 @@ class MigrationService:
                 attempt=1,
                 input_sha256=digest,
                 interactive=True,
+                detection=detection,
             ),
             attempt=1,
             input_sha256=digest,
@@ -3837,6 +3889,7 @@ class MigrationService:
     ) -> None:
         """Run one app-server turn and persist it, or hand over to the script."""
         key = (session.session_id, attempt)
+        diagnostics: dict[str, object] = {}
         try:
             try:
                 analysis = asyncio.run(
@@ -3847,6 +3900,7 @@ class MigrationService:
                         prompt=prompt,
                         model_id=model_id,
                         timeout_seconds=timeout_seconds,
+                        diagnostics=diagnostics,
                     )
                 )
             except MigrationAnalysisUnavailable as error:
@@ -3858,6 +3912,51 @@ class MigrationService:
                     type(error).__name__,
                 )
                 analysis = None
+            self._persist_analysis_outcome(
+                session, attempt=attempt, outcome=diagnostics
+            )
+            if analysis is None and diagnostics.get("events"):
+                # The turn reached Codex and Codex produced output, but nothing
+                # acceptable arrived.  That is a result-production problem, not a
+                # verdict about the project, so Studio concludes for itself instead of
+                # spending another model run: the analysis still has to produce
+                # something the user can act on.
+                logger.warning(
+                    "Studio migration analysis turn delivered no acceptable result; "
+                    "persisting the conservative conclusion task_id=%s attempt=%s "
+                    "refusals=%s",
+                    session.task_id,
+                    attempt,
+                    len(diagnostics.get("refusals") or []),
+                )
+                try:
+                    conservative, notes = _conservative_analysis(
+                        self._read_detection(session),
+                        attempt=attempt,
+                        input_sha256=input_sha256,
+                        reason=_analysis_failure_reason(diagnostics),
+                    )
+                except Exception:  # noqa: BLE001 - never lose the task to a fallback bug
+                    logger.exception(
+                        "Studio migration conservative analysis failed task_id=%s "
+                        "attempt=%s",
+                        session.task_id,
+                        attempt,
+                    )
+                else:
+                    logger.info(
+                        "Studio migration conservative conclusion stored task_id=%s "
+                        "attempt=%s notes=%s",
+                        session.task_id,
+                        attempt,
+                        notes,
+                    )
+                    self._persist_app_server_analysis(
+                        session,
+                        attempt=attempt,
+                        analysis=conservative,
+                    )
+                    return
             if analysis is None:
                 # The turn can also end without ever delivering the contract, which is
                 # why the driver switches here as well; say so, or an operator only
@@ -3900,6 +3999,7 @@ class MigrationService:
         prompt: str,
         model_id: str,
         timeout_seconds: float,
+        diagnostics: dict[str, object] | None = None,
     ) -> dict[str, object] | None:
         """Run the app-server turn while refreshing the background driver lease."""
 
@@ -3965,7 +4065,6 @@ class MigrationService:
             return await run_route_analysis(
                 endpoint=session.endpoint,
                 prompt=prompt,
-                schema=_analysis_schema(),
                 cwd=_PROJECT_PATH,
                 attempt=attempt,
                 input_sha256=input_sha256,
@@ -3973,6 +4072,8 @@ class MigrationService:
                 timeout_seconds=timeout_seconds,
                 event_sink=activity.record,
                 questioner=questioner,
+                detection=self._read_detection(session),
+                diagnostics=diagnostics,
                 idle_timeout_seconds=(
                     timeout_seconds
                     + _ANALYSIS_INPUT_WINDOW_SECONDS
@@ -3988,6 +4089,31 @@ class MigrationService:
             heartbeat.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await heartbeat
+
+    def _persist_analysis_outcome(
+        self,
+        session: MigrationSandboxSession,
+        *,
+        attempt: int,
+        outcome: dict[str, object],
+    ) -> None:
+        """Record what the model layer produced. Never fails the worker."""
+        if not outcome:
+            return
+        try:
+            self._put(
+                session,
+                _ANALYSIS_OUTCOME_PATH,
+                _json_bytes({"schema_version": 1, "attempt": attempt, **outcome}),
+                media_type="application/json",
+            )
+        except Exception:  # noqa: BLE001 - diagnostics must not break analysis
+            logger.warning(
+                "Studio migration analysis outcome could not be stored task_id=%s "
+                "attempt=%s",
+                session.task_id,
+                attempt,
+            )
 
     def _persist_app_server_analysis(
         self,
@@ -5295,6 +5421,7 @@ class MigrationService:
             _json_bytes(_analysis_schema()),
             media_type="application/json",
         )
+        detection = self._read_detection(session)
         self._put(
             session,
             _ANALYSIS_PROMPT_PATH,
@@ -5304,6 +5431,7 @@ class MigrationService:
                 input_sha256=str(source["sha256"]),
                 previous_analysis=analysis,
                 answers=body.answers,
+                detection=detection,
             ).encode("utf-8"),
             media_type="text/markdown",
         )
@@ -5317,6 +5445,7 @@ class MigrationService:
                 previous_analysis=analysis,
                 answers=body.answers,
                 protocol_retry=True,
+                detection=detection,
             ).encode("utf-8"),
             media_type="text/markdown",
         )
@@ -5329,6 +5458,7 @@ class MigrationService:
                 previous_analysis=analysis,
                 answers=body.answers,
                 interactive=True,
+                detection=detection,
             ),
             attempt=next_attempt,
             input_sha256=str(source["sha256"]),
