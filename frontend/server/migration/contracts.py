@@ -161,6 +161,21 @@ def _reject_path_collisions(paths: set[str]) -> None:
                 raise MigrationContractError("file and directory paths collide")
 
 
+def _evidence_list(value: object, *, maximum: int = 100) -> list[dict[str, object]]:
+    if not isinstance(value, list) or len(value) > maximum:
+        raise MigrationContractError("invalid evidence list")
+    evidence: list[dict[str, object]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            raise MigrationContractError("invalid evidence")
+        _exact_keys(item, required={"path", "line", "reason"})
+        _relative_path(item.get("path"))
+        _bounded_integer(item.get("line"), minimum=1, maximum=10_000_000)
+        _text(item.get("reason"), allow_empty=False, maximum=4_000)
+        evidence.append(item)
+    return evidence
+
+
 def _framework(value: object) -> str:
     if value not in MIGRATION_FRAMEWORKS:
         raise MigrationContractError("unsupported framework")
@@ -263,6 +278,98 @@ def validate_source_status(value: object) -> dict[str, object]:
         value.get("expanded_bytes"),
         maximum=_MAX_SOURCE_EXPANDED_BYTES,
     )
+    return {str(key): item for key, item in value.items()}
+
+
+def validate_detection_report(value: object) -> dict[str, object]:
+    """Validate the model-free detection report written before analysis runs.
+
+    Studio authors this document, so it is checked strictly; the analysis verdict is
+    later measured against the file inventory it carries.
+    """
+    if not isinstance(value, dict):
+        raise MigrationContractError("detection report must be an object")
+    _exact_keys(
+        value,
+        required={
+            "schema_version",
+            "files",
+            "documents",
+            "candidates",
+            "unreadable",
+            "degraded",
+            "degraded_reason",
+        },
+    )
+    if value.get("schema_version") != 1:
+        raise MigrationContractError("unsupported detection report schema")
+    files = value.get("files")
+    if not isinstance(files, dict):
+        raise MigrationContractError("invalid detection files")
+    _exact_keys(files, required={"count", "listed"})
+    _bounded_integer(files.get("count"), maximum=_MAX_DELIVERY_FILES)
+    listed = files.get("listed")
+    if not isinstance(listed, list) or len(listed) > 1_000:
+        raise MigrationContractError("invalid detection file list")
+    for item in listed:
+        _relative_path(item)
+
+    documents = value.get("documents")
+    if not isinstance(documents, list) or len(documents) > 1_000:
+        raise MigrationContractError("invalid detection documents")
+    for item in documents:
+        if not isinstance(item, dict):
+            raise MigrationContractError("invalid detection document")
+        _exact_keys(
+            item,
+            required={"path", "format", "status", "dsl", "signals"},
+            optional={"parse_error"},
+        )
+        _relative_path(item.get("path"))
+        if item.get("status") not in {"parsed", "unparsed"}:
+            raise MigrationContractError("invalid detection document status")
+        _text(item.get("format"), allow_empty=False, maximum=32)
+        _text(item.get("dsl"), maximum=64)
+        if "parse_error" in item:
+            _text(item.get("parse_error"), maximum=64)
+        signals = item.get("signals")
+        if not isinstance(signals, list) or len(signals) > 100:
+            raise MigrationContractError("invalid detection signals")
+        for signal in signals:
+            if not isinstance(signal, dict):
+                raise MigrationContractError("invalid detection signal")
+            _exact_keys(signal, required={"path", "line", "reason"})
+            _text(signal.get("path"), maximum=_MAX_PATH_BYTES)
+            _bounded_integer(signal.get("line"), minimum=1, maximum=10_000_000)
+            _text(signal.get("reason"), allow_empty=False, maximum=4_000)
+
+    candidates = value.get("candidates")
+    if not isinstance(candidates, list) or len(candidates) > 20:
+        raise MigrationContractError("invalid detection candidates")
+    for item in candidates:
+        if not isinstance(item, dict):
+            raise MigrationContractError("invalid detection candidate")
+        _exact_keys(item, required={"id", "confidence", "evidence"})
+        _framework(item.get("id"))
+        if item.get("confidence") not in {"high", "medium", "low"}:
+            raise MigrationContractError("invalid detection candidate")
+        _evidence_list(item.get("evidence"))
+
+    unreadable = value.get("unreadable")
+    if not isinstance(unreadable, list) or len(unreadable) > 1_000:
+        raise MigrationContractError("invalid detection unreadable list")
+    for item in unreadable:
+        if not isinstance(item, dict):
+            raise MigrationContractError("invalid detection unreadable entry")
+        _exact_keys(item, required={"path", "reason"})
+        path = item.get("path")
+        if path != "":
+            _relative_path(path)
+        _text(item.get("reason"), allow_empty=False, maximum=64)
+
+    if not isinstance(value.get("degraded"), bool):
+        raise MigrationContractError("invalid detection degraded flag")
+    _text(value.get("degraded_reason"), maximum=128)
     return {str(key): item for key, item in value.items()}
 
 
@@ -918,6 +1025,7 @@ def validate_delivery_result(
 __all__ = [
     "MigrationContractError",
     "validate_analysis_result",
+    "validate_detection_report",
     "validate_analysis_status",
     "validate_confirmation",
     "validate_delivery_result",

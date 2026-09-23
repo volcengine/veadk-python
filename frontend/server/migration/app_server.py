@@ -14,11 +14,13 @@
 
 """Codex app-server route analysis for Studio project migration.
 
-The migration analysis result is a strict contract object.  Delivering it through a
-registered dynamic tool keeps the payload in typed JSON-RPC arguments, so a progress
-update, a commentary message, or a Markdown-fenced reply can no longer be mistaken for
-the result.  Rejections are returned to Codex as ``success: false`` so the same turn can
-correct itself instead of failing the whole migration.
+The analysis result arrives through registered dynamic tools, so a progress update, a
+commentary message, or a Markdown-fenced reply can no longer be mistaken for the result.
+Acceptance is deliberately liberal: Studio owns the state-file format, fills in the
+protocol bookkeeping itself, and defaults or drops whatever the model could not shape,
+so a model that writes imperfect arguments still lands a usable result.  Only the
+destructive ``unsupported`` verdict is held to a deterministic bar, and a refusal is
+returned to Codex as ``success: false`` so the same turn corrects itself.
 
 The same turn also carries ``askUser``.  When the project cannot answer a question that
 changes the migration, Codex asks the user inside the turn and keeps analysing with the
@@ -42,21 +44,49 @@ from .analysis_input import (
     Answers,
     normalize_questions,
 )
+from .analysis_contract import (
+    NEEDS_INPUT_KIND,
+    RECOMMENDATION_KIND,
+    UNSUPPORTED_KIND,
+    AnalysisAcceptanceError,
+    AnalysisAssemblyError,
+    acceptance_feedback,
+    analysis_tool_schema,
+    build_analysis_result,
+)
 from .codex_tool_turn import DynamicTool, ToolTurnUnavailable, run_tool_turn
-from .contracts import MigrationContractError, validate_analysis_result
 
 logger = logging.getLogger(__name__)
 
-ROUTE_TOOL_NAME = "reportRoute"
-ROUTE_TOOL_DESCRIPTION = (
-    "提交只读项目分析的最终结果。必须在完成分析后调用一次，"
-    "参数严格遵循给定的 JSON Schema；被拒绝时按返回的错误修正后重新调用。"
-)
+RECOMMENDATION_TOOL_NAME = "reportRecommendation"
+NEEDS_INPUT_TOOL_NAME = "reportNeedsInput"
+UNSUPPORTED_TOOL_NAME = "reportUnsupported"
+TOOL_NAME_BY_KIND = {
+    RECOMMENDATION_KIND: RECOMMENDATION_TOOL_NAME,
+    NEEDS_INPUT_KIND: NEEDS_INPUT_TOOL_NAME,
+    UNSUPPORTED_KIND: UNSUPPORTED_TOOL_NAME,
+}
+TOOL_DESCRIPTION_BY_KIND = {
+    RECOMMENDATION_KIND: (
+        "提交只读项目分析的最终结论：推荐一种可执行的迁移方式。"
+        "在完成分析后调用一次；只有 summary 是必填的，其余字段能给多少给多少，"
+        "缺失的字段会被 Studio 用已核实的事实补齐，不会被拒绝。"
+    ),
+    NEEDS_INPUT_KIND: (
+        "提交只读项目分析的结论：必须先由用户补充信息才能决定迁移方式。"
+        "把要向用户提出的问题写入 questions（每项含 prompt）。"
+    ),
+    UNSUPPORTED_KIND: (
+        "提交「该项目无法迁移」的结论。这是最后一个手段，只用于材料不足或"
+        "证据完整的高风险行为链；必须给出 summary 和至少两条指向项目真实文件的"
+        "证据，证据无法核实会被拒绝。"
+    ),
+}
 # What Codex is told when nobody answered the questions in time.
 UNANSWERED_HINT = (
     "用户没有在时限内回答这些问题。请立即调用 "
-    f"{ROUTE_TOOL_NAME} 并返回 status=needs_input，"
-    "把原始问题写入 questions（每项包含 id、prompt、required），不要重复提问。"
+    f"{NEEDS_INPUT_TOOL_NAME}，"
+    "把原始问题写入 questions（每项包含 prompt），不要重复提问。"
 )
 
 _APP_SERVER_ENV = "AGENTKIT_MIGRATION_APP_SERVER"
@@ -86,34 +116,79 @@ class MigrationAnalysisUnavailable(RuntimeError):
     """The Sandbox app-server could not produce a usable analysis result."""
 
 
-class RouteRecorder:
-    """Validate and retain one analysis result delivered by a dynamic tool call."""
+class AnalysisRecorder:
+    """Accept one terminal analysis submission and retain the assembled result.
 
-    def __init__(self, *, attempt: int, input_sha256: str) -> None:
+    The record carries the outcome facts a caller may want to persist: which tool
+    landed, what acceptance had to default or drop, and why earlier submissions were
+    refused.  None of that is a verdict about the project.
+    """
+
+    def __init__(
+        self,
+        *,
+        attempt: int,
+        input_sha256: str,
+        detection: dict[str, object] | None = None,
+    ) -> None:
         self.attempt = attempt
         self.input_sha256 = input_sha256
+        self.detection = detection
         self.result: dict[str, object] | None = None
-        self.rejections: list[str] = []
+        self.kind = ""
+        self.notes: list[str] = []
+        self.refusals: list[str] = []
 
-    def submit(self, arguments: dict[str, object]) -> CodexDynamicToolResult:
-        candidate = {
-            **arguments,
-            "attempt": self.attempt,
-            "input_sha256": self.input_sha256,
-        }
+    def handler(
+        self,
+        kind: str,
+    ) -> Callable[[dict[str, object]], CodexDynamicToolResult]:
+        def handle(arguments: dict[str, object]) -> CodexDynamicToolResult:
+            return self._accept(kind, arguments)
+
+        return handle
+
+    def _accept(
+        self,
+        kind: str,
+        arguments: dict[str, object],
+    ) -> CodexDynamicToolResult:
+        if self.result is not None:
+            return CodexDynamicToolResult(
+                True,
+                "分析结果已经提交，请直接给出简短的简体中文总结。",
+            )
         try:
-            validated = validate_analysis_result(candidate)
-        except MigrationContractError as error:
-            self.rejections.append(str(error))
+            document, notes = build_analysis_result(
+                kind,
+                arguments,
+                attempt=self.attempt,
+                input_sha256=self.input_sha256,
+                detection=self.detection,
+            )
+        except AnalysisAcceptanceError as error:
+            self.refusals.append(
+                "; ".join(f"{item.path}:{item.actual}" for item in error.issues)
+            )
+            return CodexDynamicToolResult(False, acceptance_feedback(kind, error))
+        except AnalysisAssemblyError:
+            logger.exception("Studio migration analysis assembly failed kind=%s", kind)
             return CodexDynamicToolResult(
                 False,
-                f"分析结果不符合协议（{error}）。请修正后重新调用 {ROUTE_TOOL_NAME}。",
+                "Studio 暂时无法保存这次结论，请稍后重新调用同一个工具。",
             )
-        if self.result is None:
-            self.result = validated
+        self.result = document
+        self.kind = kind
+        self.notes = notes
+        if notes:
+            logger.info(
+                "Studio migration analysis accepted with defaults kind=%s notes=%s",
+                kind,
+                notes,
+            )
         return CodexDynamicToolResult(
             True,
-            "分析结果已接收。请用简体中文给出简短的用户可见总结。",
+            "结论已接收。请用简体中文给出简短的用户可见总结，不要重复分析过程。",
         )
 
 
@@ -168,7 +243,6 @@ async def run_route_analysis(
     *,
     endpoint: str,
     prompt: str,
-    schema: dict[str, object],
     cwd: str,
     attempt: int,
     input_sha256: str,
@@ -178,13 +252,22 @@ async def run_route_analysis(
     questioner: AnalysisQuestioner | None = None,
     idle_timeout_seconds: float | None = None,
     host_wait_seconds: Callable[[], float] | None = None,
+    detection: dict[str, object] | None = None,
+    diagnostics: dict[str, object] | None = None,
 ) -> dict[str, object] | None:
-    """Run one analysis turn and return the validated route contract, if any.
+    """Run one analysis turn and return the accepted analysis document, if any.
 
     Passing ``questioner`` registers ``askUser`` for this turn; the caller also owns
     the matching window through ``idle_timeout_seconds`` and ``host_wait_seconds``.
+    ``detection`` carries Studio's own verified facts, which acceptance uses to fill
+    defaults and to check the one verdict that must cite real files.  ``diagnostics``,
+    when given, is filled in place with what happened, so a caller can persist it.
     """
-    recorder = RouteRecorder(attempt=attempt, input_sha256=input_sha256)
+    recorder = AnalysisRecorder(
+        attempt=attempt,
+        input_sha256=input_sha256,
+        detection=detection,
+    )
     extra_tools = (
         (
             DynamicTool(
@@ -197,34 +280,63 @@ async def run_route_analysis(
         if questioner is not None
         else ()
     )
+    # Counting Codex' own output is what lets a caller tell "the turn never reached
+    # the model" (an infrastructure fallback) from "the model worked and delivered
+    # nothing acceptable" (a conclusion Studio must fall back for itself).
+    seen = {"events": 0}
+
+    def sink(event: object) -> None:
+        seen["events"] += 1
+        if event_sink is not None:
+            event_sink(event)
+
+    tools = tuple(
+        DynamicTool(
+            name=TOOL_NAME_BY_KIND[kind],
+            description=TOOL_DESCRIPTION_BY_KIND[kind],
+            schema=analysis_tool_schema(kind),
+            handler=recorder.handler(kind),
+        )
+        for kind in (RECOMMENDATION_KIND, NEEDS_INPUT_KIND, UNSUPPORTED_KIND)
+    )
     try:
         await run_tool_turn(
             endpoint=endpoint,
             prompt=prompt,
             cwd=cwd,
-            tool_name=ROUTE_TOOL_NAME,
-            tool_description=ROUTE_TOOL_DESCRIPTION,
-            tool_schema=schema,
-            handler=recorder.submit,
+            tools=tools,
             has_result=lambda: recorder.result is not None,
             model=model,
             timeout_seconds=timeout_seconds,
-            event_sink=event_sink,
+            event_sink=sink,
             extra_tools=extra_tools,
             idle_timeout_seconds=idle_timeout_seconds,
             host_wait_seconds=host_wait_seconds,
         )
     except ToolTurnUnavailable as error:
         raise MigrationAnalysisUnavailable(str(error)) from error
+    if diagnostics is not None:
+        diagnostics.update(
+            {
+                "accepted": recorder.result is not None,
+                "kind": recorder.kind,
+                "notes": list(recorder.notes),
+                "refusals": list(recorder.refusals),
+                "events": seen["events"],
+            }
+        )
     return recorder.result
 
 
 __all__ = [
     "AnalysisQuestioner",
+    "AnalysisRecorder",
     "MigrationAnalysisUnavailable",
-    "ROUTE_TOOL_DESCRIPTION",
-    "ROUTE_TOOL_NAME",
-    "RouteRecorder",
+    "NEEDS_INPUT_TOOL_NAME",
+    "RECOMMENDATION_TOOL_NAME",
+    "TOOL_DESCRIPTION_BY_KIND",
+    "TOOL_NAME_BY_KIND",
+    "UNSUPPORTED_TOOL_NAME",
     "app_server_analysis_enabled",
     "ask_tool_handler",
     "run_route_analysis",

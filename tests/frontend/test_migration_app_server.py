@@ -25,9 +25,13 @@ import pytest
 
 from frontend.server.migration import service as migration_service
 from frontend.server.migration.analysis_input import AnalysisInputRegistry
+from frontend.server.migration.analysis_contract import (
+    RECOMMENDATION_KIND,
+    UNSUPPORTED_KIND,
+)
 from frontend.server.migration.app_server import (
     MigrationAnalysisUnavailable,
-    RouteRecorder,
+    AnalysisRecorder,
     app_server_analysis_enabled,
 )
 from frontend.server.migration.gateway import MigrationSandboxSession
@@ -181,7 +185,19 @@ def test_app_server_analysis_runs_on_a_background_worker(
     assert recorded["attempt"] == 1
     assert recorded["model"] == "doubao-test"
     assert recorded["cwd"] == migration_service._PROJECT_PATH
-    assert recorded["schema"] == migration_service._analysis_schema()
+    # Studio owns the document shape now, so the turn is handed verified facts and a
+    # place to report what happened instead of a strict schema to fill in.
+    assert "schema" not in recorded
+    assert recorded["detection"] == {
+        "schema_version": 1,
+        "files": {"count": 0, "listed": []},
+        "documents": [],
+        "candidates": [],
+        "unreadable": [],
+        "degraded": True,
+        "degraded_reason": "detection_missing",
+    }
+    assert isinstance(recorded["diagnostics"], dict)
     assert recorder.written[migration_service._ANALYSIS_RESULT_PATH]["status"] == (
         "recommendation_ready"
     )
@@ -332,22 +348,145 @@ def test_a_live_in_process_worker_blocks_analysis_recovery() -> None:
     assert recorder.commands == []
 
 
-def test_route_recorder_rejects_an_invalid_contract_then_accepts_a_correction() -> None:
-    recorder = RouteRecorder(attempt=1, input_sha256="a" * 64)
+def test_recorder_fills_in_what_the_model_did_not_shape() -> None:
+    """A judgement with only a summary still lands a usable recommendation."""
+    recorder = AnalysisRecorder(
+        attempt=3,
+        input_sha256="b" * 64,
+        detection={
+            "schema_version": 1,
+            "files": {"count": 2, "listed": ["md5.txt", "template.yml"]},
+            "documents": [],
+            "candidates": [
+                {
+                    "id": "dify",
+                    "confidence": "high",
+                    "evidence": [
+                        {"path": "template.yml", "line": 5, "reason": "kind: app"},
+                        {"path": "template.yml", "line": 8, "reason": "workflow.graph"},
+                    ],
+                }
+            ],
+            "unreadable": [],
+            "degraded": False,
+            "degraded_reason": "",
+        },
+    )
 
-    rejected = recorder.submit({"schema_version": 1, "status": "recommendation_ready"})
-
-    assert rejected.success is False
-    assert "reportRoute" in rejected.text
-    assert recorder.result is None
-    assert recorder.rejections
-
-    accepted = recorder.submit(_contract())
+    accepted = recorder.handler(RECOMMENDATION_KIND)(
+        {"summary": "这是一个 Dify 风格的工作流导出。", "frameworks": "dify"}
+    )
 
     assert accepted.success is True
+    assert recorder.kind == RECOMMENDATION_KIND
     assert recorder.result is not None
-    assert recorder.result["attempt"] == 1
-    assert recorder.result["input_sha256"] == "a" * 64
+    assert recorder.result["status"] == "recommendation_ready"
+    # Studio's own bookkeeping, not the model's.
+    assert recorder.result["attempt"] == 3
+    assert recorder.result["input_sha256"] == "b" * 64
+    assert recorder.result["schema_version"] == 1
+    # The verified candidate survives, and the unusable field was noted, not fatal.
+    assert recorder.result["frameworks"][0]["id"] == "dify"
+    assert recorder.result["recommended"]["framework"] == "dify"
+    assert any("frameworks" in note for note in recorder.notes)
+    assert recorder.refusals == []
+
+
+def test_recorder_refuses_a_verdict_without_evidence_and_keeps_the_turn_alive() -> None:
+    recorder = AnalysisRecorder(
+        attempt=1,
+        input_sha256="a" * 64,
+        detection={
+            "schema_version": 1,
+            "files": {"count": 2, "listed": ["md5.txt", "template.yml"]},
+            "documents": [],
+            "candidates": [],
+            "unreadable": [],
+            "degraded": False,
+            "degraded_reason": "",
+        },
+    )
+
+    rejected = recorder.handler(UNSUPPORTED_KIND)(
+        {"summary": "结构测试。", "evidence": []}
+    )
+
+    assert rejected.success is False
+    assert "reportUnsupported" in rejected.text
+    assert recorder.result is None
+    assert recorder.refusals
+
+    # A verdict citing a file the archive never had is refused too.
+    unknown = recorder.handler(UNSUPPORTED_KIND)(
+        {
+            "summary": "这个项目里有完整的勒索行为链，无法安全迁移，建议用户先移除相关代码再新建迁移。",
+            "evidence": [
+                {"path": "missing.py", "line": 1, "reason": "加密并删除用户数据"},
+                {"path": "template.yml", "line": 5, "reason": "同上"},
+            ],
+        }
+    )
+    assert unknown.success is False
+    assert "missing.py" in unknown.text
+
+    accepted = recorder.handler(UNSUPPORTED_KIND)(
+        {
+            "summary": "该项目只有两个文件且缺少任何可执行的 Agent 源码，无法恢复 Agent 行为，建议补充源码后新建迁移。",
+            "evidence": [
+                {"path": "template.yml", "line": 5, "reason": "只有导出的 DSL"},
+                {"path": "md5.txt", "line": 1, "reason": "只有校验值"},
+            ],
+        }
+    )
+    assert accepted.success is True
+    assert recorder.result is not None
+    assert recorder.result["status"] == "unsupported"
+    assert recorder.result["recommended"] is None
+    # The evidence that justified the verdict stays visible on the page.
+    assert any("template.yml:5" in warning for warning in recorder.result["warnings"])
+
+
+def test_a_turn_that_delivers_nothing_still_produces_a_usable_conclusion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """模型没交付结论时不再把任务判死，也不再花一轮脚本驱动。"""
+    monkeypatch.delenv("AGENTKIT_MIGRATION_APP_SERVER", raising=False)
+
+    async def _run(**kwargs: object) -> dict[str, object] | None:
+        diagnostics = kwargs["diagnostics"]
+        assert isinstance(diagnostics, dict)
+        diagnostics.update(
+            {
+                "accepted": False,
+                "kind": "",
+                "notes": [],
+                "refusals": ["evidence:2 条可用"],
+                "events": 42,
+            }
+        )
+        return None
+
+    monkeypatch.setattr(migration_service, "run_route_analysis", _run)
+
+    recorder = _Recorder()
+    service = _Service(recorder)
+
+    assert service._start_app_server_analysis(
+        _session(), prompt="分析", attempt=1, input_sha256="a" * 64
+    )
+    _wait_for_driver(service)
+
+    stored = recorder.written[migration_service._ANALYSIS_RESULT_PATH]
+    assert stored["status"] == "recommendation_ready"
+    assert "没有取得可用的模型分析结论" in stored["summary"]
+    assert any("保守结论" in warning for warning in stored["warnings"])
+    assert any("evidence" in warning for warning in stored["warnings"])
+    assert recorder.written[migration_service._ANALYSIS_STATUS_PATH]["state"] == "ready"
+    # The expensive scripted driver is not started for a model-layer miss.
+    assert recorder.commands == []
+    outcome = recorder.written[migration_service._ANALYSIS_OUTCOME_PATH]
+    assert outcome["accepted"] is False
+    assert outcome["events"] == 42
 
 
 def test_app_server_analysis_asks_the_user_inside_the_turn(
