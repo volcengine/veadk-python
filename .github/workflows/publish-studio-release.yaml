@@ -29,6 +29,7 @@ on:
   pull_request:
     paths:
       - '.github/workflows/publish-studio-release.yaml'
+      - 'tests/cli/test_studio_update_cli_contract.py'
       - 'frontend/**'
       - 'veadk/**'
       - 'pyproject.toml'
@@ -102,6 +103,11 @@ jobs:
 
       - name: Validate frozen Studio runtime lock
         run: uv lock --check
+
+      - name: Validate cross-version Studio update contracts
+        run: >-
+          uv run --frozen --group dev python -m pytest -q
+          tests/cli/test_studio_update_cli_contract.py
 
       - name: Build and validate Studio bundle
         run: |

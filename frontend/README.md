@@ -1101,6 +1101,20 @@ their changelog and Git SHA. An accepted update verifies the selected complete
 Bundle, replaces the current Function code, and releases the existing
 Application without changing its URL or SSO configuration.
 
+After verifying the release manifest's bundle size and SHA-256, the updater
+checks the AgentKit CLI against the pin declared in the target VeADK wheel.
+It reads that declaration without importing downloaded Python code. Full and
+thin bundles can therefore move to a different CLI version while rejecting a
+wheel/CLI mismatch. These cases run in the mandatory release gates.
+
+Older Studio installations that compare the bundle against their own CLI pin
+can reject a newer release with `AgentKit CLI archive checksum is invalid`.
+Updating the Release Server alone cannot replace that installed validator.
+An administrator must first deploy a Studio containing the corrected updater
+to the existing Function through the control plane, preserving its environment,
+identity, storage, and gateway configuration. Subsequent in-product updates
+use the target release's CLI pin.
+
 When an update fails, the administrator dialog shows the failed stage, a
 searchable error ID, the complete diagnostic timeline and exception chain, and
 a direct link to the deployed Function in the VeFaaS console. The log can be
