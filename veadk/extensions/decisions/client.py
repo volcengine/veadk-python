@@ -193,6 +193,7 @@ class SystemOneClient:
             usage=DecisionUsage(
                 input_tokens=_as_int(usage, "input_tokens"),
                 output_tokens=_as_int(usage, "output_tokens"),
+                cost=_as_float(usage, "cost"),
             ),
             latency_ms=round((time.perf_counter() - started) * 1000, 1),
         )
@@ -203,6 +204,17 @@ def _as_int(payload: Mapping[str, Any], key: str) -> int:
         return int(payload.get(key) or 0)
     except (TypeError, ValueError):
         return 0
+
+
+def _as_float(payload: Mapping[str, Any], key: str) -> float | None:
+    """Read an optional float, keeping ``None`` when it is absent or unusable."""
+    raw = payload.get(key)
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
 
 
 def _body_snippet(response: httpx.Response) -> str:

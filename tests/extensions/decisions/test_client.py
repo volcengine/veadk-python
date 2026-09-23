@@ -57,6 +57,7 @@ def test_request_shape_and_typed_answer() -> None:
     assert result.latency_ms > 0
     assert isinstance(result.answers["is_urgent"], NoulAnswer)
     assert result.answers["is_urgent"].noul == pytest.approx(0.9)
+    assert result.usage.cost is None
 
     call = server.calls[0]
     assert call.path == "/v1/systemone"
@@ -64,6 +65,43 @@ def test_request_shape_and_typed_answer() -> None:
     assert call.model == "jev-latest"
     assert call.state == "My card was charged twice."
     assert call.questions["is_urgent"]["type"] == "noul"
+
+
+def test_gateway_response_extras_are_tolerated() -> None:
+    """OpenRouter adds ``id``, ``provider`` and ``usage.cost`` to the payload."""
+    body = {
+        "id": "gen-dec-1789738314-X5e5eKGQdvR9rblyX250",
+        "model": "typesafe/jev-1.13-20260917",
+        "provider": "TypeSafe",
+        "answers": {"refund": {"type": "noul", "noul": 0.98}},
+        "usage": {"input_tokens": 275, "output_tokens": 20, "cost": 0.00003},
+    }
+    with fake_system_one([(200, {}, body)]) as server:
+        result = _client(server.base_url).evaluate(
+            state="I was charged twice for my subscription.",
+            questions={
+                "refund": noul_question("Is the customer asking for money back?")
+            },
+        )
+
+    assert result.model == "typesafe/jev-1.13-20260917"
+    assert result.usage.input_tokens == 275
+    assert result.usage.cost == pytest.approx(0.00003)
+    assert result.answers["refund"].noul == pytest.approx(0.98)
+
+
+def test_unusable_usage_cost_is_ignored() -> None:
+    body = {
+        "model": "fake-system-one",
+        "answers": {"q": {"type": "noul", "noul": 0.5}},
+        "usage": {"input_tokens": 1, "cost": "not-a-number"},
+    }
+    with fake_system_one([(200, {}, body)]) as server:
+        result = _client(server.base_url).evaluate(
+            state="hi", questions={"q": noul_question("Is this a greeting?")}
+        )
+
+    assert result.usage.cost is None
 
 
 def test_choice_answer_is_typed() -> None:

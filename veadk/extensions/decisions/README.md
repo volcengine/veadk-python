@@ -24,7 +24,7 @@ pip install veadk-python
 
 ```text
 DECISION_MODEL_ENABLED=true
-DECISION_MODEL_PROVIDER=typesafe        # typesafe | systemone
+DECISION_MODEL_PROVIDER=typesafe        # typesafe | openrouter | systemone
 DECISION_MODEL_NAME=jev-latest
 DECISION_MODEL_API_BASE=https://api.typesafe.ai
 DECISION_MODEL_API_KEY=...
@@ -32,9 +32,17 @@ DECISION_MODEL_TIMEOUT=30
 DECISION_MODEL_MAX_RETRIES=3
 ```
 
-`typesafe` is the hosted service and `systemone` is a self-hosted System One
-server; both expose the same request contract, so only `api_base` changes.
-`api_base` may be given with or without the trailing `/v1/systemone`.
+Every provider speaks the same System One protocol, so switching only changes
+the API base and the API key. The provider picks the default `api_base`:
+
+| Provider | Default `api_base` | Notes |
+| --- | --- | --- |
+| `typesafe` | `https://api.typesafe.ai` | Hosted Jev. |
+| `openrouter` | `https://openrouter.ai/api` | OpenRouter forwards System One to the same model; use your OpenRouter key, and `jev-1.13` / `jev-latest` / `typesafe/jev-1.13` as the model id. Responses add `id`, `provider`, and `usage.cost`. |
+| `systemone` | none | Self-hosted System One server: set `api_base` explicitly. |
+
+An explicit `DECISION_MODEL_API_BASE` always wins, and may be given with or
+without the trailing `/v1/systemone`.
 
 The same settings can live in `config.yaml`, which VeADK flattens into
 `MODEL_DECISION_*` variables. Set both spellings and the explicit

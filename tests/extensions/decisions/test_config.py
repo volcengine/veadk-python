@@ -22,6 +22,7 @@ from pydantic import ValidationError
 from veadk.extensions.decisions import (
     DEFAULT_API_BASE,
     DEFAULT_MODEL_NAME,
+    OPENROUTER_API_BASE,
     DecisionModelConfig,
 )
 
@@ -80,6 +81,35 @@ def test_from_env_keeps_defaults_for_unusable_values() -> None:
 def test_endpoint_normalization(api_base: str) -> None:
     config = DecisionModelConfig(api_base=api_base)
     assert config.endpoint == "https://api.typesafe.ai/v1/systemone"
+
+
+@pytest.mark.parametrize(
+    ("provider", "expected_base", "expected_endpoint"),
+    [
+        ("typesafe", DEFAULT_API_BASE, "https://api.typesafe.ai/v1/systemone"),
+        ("openrouter", OPENROUTER_API_BASE, "https://openrouter.ai/api/v1/systemone"),
+    ],
+)
+def test_provider_selects_its_own_default_api_base(
+    provider: str, expected_base: str, expected_endpoint: str
+) -> None:
+    config = DecisionModelConfig.from_env(
+        {"DECISION_MODEL_PROVIDER": provider, "DECISION_MODEL_API_KEY": "key"}
+    )
+    assert config.provider == provider
+    assert config.api_base == expected_base
+    assert config.endpoint == expected_endpoint
+
+
+def test_explicit_api_base_wins_over_provider_default() -> None:
+    config = DecisionModelConfig.from_env(
+        {
+            "DECISION_MODEL_PROVIDER": "openrouter",
+            "DECISION_MODEL_API_BASE": "https://gateway.internal",
+            "DECISION_MODEL_API_KEY": "key",
+        }
+    )
+    assert config.endpoint == "https://gateway.internal/v1/systemone"
 
 
 def test_endpoint_is_not_duplicated_when_already_complete() -> None:

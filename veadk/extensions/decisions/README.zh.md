@@ -21,7 +21,7 @@ pip install veadk-python
 
 ```text
 DECISION_MODEL_ENABLED=true
-DECISION_MODEL_PROVIDER=typesafe        # typesafe | systemone
+DECISION_MODEL_PROVIDER=typesafe        # typesafe | openrouter | systemone
 DECISION_MODEL_NAME=jev-latest
 DECISION_MODEL_API_BASE=https://api.typesafe.ai
 DECISION_MODEL_API_KEY=...
@@ -29,8 +29,16 @@ DECISION_MODEL_TIMEOUT=30
 DECISION_MODEL_MAX_RETRIES=3
 ```
 
-`typesafe` 是托管服务，`systemone` 是自建 System One 服务，二者请求协议相同，
-只是 `api_base` 不同；`api_base` 带不带 `/v1/systemone` 都可以。
+三种 provider 走同一套 System One 协议，切换只改 base URL 与 API Key。provider
+决定默认 `api_base`：
+
+| provider | 默认 `api_base` | 说明 |
+| --- | --- | --- |
+| `typesafe` | `https://api.typesafe.ai` | 官方托管 Jev |
+| `openrouter` | `https://openrouter.ai/api` | OpenRouter 转发同一模型；用 OpenRouter 的 Key，模型 ID 可写 `jev-1.13` / `jev-latest` / `typesafe/jev-1.13`；响应会多返回 `id`、`provider`、`usage.cost` |
+| `systemone` | 无 | 自建 System One，必须显式指定 `api_base` |
+
+显式设置的 `DECISION_MODEL_API_BASE` 始终优先；带不带 `/v1/systemone` 都可以。
 
 同样的配置也可以写在 `config.yaml` 里——VeADK 会把配置压平成 `MODEL_DECISION_*`
 环境变量。两种写法同时存在时，显式的 `DECISION_MODEL_*` 优先。

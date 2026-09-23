@@ -25,10 +25,15 @@ from veadk.extensions.decisions.errors import DecisionModelResponseError
 
 
 class DecisionUsage(BaseModel):
-    """Token usage reported by one decision-model request."""
+    """Token usage reported by one decision-model request.
+
+    ``cost`` is only reported by gateways that bill per request, such as
+    OpenRouter, and stays ``None`` when the provider omits it.
+    """
 
     input_tokens: int = 0
     output_tokens: int = 0
+    cost: float | None = None
 
 
 class ChoiceAnswer(BaseModel):

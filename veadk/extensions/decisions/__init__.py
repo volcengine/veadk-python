@@ -40,6 +40,7 @@ from veadk.extensions.decisions.client import SystemOneClient
 from veadk.extensions.decisions.config import (
     DEFAULT_API_BASE,
     DEFAULT_MODEL_NAME,
+    OPENROUTER_API_BASE,
     DecisionModelConfig,
 )
 from veadk.extensions.decisions.errors import (
@@ -82,6 +83,7 @@ __all__ = [
     "DecisionExtension",
     "DecisionUsage",
     "NoulAnswer",
+    "OPENROUTER_API_BASE",
     "ScoreAnswer",
     "SystemOneClient",
     "choice_question",
