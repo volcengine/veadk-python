@@ -17929,6 +17929,10 @@ def frontend_update(
                 provider=provider_id,
                 offline_runtime=False,
             )
+            if provider_id == "byteplus":
+                requirements = (
+                    "--extra-index-url https://pypi.org/simple\n" + requirements
+                )
         except ValueError as error:
             raise click.ClickException(str(error)) from error
         try:
