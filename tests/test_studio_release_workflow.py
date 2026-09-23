@@ -139,14 +139,49 @@ def test_smoke_gate_requires_unexpected_studio_exit_to_fail_closed() -> None:
     )
 
 
+def test_smoke_extracts_selected_full_bundle_when_thin_is_present(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from veadk.cli import studio_self_update
+
+    output = tmp_path / "studio-release-output"
+    output.mkdir()
+    thin = output / "studio-bundle-20260917120000-thin.zip"
+    full = output / "studio-bundle-20260917120000.zip"
+    thin.write_bytes(b"provider-specific thin bundle")
+    full.write_bytes(b"full bundle shared by both providers")
+    destination = tmp_path / "package"
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
+    monkeypatch.setenv("package_dir", str(destination))
+    monkeypatch.setenv("bundle_path", str(full))
+
+    # Exercise an allowed directory order that exposes selecting the first ZIP.
+    original_glob = Path.glob
+    monkeypatch.setattr(
+        Path, "glob", lambda path, pattern: iter(sorted(original_glob(path, pattern)))
+    )
+    extracted: list[tuple[Path, Path]] = []
+    monkeypatch.setattr(
+        studio_self_update,
+        "extract_studio_bundle",
+        lambda archive, target: extracted.append((archive, target)),
+    )
+    script = _smoke_script()
+    extraction = script.split("<<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
+    exec(extraction, {})
+
+    assert extracted == [(full, destination)]
+    assert 'export package_dir bundle_path="${bundle[0]}"' in script
+
+
 def test_verification_reuses_checked_inputs_and_rebuilds_current_source(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from frontend.service.studio_release_server import publisher
     from veadk.cli import (
         agentkit_cli,
         studio_dependencies,
         studio_package,
-        studio_release,
     )
 
     sources = [
@@ -200,6 +235,9 @@ def test_verification_reuses_checked_inputs_and_rebuilds_current_source(
         (destination / "index.html").write_text("current frontend")
 
     def build_bundle(**kwargs: Any) -> tuple[Path, Any]:
+        assert kwargs["thin"] is True
+        assert kwargs["provider"] == "volcengine"
+        assert "PATH" in kwargs["env"]
         assert (kwargs["frontend_assets"] / "index.html").is_file()
         for dependency in (*sources, artifact):
             content = (kwargs["dependency_wheels"] / dependency.filename).read_bytes()
@@ -215,7 +253,7 @@ def test_verification_reuses_checked_inputs_and_rebuilds_current_source(
     monkeypatch.setattr("urllib.request.urlopen", download)
     monkeypatch.setattr(agentkit_cli, "download_agentkit_cli_archive", download_cli)
     monkeypatch.setattr(studio_package, "build_frontend_assets", build_frontend)
-    monkeypatch.setattr(studio_release, "build_studio_release", build_bundle)
+    monkeypatch.setattr(publisher, "build_studio_release", build_bundle)
     script = _verification_script()
     exec(script, {})
     assert len(downloads) == 3
