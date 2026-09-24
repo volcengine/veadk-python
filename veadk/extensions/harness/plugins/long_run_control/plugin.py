@@ -24,6 +24,9 @@ from google.adk.plugins import BasePlugin
 from veadk.extensions.decisions import DecisionModelError
 from veadk.extensions.harness.modules.long_run_control import (
     ConvergenceJudge,
+    FORCE_FINISH_ACTION,
+    LongRunJudgement,
+    NARROW_SCOPE_ACTION,
     build_convergence_judge,
     trajectory_text,
 )
@@ -96,7 +99,8 @@ class HarnessLongRunControlPlugin(BasePlugin):
         if model_calls < self.trigger_after_model_calls:
             return None
 
-        ready = await self._ready_probability(callback_context, llm_request)
+        judgement = await self._judgement(callback_context, llm_request)
+        ready = judgement.ready if judgement is not None else None
         if self._should_skip_guidance(ready=ready, model_calls=model_calls):
             self.store.append_event(
                 HarnessEvent(
@@ -111,17 +115,21 @@ class HarnessLongRunControlPlugin(BasePlugin):
             )
             return None
 
+        action = judgement.action if judgement is not None else None
         append_system_instruction(
             llm_request,
-            _long_run_control_instruction(model_calls=model_calls),
+            _long_run_control_instruction(model_calls=model_calls, action=action),
         )
         payload: JsonObject = {
             "model_calls": model_calls,
             "trigger_after_model_calls": self.trigger_after_model_calls,
         }
-        if ready is not None:
+        if judgement is not None:
             payload["decision_ready"] = ready
             payload["forced"] = model_calls >= self.unconditional_after_model_calls
+            if action is not None:
+                payload["decision_action"] = action
+                payload["decision_confidence"] = judgement.confidence
         self.store.append_event(
             HarnessEvent(
                 event_type="long_run_control.guidance_injected",
@@ -137,25 +145,26 @@ class HarnessLongRunControlPlugin(BasePlugin):
             return False
         return model_calls < self.unconditional_after_model_calls
 
-    async def _ready_probability(
+    async def _judgement(
         self,
         callback_context: "CallbackContext",
         llm_request: LlmRequest,
-    ) -> float | None:
-        """Return the probability that the run can answer, or ``None``.
+    ) -> LongRunJudgement | None:
+        """Return the convergence judgement for this run, or ``None``.
 
         Args:
             callback_context: Callback context carrying the user's request.
             llm_request: The request the run is about to send.
 
         Returns:
-            The judged probability, or ``None`` when the plugin has no judge.
-            A failing judge returns ``1.0`` so steering keeps working.
+            The judgement, or ``None`` when the plugin has no judge. A failing
+            judge reports full convergence so steering keeps working, and names
+            no action, which keeps the default guidance.
         """
         if self.convergence_judge is None:
             return None
         try:
-            return await self.convergence_judge.aready_probability(
+            return await self.convergence_judge.ajudge(
                 goal=user_text_from_callback(callback_context),
                 trajectory=trajectory_text(contents_to_messages(llm_request.contents)),
             )
@@ -164,20 +173,46 @@ class HarnessLongRunControlPlugin(BasePlugin):
                 "long-run convergence judge unavailable, steering as before: %s",
                 exc,
             )
-            return 1.0
+            return LongRunJudgement(ready=1.0)
 
 
-def _long_run_control_instruction(*, model_calls: int) -> str:
+def _long_run_control_instruction(
+    *, model_calls: int, action: str | None = None
+) -> str:
     return (
         "[Harness Long Run Control]\n"
         f"model_calls_so_far: {model_calls}\n"
         "objective: finish the current run within the remaining budget.\n"
-        "guidance:\n"
+        f"guidance:\n{_steering_guidance(action)}"
+        "[/Harness Long Run Control]"
+    )
+
+
+def _steering_guidance(action: str | None) -> str:
+    """Return the guidance bullets for one steering action.
+
+    An unknown action keeps the default bullets, which is also what the
+    counter strategy and a failing judge inject.
+    """
+    if action == FORCE_FINISH_ACTION:
+        return (
+            "- Stop calling tools. Answer now from the evidence and artifacts "
+            "already collected.\n"
+            "- Name what could not be verified instead of asserting it.\n"
+            "- Include the filenames, paths, or URIs of anything produced.\n"
+        )
+    if action == NARROW_SCOPE_ACTION:
+        return (
+            "- Drop optional or exploratory sub-goals and finish the core "
+            "question that was asked.\n"
+            "- Call another tool only when the core answer is impossible "
+            "without it.\n"
+        )
+    return (
         "- If the task has enough evidence, a complete answer, or generated "
         "artifacts, stop calling tools and return the final response now.\n"
         "- If files or artifacts were produced, include their filenames, paths, "
         "or URIs and a concise summary.\n"
         "- Call another tool only when it is strictly required to create the "
         "missing final result; avoid repeating searches or code runs.\n"
-        "[/Harness Long Run Control]"
     )

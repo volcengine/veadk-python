@@ -12,13 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Decision-model judgement for long-run convergence.
+"""Decision-model judgement for long-run convergence and steering.
 
 The long-run control plugin steers a run towards a final answer once it has
 used many model calls. A call count cannot tell "still collecting the evidence
 this task needs" from "already has everything and keeps going", so the
 ``decision`` strategy asks the configured decision model whether the
 trajectory already holds what the final answer needs.
+
+A second question picks the steering action: how hard to push the run towards
+its answer is a choice among a few kinds of guidance, not a yes/no, so the
+judgement returns one option and the plugin injects the matching text.
 
 Judgements are optional: when no decision model is configured, callers keep
 their own rules.
@@ -27,12 +31,15 @@ their own rules.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Any, Protocol
 
 from veadk.extensions.decisions import (
+    ChoiceAnswer,
     DecisionExtension,
     DecisionModelResponseError,
     NoulAnswer,
+    choice_question,
     get_default_decision_extension,
     noul_question,
 )
@@ -44,6 +51,18 @@ logger = get_logger(__name__)
 
 #: 判定问题的 id。
 READY_QUESTION_ID = "ready"
+ACTION_QUESTION_ID = "action"
+
+#: 引导动作的名字，也是判定返回的选项。
+NARROW_SCOPE_ACTION = "narrow_scope"
+NUDGE_TO_FINISH_ACTION = "nudge_to_finish"
+FORCE_FINISH_ACTION = "force_finish"
+
+STEERING_ACTIONS = (
+    NARROW_SCOPE_ACTION,
+    NUDGE_TO_FINISH_ACTION,
+    FORCE_FINISH_ACTION,
+)
 
 _DEFAULT_STATE_CHARS = 12000
 _DEFAULT_TRAJECTORY_MESSAGES = 20
@@ -55,12 +74,30 @@ _READY_INSTRUCTIONS = (
     "needs, so that no further tool call is required."
 )
 
+_ACTION_INSTRUCTIONS = (
+    "The agent has spent many model calls on this run. Choose how it should be "
+    "steered through the remaining budget: pick the mildest steering that "
+    "still fits the trajectory."
+)
+
+
+@dataclass(frozen=True)
+class LongRunJudgement:
+    """What a decision model judged about one long run."""
+
+    #: Probability that the run already holds what the final answer needs.
+    ready: float
+    #: Steering action, or ``None`` when the judgement named no usable one.
+    action: str | None = None
+    #: Probability the decision model assigned to the chosen action.
+    confidence: float = 0.0
+
 
 class ConvergenceJudge(Protocol):
-    """Judge whether a run already has what a final answer needs."""
+    """Judge whether a run already has what a final answer needs, and how to steer it."""
 
-    async def aready_probability(self, *, goal: str, trajectory: str) -> float:
-        """Return the probability that the run can answer now."""
+    async def ajudge(self, *, goal: str, trajectory: str) -> LongRunJudgement:
+        """Return the convergence judgement for one run."""
         ...
 
 
@@ -78,8 +115,8 @@ class DecisionConvergenceJudge:
         self.extension = extension
         self.max_state_chars = max_state_chars
 
-    async def aready_probability(self, *, goal: str, trajectory: str) -> float:
-        """Return the probability that the run already holds its answer.
+    async def ajudge(self, *, goal: str, trajectory: str) -> LongRunJudgement:
+        """Return the convergence probability and the steering action.
 
         Raises:
             DecisionModelError: If the decision model cannot answer. Callers
@@ -87,12 +124,18 @@ class DecisionConvergenceJudge:
         """
         result = await self.extension.aevaluate(
             state=self._state(goal, trajectory),
-            questions={READY_QUESTION_ID: build_ready_question()},
+            questions={
+                READY_QUESTION_ID: build_ready_question(),
+                ACTION_QUESTION_ID: build_action_question(),
+            },
         )
         answer = result.answers.get(READY_QUESTION_ID)
         if not isinstance(answer, NoulAnswer):
             raise DecisionModelResponseError("long-run judge returned no usable answer")
-        return answer.noul
+        return LongRunJudgement(
+            ready=answer.noul,
+            action=_action(result.answers.get(ACTION_QUESTION_ID)),
+        )
 
     def _state(self, goal: str, trajectory: str) -> str:
         """Render the judgement state within the configured budget."""
@@ -120,6 +163,42 @@ def build_ready_question() -> dict[str, Any]:
         yes="the final answer can be written now from what was collected",
         no="at least one more tool call or step is needed first",
     )
+
+
+def build_action_question() -> dict[str, Any]:
+    """Build the steering-action question."""
+    return choice_question(
+        _ACTION_INSTRUCTIONS,
+        {
+            NARROW_SCOPE_ACTION: (
+                "keep working, but drop optional or exploratory sub-goals and "
+                "finish the core question"
+            ),
+            NUDGE_TO_FINISH_ACTION: (
+                "keep working while converging: answer as soon as the evidence "
+                "is enough"
+            ),
+            FORCE_FINISH_ACTION: (
+                "answer now from the evidence already collected, naming "
+                "anything that could not be verified"
+            ),
+        },
+    )
+
+
+def _action(answer: Any) -> str | None:
+    """Return the judged steering action, ignoring an unusable one.
+
+    The action only selects the wording of the guidance, so an answer that
+    names no known option falls back to the default wording instead of
+    discarding the convergence probability that came with it.
+    """
+    if not isinstance(answer, ChoiceAnswer):
+        return None
+    if answer.choice not in STEERING_ACTIONS:
+        logger.warning("long-run judge returned unknown action %r", answer.choice)
+        return None
+    return answer.choice
 
 
 def trajectory_text(
@@ -171,7 +250,12 @@ def build_convergence_judge(
 __all__ = [
     "ConvergenceJudge",
     "DecisionConvergenceJudge",
+    "FORCE_FINISH_ACTION",
+    "LongRunJudgement",
+    "NARROW_SCOPE_ACTION",
+    "NUDGE_TO_FINISH_ACTION",
     "build_convergence_judge",
+    "build_action_question",
     "build_ready_question",
     "trajectory_text",
 ]

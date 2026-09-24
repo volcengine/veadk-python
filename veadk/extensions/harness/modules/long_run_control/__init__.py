@@ -17,6 +17,11 @@
 from veadk.extensions.harness.modules.long_run_control.judge import (
     ConvergenceJudge,
     DecisionConvergenceJudge,
+    FORCE_FINISH_ACTION,
+    LongRunJudgement,
+    NARROW_SCOPE_ACTION,
+    NUDGE_TO_FINISH_ACTION,
+    build_action_question,
     build_convergence_judge,
     build_ready_question,
     trajectory_text,
@@ -25,6 +30,11 @@ from veadk.extensions.harness.modules.long_run_control.judge import (
 __all__ = [
     "ConvergenceJudge",
     "DecisionConvergenceJudge",
+    "FORCE_FINISH_ACTION",
+    "LongRunJudgement",
+    "NARROW_SCOPE_ACTION",
+    "NUDGE_TO_FINISH_ACTION",
+    "build_action_question",
     "build_convergence_judge",
     "build_ready_question",
     "trajectory_text",

@@ -18,18 +18,29 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
+from typing import Any
 
 from google.adk.models import LlmRequest
 from google.genai import types
 
 from veadk.extensions.decisions import (
+    ChoiceAnswer,
     DecisionModelConfig,
     DecisionModelDisabledError,
     DecisionExtension,
+    DecisionResult,
+    NoulAnswer,
 )
 from veadk.extensions.harness.modules.long_run_control import (
+    FORCE_FINISH_ACTION,
+    NARROW_SCOPE_ACTION,
+    DecisionConvergenceJudge,
+    LongRunJudgement,
     build_convergence_judge,
     trajectory_text,
+)
+from veadk.extensions.harness.modules.long_run_control.judge import (
+    ACTION_QUESTION_ID,
 )
 from veadk.extensions.harness.plugins.long_run_control import (
     HarnessLongRunControlPlugin,
@@ -41,18 +52,43 @@ _STEERING_MARKER = "[Harness Long Run Control]"
 
 
 class _FakeJudge:
-    """Record the trajectories it judged and return fixed probabilities."""
+    """Record the trajectories it judged and return fixed judgements."""
 
-    def __init__(self, ready: float = 0.1, error: Exception | None = None) -> None:
+    def __init__(
+        self,
+        ready: float = 0.1,
+        error: Exception | None = None,
+        action: str | None = None,
+        confidence: float = 0.0,
+    ) -> None:
         self.ready = ready
         self.error = error
+        self.action = action
+        self.confidence = confidence
         self.calls: list[dict[str, str]] = []
 
-    async def aready_probability(self, *, goal: str, trajectory: str) -> float:
+    async def ajudge(self, *, goal: str, trajectory: str) -> LongRunJudgement:
         self.calls.append({"goal": goal, "trajectory": trajectory})
         if self.error is not None:
             raise self.error
-        return self.ready
+        return LongRunJudgement(
+            ready=self.ready,
+            action=self.action,
+            confidence=self.confidence,
+        )
+
+
+class _StubExtension:
+    """Answer with fixed payloads, without a decision model behind them."""
+
+    def __init__(self, answers: dict[str, Any]) -> None:
+        self.answers = answers
+        self.questions: dict[str, Any] = {}
+
+    async def aevaluate(self, state: Any, questions: dict[str, Any]) -> DecisionResult:
+        self.state = state
+        self.questions = questions
+        return DecisionResult(answers=self.answers)
 
 
 def _callback_context(invocation_id: str = "r1") -> SimpleNamespace:
@@ -223,3 +259,87 @@ def test_trajectory_text_keeps_the_tail_within_budget() -> None:
     assert "step 29" in text
     assert "step 0:" not in text
     assert len(text) < 5000
+
+
+def test_decision_strategy_injects_the_judged_action_guidance() -> None:
+    store = InMemoryHarnessStore()
+    plugin = HarnessLongRunControlPlugin(
+        store=store,
+        convergence_judge=_FakeJudge(
+            ready=0.9, action=FORCE_FINISH_ACTION, confidence=0.71
+        ),
+    )
+    request = _request()
+
+    _run(plugin, request, 8)
+
+    assert "Stop calling tools." in _instruction_text(request)
+    injected = store.events[-1]
+    assert injected.payload["decision_action"] == FORCE_FINISH_ACTION
+    assert injected.payload["decision_confidence"] == 0.71
+
+
+def test_each_action_injects_its_own_guidance() -> None:
+    narrow = _request()
+    _run(
+        HarnessLongRunControlPlugin(
+            store=InMemoryHarnessStore(),
+            convergence_judge=_FakeJudge(ready=0.9, action=NARROW_SCOPE_ACTION),
+        ),
+        narrow,
+        8,
+    )
+
+    narrow_text = _instruction_text(narrow)
+    assert "Drop optional or exploratory sub-goals" in narrow_text
+    assert "Stop calling tools." not in narrow_text
+
+
+def test_a_judgement_without_an_action_keeps_the_default_guidance() -> None:
+    store = InMemoryHarnessStore()
+    plugin = HarnessLongRunControlPlugin(
+        store=store, convergence_judge=_FakeJudge(ready=0.9)
+    )
+    request = _request()
+
+    _run(plugin, request, 8)
+
+    assert "If the task has enough evidence" in _instruction_text(request)
+    assert "decision_action" not in store.events[-1].payload
+
+
+def test_the_judge_asks_about_the_action_in_the_same_request() -> None:
+    extension = _StubExtension(
+        {
+            "ready": NoulAnswer(noul=0.2),
+            "action": ChoiceAnswer(
+                choice=FORCE_FINISH_ACTION,
+                confidence=0.6,
+                probabilities={FORCE_FINISH_ACTION: 0.6},
+            ),
+        }
+    )
+    judge = DecisionConvergenceJudge(extension)  # type: ignore[arg-type]
+
+    judgement = asyncio.run(judge.ajudge(goal="ship it", trajectory="user: hi"))
+
+    assert judgement.ready == 0.2
+    assert judgement.action == FORCE_FINISH_ACTION
+    assert set(extension.questions) == {"ready", ACTION_QUESTION_ID}
+    assert extension.questions["ready"]["type"] == "noul"
+    assert extension.questions[ACTION_QUESTION_ID]["type"] == "choice"
+
+
+def test_an_unknown_action_keeps_the_convergence_probability() -> None:
+    extension = _StubExtension(
+        {
+            "ready": NoulAnswer(noul=0.4),
+            "action": ChoiceAnswer(choice="do_something_else", confidence=0.3),
+        }
+    )
+    judge = DecisionConvergenceJudge(extension)  # type: ignore[arg-type]
+
+    judgement = asyncio.run(judge.ajudge(goal="ship it", trajectory="user: hi"))
+
+    assert judgement.ready == 0.4
+    assert judgement.action is None
