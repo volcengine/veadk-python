@@ -109,6 +109,13 @@ They need a configured decision model; see
 [decisions](../decisions/README.md) for the `DECISION_MODEL_*` variables. A
 failed judgement degrades to the rule above instead of failing the run.
 
+Assembling plugins in code selects the same strategies as arguments instead of
+environment variables: `compaction_config=ToolResultCompactorConfig(strategy="decision")`,
+`context_config=HarnessInvocationContextConfig(mode_strategy="decision")`, and
+`long_run_strategy="decision"` on `HarnessExtension`. Passing an `env` mapping
+instead makes the environment variables the only source, as `HarnessExtension.from_env()`
+does.
+
 ## Direct Module Usage
 
 ```python

@@ -46,6 +46,22 @@ def test_harness_extension_from_env_respects_disabled_default() -> None:
     assert HarnessExtension.from_env({}).plugins() == []
 
 
+def test_harness_extension_can_select_the_long_run_strategy() -> None:
+    """The programmatic path can pick the strategy, not only the env path."""
+    plugins = HarnessExtension(
+        components="long_run_control", long_run_strategy="decision"
+    ).plugins()
+
+    assert [plugin.name for plugin in plugins] == ["harness_long_run_control_plugin"]
+    assert plugins[0].strategy == "decision"
+
+
+def test_harness_extension_keeps_the_counter_strategy_by_default() -> None:
+    plugins = HarnessExtension(components="long_run_control").plugins()
+
+    assert plugins[0].strategy == "counter"
+
+
 def test_harness_extension_from_env_builds_configured_plugins() -> None:
     plugins = HarnessExtension.from_env(
         {

@@ -102,6 +102,12 @@ harness_enhance:
 
 策略依赖已配置的判定模型，环境变量见 [decisions](../decisions/README.zh.md)。判定失败会回落到上表规则，不会让运行失败。
 
+用代码装配插件时，同样的选择通过参数传入，而不是环境变量：
+`compaction_config=ToolResultCompactorConfig(strategy="decision")`、
+`context_config=HarnessInvocationContextConfig(mode_strategy="decision")`、
+`HarnessExtension(long_run_strategy="decision")`。一旦传入 `env` 映射，就以环境变量为唯一来源
+（`HarnessExtension.from_env()` 即这种形态）。
+
 ## 直接使用模块
 
 ```python
