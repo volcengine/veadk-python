@@ -138,8 +138,9 @@ The judged state and the API key are never logged.
 
 ## Judgement Thresholds
 
-Every decision point keeps its own threshold, compared against the probability
-of "yes" in `[0, 1]`:
+Every decision point keeps its own threshold, compared against the answer of
+its own judgement on `[0, 1]` — the probability of "yes" for a yes/no question,
+the rated position for a rating:
 
 | Decision point | Setting | Default |
 | --- | --- | --- |
@@ -147,6 +148,8 @@ of "yes" in `[0, 1]`:
 | Long-run steering | `HARNESS_LONG_RUN_READY_THRESHOLD` | 0.5 |
 | Context mode blocks | `HARNESS_MODE_DECISION_THRESHOLD` | 0.5 |
 | Long-term memory saves | `MEMORY_SAVE_WORTH_THRESHOLD` | 0.5 |
+| Final-answer support | `HARNESS_VERIFIER_SUPPORT_THRESHOLD` | 0.5 |
+| Long-term memory recall | `MEMORY_RECALL_RELEVANCE_THRESHOLD` | 0.5 |
 
 Parsing goes through `probability_threshold()`, which **clamps** an
 out-of-range value instead of falling back (`1.5 → 1.0`, `-1 → 0.0`, keeping

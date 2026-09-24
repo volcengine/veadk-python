@@ -31,6 +31,8 @@ ltm = LongTermMemory(backend="viking", app_name="ltm_demo")
 | `index` | `str` | `""` | 存储记忆所用的索引/集合名。为空时回退到 `app_name`，再为空则用 `default_app`。 |
 | `app_name` | `str` | `""` | 拥有该记忆的应用名，常用作数据隔离与 `index` 的回退值。 |
 | `user_id` | `str` | `""` | **已废弃**，仅为向后兼容保留。 |
+| `recall_strategy` | `str` | `"off"` | 召回判定策略；`decision` 时由判定模型过滤与本次请求无关的记忆。 |
+| `recall_relevance_threshold` | `float` | `0.5` | 召回相关度阈值；判定低于该值的记忆不返回。 |
 
 <Callout type="info">
 向量类后端（`local`、`opensearch`、`redis`）会对记忆做向量化（embedding），需要安装扩展依赖：`pip install "veadk-python[extensions]"`，并配置 embedding 模型（环境变量前缀 `MODEL_EMBEDDING_`，缺省时复用 `MODEL_AGENT_API_KEY`）。`viking`、`mem0`、`openviking` 与 `tos_context` 是托管服务，无需本地 embedding。
@@ -183,6 +185,7 @@ agent = Agent(
 | 判定不可用 | 回落到 `MIN_MESSAGES_THRESHOLD` / `MIN_TIME_THRESHOLD` |
 
 被跳过的轮次不会推进保存游标，后续判定通过时会把这批 event 一起写入，因此不会丢数据。判定模型的环境变量见 [环境变量参考](/references/configuration/environment-variables)。
+检索侧同样可以交给判定模型：`MEMORY_RECALL_STRATEGY=decision` 时，`search_memory` 返回前会逐条给召回片段打相关度（不相关 / 同主题但用不上 / 有用背景 / 必须遵守），低于 `MEMORY_RECALL_RELEVANCE_THRESHOLD`（默认 `0.5`）的会被丢弃；一次判定最多覆盖 20 条，超出的按后端顺序原样保留，判定不可用时保留全部结果。
 ## 自动保存记忆策略
 开发者在 `Agent` 上配置 `auto_save_memory_policy` 来控制自动保存长期记忆时哪些 event 会被写入；不配置时等价于 `"default"`。
 ```python

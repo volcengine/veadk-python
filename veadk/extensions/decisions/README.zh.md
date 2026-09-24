@@ -127,7 +127,8 @@ agent = Agent(name="router", tools=[decision_evaluate])
 
 ## 判定阈值
 
-每个判定点各自持有阈值，比较的都是「是」的概率在 `[0, 1]` 上的取值：
+每个判定点各自持有阈值，比较的都是各自判定结果在 `[0, 1]` 上的取值（是否类问题是
+「是」的概率，评分类问题是加权位置）：
 
 | 判定点 | 阈值 | 默认 |
 | --- | --- | --- |
@@ -135,6 +136,8 @@ agent = Agent(name="router", tools=[decision_evaluate])
 | 长任务引导 | `HARNESS_LONG_RUN_READY_THRESHOLD` | 0.5 |
 | 上下文模式块 | `HARNESS_MODE_DECISION_THRESHOLD` | 0.5 |
 | 记忆落库 | `MEMORY_SAVE_WORTH_THRESHOLD` | 0.5 |
+| 最终回答支撑度 | `HARNESS_VERIFIER_SUPPORT_THRESHOLD` | 0.5 |
+| 长期记忆召回 | `MEMORY_RECALL_RELEVANCE_THRESHOLD` | 0.5 |
 
 解析统一走 `probability_threshold()`：越界的值**夹紧**而不是回落（`1.5 → 1.0`、
 `-1 → 0.0`，保留「永不生效 / 总是生效」的原意，回落会把行为整个翻转）；`NaN`

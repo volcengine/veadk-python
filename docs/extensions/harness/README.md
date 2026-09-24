@@ -211,6 +211,8 @@ veadk agentkit invoke \
 | `HARNESS_MAX_CONTEXT_CHARS` | `24000` | Context compaction threshold. |
 | `HARNESS_MAX_TOOL_RESULT_CHARS` | `4000` | Tool-result compaction threshold. |
 | `HARNESS_VERIFIER_MODE` | `observe` | Verification behavior: `observe` or `block`. |
+| `HARNESS_VERIFIER_STRATEGY` | `deterministic` | Final-answer verification: `deterministic` or `decision`. |
+| `HARNESS_VERIFIER_SUPPORT_THRESHOLD` | `0.5` | Support rating below which the answer fails. |
 | `HARNESS_STORE_PATH` | unset | Uses a JSONL event store when set. |
 | `HARNESS_COMPACTION_STRATEGY` | `builtin` | Compaction candidates: `builtin` or `decision`. |
 | `HARNESS_LONG_RUN_STRATEGY` | `counter` | Long-run steering: `counter` or `decision`. |
@@ -221,7 +223,7 @@ veadk agentkit invoke \
 
 ## Decision Model Strategies
 
-The three `*_STRATEGY=decision` settings replace a rule with a judgement from
+The four `*_STRATEGY=decision` settings replace a rule with a judgement from
 the configured decision model. They need `DECISION_MODEL_ENABLED=true` and an
 API key; without one, each strategy keeps its rule and logs a warning.
 
@@ -230,6 +232,7 @@ API key; without one, each strategy keeps its rule and logs a warning.
 | `HARNESS_COMPACTION_STRATEGY` | Role and size based compaction candidates | Builtin rules |
 | `HARNESS_LONG_RUN_STRATEGY` | Model-call counter | Counter, forced after the unconditional count |
 | `HARNESS_MODE_STRATEGY` | Precision and artifact keyword markers | Keyword markers |
+| `HARNESS_VERIFIER_STRATEGY` | Completion markers plus a successful-receipt check | Builtin rules |
 
 ### Judgement Thresholds
 
@@ -244,6 +247,13 @@ back to `0.5` for an unusable one.
 | `HARNESS_COMPACTION_KEEP_THRESHOLD` | `0.5` | Keeps more tool output verbatim |
 | `HARNESS_LONG_RUN_READY_THRESHOLD` | `0.5` | Steers a run toward its answer sooner |
 | `HARNESS_MODE_DECISION_THRESHOLD` | `0.5` | Injects the mode block more often |
+| `HARNESS_VERIFIER_SUPPORT_THRESHOLD` | `0.5` | Requires more evidence before the answer passes |
+
+A judgement also picks an action: long-run steering chooses `narrow_scope` /
+`nudge_to_finish` / `force_finish` to shape the injected guidance, and
+verification chooses `retry_tool_call` / `soften_claim` / `drop_claim` /
+`ask_user` to shape the repair instruction. An unusable action keeps the
+default wording while the rating still applies.
 
 ## Compaction Providers
 

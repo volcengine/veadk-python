@@ -203,6 +203,8 @@ veadk agentkit invoke \
 | `HARNESS_MAX_CONTEXT_CHARS` | `24000` | 上下文压缩阈值。 |
 | `HARNESS_MAX_TOOL_RESULT_CHARS` | `4000` | 工具结果压缩阈值。 |
 | `HARNESS_VERIFIER_MODE` | `observe` | 校验行为，支持 `observe` 或 `block`。 |
+| `HARNESS_VERIFIER_STRATEGY` | `deterministic` | 最终回答校验策略：`deterministic` 或 `decision`。 |
+| `HARNESS_VERIFIER_SUPPORT_THRESHOLD` | `0.5` | 最终回答支撑度阈值；判定低于该值即判为失败。 |
 | `HARNESS_STORE_PATH` | 未设置 | 设置后使用 JSONL event store。 |
 | `HARNESS_COMPACTION_STRATEGY` | `builtin` | 压缩候选策略：`builtin` 或 `decision`。 |
 | `HARNESS_LONG_RUN_STRATEGY` | `counter` | 长任务引导策略：`counter` 或 `decision`。 |
@@ -213,13 +215,14 @@ veadk agentkit invoke \
 
 ## 判定模型策略
 
-三个 `*_STRATEGY=decision` 开关把一条规则换成判定模型的判定结果，需要 `DECISION_MODEL_ENABLED=true` 与 API Key；没有配置时各自保留原规则并打印告警。
+四个 `*_STRATEGY=decision` 开关把一条规则换成判定模型的判定结果，需要 `DECISION_MODEL_ENABLED=true` 与 API Key；没有配置时各自保留原规则并打印告警。
 
 | 策略 | 被替代的规则 | 判定不可用时 |
 | --- | --- | --- |
 | `HARNESS_COMPACTION_STRATEGY` | 按角色和长度挑选压缩候选 | 内置规则 |
 | `HARNESS_LONG_RUN_STRATEGY` | 仅按模型调用次数计数 | 计数规则，超过强制次数后必定生效 |
 | `HARNESS_MODE_STRATEGY` | 精度/产物关键词匹配 | 关键词匹配 |
+| `HARNESS_VERIFIER_STRATEGY` | 完成类关键词加「有无成功回执」 | 内置规则 |
 
 ### 判定阈值
 
@@ -230,6 +233,9 @@ veadk agentkit invoke \
 | `HARNESS_COMPACTION_KEEP_THRESHOLD` | `0.5` | 更多工具结果原样保留 |
 | `HARNESS_LONG_RUN_READY_THRESHOLD` | `0.5` | 更早把运行推向收尾 |
 | `HARNESS_MODE_DECISION_THRESHOLD` | `0.5` | 更频繁注入模式块 |
+| `HARNESS_VERIFIER_SUPPORT_THRESHOLD` | `0.5` | 要求更充分的证据才放行回答 |
+
+判定还会选动作：长任务引导可选 `narrow_scope` / `nudge_to_finish` / `force_finish` 决定注入的引导文案，最终回答校验可选 `retry_tool_call` / `soften_claim` / `drop_claim` / `ask_user` 决定修复指引；动作不可用时保留默认文案，评级仍然生效。
 
 ## 压缩 Provider
 

@@ -79,6 +79,11 @@ volcengine:
 | `HARNESS_COMPACTION_STRATEGY` | 工具结果压缩候选策略，`builtin` 或 `decision`，默认 `builtin`。 |
 | `HARNESS_LONG_RUN_STRATEGY` | 长任务收尾引导策略，`counter` 或 `decision`，默认 `counter`。 |
 | `HARNESS_MODE_STRATEGY` | 上下文模式块策略，`keywords` 或 `decision`，默认 `keywords`。 |
+| `HARNESS_VERIFIER_STRATEGY` | 最终回答校验策略，`deterministic` 或 `decision`，默认 `deterministic`。 |
+| `HARNESS_COMPACTION_KEEP_THRESHOLD` | 压缩候选保留阈值，默认 `0.5`；判定保留概率低于该值即压缩。 |
+| `HARNESS_LONG_RUN_READY_THRESHOLD` | 长任务收尾阈值，默认 `0.5`；判定可收尾概率高于该值即注入引导。 |
+| `HARNESS_MODE_DECISION_THRESHOLD` | 上下文模式块阈值，默认 `0.5`；判定概率高于该值即注入对应模式块。 |
+| `HARNESS_VERIFIER_SUPPORT_THRESHOLD` | 最终回答支撑度阈值，默认 `0.5`；判定支撑度低于该值即判为失败。 |
 
 `harness_enhance` 配置块会在 HarnessApp Runtime 部署时映射为这些环境变量。推荐开发者优先通过 `harness.yaml` 或 `veadk agentkit invoke` 参数启用，环境变量适合平台集成和镜像运行时。
 
