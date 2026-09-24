@@ -19,8 +19,15 @@ from __future__ import annotations
 import json
 from typing import Literal
 
+from pydantic import Field
+
+from veadk.extensions.decisions import DecisionModelError
 from veadk.extensions.harness.modules.tool_result_compactor.builtin_provider import (
     BuiltinCompressionProvider,
+)
+from veadk.extensions.harness.modules.tool_result_compactor.decision_judge import (
+    CompactionJudge,
+    build_compaction_judge,
 )
 from veadk.extensions.harness.modules.tool_result_compactor.headroom_provider import (
     HeadroomCompressionProvider,
@@ -41,30 +48,137 @@ from veadk.extensions.harness.utils import (
     stringify_json_value,
     summarize_text,
 )
+from veadk.utils.logger import get_logger
+
+logger = get_logger(__name__)
+
+#: 判定为"必须原样保留"时的决策原因，便于调用方和报表区分来源。
+DECISION_KEEP_REASON = "decision_model_keep_verbatim"
+#: 判定为"可以摘要"时的决策原因。
+DECISION_SUMMARIZE_REASON = "decision_model_summarizable"
 
 
 class ToolResultCompactorConfig(HarnessBaseModel):
     """Settings for tool-result compaction."""
 
     provider: str = "builtin"
+    # ``decision`` replaces the role based candidate rules with a content
+    # pre-filter plus a decision-model judgement; ``builtin`` keeps them
+    # untouched. Role labels cannot separate a tool result from the user's own
+    # text on real ADK traffic, which is why the content filter exists.
+    strategy: Literal["builtin", "decision"] = "builtin"
     max_context_chars: int = 24000
     max_tool_result_chars: int = 4000
     min_candidate_chars: int = 4000
     protect_recent_messages: int = 2
+    #: 判定策略下始终原样保留的开头消息数，用于护住最初的任务描述。
+    protect_leading_messages: int = Field(default=1, ge=0)
     summary_chars: int = 900
+    decision_keep_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
+    decision_evidence_chars: int = Field(default=600, ge=1)
 
 
 class ContextCompactionPolicy:
-    """Select safe historical context for compaction."""
+    """Select safe historical context for compaction.
 
-    def __init__(self, config: ToolResultCompactorConfig | None = None) -> None:
+    The builtin rules only read message roles and sizes. A ``judge`` adds a
+    content judgement for every candidate the rules selected, so evidence a
+    run still needs can be protected from summarization.
+    """
+
+    def __init__(
+        self,
+        config: ToolResultCompactorConfig | None = None,
+        *,
+        judge: CompactionJudge | None = None,
+    ) -> None:
         self.config = config or ToolResultCompactorConfig()
+        self.judge = judge
 
     def plan(self, messages: list[ConversationMessage]) -> CompressionPlan:
-        decisions = [
+        """Plan from the builtin rules alone."""
+        return self._build_plan(self._classify_all(messages))
+
+    async def aplan(
+        self, messages: list[ConversationMessage], *, goal: str = ""
+    ) -> CompressionPlan:
+        """Plan with the configured judge, degrading to the builtin rules.
+
+        Under the decision strategy the candidates come from a content
+        pre-filter instead of the role based rules, because role labels cannot
+        tell a tool result from the user's own text on real ADK traffic. Every
+        candidate is then judged on content: the ones the judge keeps stay
+        verbatim, the rest may be summarized.
+
+        Args:
+            messages: Messages to classify.
+            goal: The task the run is working on, used as judgement context.
+        """
+        decisions = self._classify_all(messages)
+        if self.judge is None:
+            return self._build_plan(decisions)
+        evidence = {
+            index: messages[index].content
+            for index in self._judgeable_indexes(messages)
+        }
+        if not evidence:
+            return self._build_plan(decisions)
+        try:
+            keep_probabilities = await self.judge.aprotect(goal=goal, evidence=evidence)
+        except DecisionModelError as exc:
+            logger.warning(
+                "decision model could not judge compaction candidates, keeping "
+                "the builtin rules: %s",
+                exc,
+            )
+            return self._build_plan(decisions)
+        judged = [
+            self._apply_judgement(decision, keep_probabilities.get(decision.index))
+            for decision in decisions
+        ]
+        return self._build_plan(
+            judged,
+            summary_extra={
+                "judged_by": "decision_model",
+                "judged_candidates": len(evidence),
+                "kept_verbatim": sum(
+                    1
+                    for index in evidence
+                    if keep_probabilities[index] >= self.config.decision_keep_threshold
+                ),
+            },
+        )
+
+    def _judgeable_indexes(self, messages: list[ConversationMessage]) -> list[int]:
+        """Indexes the decision strategy may summarize.
+
+        Only large, non-leading, non-recent messages qualify; instructions are
+        never summarized. The leading window is always protected so the
+        original task statement survives a wrong judgement.
+        """
+        total = len(messages)
+        return [
+            index
+            for index, message in enumerate(messages)
+            if index >= self.config.protect_leading_messages
+            and message.role not in {"system", "developer"}
+            and total - index > self.config.protect_recent_messages
+            and len(message.content) >= self.config.min_candidate_chars
+        ]
+
+    def _classify_all(
+        self, messages: list[ConversationMessage]
+    ) -> list[CompressionDecision]:
+        return [
             self._classify(index=index, total=len(messages), message=message)
             for index, message in enumerate(messages)
         ]
+
+    def _build_plan(
+        self,
+        decisions: list[CompressionDecision],
+        summary_extra: JsonObject | None = None,
+    ) -> CompressionPlan:
         candidate_indexes = [
             decision.index for decision in decisions if decision.action == "compress"
         ]
@@ -82,10 +196,33 @@ class ContextCompactionPolicy:
             "by_action": by_action,
             "by_reason": by_reason,
         }
+        if summary_extra:
+            summary.update(summary_extra)
         return CompressionPlan(
             decisions=decisions,
             candidate_indexes=candidate_indexes,
             summary=summary,
+        )
+
+    def _apply_judgement(
+        self, decision: CompressionDecision, keep_probability: float | None
+    ) -> CompressionDecision:
+        """Apply the judgement of one candidate.
+
+        Args:
+            decision: The builtin decision, kept when the message was not
+                handed to the judge.
+            keep_probability: Probability that the message must stay verbatim,
+                or ``None`` when it was not a candidate.
+        """
+        if keep_probability is None:
+            return decision
+        if keep_probability >= self.config.decision_keep_threshold:
+            return decision.model_copy(
+                update={"action": "protect", "reason": DECISION_KEEP_REASON}
+            )
+        return decision.model_copy(
+            update={"action": "compress", "reason": DECISION_SUMMARIZE_REASON}
         )
 
     def _classify(
@@ -152,28 +289,71 @@ class ContextCompactionPolicy:
 class ToolResultCompactor:
     """Dependency-free compactor for large historical tool results."""
 
-    def __init__(self, config: ToolResultCompactorConfig | None = None) -> None:
+    def __init__(
+        self,
+        config: ToolResultCompactorConfig | None = None,
+        *,
+        compaction_judge: CompactionJudge | None = None,
+    ) -> None:
         self.config = config or ToolResultCompactorConfig()
-        self.policy = ContextCompactionPolicy(self.config)
+        # ``None`` keeps the builtin rules; the config decides which strategy
+        # is asked for and an unconfigured decision model degrades back to them.
+        self.policy = ContextCompactionPolicy(
+            self.config,
+            judge=compaction_judge or build_compaction_judge(self.config),
+        )
         self.builtin = BuiltinCompressionProvider()
         self._headroom: HeadroomCompressionProvider | None = None
+
+    @property
+    def uses_judgement(self) -> bool:
+        """Whether a decision model judges the compaction candidates."""
+        return self.policy.judge is not None
 
     def compress_messages(self, request: CompressionRequest) -> CompactionResult:
         """Compact candidate messages while preserving control-plane messages."""
 
-        original_chars = self._messages_char_count(request.messages)
-        if original_chars <= request.max_context_chars:
-            return CompactionResult(
-                messages=list(request.messages),
-                report=CompactionReport(
-                    provider=self.config.provider,
-                    original_chars=original_chars,
-                    compressed_chars=original_chars,
-                    changed=False,
-                ),
-            )
+        if self._fits(request):
+            return self._unchanged_result(request)
+        return self._compress_messages(request, self.policy.plan(request.messages))
 
-        plan = self.policy.plan(request.messages)
+    async def acompress_messages(
+        self, request: CompressionRequest, *, goal: str = ""
+    ) -> CompactionResult:
+        """Asynchronous counterpart of :meth:`compress_messages`.
+
+        Args:
+            request: Messages and limits to compact.
+            goal: The task the run is working on, used as judgement context.
+        """
+        if self._fits(request):
+            return self._unchanged_result(request)
+        plan = await self.policy.aplan(request.messages, goal=goal)
+        return self._compress_messages(request, plan)
+
+    def _fits(self, request: CompressionRequest) -> bool:
+        """Whether the request already fits its context budget."""
+        return self._messages_char_count(request.messages) <= request.max_context_chars
+
+    def _unchanged_result(self, request: CompressionRequest) -> CompactionResult:
+        """Return the messages of a request that already fits."""
+        original_chars = self._messages_char_count(request.messages)
+        return CompactionResult(
+            messages=list(request.messages),
+            report=CompactionReport(
+                provider=self.config.provider,
+                original_chars=original_chars,
+                compressed_chars=original_chars,
+                changed=False,
+            ),
+        )
+
+    def _compress_messages(
+        self, request: CompressionRequest, plan: CompressionPlan
+    ) -> CompactionResult:
+        """Compact the candidates of ``plan`` to fit the context budget."""
+
+        original_chars = self._messages_char_count(request.messages)
         warnings: list[str] = []
         if self._uses_headroom():
             result = self._compress_messages_with_headroom(request, plan)
@@ -591,6 +771,8 @@ ContextCompressionPolicy = ContextCompactionPolicy
 ToolResultCompressor = ToolResultCompactor
 
 __all__ = [
+    "DECISION_KEEP_REASON",
+    "DECISION_SUMMARIZE_REASON",
     "ContextCompactionPolicy",
     "ContextCompressionPolicy",
     "ToolResultCompactor",

@@ -69,6 +69,9 @@ HARNESS_ENHANCE_ENABLED=true
 HARNESS_ENHANCE_COMPONENTS=invocation_context,compactor,response_verification
 HARNESS_PROFILE=research
 HARNESS_COMPRESSION_PROVIDER=builtin
+HARNESS_COMPACTION_STRATEGY=builtin
+HARNESS_LONG_RUN_STRATEGY=counter
+HARNESS_MODE_STRATEGY=keywords
 ```
 
 ```python
@@ -86,6 +89,18 @@ harness_enhance:
   profile: general
   compression_provider: builtin
 ```
+
+## 判定模型策略
+
+三个判定点可以选择改用已配置的判定模型，替代内置规则。所有策略默认关闭；没有配置判定模型时会各自保留原规则并打印告警。
+
+| 策略 | 开关 | 被替代的规则 | 判定不可用时 |
+| --- | --- | --- | --- |
+| 压缩候选 | `HARNESS_COMPACTION_STRATEGY=decision` | 按角色和长度挑选压缩候选 | 内置规则 |
+| 长任务引导 | `HARNESS_LONG_RUN_STRATEGY=decision` | 仅按模型调用次数计数 | 计数规则，并在 `unconditional_after_model_calls` 后强制生效 |
+| 上下文模式块 | `HARNESS_MODE_STRATEGY=decision` | 精度/产物关键词匹配 | 关键词匹配 |
+
+策略依赖已配置的判定模型，环境变量见 [decisions](../decisions/README.zh.md)。判定失败会回落到上表规则，不会让运行失败。
 
 ## 直接使用模块
 

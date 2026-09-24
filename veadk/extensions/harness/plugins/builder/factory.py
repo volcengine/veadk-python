@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from typing import Literal
 
 from google.adk.plugins import BasePlugin
 
@@ -56,6 +57,7 @@ def build_harness_plugins(
     compaction_config: ToolResultCompactorConfig | None = None,
     compression_config: ToolResultCompactorConfig | None = None,
     verifier_config: FinalResponseVerifierConfig | None = None,
+    long_run_strategy: str = "counter",
 ) -> list[BasePlugin]:
     """Build a shared-store Harness plugin bundle."""
 
@@ -92,9 +94,15 @@ def build_harness_plugins(
             HarnessLongRunControlPlugin(
                 store=shared_store,
                 profile=profile,
+                strategy=_long_run_strategy(long_run_strategy),
             )
         )
     return plugins
+
+
+def _long_run_strategy(value: str | None) -> Literal["counter", "decision"]:
+    """Normalize the long-run control strategy name."""
+    return "decision" if (value or "").strip().lower() == "decision" else "counter"
 
 
 def _normalize_components(components: Iterable[ComponentName] | str | None) -> set[str]:

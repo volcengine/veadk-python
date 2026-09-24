@@ -80,14 +80,29 @@ def build_harness_plugins_from_env(
         profile=profile,
         store=store,
         context_config=HarnessInvocationContextConfig(
-            max_context_chars=max_context_chars
+            mode_strategy=_decision_strategy(
+                values.get("HARNESS_MODE_STRATEGY")
+                or values.get("HARNESS_ENHANCE_MODE_STRATEGY"),
+                default="keywords",
+            ),
+            max_context_chars=max_context_chars,
         ),
         compaction_config=ToolResultCompactorConfig(
             provider=values.get("HARNESS_COMPRESSION_PROVIDER")
             or values.get("HARNESS_ENHANCE_COMPRESSION_PROVIDER")
             or "builtin",
+            strategy=_decision_strategy(
+                values.get("HARNESS_COMPACTION_STRATEGY")
+                or values.get("HARNESS_ENHANCE_COMPACTION_STRATEGY"),
+                default="builtin",
+            ),
             max_context_chars=max_context_chars,
             max_tool_result_chars=max_tool_result_chars,
+        ),
+        long_run_strategy=_decision_strategy(
+            values.get("HARNESS_LONG_RUN_STRATEGY")
+            or values.get("HARNESS_ENHANCE_LONG_RUN_STRATEGY"),
+            default="counter",
         ),
         verifier_config=FinalResponseVerifierConfig(
             mode=_verifier_mode(
@@ -109,6 +124,11 @@ def _int_value(value: str | None, *, default: int) -> int:
         return int(value)
     except ValueError:
         return default
+
+
+def _decision_strategy(value: str | None, *, default: str) -> str:
+    """Return ``decision`` when explicitly requested, else the default."""
+    return "decision" if (value or "").strip().lower() == "decision" else default
 
 
 def _verifier_mode(value: str | None) -> Literal["observe", "block"]:

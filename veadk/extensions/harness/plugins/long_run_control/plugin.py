@@ -16,24 +16,46 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from google.adk.models import LlmRequest, LlmResponse
 from google.adk.plugins import BasePlugin
 
+from veadk.extensions.decisions import DecisionModelError
+from veadk.extensions.harness.modules.long_run_control import (
+    ConvergenceJudge,
+    build_convergence_judge,
+    trajectory_text,
+)
 from veadk.extensions.harness.plugins._shared.callback_utils import (
     run_context_from_callback,
+    user_text_from_callback,
 )
-from veadk.extensions.harness.plugins.content_adapter import append_system_instruction
-from veadk.extensions.harness.schemas import HarnessEvent
+from veadk.extensions.harness.plugins.content_adapter import (
+    append_system_instruction,
+    contents_to_messages,
+)
+from veadk.extensions.harness.schemas import HarnessEvent, JsonObject
 from veadk.extensions.harness.stores import HarnessStoreProtocol, InMemoryHarnessStore
+from veadk.utils.logger import get_logger
 
 if TYPE_CHECKING:
     from google.adk.agents.callback_context import CallbackContext
 
+logger = get_logger(__name__)
+
+LongRunStrategy = Literal["counter", "decision"]
+
 
 class HarnessLongRunControlPlugin(BasePlugin):
-    """Steers long tool chains toward a final answer near the run budget."""
+    """Steers long tool chains toward a final answer near the run budget.
+
+    ``counter`` steers every call after ``trigger_after_model_calls``. The
+    ``decision`` strategy steers only when a decision model judges that the
+    run is not already able to answer, so a still-productive run is not cut
+    short; ``unconditional_after_model_calls`` keeps steering guaranteed for
+    very long runs.
+    """
 
     def __init__(
         self,
@@ -41,11 +63,21 @@ class HarnessLongRunControlPlugin(BasePlugin):
         store: HarnessStoreProtocol | None = None,
         profile: str = "default",
         trigger_after_model_calls: int = 8,
+        strategy: LongRunStrategy = "counter",
+        convergence_judge: ConvergenceJudge | None = None,
+        unconditional_after_model_calls: int = 16,
+        ready_threshold: float = 0.5,
     ) -> None:
         super().__init__(name="harness_long_run_control_plugin")
         self.store = store or InMemoryHarnessStore()
         self.profile = profile
         self.trigger_after_model_calls = max(1, trigger_after_model_calls)
+        self.strategy = strategy
+        self.convergence_judge = convergence_judge or build_convergence_judge(strategy)
+        self.unconditional_after_model_calls = max(
+            self.trigger_after_model_calls, unconditional_after_model_calls
+        )
+        self.ready_threshold = ready_threshold
         self._model_call_counts: dict[tuple[str, str], int] = {}
 
     async def before_model_callback(
@@ -64,21 +96,75 @@ class HarnessLongRunControlPlugin(BasePlugin):
         if model_calls < self.trigger_after_model_calls:
             return None
 
+        ready = await self._ready_probability(callback_context, llm_request)
+        if self._should_skip_guidance(ready=ready, model_calls=model_calls):
+            self.store.append_event(
+                HarnessEvent(
+                    event_type="long_run_control.guidance_skipped",
+                    run_context=run_context,
+                    payload={
+                        "model_calls": model_calls,
+                        "decision_ready": ready,
+                        "reason": "trajectory_is_still_collecting_evidence",
+                    },
+                )
+            )
+            return None
+
         append_system_instruction(
             llm_request,
             _long_run_control_instruction(model_calls=model_calls),
         )
+        payload: JsonObject = {
+            "model_calls": model_calls,
+            "trigger_after_model_calls": self.trigger_after_model_calls,
+        }
+        if ready is not None:
+            payload["decision_ready"] = ready
+            payload["forced"] = model_calls >= self.unconditional_after_model_calls
         self.store.append_event(
             HarnessEvent(
                 event_type="long_run_control.guidance_injected",
                 run_context=run_context,
-                payload={
-                    "model_calls": model_calls,
-                    "trigger_after_model_calls": self.trigger_after_model_calls,
-                },
+                payload=payload,
             )
         )
         return None
+
+    def _should_skip_guidance(self, *, ready: float | None, model_calls: int) -> bool:
+        """Whether the convergence judgement lets a run keep working."""
+        if ready is None or ready >= self.ready_threshold:
+            return False
+        return model_calls < self.unconditional_after_model_calls
+
+    async def _ready_probability(
+        self,
+        callback_context: "CallbackContext",
+        llm_request: LlmRequest,
+    ) -> float | None:
+        """Return the probability that the run can answer, or ``None``.
+
+        Args:
+            callback_context: Callback context carrying the user's request.
+            llm_request: The request the run is about to send.
+
+        Returns:
+            The judged probability, or ``None`` when the plugin has no judge.
+            A failing judge returns ``1.0`` so steering keeps working.
+        """
+        if self.convergence_judge is None:
+            return None
+        try:
+            return await self.convergence_judge.aready_probability(
+                goal=user_text_from_callback(callback_context),
+                trajectory=trajectory_text(contents_to_messages(llm_request.contents)),
+            )
+        except DecisionModelError as exc:
+            logger.warning(
+                "long-run convergence judge unavailable, steering as before: %s",
+                exc,
+            )
+            return 1.0
 
 
 def _long_run_control_instruction(*, model_calls: int) -> str:

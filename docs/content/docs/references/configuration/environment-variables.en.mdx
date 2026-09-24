@@ -76,6 +76,9 @@ Prefix `HARNESS_`, used to attach optional Harness plugins to HarnessApp Runtime
 | `HARNESS_MAX_TOOL_RESULT_CHARS` | Single tool-result compaction threshold, default `4000`. |
 | `HARNESS_VERIFIER_MODE` | Final-response verification mode, `observe` or `block`; default `observe`. |
 | `HARNESS_STORE_PATH` | Optional JSONL event store path; in-memory store is used when unset. |
+| `HARNESS_COMPACTION_STRATEGY` | Compaction candidate strategy, `builtin` or `decision`; default `builtin`. |
+| `HARNESS_LONG_RUN_STRATEGY` | Long-run steering strategy, `counter` or `decision`; default `counter`. |
+| `HARNESS_MODE_STRATEGY` | Context mode-block strategy, `keywords` or `decision`; default `keywords`. |
 
 The `harness_enhance` block maps to these environment variables when deploying a HarnessApp Runtime. Prefer `harness.yaml` or `veadk agentkit invoke` flags for normal developer workflows; use environment variables for platform integration and container runtimes.
 

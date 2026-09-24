@@ -13,11 +13,30 @@
 # limitations under the License.
 
 import time
+from functools import lru_cache
+
 from google.adk.agents.callback_context import CallbackContext
+from google.adk.events import Event
+
 from veadk.config import getenv
+from veadk.extensions.decisions import DecisionModelError
+from veadk.memory.auto_save_judge import (
+    DecisionMemorySaveJudge,
+    build_memory_save_judge,
+    events_text,
+)
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+def _float_env(value: object, default: float) -> float:
+    """Read a float setting that may arrive as a string."""
+    try:
+        return float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+
 
 # Session-level cache for tracking save state
 # Format: {(app_name, user_id, session_id): {'last_save_time': float, 'last_event_count': int}}
@@ -35,9 +54,56 @@ MIN_TIME_THRESHOLD = getenv(
     "MIN_TIME_THRESHOLD", 60
 )  # Minimum seconds between saves (1 minute)
 
+# ``decision`` lets the configured decision model decide whether a turn is
+# worth remembering; ``threshold`` keeps the two thresholds above.
+MEMORY_SAVE_STRATEGY = getenv("MEMORY_SAVE_STRATEGY", "threshold")
+MEMORY_SAVE_WORTH_THRESHOLD = _float_env(
+    getenv("MEMORY_SAVE_WORTH_THRESHOLD", 0.5), 0.5
+)
+
 
 def _copy_session_with_events(session, events):
     return session.model_copy(update={"events": events})
+
+
+@lru_cache(maxsize=1)
+def _memory_save_judge() -> DecisionMemorySaveJudge | None:
+    """Return the judge the configured strategy asks for, built once."""
+    return build_memory_save_judge(MEMORY_SAVE_STRATEGY)
+
+
+async def _should_persist(*, events: list[Event], throttled: bool) -> bool:
+    """Decide whether new events are worth writing to long-term memory.
+
+    The thresholds are the default. Under the ``decision`` strategy the
+    judgement decides instead, so a turn that stated something durable is
+    stored before it crosses the thresholds, and a trivial turn is not stored
+    merely because it did. A failing judgement falls back to the thresholds.
+
+    Args:
+        events: The new events of the current session.
+        throttled: Whether the thresholds would skip this save.
+
+    Returns:
+        Whether the events should be written to long-term memory.
+    """
+    judge = _memory_save_judge()
+    if judge is None:
+        return not throttled
+    try:
+        probability = await judge.aworth_saving(events_text=events_text(events))
+    except DecisionModelError as exc:
+        logger.warning(
+            "memory save judge unavailable, using the save thresholds: %s", exc
+        )
+        return not throttled
+    if probability >= MEMORY_SAVE_WORTH_THRESHOLD:
+        return True
+    logger.info(
+        f"Skipping save: judgement {probability:.2f} is below "
+        f"{MEMORY_SAVE_WORTH_THRESHOLD}."
+    )
+    return False
 
 
 async def save_session_to_long_term_memory(
@@ -145,6 +211,7 @@ async def save_session_to_long_term_memory(
 
         cache_info = _session_save_cache.get(cache_key)
         last_event_count = 0
+        throttled = False
 
         if cache_info:
             last_save_time = cache_info.get("last_save_time", 0)
@@ -161,23 +228,24 @@ async def save_session_to_long_term_memory(
             time_elapsed = current_time - last_save_time
             new_events_count = current_event_count - last_event_count
 
-            # Check if we should skip save
-            if (
+            throttled = (
                 time_elapsed < MIN_TIME_THRESHOLD
                 and new_events_count < MIN_MESSAGES_THRESHOLD
-            ):
-                logger.info(
-                    f"Skipping save for session {session_id}: "
-                    f"only {new_events_count} new events (need {MIN_MESSAGES_THRESHOLD}) "
-                    f"and {time_elapsed:.1f}s elapsed (need {MIN_TIME_THRESHOLD}s)"
-                )
-                return None
+            )
         else:
             logger.info(f"First save for session {session_id}.")
 
         new_events = current_events[last_event_count:]
         if not new_events:
             logger.info(f"Skipping save for session {session_id}: no new events.")
+            return None
+
+        # 阈值没挡住时也要过判定；判定没挡住时也可能因阈值而跳过
+        if not await _should_persist(events=new_events, throttled=throttled):
+            logger.info(
+                f"Skipping save for session {session_id}: "
+                f"{len(new_events)} new events were not worth remembering."
+            )
             return None
 
         # Save to long-term memory

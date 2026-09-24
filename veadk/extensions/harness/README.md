@@ -71,6 +71,9 @@ HARNESS_ENHANCE_ENABLED=true
 HARNESS_ENHANCE_COMPONENTS=invocation_context,compactor,response_verification
 HARNESS_PROFILE=research
 HARNESS_COMPRESSION_PROVIDER=builtin
+HARNESS_COMPACTION_STRATEGY=builtin
+HARNESS_LONG_RUN_STRATEGY=counter
+HARNESS_MODE_STRATEGY=keywords
 ```
 
 ```python
@@ -89,6 +92,22 @@ harness_enhance:
   profile: general
   compression_provider: builtin
 ```
+
+## Decision Model Strategies
+
+Three judgement points can ask the configured decision model instead of using
+their built-in rules. Every strategy is opt-in, and without a decision model
+each one keeps its rule and logs a warning.
+
+| Strategy | Setting | Rule it replaces | Unavailable behaviour |
+| --- | --- | --- | --- |
+| Compaction candidates | `HARNESS_COMPACTION_STRATEGY=decision` | Role and size based candidate selection | Builtin rules |
+| Long-run steering | `HARNESS_LONG_RUN_STRATEGY=decision` | Model-call counter | Counter, and always after `unconditional_after_model_calls` |
+| Context mode blocks | `HARNESS_MODE_STRATEGY=decision` | Precision and artifact keyword markers | Keyword markers |
+
+They need a configured decision model; see
+[decisions](../decisions/README.md) for the `DECISION_MODEL_*` variables. A
+failed judgement degrades to the rule above instead of failing the run.
 
 ## Direct Module Usage
 

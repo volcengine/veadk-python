@@ -173,6 +173,10 @@ export HARNESS_ENHANCE_ENABLED=true
 export HARNESS_ENHANCE_COMPONENTS=invocation_context,compactor,response_verification
 export HARNESS_COMPRESSION_PROVIDER=builtin
 export HARNESS_VERIFIER_MODE=observe
+# optional: let a decision model judge the built-in rules
+# export HARNESS_COMPACTION_STRATEGY=decision
+# export HARNESS_LONG_RUN_STRATEGY=decision
+# export HARNESS_MODE_STRATEGY=decision
 ```
 
 Equivalent YAML:
@@ -208,6 +212,21 @@ veadk agentkit invoke \
 | `HARNESS_MAX_TOOL_RESULT_CHARS` | `4000` | Tool-result compaction threshold. |
 | `HARNESS_VERIFIER_MODE` | `observe` | Verification behavior: `observe` or `block`. |
 | `HARNESS_STORE_PATH` | unset | Uses a JSONL event store when set. |
+| `HARNESS_COMPACTION_STRATEGY` | `builtin` | Compaction candidates: `builtin` or `decision`. |
+| `HARNESS_LONG_RUN_STRATEGY` | `counter` | Long-run steering: `counter` or `decision`. |
+| `HARNESS_MODE_STRATEGY` | `keywords` | Context mode blocks: `keywords` or `decision`. |
+
+## Decision Model Strategies
+
+The three `*_STRATEGY=decision` settings replace a rule with a judgement from
+the configured decision model. They need `DECISION_MODEL_ENABLED=true` and an
+API key; without one, each strategy keeps its rule and logs a warning.
+
+| Strategy | Rule it replaces | Unavailable behaviour |
+| --- | --- | --- |
+| `HARNESS_COMPACTION_STRATEGY` | Role and size based compaction candidates | Builtin rules |
+| `HARNESS_LONG_RUN_STRATEGY` | Model-call counter | Counter, forced after the unconditional count |
+| `HARNESS_MODE_STRATEGY` | Precision and artifact keyword markers | Keyword markers |
 
 ## Compaction Providers
 

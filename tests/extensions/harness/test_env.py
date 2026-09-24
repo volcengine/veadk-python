@@ -52,3 +52,52 @@ def test_build_harness_plugins_from_env_defaults_to_builtin_compression():
 
     assert plugins[0].name == "harness_compress_plugin"
     assert plugins[0].compressor.config.provider == "builtin"
+    assert plugins[0].compressor.config.strategy == "builtin"
+    assert plugins[0].compressor.uses_judgement is False
+
+
+def test_build_harness_plugins_from_env_reads_decision_strategies():
+    plugins = build_harness_plugins_from_env(
+        {
+            "HARNESS_ENHANCE_ENABLED": "true",
+            "HARNESS_ENHANCE_COMPONENTS": (
+                "context_engine,compressor,long_run_control"
+            ),
+            "HARNESS_ENHANCE_COMPACTION_STRATEGY": "decision",
+            "HARNESS_ENHANCE_LONG_RUN_STRATEGY": "decision",
+            "HARNESS_ENHANCE_MODE_STRATEGY": "decision",
+        }
+    )
+    by_name = {plugin.name: plugin for plugin in plugins}
+
+    assert by_name["harness_compress_plugin"].compressor.config.strategy == "decision"
+    assert by_name["harness_long_run_control_plugin"].strategy == "decision"
+    assert (
+        by_name[
+            "harness_invocation_context_plugin"
+        ].context_builder.config.mode_strategy
+        == "decision"
+    )
+
+
+def test_decision_strategies_degrade_without_a_decision_model():
+    plugins = build_harness_plugins_from_env(
+        {
+            "HARNESS_ENHANCE_ENABLED": "true",
+            "HARNESS_ENHANCE_COMPONENTS": (
+                "context_engine,compressor,long_run_control"
+            ),
+            "HARNESS_ENHANCE_COMPACTION_STRATEGY": "decision",
+            "HARNESS_ENHANCE_LONG_RUN_STRATEGY": "decision",
+            "HARNESS_ENHANCE_MODE_STRATEGY": "decision",
+        }
+    )
+    by_name = {plugin.name: plugin for plugin in plugins}
+
+    # 没有配置判定模型时必须回落到原有规则，而不是失败
+    assert by_name["harness_compress_plugin"].compressor.uses_judgement is False
+    assert by_name["harness_long_run_control_plugin"].convergence_judge is None
+    assert (
+        by_name["harness_invocation_context_plugin"].context_builder.uses_mode_judgement
+        is False
+    )

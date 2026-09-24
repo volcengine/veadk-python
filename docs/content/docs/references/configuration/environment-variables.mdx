@@ -76,6 +76,9 @@ volcengine:
 | `HARNESS_MAX_TOOL_RESULT_CHARS` | 单个工具结果压缩阈值，默认 `4000`。 |
 | `HARNESS_VERIFIER_MODE` | 最终回答校验模式，`observe` 或 `block`，默认 `observe`。 |
 | `HARNESS_STORE_PATH` | 可选 JSONL 事件存储路径；不设置时使用内存存储。 |
+| `HARNESS_COMPACTION_STRATEGY` | 工具结果压缩候选策略，`builtin` 或 `decision`，默认 `builtin`。 |
+| `HARNESS_LONG_RUN_STRATEGY` | 长任务收尾引导策略，`counter` 或 `decision`，默认 `counter`。 |
+| `HARNESS_MODE_STRATEGY` | 上下文模式块策略，`keywords` 或 `decision`，默认 `keywords`。 |
 
 `harness_enhance` 配置块会在 HarnessApp Runtime 部署时映射为这些环境变量。推荐开发者优先通过 `harness.yaml` 或 `veadk agentkit invoke` 参数启用，环境变量适合平台集成和镜像运行时。
 

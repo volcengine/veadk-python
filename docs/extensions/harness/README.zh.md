@@ -165,6 +165,10 @@ export HARNESS_ENHANCE_ENABLED=true
 export HARNESS_ENHANCE_COMPONENTS=invocation_context,compactor,response_verification
 export HARNESS_COMPRESSION_PROVIDER=builtin
 export HARNESS_VERIFIER_MODE=observe
+# 可选：把内置规则交给判定模型
+# export HARNESS_COMPACTION_STRATEGY=decision
+# export HARNESS_LONG_RUN_STRATEGY=decision
+# export HARNESS_MODE_STRATEGY=decision
 ```
 
 等价 YAML：
@@ -200,6 +204,19 @@ veadk agentkit invoke \
 | `HARNESS_MAX_TOOL_RESULT_CHARS` | `4000` | 工具结果压缩阈值。 |
 | `HARNESS_VERIFIER_MODE` | `observe` | 校验行为，支持 `observe` 或 `block`。 |
 | `HARNESS_STORE_PATH` | 未设置 | 设置后使用 JSONL event store。 |
+| `HARNESS_COMPACTION_STRATEGY` | `builtin` | 压缩候选策略：`builtin` 或 `decision`。 |
+| `HARNESS_LONG_RUN_STRATEGY` | `counter` | 长任务引导策略：`counter` 或 `decision`。 |
+| `HARNESS_MODE_STRATEGY` | `keywords` | 上下文模式块策略：`keywords` 或 `decision`。 |
+
+## 判定模型策略
+
+三个 `*_STRATEGY=decision` 开关把一条规则换成判定模型的判定结果，需要 `DECISION_MODEL_ENABLED=true` 与 API Key；没有配置时各自保留原规则并打印告警。
+
+| 策略 | 被替代的规则 | 判定不可用时 |
+| --- | --- | --- |
+| `HARNESS_COMPACTION_STRATEGY` | 按角色和长度挑选压缩候选 | 内置规则 |
+| `HARNESS_LONG_RUN_STRATEGY` | 仅按模型调用次数计数 | 计数规则，超过强制次数后必定生效 |
+| `HARNESS_MODE_STRATEGY` | 精度/产物关键词匹配 | 关键词匹配 |
 
 ## 压缩 Provider
 

@@ -173,6 +173,16 @@ agent = Agent(
 ```
 
 为避免索引被频繁初始化，VeADK 提供 `MIN_MESSAGES_THRESHOLD` 与 `MIN_TIME_THRESHOLD` 两个环境变量自定义保存周期：默认在累计 10 条 event 或间隔 60 秒时触发保存；此外，当切换 `session_id` 并发起新问答时，VeADK 会自动把上一个会话写入长期记忆。
+
+默认保存策略是 `MEMORY_SAVE_STRATEGY=threshold`，即上面的双阈值规则。设置为 `decision` 后，改由已配置的判定模型判断"这一轮是否包含值得长期记住的内容"（陈述过的偏好、事实、决策、约束等），阈值由 `MEMORY_SAVE_WORTH_THRESHOLD` 控制，默认 `0.5`：
+
+| 判定结果 | 行为 |
+| --- | --- |
+| 通过阈值 | 立即写入，不必等满 10 条 event 或 60 秒 |
+| 未通过阈值 | 跳过，不会仅因为攒够条数就写入 |
+| 判定不可用 | 回落到 `MIN_MESSAGES_THRESHOLD` / `MIN_TIME_THRESHOLD` |
+
+被跳过的轮次不会推进保存游标，后续判定通过时会把这批 event 一起写入，因此不会丢数据。判定模型的环境变量见 [环境变量参考](/references/configuration/environment-variables)。
 ## 自动保存记忆策略
 开发者在 `Agent` 上配置 `auto_save_memory_policy` 来控制自动保存长期记忆时哪些 event 会被写入；不配置时等价于 `"default"`。
 ```python
