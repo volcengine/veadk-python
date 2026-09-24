@@ -105,6 +105,18 @@ each one keeps its rule and logs a warning.
 | Long-run steering | `HARNESS_LONG_RUN_STRATEGY=decision` | Model-call counter | Counter, and always after `unconditional_after_model_calls` |
 | Context mode blocks | `HARNESS_MODE_STRATEGY=decision` | Precision and artifact keyword markers | Keyword markers |
 
+Every judgement asks for the probability of "yes" in `[0, 1]`, and each point
+keeps its own threshold: raising one point's bar does not raise the others',
+because the same probability costs each point a different thing. Each setting
+accepts a `HARNESS_ENHANCE_`-prefixed alias, clamps out-of-range values, and
+falls back to `0.5` for an unusable one.
+
+| Threshold | Setting | What a high value means |
+| --- | --- | --- |
+| Compaction candidates | `HARNESS_COMPACTION_KEEP_THRESHOLD=0.5` | Keeps more tool output verbatim |
+| Long-run steering | `HARNESS_LONG_RUN_READY_THRESHOLD=0.5` | Steers a run toward its answer sooner |
+| Context mode blocks | `HARNESS_MODE_DECISION_THRESHOLD=0.5` | Injects the mode block more often |
+
 They need a configured decision model; see
 [decisions](../decisions/README.md) for the `DECISION_MODEL_*` variables. A
 failed judgement degrades to the rule above instead of failing the run.
@@ -112,9 +124,9 @@ failed judgement degrades to the rule above instead of failing the run.
 Assembling plugins in code selects the same strategies as arguments instead of
 environment variables: `compaction_config=ToolResultCompactorConfig(strategy="decision")`,
 `context_config=HarnessInvocationContextConfig(mode_strategy="decision")`, and
-`long_run_strategy="decision"` on `HarnessExtension`. Passing an `env` mapping
-instead makes the environment variables the only source, as `HarnessExtension.from_env()`
-does.
+`long_run_strategy="decision"` / `long_run_ready_threshold=0.5` on
+`HarnessExtension`. Passing an `env` mapping instead makes the environment
+variables the only source, as `HarnessExtension.from_env()` does.
 
 ## Direct Module Usage
 

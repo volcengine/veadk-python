@@ -62,6 +62,23 @@ def test_harness_extension_keeps_the_counter_strategy_by_default() -> None:
     assert plugins[0].strategy == "counter"
 
 
+def test_harness_extension_can_tune_the_long_run_threshold() -> None:
+    """The programmatic path can tune the threshold, not only the env path."""
+    plugins = HarnessExtension(
+        components="long_run_control",
+        long_run_strategy="decision",
+        long_run_ready_threshold=0.2,
+    ).plugins()
+
+    assert plugins[0].ready_threshold == 0.2
+
+
+def test_harness_extension_keeps_the_neutral_threshold_by_default() -> None:
+    plugins = HarnessExtension(components="long_run_control").plugins()
+
+    assert plugins[0].ready_threshold == 0.5
+
+
 def test_harness_extension_from_env_builds_configured_plugins() -> None:
     plugins = HarnessExtension.from_env(
         {

@@ -73,3 +73,38 @@ def test_structured_skills_and_mcp_map_to_json_runtime_env():
             "bear_token": "secret",
         }
     ]
+
+
+def test_judgement_thresholds_survive_the_deploy_path():
+    """A threshold set in ``harness_enhance`` must reach the built plugins.
+
+    ``to_runtime_env`` flattens the section into ``HARNESS_ENHANCE_*``, the same
+    spelling the strategy settings use, so the runtime has to read it there.
+    """
+    from veadk.extensions.harness.env import build_harness_plugins_from_env
+
+    env = to_runtime_env(
+        {
+            "harness_enhance": {
+                "enabled": True,
+                "components": "context_engine,compressor,long_run_control",
+                "compaction_keep_threshold": 0.8,
+                "long_run_ready_threshold": 0.25,
+                "mode_decision_threshold": 0.9,
+            }
+        }
+    )
+
+    plugins = {plugin.name: plugin for plugin in build_harness_plugins_from_env(env)}
+
+    assert (
+        plugins["harness_compress_plugin"].compressor.config.decision_keep_threshold
+        == 0.8
+    )
+    assert plugins["harness_long_run_control_plugin"].ready_threshold == 0.25
+    assert (
+        plugins[
+            "harness_invocation_context_plugin"
+        ].context_builder.config.mode_decision_threshold
+        == 0.9
+    )

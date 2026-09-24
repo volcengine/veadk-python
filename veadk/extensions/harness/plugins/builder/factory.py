@@ -21,6 +21,7 @@ from typing import Literal
 
 from google.adk.plugins import BasePlugin
 
+from veadk.extensions.decisions import DEFAULT_JUDGEMENT_THRESHOLD
 from veadk.extensions.harness.modules.final_response_verifier import (
     FinalResponseVerifier,
     FinalResponseVerifierConfig,
@@ -58,6 +59,7 @@ def build_harness_plugins(
     compression_config: ToolResultCompactorConfig | None = None,
     verifier_config: FinalResponseVerifierConfig | None = None,
     long_run_strategy: str = "counter",
+    long_run_ready_threshold: float = DEFAULT_JUDGEMENT_THRESHOLD,
 ) -> list[BasePlugin]:
     """Build a shared-store Harness plugin bundle."""
 
@@ -95,6 +97,7 @@ def build_harness_plugins(
                 store=shared_store,
                 profile=profile,
                 strategy=_long_run_strategy(long_run_strategy),
+                ready_threshold=long_run_ready_threshold,
             )
         )
     return plugins

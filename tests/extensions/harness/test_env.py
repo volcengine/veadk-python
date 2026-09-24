@@ -101,3 +101,82 @@ def test_decision_strategies_degrade_without_a_decision_model():
         by_name["harness_invocation_context_plugin"].context_builder.uses_mode_judgement
         is False
     )
+
+
+def test_judgement_thresholds_default_to_a_neutral_boundary():
+    plugins = build_harness_plugins_from_env(
+        {
+            "HARNESS_ENHANCE_ENABLED": "true",
+            "HARNESS_ENHANCE_COMPONENTS": (
+                "context_engine,compressor,long_run_control"
+            ),
+        }
+    )
+    by_name = {plugin.name: plugin for plugin in plugins}
+
+    assert (
+        by_name["harness_compress_plugin"].compressor.config.decision_keep_threshold
+        == 0.5
+    )
+    assert by_name["harness_long_run_control_plugin"].ready_threshold == 0.5
+    assert (
+        by_name[
+            "harness_invocation_context_plugin"
+        ].context_builder.config.mode_decision_threshold
+        == 0.5
+    )
+
+
+def test_build_harness_plugins_from_env_reads_judgement_thresholds():
+    plugins = build_harness_plugins_from_env(
+        {
+            "HARNESS_ENHANCE_ENABLED": "true",
+            "HARNESS_ENHANCE_COMPONENTS": (
+                "context_engine,compressor,long_run_control"
+            ),
+            "HARNESS_ENHANCE_COMPACTION_KEEP_THRESHOLD": "0.8",
+            "HARNESS_ENHANCE_LONG_RUN_READY_THRESHOLD": "0.3",
+            "HARNESS_ENHANCE_MODE_DECISION_THRESHOLD": "0.9",
+        }
+    )
+    by_name = {plugin.name: plugin for plugin in plugins}
+
+    assert (
+        by_name["harness_compress_plugin"].compressor.config.decision_keep_threshold
+        == 0.8
+    )
+    assert by_name["harness_long_run_control_plugin"].ready_threshold == 0.3
+    assert (
+        by_name[
+            "harness_invocation_context_plugin"
+        ].context_builder.config.mode_decision_threshold
+        == 0.9
+    )
+
+
+def test_judgement_thresholds_accept_the_generic_spelling_and_clamp():
+    plugins = build_harness_plugins_from_env(
+        {
+            "HARNESS_ENHANCE_ENABLED": "true",
+            "HARNESS_ENHANCE_COMPONENTS": (
+                "context_engine,compressor,long_run_control"
+            ),
+            "HARNESS_COMPACTION_KEEP_THRESHOLD": "0.25",
+            "HARNESS_LONG_RUN_READY_THRESHOLD": "-1",
+            "HARNESS_MODE_DECISION_THRESHOLD": "3",
+        }
+    )
+    by_name = {plugin.name: plugin for plugin in plugins}
+
+    assert (
+        by_name["harness_compress_plugin"].compressor.config.decision_keep_threshold
+        == 0.25
+    )
+    # 越界值夹紧而不是回落：-1 仍然是"总是生效"，3 仍然是"永不生效"。
+    assert by_name["harness_long_run_control_plugin"].ready_threshold == 0.0
+    assert (
+        by_name[
+            "harness_invocation_context_plugin"
+        ].context_builder.config.mode_decision_threshold
+        == 1.0
+    )

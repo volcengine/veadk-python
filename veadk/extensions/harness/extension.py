@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Any
 from pydantic import Field
 from typing_extensions import Self
 
+from veadk.extensions.decisions import DEFAULT_JUDGEMENT_THRESHOLD
 from veadk.extensions.harness.env import (
     build_harness_plugins_from_env,
     harness_enabled_from_env,
@@ -83,15 +84,16 @@ class HarnessExtension:
         compaction_config: ToolResultCompactorConfig | None = None,
         verifier_config: FinalResponseVerifierConfig | None = None,
         long_run_strategy: str = "counter",
+        long_run_ready_threshold: float = DEFAULT_JUDGEMENT_THRESHOLD,
         sidecar: bool | Mapping[str, Any] | Any | None = None,
         env: Mapping[str, str] | None = None,
     ) -> None:
         """Configure Harness plugin assembly.
 
         ``context_config``, ``compaction_config``, ``verifier_config``, and
-        ``long_run_strategy`` only apply when ``env`` is ``None``: an
-        ``env`` mapping makes the Harness environment variables the single
-        source of truth, as :meth:`from_env` intends.
+        ``long_run_strategy`` / ``long_run_ready_threshold`` only apply when
+        ``env`` is ``None``: an ``env`` mapping makes the Harness environment
+        variables the single source of truth, as :meth:`from_env` intends.
         """
         normalized_sidecar = normalize_sidecar_config(sidecar)
         self.sidecar = ManagedHarnessSidecar(
@@ -134,6 +136,7 @@ class HarnessExtension:
         self.compaction_config = compaction_config
         self.verifier_config = verifier_config
         self.long_run_strategy = long_run_strategy
+        self.long_run_ready_threshold = long_run_ready_threshold
         self.env = dict(env) if env is not None else None
         self.sidecar.start()
 
@@ -173,6 +176,7 @@ class HarnessExtension:
             compaction_config=self.compaction_config,
             verifier_config=self.verifier_config,
             long_run_strategy=self.long_run_strategy,
+            long_run_ready_threshold=self.long_run_ready_threshold,
         )
 
     @property

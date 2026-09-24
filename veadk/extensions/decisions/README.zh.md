@@ -125,6 +125,22 @@ agent = Agent(name="router", tools=[decision_evaluate])
 
 被判定的 state 原文与 API Key 都不进日志。
 
+## 判定阈值
+
+每个判定点各自持有阈值，比较的都是「是」的概率在 `[0, 1]` 上的取值：
+
+| 判定点 | 阈值 | 默认 |
+| --- | --- | --- |
+| 压缩候选 | `HARNESS_COMPACTION_KEEP_THRESHOLD` | 0.5 |
+| 长任务引导 | `HARNESS_LONG_RUN_READY_THRESHOLD` | 0.5 |
+| 上下文模式块 | `HARNESS_MODE_DECISION_THRESHOLD` | 0.5 |
+| 记忆落库 | `MEMORY_SAVE_WORTH_THRESHOLD` | 0.5 |
+
+解析统一走 `probability_threshold()`：越界的值**夹紧**而不是回落（`1.5 → 1.0`、
+`-1 → 0.0`，保留「永不生效 / 总是生效」的原意，回落会把行为整个翻转）；`NaN`
+或非数字没有原意可保留，回落到默认值并打 warning。阈值之间相互独立——同一个概率
+落在不同判定点上代价不同，调高一处不会连带影响其它判定点。
+
 ## 目录结构
 
 | 路径 | 作用 |

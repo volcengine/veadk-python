@@ -19,7 +19,11 @@ from google.adk.agents.callback_context import CallbackContext
 from google.adk.events import Event
 
 from veadk.config import getenv
-from veadk.extensions.decisions import DecisionModelError
+from veadk.extensions.decisions import (
+    DEFAULT_JUDGEMENT_THRESHOLD,
+    DecisionModelError,
+    probability_threshold,
+)
 from veadk.memory.auto_save_judge import (
     DecisionMemorySaveJudge,
     build_memory_save_judge,
@@ -28,14 +32,6 @@ from veadk.memory.auto_save_judge import (
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
-
-
-def _float_env(value: object, default: float) -> float:
-    """Read a float setting that may arrive as a string."""
-    try:
-        return float(value)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
-        return default
 
 
 # Session-level cache for tracking save state
@@ -57,8 +53,15 @@ MIN_TIME_THRESHOLD = getenv(
 # ``decision`` lets the configured decision model decide whether a turn is
 # worth remembering; ``threshold`` keeps the two thresholds above.
 MEMORY_SAVE_STRATEGY = getenv("MEMORY_SAVE_STRATEGY", "threshold")
-MEMORY_SAVE_WORTH_THRESHOLD = _float_env(
-    getenv("MEMORY_SAVE_WORTH_THRESHOLD", 0.5), 0.5
+# 阈值必须是 [0, 1] 的概率：越界的值会被夹紧，NaN / 非数字回落到默认值。
+# 空字符串同样按"未配置"处理，避免 import 期直接抛错。
+MEMORY_SAVE_WORTH_THRESHOLD = probability_threshold(
+    getenv(
+        "MEMORY_SAVE_WORTH_THRESHOLD",
+        DEFAULT_JUDGEMENT_THRESHOLD,
+        allow_false_values=True,
+    ),
+    name="MEMORY_SAVE_WORTH_THRESHOLD",
 )
 
 

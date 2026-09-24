@@ -39,6 +39,7 @@ def build_harness_plugins_from_env(
     values = env or os.environ
     if not harness_enabled_from_env(values):
         return []
+    from veadk.extensions.decisions import probability_threshold
     from veadk.extensions.harness.modules.final_response_verifier import (
         FinalResponseVerifierConfig,
     )
@@ -85,6 +86,14 @@ def build_harness_plugins_from_env(
                 or values.get("HARNESS_ENHANCE_MODE_STRATEGY"),
                 default="keywords",
             ),
+            mode_decision_threshold=probability_threshold(
+                _first(
+                    values,
+                    "HARNESS_MODE_DECISION_THRESHOLD",
+                    "HARNESS_ENHANCE_MODE_DECISION_THRESHOLD",
+                ),
+                name="HARNESS_MODE_DECISION_THRESHOLD",
+            ),
             max_context_chars=max_context_chars,
         ),
         compaction_config=ToolResultCompactorConfig(
@@ -96,6 +105,14 @@ def build_harness_plugins_from_env(
                 or values.get("HARNESS_ENHANCE_COMPACTION_STRATEGY"),
                 default="builtin",
             ),
+            decision_keep_threshold=probability_threshold(
+                _first(
+                    values,
+                    "HARNESS_COMPACTION_KEEP_THRESHOLD",
+                    "HARNESS_ENHANCE_COMPACTION_KEEP_THRESHOLD",
+                ),
+                name="HARNESS_COMPACTION_KEEP_THRESHOLD",
+            ),
             max_context_chars=max_context_chars,
             max_tool_result_chars=max_tool_result_chars,
         ),
@@ -103,6 +120,14 @@ def build_harness_plugins_from_env(
             values.get("HARNESS_LONG_RUN_STRATEGY")
             or values.get("HARNESS_ENHANCE_LONG_RUN_STRATEGY"),
             default="counter",
+        ),
+        long_run_ready_threshold=probability_threshold(
+            _first(
+                values,
+                "HARNESS_LONG_RUN_READY_THRESHOLD",
+                "HARNESS_ENHANCE_LONG_RUN_READY_THRESHOLD",
+            ),
+            name="HARNESS_LONG_RUN_READY_THRESHOLD",
         ),
         verifier_config=FinalResponseVerifierConfig(
             mode=_verifier_mode(
@@ -115,6 +140,16 @@ def build_harness_plugins_from_env(
 
 def _truthy(value: str | None) -> bool:
     return bool(value and value.strip().lower() in {"1", "true", "yes", "on"})
+
+
+def _first(values: Mapping[str, str], *names: str) -> str | None:
+    """Return the first configured value among the accepted env spellings."""
+
+    for name in names:
+        value = values.get(name)
+        if value not in (None, ""):
+            return str(value)
+    return None
 
 
 def _int_value(value: str | None, *, default: int) -> int:

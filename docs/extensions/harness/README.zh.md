@@ -207,6 +207,9 @@ veadk agentkit invoke \
 | `HARNESS_COMPACTION_STRATEGY` | `builtin` | 压缩候选策略：`builtin` 或 `decision`。 |
 | `HARNESS_LONG_RUN_STRATEGY` | `counter` | 长任务引导策略：`counter` 或 `decision`。 |
 | `HARNESS_MODE_STRATEGY` | `keywords` | 上下文模式块策略：`keywords` 或 `decision`。 |
+| `HARNESS_COMPACTION_KEEP_THRESHOLD` | `0.5` | 压缩候选：概率高于该值即保留。 |
+| `HARNESS_LONG_RUN_READY_THRESHOLD` | `0.5` | 长任务引导：概率高于该值即引导收尾。 |
+| `HARNESS_MODE_DECISION_THRESHOLD` | `0.5` | 上下文模式块：概率高于该值即注入。 |
 
 ## 判定模型策略
 
@@ -217,6 +220,16 @@ veadk agentkit invoke \
 | `HARNESS_COMPACTION_STRATEGY` | 按角色和长度挑选压缩候选 | 内置规则 |
 | `HARNESS_LONG_RUN_STRATEGY` | 仅按模型调用次数计数 | 计数规则，超过强制次数后必定生效 |
 | `HARNESS_MODE_STRATEGY` | 精度/产物关键词匹配 | 关键词匹配 |
+
+### 判定阈值
+
+每个判定点各自持有阈值，比较的都是「是」在 `[0, 1]` 上的概率：同一个概率在不同判定点上代价不同，所以调高一个点不会连带抬高其它点。设置同时接受 `HARNESS_ENHANCE_` 前缀的别名，越界的值会被夹紧，不可用的值回落到 `0.5`。
+
+| 阈值 | 默认值 | 值调高意味着 |
+| --- | --- | --- |
+| `HARNESS_COMPACTION_KEEP_THRESHOLD` | `0.5` | 更多工具结果原样保留 |
+| `HARNESS_LONG_RUN_READY_THRESHOLD` | `0.5` | 更早把运行推向收尾 |
+| `HARNESS_MODE_DECISION_THRESHOLD` | `0.5` | 更频繁注入模式块 |
 
 ## 压缩 Provider
 

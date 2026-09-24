@@ -136,6 +136,25 @@ Logging stays quiet and carries no user data:
 
 The judged state and the API key are never logged.
 
+## Judgement Thresholds
+
+Every decision point keeps its own threshold, compared against the probability
+of "yes" in `[0, 1]`:
+
+| Decision point | Setting | Default |
+| --- | --- | --- |
+| Compaction candidates | `HARNESS_COMPACTION_KEEP_THRESHOLD` | 0.5 |
+| Long-run steering | `HARNESS_LONG_RUN_READY_THRESHOLD` | 0.5 |
+| Context mode blocks | `HARNESS_MODE_DECISION_THRESHOLD` | 0.5 |
+| Long-term memory saves | `MEMORY_SAVE_WORTH_THRESHOLD` | 0.5 |
+
+Parsing goes through `probability_threshold()`, which **clamps** an
+out-of-range value instead of falling back (`1.5 → 1.0`, `-1 → 0.0`, keeping
+the intent of "never act" / "always act"; a fallback would flip the behaviour),
+and falls back to the default with a warning for `NaN` or text, which carry no
+intent. The thresholds are independent: the same probability costs each point
+something different, so raising one must not move the others.
+
 ## Source Layout
 
 | Path | Purpose |

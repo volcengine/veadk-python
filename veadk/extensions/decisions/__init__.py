@@ -63,6 +63,10 @@ from veadk.extensions.decisions.extension import (
     configure_default_decision_extension,
     get_default_decision_extension,
 )
+from veadk.extensions.decisions.thresholds import (
+    DEFAULT_JUDGEMENT_THRESHOLD,
+    probability_threshold,
+)
 from veadk.extensions.decisions.tools import decision_evaluate
 from veadk.extensions.decisions.types import (
     ChoiceAnswer,
@@ -78,6 +82,7 @@ __all__ = [
     "DEFAULT_API_BASE",
     "DEFAULT_COOLDOWN_SECONDS",
     "DEFAULT_FAILURE_THRESHOLD",
+    "DEFAULT_JUDGEMENT_THRESHOLD",
     "DEFAULT_MODEL_NAME",
     "DecisionAnswer",
     "DecisionModelConfig",
@@ -99,5 +104,6 @@ __all__ = [
     "decision_evaluate",
     "get_default_decision_extension",
     "noul_question",
+    "probability_threshold",
     "score_question",
 ]

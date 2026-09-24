@@ -100,13 +100,23 @@ harness_enhance:
 | 长任务引导 | `HARNESS_LONG_RUN_STRATEGY=decision` | 仅按模型调用次数计数 | 计数规则，并在 `unconditional_after_model_calls` 后强制生效 |
 | 上下文模式块 | `HARNESS_MODE_STRATEGY=decision` | 精度/产物关键词匹配 | 关键词匹配 |
 
+判定返回的是「是」在 `[0, 1]` 上的概率，每个点各自持有阈值：同一个概率落在不同点上
+代价不同，所以调高一个点的门槛不会抬高其它点。三个设置都接受 `HARNESS_ENHANCE_`
+前缀的别名，越界的值会被夹紧，不可用的值回落到 `0.5`。
+
+| 阈值 | 开关 | 值调高意味着 |
+| --- | --- | --- |
+| 压缩候选 | `HARNESS_COMPACTION_KEEP_THRESHOLD=0.5` | 更多工具结果原样保留 |
+| 长任务引导 | `HARNESS_LONG_RUN_READY_THRESHOLD=0.5` | 更早把运行推向收尾 |
+| 上下文模式块 | `HARNESS_MODE_DECISION_THRESHOLD=0.5` | 更频繁注入模式块 |
+
 策略依赖已配置的判定模型，环境变量见 [decisions](../decisions/README.zh.md)。判定失败会回落到上表规则，不会让运行失败。
 
 用代码装配插件时，同样的选择通过参数传入，而不是环境变量：
 `compaction_config=ToolResultCompactorConfig(strategy="decision")`、
 `context_config=HarnessInvocationContextConfig(mode_strategy="decision")`、
-`HarnessExtension(long_run_strategy="decision")`。一旦传入 `env` 映射，就以环境变量为唯一来源
-（`HarnessExtension.from_env()` 即这种形态）。
+`HarnessExtension(long_run_strategy="decision", long_run_ready_threshold=0.5)`。
+一旦传入 `env` 映射，就以环境变量为唯一来源（`HarnessExtension.from_env()` 即这种形态）。
 
 ## 直接使用模块
 

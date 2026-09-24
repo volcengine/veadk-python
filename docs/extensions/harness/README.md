@@ -215,6 +215,9 @@ veadk agentkit invoke \
 | `HARNESS_COMPACTION_STRATEGY` | `builtin` | Compaction candidates: `builtin` or `decision`. |
 | `HARNESS_LONG_RUN_STRATEGY` | `counter` | Long-run steering: `counter` or `decision`. |
 | `HARNESS_MODE_STRATEGY` | `keywords` | Context mode blocks: `keywords` or `decision`. |
+| `HARNESS_COMPACTION_KEEP_THRESHOLD` | `0.5` | Compaction candidates: keeps a candidate above this probability. |
+| `HARNESS_LONG_RUN_READY_THRESHOLD` | `0.5` | Long-run steering: steers the run to finish above this probability. |
+| `HARNESS_MODE_DECISION_THRESHOLD` | `0.5` | Context mode blocks: injects a block above this probability. |
 
 ## Decision Model Strategies
 
@@ -227,6 +230,20 @@ API key; without one, each strategy keeps its rule and logs a warning.
 | `HARNESS_COMPACTION_STRATEGY` | Role and size based compaction candidates | Builtin rules |
 | `HARNESS_LONG_RUN_STRATEGY` | Model-call counter | Counter, forced after the unconditional count |
 | `HARNESS_MODE_STRATEGY` | Precision and artifact keyword markers | Keyword markers |
+
+### Judgement Thresholds
+
+Each point keeps its own threshold, compared against the probability of "yes"
+in `[0, 1]`: the same probability costs each point something different, so
+raising one point's bar does not raise the others'. Every setting also accepts
+a `HARNESS_ENHANCE_`-prefixed alias, clamps an out-of-range value, and falls
+back to `0.5` for an unusable one.
+
+| Threshold | Default | Raising it means |
+| --- | --- | --- |
+| `HARNESS_COMPACTION_KEEP_THRESHOLD` | `0.5` | Keeps more tool output verbatim |
+| `HARNESS_LONG_RUN_READY_THRESHOLD` | `0.5` | Steers a run toward its answer sooner |
+| `HARNESS_MODE_DECISION_THRESHOLD` | `0.5` | Injects the mode block more often |
 
 ## Compaction Providers
 

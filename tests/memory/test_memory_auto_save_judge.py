@@ -156,3 +156,27 @@ def test_build_memory_save_judge_is_opt_in() -> None:
         )
         is not None
     )
+
+
+def test_the_worth_threshold_is_sanitized_at_import(monkeypatch) -> None:
+    """An unusable setting must not turn saves silently on or off.
+
+    The threshold is read once, when the module is imported. Values outside
+    ``[0, 1]`` used to make every save fail or succeed without a trace, so the
+    import must clamp them and fall back for ``NaN``.
+    """
+    import importlib
+
+    monkeypatch.setenv("MEMORY_SAVE_WORTH_THRESHOLD", "1.5")
+    assert importlib.reload(save_session_callback).MEMORY_SAVE_WORTH_THRESHOLD == 1.0
+
+    # NaN 的比较恒为 False，等于"永不写入"——必须回到默认值。
+    monkeypatch.setenv("MEMORY_SAVE_WORTH_THRESHOLD", "nan")
+    assert importlib.reload(save_session_callback).MEMORY_SAVE_WORTH_THRESHOLD == 0.5
+
+    # 空值按未配置处理，而不是在 import 期抛错。
+    monkeypatch.setenv("MEMORY_SAVE_WORTH_THRESHOLD", "")
+    assert importlib.reload(save_session_callback).MEMORY_SAVE_WORTH_THRESHOLD == 0.5
+
+    monkeypatch.delenv("MEMORY_SAVE_WORTH_THRESHOLD")
+    assert importlib.reload(save_session_callback).MEMORY_SAVE_WORTH_THRESHOLD == 0.5
