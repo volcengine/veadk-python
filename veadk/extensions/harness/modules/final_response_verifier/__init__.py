@@ -14,6 +14,12 @@
 
 """Final response verifier module exports."""
 
+from veadk.extensions.harness.modules.final_response_verifier.support_judge import (
+    DecisionSupportJudge,
+    SupportJudge,
+    SupportJudgement,
+    build_support_judge,
+)
 from veadk.extensions.harness.modules.final_response_verifier.verifier import (
     FinalResponseVerifier,
     FinalResponseVerifierConfig,
@@ -22,8 +28,12 @@ from veadk.extensions.harness.modules.final_response_verifier.verifier import (
 )
 
 __all__ = [
+    "DecisionSupportJudge",
     "FinalResponseVerifier",
     "FinalResponseVerifierConfig",
     "ResultVerifier",
     "ResultVerifierConfig",
+    "SupportJudge",
+    "SupportJudgement",
+    "build_support_judge",
 ]

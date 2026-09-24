@@ -21,8 +21,14 @@ from typing import TYPE_CHECKING
 from google.adk.models import LlmResponse
 from google.adk.plugins import BasePlugin
 
+from veadk.extensions.decisions import DecisionModelError
 from veadk.extensions.harness.modules.final_response_verifier import (
     FinalResponseVerifier,
+)
+from veadk.extensions.harness.modules.final_response_verifier.support_judge import (
+    SupportJudge,
+    SupportJudgement,
+    build_support_judge,
 )
 from veadk.extensions.harness.plugins._shared.callback_utils import (
     looks_like_error_result,
@@ -30,18 +36,27 @@ from veadk.extensions.harness.plugins._shared.callback_utils import (
     run_context_from_invocation,
     run_context_from_tool,
     tool_name,
+    user_text_from_callback,
 )
 from veadk.extensions.harness.plugins.content_adapter import (
     response_text,
     text_response,
 )
-from veadk.extensions.harness.schemas import EvidenceRef, HarnessEvent, ToolReceipt
+from veadk.extensions.harness.schemas import (
+    EvidenceRef,
+    HarnessEvent,
+    JsonObject,
+    ToolReceipt,
+)
 from veadk.extensions.harness.stores import HarnessStoreProtocol, InMemoryHarnessStore
 from veadk.extensions.harness.utils import (
     coerce_json_object,
     stringify_json_value,
     summarize_text,
 )
+from veadk.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     from google.adk.agents.callback_context import CallbackContext
@@ -58,11 +73,15 @@ class HarnessResponseVerificationPlugin(BasePlugin):
         self,
         *,
         verifier: FinalResponseVerifier | None = None,
+        support_judge: SupportJudge | None = None,
         store: HarnessStoreProtocol | None = None,
         profile: str = "default",
     ) -> None:
         super().__init__(name="harness_response_verification_plugin")
         self.verifier = verifier or FinalResponseVerifier()
+        self.support_judge = support_judge or build_support_judge(
+            self.verifier.config.strategy
+        )
         self.store = store or InMemoryHarnessStore()
         self.profile = profile
 
@@ -110,15 +129,24 @@ class HarnessResponseVerificationPlugin(BasePlugin):
             limit=20,
         )
         report = self.verifier.verify_text(text, receipts=receipts)
-        intervention = self.verifier.decide(report)
+        judgement = await self._review(callback_context, answer=text, receipts=receipts)
+        intervention = self.verifier.decide(report, judgement=judgement)
+        effective_report = intervention.report or report
+        payload: JsonObject = {
+            "intervention": intervention.model_dump(mode="json"),
+            "receipt_count": len(receipts),
+        }
+        if judgement is not None:
+            payload["judgement"] = {
+                "support": judgement.support,
+                "action": judgement.action,
+                "confidence": judgement.confidence,
+            }
         self.store.append_event(
             HarnessEvent(
                 event_type="verifier.report",
                 run_context=run_context,
-                payload={
-                    "intervention": intervention.model_dump(mode="json"),
-                    "receipt_count": len(receipts),
-                },
+                payload=payload,
             )
         )
         if intervention.action == "block":
@@ -128,13 +156,43 @@ class HarnessResponseVerificationPlugin(BasePlugin):
                     "Please rerun the required tool step or provide supporting evidence."
                 ),
                 custom_metadata={
-                    "harness_verification": report.model_dump(mode="json")
+                    "harness_verification": effective_report.model_dump(mode="json")
                 },
             )
         metadata = dict(llm_response.custom_metadata or {})
-        metadata["harness_verification"] = report.model_dump(mode="json")
+        metadata["harness_verification"] = effective_report.model_dump(mode="json")
+        if intervention.instruction:
+            metadata["harness_repair_instruction"] = intervention.instruction
         llm_response.custom_metadata = metadata
         return None
+
+    async def _review(
+        self,
+        callback_context: "CallbackContext",
+        *,
+        answer: str,
+        receipts: list[ToolReceipt],
+    ) -> SupportJudgement | None:
+        """Return the judged support of one answer, or ``None``.
+
+        Returns:
+            The judgement, or ``None`` when the plugin has no judge. A judge
+            that cannot answer also returns ``None``, so the builtin rules
+            decide instead of the answer passing unverified.
+        """
+        if self.support_judge is None:
+            return None
+        try:
+            return await self.support_judge.areview(
+                answer=answer,
+                receipts=receipts,
+                goal=user_text_from_callback(callback_context),
+            )
+        except DecisionModelError as exc:
+            logger.warning(
+                "support judge unavailable, using the builtin rules: %s", exc
+            )
+            return None
 
     async def on_event_callback(
         self,

@@ -133,7 +133,20 @@ def build_harness_plugins_from_env(
             mode=_verifier_mode(
                 values.get("HARNESS_VERIFIER_MODE")
                 or values.get("HARNESS_ENHANCE_VERIFIER_MODE")
-            )
+            ),
+            strategy=_decision_strategy(
+                values.get("HARNESS_VERIFIER_STRATEGY")
+                or values.get("HARNESS_ENHANCE_VERIFIER_STRATEGY"),
+                default="deterministic",
+            ),
+            support_threshold=probability_threshold(
+                _first(
+                    values,
+                    "HARNESS_VERIFIER_SUPPORT_THRESHOLD",
+                    "HARNESS_ENHANCE_VERIFIER_SUPPORT_THRESHOLD",
+                ),
+                name="HARNESS_VERIFIER_SUPPORT_THRESHOLD",
+            ),
         ),
     )
 

@@ -180,3 +180,53 @@ def test_judgement_thresholds_accept_the_generic_spelling_and_clamp():
         ].context_builder.config.mode_decision_threshold
         == 1.0
     )
+
+
+def test_verifier_strategy_and_support_threshold_are_read_from_env():
+    plugins = build_harness_plugins_from_env(
+        {
+            "HARNESS_ENHANCE_ENABLED": "true",
+            "HARNESS_ENHANCE_COMPONENTS": "response_verification",
+            "HARNESS_VERIFIER_STRATEGY": "decision",
+            "HARNESS_VERIFIER_SUPPORT_THRESHOLD": "0.8",
+        }
+    )
+    by_name = {plugin.name: plugin for plugin in plugins}
+
+    config = by_name["harness_response_verification_plugin"].verifier.config
+    assert config.strategy == "decision"
+    assert config.support_threshold == 0.8
+
+
+def test_verifier_support_threshold_accepts_the_prefixed_alias_and_clamps():
+    plugins = build_harness_plugins_from_env(
+        {
+            "HARNESS_ENHANCE_ENABLED": "true",
+            "HARNESS_ENHANCE_COMPONENTS": "response_verification",
+            "HARNESS_ENHANCE_VERIFIER_SUPPORT_THRESHOLD": "2",
+        }
+    )
+    by_name = {plugin.name: plugin for plugin in plugins}
+
+    assert (
+        by_name[
+            "harness_response_verification_plugin"
+        ].verifier.config.support_threshold
+        == 1.0
+    )
+
+
+def test_verifier_keeps_the_builtin_rules_by_default():
+    plugins = build_harness_plugins_from_env(
+        {
+            "HARNESS_ENHANCE_ENABLED": "true",
+            "HARNESS_ENHANCE_COMPONENTS": "response_verification",
+        }
+    )
+    plugin = {item.name: item for item in plugins}[
+        "harness_response_verification_plugin"
+    ]
+
+    assert plugin.verifier.config.strategy == "deterministic"
+    assert plugin.verifier.config.support_threshold == 0.5
+    assert plugin.support_judge is None
