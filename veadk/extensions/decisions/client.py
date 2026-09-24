@@ -25,6 +25,7 @@ import httpx
 
 from veadk.extensions.decisions.config import DecisionModelConfig
 from veadk.extensions.decisions.errors import (
+    DecisionModelError,
     DecisionModelRequestError,
     DecisionModelResponseError,
 )
@@ -33,10 +34,15 @@ from veadk.extensions.decisions.types import (
     DecisionUsage,
     parse_answers,
 )
+from veadk.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 # Statuses worth retrying: rate limits, transient overload, gateway errors.
 RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504, 529})
 _BODY_SNIPPET_LIMIT = 500
+# Below this remaining budget an attempt is not worth starting.
+_MIN_ATTEMPT_SECONDS = 0.05
 
 
 class SystemOneClient:
@@ -68,16 +74,36 @@ class SystemOneClient:
 
         Returns:
             The typed answers plus model name, usage, and latency.
+
+        Raises:
+            DecisionModelRequestError: If the endpoint cannot be reached or
+                keeps failing. The retries and their backoff share the
+                ``timeout`` budget, so one judgement never outlives it.
+            DecisionModelResponseError: If the payload cannot be used.
         """
         payload = self._payload(state, questions, model)
         started = time.perf_counter()
-        with httpx.Client(timeout=self.config.timeout) as client:
-            body = self._request(
-                lambda: client.post(
-                    self.config.endpoint, json=payload, headers=self._headers()
+        deadline = time.monotonic() + self.config.timeout
+        try:
+            with httpx.Client() as client:
+                body = self._request(
+                    lambda remaining: client.post(
+                        self.config.endpoint,
+                        json=payload,
+                        headers=self._headers(),
+                        timeout=remaining,
+                    ),
+                    deadline=deadline,
                 )
-            )
-        return self._to_result(body, started)
+        except DecisionModelError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - optional-capability boundary
+            raise DecisionModelRequestError(
+                f"decision model call failed: {type(exc).__name__}: {exc}"
+            ) from exc
+        result = self._to_result(body, started)
+        self._log_success(result)
+        return result
 
     async def aevaluate(
         self,
@@ -89,13 +115,27 @@ class SystemOneClient:
         """Asynchronous counterpart of :meth:`evaluate`."""
         payload = self._payload(state, questions, model)
         started = time.perf_counter()
-        async with httpx.AsyncClient(timeout=self.config.timeout) as client:
-            body = await self._arequest(
-                lambda: client.post(
-                    self.config.endpoint, json=payload, headers=self._headers()
+        deadline = time.monotonic() + self.config.timeout
+        try:
+            async with httpx.AsyncClient() as client:
+                body = await self._arequest(
+                    lambda remaining: client.post(
+                        self.config.endpoint,
+                        json=payload,
+                        headers=self._headers(),
+                        timeout=remaining,
+                    ),
+                    deadline=deadline,
                 )
-            )
-        return self._to_result(body, started)
+        except DecisionModelError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - optional-capability boundary
+            raise DecisionModelRequestError(
+                f"decision model call failed: {type(exc).__name__}: {exc}"
+            ) from exc
+        result = self._to_result(body, started)
+        self._log_success(result)
+        return result
 
     # -- internals ---------------------------------------------------------
 
@@ -117,48 +157,112 @@ class SystemOneClient:
             "questions": dict(questions),
         }
 
-    def _request(self, send: Callable[[], httpx.Response]) -> Mapping[str, Any]:
-        """Send one request, retrying transient failures with backoff."""
+    def _request(
+        self, send: Callable[[float], httpx.Response], *, deadline: float
+    ) -> Mapping[str, Any]:
+        """Send one request, retrying transient failures inside the budget.
+
+        Retries and their backoff are cut short once ``deadline`` passes, so a
+        flapping endpoint cannot turn one judgement into several timeouts.
+        """
+        attempts = 0
         failure = "no attempt was made"
         for attempt in range(self.config.max_retries + 1):
+            remaining = deadline - time.monotonic()
+            if remaining <= _MIN_ATTEMPT_SECONDS:
+                failure = "the time budget was exhausted"
+                break
+            attempts += 1
             response: httpx.Response | None = None
             try:
-                response = send()
+                response = send(remaining)
             except httpx.HTTPError as exc:
-                failure = f"transport error: {exc}"
+                failure = f"transport error: {type(exc).__name__}: {exc}"
+            except Exception as exc:  # noqa: BLE001 - normalized for callers
+                raise DecisionModelRequestError(
+                    "decision model request could not be sent: "
+                    f"{type(exc).__name__}: {exc}"
+                ) from exc
             if response is not None:
                 if response.status_code not in RETRYABLE_STATUS:
                     return self._decode(response)
                 failure = f"HTTP {response.status_code}: {_body_snippet(response)}"
-            if attempt < self.config.max_retries:
-                time.sleep(_retry_delay(attempt, response))
-                continue
-            break
+            if attempt >= self.config.max_retries:
+                break
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                failure = "the time budget was exhausted"
+                break
+            delay = min(_retry_delay(attempt, response), remaining)
+            self._log_retry(delay=delay, attempt=attempt, failure=failure)
+            time.sleep(delay)
         raise DecisionModelRequestError(
-            f"decision model request failed after {self.config.max_retries} "
-            f"retries: {failure}"
+            f"decision model request failed after {attempts} attempt(s) within "
+            f"{self.config.timeout:.1f}s: {failure}"
         )
 
-    async def _arequest(self, send: Callable[[], Any]) -> Mapping[str, Any]:
+    async def _arequest(
+        self, send: Callable[[float], Any], *, deadline: float
+    ) -> Mapping[str, Any]:
         """Asynchronous counterpart of :meth:`_request`."""
+        attempts = 0
         failure = "no attempt was made"
         for attempt in range(self.config.max_retries + 1):
+            remaining = deadline - time.monotonic()
+            if remaining <= _MIN_ATTEMPT_SECONDS:
+                failure = "the time budget was exhausted"
+                break
+            attempts += 1
             response: httpx.Response | None = None
             try:
-                response = await send()
+                response = await send(remaining)
             except httpx.HTTPError as exc:
-                failure = f"transport error: {exc}"
+                failure = f"transport error: {type(exc).__name__}: {exc}"
+            except Exception as exc:  # noqa: BLE001 - normalized for callers
+                raise DecisionModelRequestError(
+                    "decision model request could not be sent: "
+                    f"{type(exc).__name__}: {exc}"
+                ) from exc
             if response is not None:
                 if response.status_code not in RETRYABLE_STATUS:
                     return self._decode(response)
                 failure = f"HTTP {response.status_code}: {_body_snippet(response)}"
-            if attempt < self.config.max_retries:
-                await asyncio.sleep(_retry_delay(attempt, response))
-                continue
-            break
+            if attempt >= self.config.max_retries:
+                break
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                failure = "the time budget was exhausted"
+                break
+            delay = min(_retry_delay(attempt, response), remaining)
+            self._log_retry(delay=delay, attempt=attempt, failure=failure)
+            await asyncio.sleep(delay)
         raise DecisionModelRequestError(
-            f"decision model request failed after {self.config.max_retries} "
-            f"retries: {failure}"
+            f"decision model request failed after {attempts} attempt(s) within "
+            f"{self.config.timeout:.1f}s: {failure}"
+        )
+
+    def _log_retry(self, *, delay: float, attempt: int, failure: str) -> None:
+        """Record one retry, the signal that an endpoint is flapping."""
+        logger.warning(
+            "decision model request failed, retrying in %.1fs (retry %d/%d, "
+            "model=%s): %s",
+            delay,
+            attempt + 1,
+            self.config.max_retries,
+            self.config.name,
+            failure,
+        )
+
+    def _log_success(self, result: DecisionResult) -> None:
+        """Record one usable judgement for cost and latency observability."""
+        cost = result.usage.cost
+        logger.debug(
+            "decision model %s answered in %.1fms (input=%d output=%d tokens, cost=%s)",
+            result.model or self.config.name,
+            result.latency_ms,
+            result.usage.input_tokens,
+            result.usage.output_tokens,
+            f"${cost:.6f}" if cost is not None else "n/a",
         )
 
     def _decode(self, response: httpx.Response) -> Mapping[str, Any]:

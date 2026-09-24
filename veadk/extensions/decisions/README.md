@@ -28,9 +28,16 @@ DECISION_MODEL_PROVIDER=typesafe        # typesafe | openrouter | systemone
 DECISION_MODEL_NAME=jev-latest
 DECISION_MODEL_API_BASE=https://api.typesafe.ai
 DECISION_MODEL_API_KEY=...
-DECISION_MODEL_TIMEOUT=30
+DECISION_MODEL_TIMEOUT=5                 # seconds per judgement (ceiling: 5)
 DECISION_MODEL_MAX_RETRIES=3
+DECISION_MODEL_FAILURE_THRESHOLD=3       # 0 disables the circuit breaker
+DECISION_MODEL_COOLDOWN_SECONDS=30
 ```
+
+`DECISION_MODEL_TIMEOUT` is the budget of one whole judgement, retries and
+their backoff included. Values above 5 seconds are clamped to 5 with a
+warning: a judgement runs in the agent's hot path, so a slow endpoint has to
+degrade the judgement rather than the run.
 
 Every provider speaks the same System One protocol, so switching only changes
 the API base and the API key. The provider picks the default `api_base`:
@@ -102,6 +109,32 @@ The tool asks the configured decision model for one judgement and returns
 `{"kind", "answer", "confidence", ...}`. It returns `{"error": ...}` when the
 decision model is unconfigured or the request fails, so a run never breaks
 because of an optional capability.
+
+## Failures and Degradation
+
+The decision model is optional, so callers only ever handle one error type:
+`DecisionModelError`. Whatever goes wrong, a judgement degrades to the caller's
+own rules instead of breaking the run.
+
+| Failure | What happens |
+| --- | --- |
+| Not configured, or no API key | `DecisionModelDisabledError` on the first call; nothing else changes. |
+| Timeout, connection error, `429`, `5xx` | Retried with exponential backoff inside the `timeout` budget, honouring `retry-after`; then `DecisionModelRequestError`. |
+| Other `4xx` | Not retried; `DecisionModelRequestError` with the status and a body snippet. |
+| `200` with unusable answers | `DecisionModelResponseError`; malformed payloads and unknown answer types are reported the same way, never as a `pydantic` or `httpx` error. |
+| `DECISION_MODEL_TIMEOUT` above the ceiling | Clamped to 5 seconds with a warning. |
+| Unusable settings at startup | The extension disables itself with a warning instead of failing startup. |
+| `DECISION_MODEL_FAILURE_THRESHOLD` failures in a row (default 3) | The endpoint is marked down for `DECISION_MODEL_COOLDOWN_SECONDS` (default 30). Further judgements raise `DecisionModelUnavailableError` immediately and make no HTTP call; one probe request after the cooldown decides whether to resume. |
+
+Logging stays quiet and carries no user data:
+
+| Level | Message |
+| --- | --- |
+| `DEBUG` | One line per usable judgement: model, latency, tokens, cost. |
+| `INFO` | Cooldown elapsed and a probe was sent; judgements resumed. |
+| `WARNING` | A retry, an outage that marked the endpoint down, settings that were clamped or are unusable. |
+
+The judged state and the API key are never logged.
 
 ## Source Layout
 

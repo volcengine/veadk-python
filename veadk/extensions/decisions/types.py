@@ -17,9 +17,9 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Annotated, Any, Literal, Union
+from typing import Annotated, Any, Literal, Union, cast
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from veadk.extensions.decisions.errors import DecisionModelResponseError
 
@@ -92,7 +92,9 @@ def parse_answers(raw: Mapping[str, Any]) -> dict[str, DecisionAnswer]:
 
     Raises:
         DecisionModelResponseError: If an answer is missing its type or an
-            unknown question type is returned.
+            unknown question type is returned. A payload that does not match
+            its type is reported the same way, so callers only ever handle
+            decision-model errors.
     """
     answers: dict[str, DecisionAnswer] = {}
     for question_id, payload in raw.items():
@@ -101,14 +103,25 @@ def parse_answers(raw: Mapping[str, Any]) -> dict[str, DecisionAnswer]:
                 f"answer {question_id!r} is not an object: {payload!r}"
             )
         kind = payload.get("type")
-        if kind == "choice":
-            answers[question_id] = ChoiceAnswer.model_validate(payload)
-        elif kind == "score":
-            answers[question_id] = ScoreAnswer.model_validate(payload)
-        elif kind == "noul":
-            answers[question_id] = NoulAnswer.model_validate(payload)
-        else:
+        answer_type = _ANSWER_TYPES.get(kind)
+        if answer_type is None:
             raise DecisionModelResponseError(
                 f"answer {question_id!r} has unknown type {kind!r}"
             )
+        try:
+            answers[question_id] = cast(
+                DecisionAnswer, answer_type.model_validate(payload)
+            )
+        except ValidationError as exc:
+            raise DecisionModelResponseError(
+                f"answer {question_id!r} is not a valid {kind} answer: {exc}"
+            ) from exc
     return answers
+
+
+#: Answer type per ``type`` discriminator in a System One response.
+_ANSWER_TYPES: dict[Any, type[BaseModel]] = {
+    "choice": ChoiceAnswer,
+    "score": ScoreAnswer,
+    "noul": NoulAnswer,
+}

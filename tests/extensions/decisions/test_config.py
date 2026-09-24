@@ -21,7 +21,10 @@ from pydantic import ValidationError
 
 from veadk.extensions.decisions import (
     DEFAULT_API_BASE,
+    DEFAULT_COOLDOWN_SECONDS,
+    DEFAULT_FAILURE_THRESHOLD,
     DEFAULT_MODEL_NAME,
+    MAX_TIMEOUT_SECONDS,
     OPENROUTER_API_BASE,
     DecisionModelConfig,
 )
@@ -44,8 +47,10 @@ def test_from_env_reads_every_field() -> None:
             "DECISION_MODEL_NAME": "jev-1.13.0",
             "DECISION_MODEL_API_BASE": "http://localhost:9000/",
             "DECISION_MODEL_API_KEY": "secret",
-            "DECISION_MODEL_TIMEOUT": "12.5",
+            "DECISION_MODEL_TIMEOUT": "4.5",
             "DECISION_MODEL_MAX_RETRIES": "1",
+            "DECISION_MODEL_FAILURE_THRESHOLD": "5",
+            "DECISION_MODEL_COOLDOWN_SECONDS": "12.5",
         }
     )
     assert config.enabled is True
@@ -53,8 +58,10 @@ def test_from_env_reads_every_field() -> None:
     assert config.name == "jev-1.13.0"
     assert config.api_base == "http://localhost:9000"
     assert config.api_key == "secret"
-    assert config.timeout == 12.5
+    assert config.timeout == 4.5
     assert config.max_retries == 1
+    assert config.failure_threshold == 5
+    assert config.cooldown_seconds == 12.5
     assert config.endpoint == "http://localhost:9000/v1/systemone"
     assert config.configured is True
 
@@ -70,8 +77,41 @@ def test_from_env_keeps_defaults_for_unusable_values() -> None:
     )
     assert config.enabled is False
     assert config.provider == "typesafe"
-    assert config.timeout == 30.0
+    assert config.timeout == MAX_TIMEOUT_SECONDS
     assert config.max_retries == 3
+    assert config.failure_threshold == DEFAULT_FAILURE_THRESHOLD
+    assert config.cooldown_seconds == DEFAULT_COOLDOWN_SECONDS
+
+
+def test_timeout_is_capped_so_one_judgement_cannot_stall_a_run() -> None:
+    """A judgement sits before and after model calls, so it has a hard ceiling."""
+    assert DecisionModelConfig().timeout == MAX_TIMEOUT_SECONDS
+    assert DecisionModelConfig(timeout=30.0).timeout == MAX_TIMEOUT_SECONDS
+    assert (
+        DecisionModelConfig.from_env({"DECISION_MODEL_TIMEOUT": "300"}).timeout
+        == MAX_TIMEOUT_SECONDS
+    )
+
+
+@pytest.mark.parametrize(
+    "api_base",
+    ["http://[::1", "not a url", "ftp://host", "http://", "https://user:pw@host"],
+)
+def test_unusable_api_base_is_rejected_at_configuration_time(api_base: str) -> None:
+    with pytest.raises(ValidationError):
+        DecisionModelConfig(api_base=api_base)
+
+
+def test_from_env_disables_itself_instead_of_breaking_startup() -> None:
+    """Broken settings degrade to "no decision model" with a warning."""
+    config = DecisionModelConfig.from_env(
+        {
+            "DECISION_MODEL_ENABLED": "true",
+            "DECISION_MODEL_API_KEY": "secret",
+            "DECISION_MODEL_API_BASE": "http://[::1",
+        }
+    )
+    assert config.configured is False
 
 
 @pytest.mark.parametrize(

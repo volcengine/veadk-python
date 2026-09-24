@@ -21,6 +21,8 @@ per process.
 
 from __future__ import annotations
 
+import threading
+import time
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -28,7 +30,9 @@ from veadk.extensions.decisions.client import SystemOneClient
 from veadk.extensions.decisions.config import DecisionModelConfig
 from veadk.extensions.decisions.errors import (
     DecisionModelDisabledError,
+    DecisionModelError,
     DecisionModelResponseError,
+    DecisionModelUnavailableError,
 )
 from veadk.extensions.decisions.questions import (
     choice_question,
@@ -42,6 +46,9 @@ from veadk.extensions.decisions.types import (
     NoulAnswer,
     ScoreAnswer,
 )
+from veadk.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 DISABLED_HINT = (
     "decision model is not configured; set DECISION_MODEL_ENABLED=true and "
@@ -56,6 +63,13 @@ class DecisionExtension:
     Constructing an extension never fails: an unconfigured extension keeps
     ``enabled`` false and raises only when a decision is actually requested,
     so callers can stay opt-in.
+
+    Failures are contained. Every failure surfaces as a
+    :class:`~veadk.extensions.decisions.errors.DecisionModelError`, so a
+    caller that catches that one type always falls back to its own rules.
+    After ``config.failure_threshold`` failures in a row the endpoint is
+    marked down for ``config.cooldown_seconds``, during which judgements fail
+    immediately instead of paying the retry and timeout budget again.
     """
 
     def __init__(
@@ -66,6 +80,10 @@ class DecisionExtension:
     ) -> None:
         self.config = config or DecisionModelConfig.disabled()
         self._client = client
+        self._lock = threading.Lock()
+        self._consecutive_failures = 0
+        self._open_until = 0.0
+        self._probing = False
 
     @classmethod
     def from_env(cls) -> DecisionExtension:
@@ -78,14 +96,36 @@ class DecisionExtension:
         return bool(self.config.configured or self._client is not None)
 
     def evaluate(self, state: Any, questions: Mapping[str, Any]) -> DecisionResult:
-        """Evaluate several questions about one state synchronously."""
-        return self._require_client().evaluate(state=state, questions=questions)
+        """Evaluate several questions about one state synchronously.
+
+        Raises:
+            DecisionModelDisabledError: If no decision model is configured.
+            DecisionModelUnavailableError: While the endpoint is marked down.
+            DecisionModelError: Any other decision-model failure.
+        """
+        client = self._require_client()
+        self._check_availability()
+        try:
+            result = client.evaluate(state=state, questions=questions)
+        except DecisionModelError:
+            self._record_failure()
+            raise
+        self._record_success()
+        return result
 
     async def aevaluate(
         self, state: Any, questions: Mapping[str, Any]
     ) -> DecisionResult:
         """Asynchronous counterpart of :meth:`evaluate`."""
-        return await self._require_client().aevaluate(state=state, questions=questions)
+        client = self._require_client()
+        self._check_availability()
+        try:
+            result = await client.aevaluate(state=state, questions=questions)
+        except DecisionModelError:
+            self._record_failure()
+            raise
+        self._record_success()
+        return result
 
     def choose(
         self, state: Any, instructions: str, options: Sequence[str]
@@ -154,6 +194,65 @@ class DecisionExtension:
             raise DecisionModelDisabledError(DISABLED_HINT)
         self._client = SystemOneClient(self.config)
         return self._client
+
+    # -- availability ------------------------------------------------------
+
+    def _check_availability(self) -> None:
+        """Fail fast while the endpoint is known to be down.
+
+        Raises:
+            DecisionModelUnavailableError: While the circuit is open. Once the
+                cooldown has passed, one caller becomes the probe that decides
+                whether judgements may resume.
+        """
+        if self.config.failure_threshold <= 0:
+            return
+        with self._lock:
+            if not self._open_until:
+                return
+            remaining = self._open_until - time.monotonic()
+            if remaining > 0 or self._probing:
+                raise DecisionModelUnavailableError(
+                    f"decision model {self.config.name} is marked down; "
+                    f"skipping judgements for {max(remaining, 0.0):.0f}s"
+                )
+            self._probing = True
+            logger.info(
+                "decision model cooldown elapsed; probing %s",
+                self.config.endpoint,
+            )
+
+    def _record_failure(self) -> None:
+        """Count a failed judgement and mark the endpoint down when it persists."""
+        if self.config.failure_threshold <= 0:
+            return
+        with self._lock:
+            self._probing = False
+            self._consecutive_failures += 1
+            if self._consecutive_failures < self.config.failure_threshold:
+                return
+            self._open_until = time.monotonic() + self.config.cooldown_seconds
+            logger.warning(
+                "decision model %s failed %d time(s) in a row; skipping "
+                "judgements for %.0fs",
+                self.config.name,
+                self._consecutive_failures,
+                self.config.cooldown_seconds,
+            )
+
+    def _record_success(self) -> None:
+        """Mark the endpoint as healthy again."""
+        if self.config.failure_threshold <= 0:
+            return
+        with self._lock:
+            self._probing = False
+            self._consecutive_failures = 0
+            if self._open_until:
+                self._open_until = 0.0
+                logger.info(
+                    "decision model %s answered again; judgements resumed",
+                    self.config.name,
+                )
 
 
 def _single_answer(result: DecisionResult) -> DecisionAnswer:

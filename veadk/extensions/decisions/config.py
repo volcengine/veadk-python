@@ -20,12 +20,24 @@ import os
 from collections.abc import Mapping
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+import httpx
+from pydantic import BaseModel, Field, ValidationError, field_validator
+
+from veadk.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 DEFAULT_API_BASE = "https://api.typesafe.ai"
 OPENROUTER_API_BASE = "https://openrouter.ai/api"
 DEFAULT_MODEL_NAME = "jev-latest"
 SYSTEM_ONE_PATH = "/v1/systemone"
+
+#: A judgement sits in a hot path -- before and after model calls -- so one
+#: judgement may never hold a run longer than this. The budget covers the
+#: retries and their backoff, not only one HTTP attempt.
+MAX_TIMEOUT_SECONDS = 5.0
+DEFAULT_FAILURE_THRESHOLD = 3
+DEFAULT_COOLDOWN_SECONDS = 30.0
 
 ENV_PREFIX = "DECISION_MODEL_"
 # ``config.yaml`` is flattened into environment variables, so ``model.decision``
@@ -53,6 +65,10 @@ class DecisionModelConfig(BaseModel):
     The decision model is optional and independent from the agent model. When
     it is disabled or missing an API key, every caller must keep working
     without it.
+
+    ``timeout`` is the wall-clock budget of one judgement, retries included,
+    and is capped at :data:`MAX_TIMEOUT_SECONDS` so a slow endpoint degrades
+    instead of stalling the run.
     """
 
     enabled: bool = False
@@ -60,16 +76,49 @@ class DecisionModelConfig(BaseModel):
     name: str = DEFAULT_MODEL_NAME
     api_base: str = DEFAULT_API_BASE
     api_key: str = ""
-    timeout: float = Field(default=30.0, gt=0)
+    timeout: float = Field(default=MAX_TIMEOUT_SECONDS, gt=0)
     max_retries: int = Field(default=3, ge=0)
+    # Failures in a row that mark the endpoint as down; ``0`` disables the
+    # circuit breaker and keeps calling it.
+    failure_threshold: int = Field(default=DEFAULT_FAILURE_THRESHOLD, ge=0)
+    # How long judgements are skipped by once the endpoint is marked down.
+    cooldown_seconds: float = Field(default=DEFAULT_COOLDOWN_SECONDS, ge=0)
+
+    @field_validator("timeout")
+    @classmethod
+    def _cap_timeout(cls, value: float) -> float:
+        """Keep a judgement from stalling a run longer than the ceiling."""
+        if value <= MAX_TIMEOUT_SECONDS:
+            return value
+        logger.warning(
+            "decision model timeout %.1fs exceeds the %.0fs ceiling; using %.0fs",
+            value,
+            MAX_TIMEOUT_SECONDS,
+            MAX_TIMEOUT_SECONDS,
+        )
+        return MAX_TIMEOUT_SECONDS
 
     @field_validator("api_base")
     @classmethod
     def _normalize_api_base(cls, value: str) -> str:
-        """Strip a trailing slash and reject an empty API base."""
+        """Strip a trailing slash and reject an unusable API base.
+
+        A malformed base would otherwise surface as an ``httpx`` error on the
+        first judgement instead of at configuration time.
+        """
         base = value.strip().rstrip("/")
         if not base:
             raise ValueError("api_base must not be empty")
+        try:
+            url = httpx.URL(base)
+        except httpx.InvalidURL as exc:
+            raise ValueError(f"api_base is not a valid URL: {exc}") from exc
+        if url.scheme not in ("http", "https"):
+            raise ValueError("api_base must use the http or https scheme")
+        if not url.host:
+            raise ValueError("api_base must include a host")
+        if url.userinfo:
+            raise ValueError("api_base must not embed credentials; use api_key")
         return base
 
     @property
@@ -97,21 +146,37 @@ class DecisionModelConfig(BaseModel):
             env: Mapping to read instead of ``os.environ`` (used by tests).
 
         Returns:
-            The parsed configuration; disabled when nothing is configured.
+            The parsed configuration; disabled when nothing is configured or
+            the configured values are unusable, so a bad setting degrades to
+            "no decision model" with a warning instead of breaking startup.
         """
         values = env if env is not None else os.environ
         provider = _env_provider(_lookup(values, "PROVIDER"))
-        return cls(
-            enabled=_env_bool(_lookup(values, "ENABLED")),
-            provider=provider,
-            name=_lookup(values, "NAME") or DEFAULT_MODEL_NAME,
-            api_base=(
-                _lookup(values, "API_BASE") or DEFAULT_API_BASE_BY_PROVIDER[provider]
-            ),
-            api_key=_lookup(values, "API_KEY") or "",
-            timeout=_env_float(_lookup(values, "TIMEOUT"), 30.0),
-            max_retries=_env_int(_lookup(values, "MAX_RETRIES"), 3),
-        )
+        try:
+            return cls(
+                enabled=_env_bool(_lookup(values, "ENABLED")),
+                provider=provider,
+                name=_lookup(values, "NAME") or DEFAULT_MODEL_NAME,
+                api_base=(
+                    _lookup(values, "API_BASE")
+                    or DEFAULT_API_BASE_BY_PROVIDER[provider]
+                ),
+                api_key=_lookup(values, "API_KEY") or "",
+                timeout=_env_float(_lookup(values, "TIMEOUT"), MAX_TIMEOUT_SECONDS),
+                max_retries=_env_int(_lookup(values, "MAX_RETRIES"), 3),
+                failure_threshold=_env_int(
+                    _lookup(values, "FAILURE_THRESHOLD"), DEFAULT_FAILURE_THRESHOLD
+                ),
+                cooldown_seconds=_env_float(
+                    _lookup(values, "COOLDOWN_SECONDS"), DEFAULT_COOLDOWN_SECONDS
+                ),
+            )
+        except ValidationError as exc:
+            logger.warning(
+                "decision model settings are unusable, keeping it disabled: %s",
+                exc,
+            )
+            return cls.disabled()
 
 
 def _lookup(values: Mapping[str, str], name: str) -> str | None:

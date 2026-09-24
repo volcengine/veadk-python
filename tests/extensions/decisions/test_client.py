@@ -146,7 +146,7 @@ def test_rate_limit_is_retried_and_can_succeed() -> None:
 def test_retries_are_bounded() -> None:
     script = [(529, {"retry-after": "0"}, {"detail": "overloaded"})] * 3
     with fake_system_one(script) as server:
-        with pytest.raises(DecisionModelRequestError, match="after 2 retries"):
+        with pytest.raises(DecisionModelRequestError, match="after 3 attempt"):
             _client(server.base_url, max_retries=2).evaluate(
                 state="hi", questions={"q": noul_question("Is this a greeting?")}
             )

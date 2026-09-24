@@ -29,5 +29,13 @@ class DecisionModelRequestError(DecisionModelError):
     """Raised when the decision-model endpoint cannot be reached or rejects it."""
 
 
+class DecisionModelUnavailableError(DecisionModelError):
+    """Raised while the decision model is known to be down.
+
+    The extension raises this instead of calling an endpoint that just failed
+    repeatedly, so a hot path never pays the retry and timeout budget again.
+    """
+
+
 class DecisionModelResponseError(DecisionModelError):
     """Raised when the endpoint answers with an unusable payload."""

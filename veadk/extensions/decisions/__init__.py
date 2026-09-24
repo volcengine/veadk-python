@@ -38,8 +38,11 @@ if extension.enabled:
 
 from veadk.extensions.decisions.client import SystemOneClient
 from veadk.extensions.decisions.config import (
+    DEFAULT_COOLDOWN_SECONDS,
+    DEFAULT_FAILURE_THRESHOLD,
     DEFAULT_API_BASE,
     DEFAULT_MODEL_NAME,
+    MAX_TIMEOUT_SECONDS,
     OPENROUTER_API_BASE,
     DecisionModelConfig,
 )
@@ -48,6 +51,7 @@ from veadk.extensions.decisions.errors import (
     DecisionModelError,
     DecisionModelRequestError,
     DecisionModelResponseError,
+    DecisionModelUnavailableError,
 )
 from veadk.extensions.decisions.questions import (
     choice_question,
@@ -72,6 +76,8 @@ from veadk.extensions.decisions.types import (
 __all__ = [
     "ChoiceAnswer",
     "DEFAULT_API_BASE",
+    "DEFAULT_COOLDOWN_SECONDS",
+    "DEFAULT_FAILURE_THRESHOLD",
     "DEFAULT_MODEL_NAME",
     "DecisionAnswer",
     "DecisionModelConfig",
@@ -79,9 +85,11 @@ __all__ = [
     "DecisionModelError",
     "DecisionModelRequestError",
     "DecisionModelResponseError",
+    "DecisionModelUnavailableError",
     "DecisionResult",
     "DecisionExtension",
     "DecisionUsage",
+    "MAX_TIMEOUT_SECONDS",
     "NoulAnswer",
     "OPENROUTER_API_BASE",
     "ScoreAnswer",
