@@ -94,6 +94,35 @@ def append_system_instruction(llm_request: LlmRequest, instruction: str) -> None
         llm_request.config.system_instruction = instruction
 
 
+def system_instruction_text(llm_request: LlmRequest) -> str:
+    """Read the system instruction of a request as plain text.
+
+    Returns an empty string when the request carries no instruction, so callers
+    treat "nothing to rewrite" the same way they treat "already rewritten".
+    """
+
+    config = llm_request.config
+    if config is None or not config.system_instruction:
+        return ""
+    if isinstance(config.system_instruction, str):
+        return config.system_instruction
+    return _system_instruction_to_text(config.system_instruction)
+
+
+def set_system_instruction_text(llm_request: LlmRequest, text: str) -> None:
+    """Replace the system instruction of a request with ``text``.
+
+    The change lives on this one request; the agent instruction it came from is
+    left untouched, so nothing keeps the rewrite after the model call.
+    """
+
+    config = llm_request.config
+    if config is None:
+        llm_request.config = types.GenerateContentConfig(system_instruction=text)
+        return
+    config.system_instruction = text
+
+
 def response_text(content: types.Content | None) -> str:
     """Extract final response text."""
 

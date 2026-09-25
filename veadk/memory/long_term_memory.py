@@ -34,6 +34,14 @@ from typing_extensions import Union, override
 from veadk.memory.long_term_memory_backends.base_backend import (
     BaseLongTermMemoryBackend,
 )
+from veadk.extensions.decisions import DecisionModelError
+from veadk.memory.recall_judge import (
+    MAX_JUDGED_MEMORIES,
+    MEMORY_RECALL_RELEVANCE_THRESHOLD,
+    MEMORY_RECALL_STRATEGY,
+    RecallJudge,
+    build_recall_judge,
+)
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -188,7 +196,18 @@ class LongTermMemory(BaseMemoryService, BaseModel):
 
     user_id: str = ""
 
+    recall_strategy: str = Field(default_factory=lambda: MEMORY_RECALL_STRATEGY)
+    """召回判定策略。``decision`` 时交给判定模型过滤不相关的记忆。"""
+
+    recall_relevance_threshold: float = Field(
+        default_factory=lambda: MEMORY_RECALL_RELEVANCE_THRESHOLD
+    )
+    """相关度阈值。判定低于该值的记忆不返回给 agent。"""
+
     def model_post_init(self, __context: Any) -> None:
+        self._recall_judge: RecallJudge | None = build_recall_judge(
+            self.recall_strategy
+        )
         # Once user define a backend instance, use it directly
         if isinstance(self.backend, BaseLongTermMemoryBackend):
             self._backend = self.backend
@@ -633,10 +652,47 @@ class LongTermMemory(BaseMemoryService, BaseModel):
         for memory in memory_chunks:
             memory_events.extend(self._convert_memory_chunk_to_entries(memory))
 
+        relevant = await self._drop_irrelevant_memories(query, memory_events)
         logger.info(
-            f"Return {len(memory_events)} memory events for query: {query} index={self.index} user_id={user_id}"
+            f"Return {len(relevant)} of {len(memory_events)} memory events for query: {query} index={self.index} user_id={user_id}"
         )
-        return SearchMemoryResponse(memories=memory_events)
+        return SearchMemoryResponse(memories=relevant)
+
+    async def _drop_irrelevant_memories(
+        self, query: str, memories: list[MemoryEntry]
+    ) -> list[MemoryEntry]:
+        """Return only the recalled memories the judge rates as relevant.
+
+        Similarity ranking cannot tell a memory the answer has to respect from
+        a memory about the same topic, so the ``decision`` strategy rates each
+        candidate and drops what does not clear the threshold. A memory the
+        judgement did not rate is kept, as is every memory beyond the judged
+        budget, and a judgement that cannot be made keeps every match.
+        """
+        if self._recall_judge is None or not memories:
+            return memories
+        judged = memories[:MAX_JUDGED_MEMORIES]
+        texts = [
+            self._extract_memory_parts_text(getattr(entry.content, "parts", None) or [])
+            for entry in judged
+        ]
+        try:
+            scores = await self._recall_judge.arelevance(query=query, memories=texts)
+        except DecisionModelError as exc:
+            logger.warning("recall judge unavailable, keeping every memory: %s", exc)
+            return memories
+        kept = [
+            entry
+            for index, entry in enumerate(judged)
+            if scores.get(index) is None
+            or scores[index] >= self.recall_relevance_threshold
+        ]
+        if len(kept) < len(judged):
+            logger.debug(
+                f"Recall judge dropped {len(judged) - len(kept)} of "
+                f"{len(judged)} memories for query: {query}"
+            )
+        return kept + memories[MAX_JUDGED_MEMORIES:]
 
     def _uses_openviking_backend(self) -> bool:
         return (
@@ -751,6 +807,9 @@ class LongTermMemory(BaseMemoryService, BaseModel):
             if isinstance(parsed, str):
                 return self._clean_memory_text(parsed)
             return json.dumps(parsed, ensure_ascii=False)
+        # 已解析的 Part 对象只取其文本，否则会退化成整段 repr。
+        if isinstance(part, types.Part):
+            return self._clean_memory_text(part.text) if part.text else ""
         return str(part)
 
     def _extract_memory_text_field(self, memory_dict: dict[str, Any]) -> str:

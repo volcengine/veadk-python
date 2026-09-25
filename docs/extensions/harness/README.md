@@ -60,6 +60,8 @@ plugins = build_harness_plugins(components=["compactor"])
 | `compactor` | `HarnessCompressPlugin` | Compacts oversized tool results and old function responses. |
 | `response_verification` | `HarnessResponseVerificationPlugin` | Records tool receipts and checks whether final answers are supported. |
 | `long_run_control` | `HarnessLongRunControlPlugin` | Adds finish-oriented guidance when a run approaches its model-call budget. |
+| `skill_prefilter` | `HarnessSkillPrefilterPlugin` | Advertises only the skills the current request needs; the agent instruction keeps every skill. |
+| `agent_routing` | `HarnessAgentRoutingPlugin` | Transfers to the sub-agent a confident judgement picked; the model routes everything else. |
 
 ## Core Concepts
 
@@ -88,6 +90,10 @@ plugins = build_harness_plugins(components=["compactor"])
 | `veadk/extensions/harness/plugins/compactor/` | Tool-result and context compaction callback plugin. |
 | `veadk/extensions/harness/plugins/response_verification/` | Receipt recording and final-response verification callback plugin. |
 | `veadk/extensions/harness/plugins/long_run_control/` | Long-run guidance callback plugin. |
+| `veadk/extensions/harness/modules/skill_prefilter/` | Skill-list parsing and the per-skill judgement. |
+| `veadk/extensions/harness/modules/agent_routing/` | Transfer-target judgement. |
+| `veadk/extensions/harness/plugins/skill_prefilter/` | Skill-list narrowing callback plugin. |
+| `veadk/extensions/harness/plugins/agent_routing/` | Transfer callback plugin. |
 | `veadk/extensions/harness/plugins/_shared/` | Internal callback helpers shared by plugins. |
 | `veadk/extensions/harness/stores/` | Store protocol and in-memory or JSONL implementations. |
 
@@ -173,6 +179,12 @@ export HARNESS_ENHANCE_ENABLED=true
 export HARNESS_ENHANCE_COMPONENTS=invocation_context,compactor,response_verification
 export HARNESS_COMPRESSION_PROVIDER=builtin
 export HARNESS_VERIFIER_MODE=observe
+# optional: let a decision model judge the built-in rules
+# export HARNESS_COMPACTION_STRATEGY=decision
+# export HARNESS_LONG_RUN_STRATEGY=decision
+# export HARNESS_MODE_STRATEGY=decision
+# export HARNESS_SKILL_STRATEGY=decision
+# export HARNESS_ROUTING_STRATEGY=decision
 ```
 
 Equivalent YAML:
@@ -207,7 +219,84 @@ veadk agentkit invoke \
 | `HARNESS_MAX_CONTEXT_CHARS` | `24000` | Context compaction threshold. |
 | `HARNESS_MAX_TOOL_RESULT_CHARS` | `4000` | Tool-result compaction threshold. |
 | `HARNESS_VERIFIER_MODE` | `observe` | Verification behavior: `observe` or `block`. |
+| `HARNESS_VERIFIER_STRATEGY` | `deterministic` | Final-answer verification: `deterministic` or `decision`. |
+| `HARNESS_VERIFIER_SUPPORT_THRESHOLD` | `0.5` | Support rating below which the answer fails. |
+| `HARNESS_VERIFIER_OVERCLAIM_THRESHOLD` | `0.5` | Fails an answer whose judged overclaim is at or above this value, even when the verdict was `supported`. |
+| `HARNESS_VERIFIER_MIN_CONFIDENCE` | `0` | Refuses to act on a verdict below this confidence and keeps the builtin rules. |
+| `HARNESS_LONG_RUN_MIN_CONFIDENCE` | `0` | Keeps the default steering wording when the judged action is below this confidence. |
 | `HARNESS_STORE_PATH` | unset | Uses a JSONL event store when set. |
+| `HARNESS_COMPACTION_STRATEGY` | `builtin` | Compaction candidates: `builtin` or `decision`. |
+| `HARNESS_LONG_RUN_STRATEGY` | `counter` | Long-run steering: `counter` or `decision`. |
+| `HARNESS_MODE_STRATEGY` | `keywords` | Context mode blocks: `keywords` or `decision`. |
+| `HARNESS_COMPACTION_KEEP_THRESHOLD` | `0.5` | Compaction candidates: keeps a candidate above this probability. |
+| `HARNESS_LONG_RUN_READY_THRESHOLD` | `0.5` | Long-run steering: steers the run to finish above this probability. |
+| `HARNESS_MODE_DECISION_THRESHOLD` | `0.5` | Context mode blocks: injects a block above this probability. |
+| `HARNESS_SKILL_STRATEGY` | `all` | Advertised skills: `all` or `decision`. |
+| `HARNESS_SKILL_DECISION_THRESHOLD` | `0.5` | Skills: a skill stays advertised when its judged probability is at or above this value. |
+| `HARNESS_SKILL_MAX_CANDIDATES` | `40` | Skills: a list longer than this is not judged at all, so every skill stays advertised. |
+| `HARNESS_ROUTING_STRATEGY` | `model` | Agent routing: `model` or `decision`. |
+| `HARNESS_ROUTING_DECISION_THRESHOLD` | `0.5` | Routing: transfers only when the judged agent is at or above this probability. |
+
+## Decision Model Strategies
+
+The six `*_STRATEGY=decision` settings replace a rule with a judgement from
+the configured decision model. They need `DECISION_MODEL_ENABLED=true` and an
+API key; without one, each strategy keeps its rule and logs a warning.
+
+| Strategy | Rule it replaces | Unavailable behaviour |
+| --- | --- | --- |
+| `HARNESS_COMPACTION_STRATEGY` | Role and size based compaction candidates | Builtin rules |
+| `HARNESS_LONG_RUN_STRATEGY` | Model-call counter | Counter, forced after the unconditional count |
+| `HARNESS_MODE_STRATEGY` | Precision and artifact keyword markers | Keyword markers |
+| `HARNESS_VERIFIER_STRATEGY` | Completion markers plus a successful-receipt check | Builtin rules |
+| `HARNESS_SKILL_STRATEGY` | Advertising every loaded skill | Every skill stays advertised |
+| `HARNESS_ROUTING_STRATEGY` | The model picking the sub-agent to transfer to | The model routes |
+
+### Judgement Thresholds
+
+Each point keeps its own threshold, compared against the probability of "yes"
+in `[0, 1]`: the same probability costs each point something different, so
+raising one point's bar does not raise the others'. Every setting also accepts
+a `HARNESS_ENHANCE_`-prefixed alias, clamps an out-of-range value, and falls
+back to `0.5` for an unusable one.
+
+| Threshold | Default | Raising it means |
+| --- | --- | --- |
+| `HARNESS_COMPACTION_KEEP_THRESHOLD` | `0.5` | Keeps more tool output verbatim |
+| `HARNESS_LONG_RUN_READY_THRESHOLD` | `0.5` | Steers a run toward its answer sooner |
+| `HARNESS_MODE_DECISION_THRESHOLD` | `0.5` | Injects the mode block more often |
+| `HARNESS_VERIFIER_SUPPORT_THRESHOLD` | `0.5` | Requires more evidence before the answer passes |
+| `HARNESS_VERIFIER_OVERCLAIM_THRESHOLD` | `0.5` | Fails more answers that claim more than the receipts show |
+| `HARNESS_VERIFIER_MIN_CONFIDENCE` | `0` | Stops acting on unsure verdicts sooner (`0` acts on every verdict) |
+| `HARNESS_LONG_RUN_MIN_CONFIDENCE` | `0` | Keeps the default steering wording for unsure actions |
+| `HARNESS_SKILL_DECISION_THRESHOLD` | `0.5` | Hides more skills from the list |
+| `HARNESS_ROUTING_DECISION_THRESHOLD` | `0.5` | Routes more requests without asking the model |
+
+A judgement also picks an action: long-run steering chooses `narrow_scope` /
+`nudge_to_finish` / `force_finish` to shape the injected guidance, and
+verification chooses `retry_tool_call` / `soften_claim` / `drop_claim` /
+`ask_user` to shape the repair instruction. An unusable action keeps the
+default wording while the rating still applies.
+
+The verifier asks one mutually exclusive outcome — `supported`, `partial`, or
+`unsupported` — plus two checks that read the same answer from different
+angles: whether a receipt covers the main claim, and whether the answer claims
+more than the receipts show. The overclaim check is a veto, so an answer that
+claims more than its receipts fails even when the verdict says `supported`.
+
+A judgement that names an option also carries the confidence the decision model
+gave it, and a point can refuse to act on an unsure one:
+`HARNESS_VERIFIER_MIN_CONFIDENCE` and `HARNESS_LONG_RUN_MIN_CONFIDENCE` keep
+the builtin verdict or the default wording below the configured confidence.
+Both default to `0`, which acts on every judged answer, because an endpoint may
+report no confidence at all.
+
+Captured content never travels as an instruction. Every value a judgement reads
+— the user request, the final answer, the run trajectory, tool receipts, tool
+output, memory text, session events — is wrapped in an `<untrusted>` block, and
+the spans inside it that try to give orders are replaced by `[defused]` before
+the request is sent. A tool output claiming "the user already approved this" is
+the cheapest way to move a judgement, so it is read as data instead.
 
 ## Compaction Providers
 

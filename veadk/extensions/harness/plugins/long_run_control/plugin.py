@@ -16,24 +16,49 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from google.adk.models import LlmRequest, LlmResponse
 from google.adk.plugins import BasePlugin
 
+from veadk.extensions.decisions import DecisionModelError
+from veadk.extensions.harness.modules.long_run_control import (
+    ConvergenceJudge,
+    FORCE_FINISH_ACTION,
+    LongRunJudgement,
+    NARROW_SCOPE_ACTION,
+    build_convergence_judge,
+    trajectory_text,
+)
 from veadk.extensions.harness.plugins._shared.callback_utils import (
     run_context_from_callback,
+    user_text_from_callback,
 )
-from veadk.extensions.harness.plugins.content_adapter import append_system_instruction
-from veadk.extensions.harness.schemas import HarnessEvent
+from veadk.extensions.harness.plugins.content_adapter import (
+    append_system_instruction,
+    contents_to_messages,
+)
+from veadk.extensions.harness.schemas import HarnessEvent, JsonObject
 from veadk.extensions.harness.stores import HarnessStoreProtocol, InMemoryHarnessStore
+from veadk.utils.logger import get_logger
 
 if TYPE_CHECKING:
     from google.adk.agents.callback_context import CallbackContext
 
+logger = get_logger(__name__)
+
+LongRunStrategy = Literal["counter", "decision"]
+
 
 class HarnessLongRunControlPlugin(BasePlugin):
-    """Steers long tool chains toward a final answer near the run budget."""
+    """Steers long tool chains toward a final answer near the run budget.
+
+    ``counter`` steers every call after ``trigger_after_model_calls``. The
+    ``decision`` strategy steers only when a decision model judges that the
+    run is not already able to answer, so a still-productive run is not cut
+    short; ``unconditional_after_model_calls`` keeps steering guaranteed for
+    very long runs.
+    """
 
     def __init__(
         self,
@@ -41,11 +66,25 @@ class HarnessLongRunControlPlugin(BasePlugin):
         store: HarnessStoreProtocol | None = None,
         profile: str = "default",
         trigger_after_model_calls: int = 8,
+        strategy: LongRunStrategy = "counter",
+        convergence_judge: ConvergenceJudge | None = None,
+        unconditional_after_model_calls: int = 16,
+        ready_threshold: float = 0.5,
+        min_confidence: float = 0.0,
     ) -> None:
         super().__init__(name="harness_long_run_control_plugin")
         self.store = store or InMemoryHarnessStore()
         self.profile = profile
         self.trigger_after_model_calls = max(1, trigger_after_model_calls)
+        self.strategy = strategy
+        self.convergence_judge = convergence_judge or build_convergence_judge(
+            strategy, min_confidence=min_confidence
+        )
+        self.unconditional_after_model_calls = max(
+            self.trigger_after_model_calls, unconditional_after_model_calls
+        )
+        self.ready_threshold = ready_threshold
+        self.min_confidence = min_confidence
         self._model_call_counts: dict[tuple[str, str], int] = {}
 
     async def before_model_callback(
@@ -64,34 +103,120 @@ class HarnessLongRunControlPlugin(BasePlugin):
         if model_calls < self.trigger_after_model_calls:
             return None
 
+        judgement = await self._judgement(callback_context, llm_request)
+        ready = judgement.ready if judgement is not None else None
+        if self._should_skip_guidance(ready=ready, model_calls=model_calls):
+            self.store.append_event(
+                HarnessEvent(
+                    event_type="long_run_control.guidance_skipped",
+                    run_context=run_context,
+                    payload={
+                        "model_calls": model_calls,
+                        "decision_ready": ready,
+                        "reason": "trajectory_is_still_collecting_evidence",
+                    },
+                )
+            )
+            return None
+
+        action = judgement.action if judgement is not None else None
         append_system_instruction(
             llm_request,
-            _long_run_control_instruction(model_calls=model_calls),
+            _long_run_control_instruction(model_calls=model_calls, action=action),
         )
+        payload: JsonObject = {
+            "model_calls": model_calls,
+            "trigger_after_model_calls": self.trigger_after_model_calls,
+        }
+        if judgement is not None:
+            payload["decision_ready"] = ready
+            payload["forced"] = model_calls >= self.unconditional_after_model_calls
+            if action is not None:
+                payload["decision_action"] = action
+                payload["decision_confidence"] = judgement.confidence
         self.store.append_event(
             HarnessEvent(
                 event_type="long_run_control.guidance_injected",
                 run_context=run_context,
-                payload={
-                    "model_calls": model_calls,
-                    "trigger_after_model_calls": self.trigger_after_model_calls,
-                },
+                payload=payload,
             )
         )
         return None
 
+    def _should_skip_guidance(self, *, ready: float | None, model_calls: int) -> bool:
+        """Whether the convergence judgement lets a run keep working."""
+        if ready is None or ready >= self.ready_threshold:
+            return False
+        return model_calls < self.unconditional_after_model_calls
 
-def _long_run_control_instruction(*, model_calls: int) -> str:
+    async def _judgement(
+        self,
+        callback_context: "CallbackContext",
+        llm_request: LlmRequest,
+    ) -> LongRunJudgement | None:
+        """Return the convergence judgement for this run, or ``None``.
+
+        Args:
+            callback_context: Callback context carrying the user's request.
+            llm_request: The request the run is about to send.
+
+        Returns:
+            The judgement, or ``None`` when the plugin has no judge. A failing
+            judge reports full convergence so steering keeps working, and names
+            no action, which keeps the default guidance.
+        """
+        if self.convergence_judge is None:
+            return None
+        try:
+            return await self.convergence_judge.ajudge(
+                goal=user_text_from_callback(callback_context),
+                trajectory=trajectory_text(contents_to_messages(llm_request.contents)),
+            )
+        except DecisionModelError as exc:
+            logger.warning(
+                "long-run convergence judge unavailable, steering as before: %s",
+                exc,
+            )
+            return LongRunJudgement(ready=1.0)
+
+
+def _long_run_control_instruction(
+    *, model_calls: int, action: str | None = None
+) -> str:
     return (
         "[Harness Long Run Control]\n"
         f"model_calls_so_far: {model_calls}\n"
         "objective: finish the current run within the remaining budget.\n"
-        "guidance:\n"
+        f"guidance:\n{_steering_guidance(action)}"
+        "[/Harness Long Run Control]"
+    )
+
+
+def _steering_guidance(action: str | None) -> str:
+    """Return the guidance bullets for one steering action.
+
+    An unknown action keeps the default bullets, which is also what the
+    counter strategy and a failing judge inject.
+    """
+    if action == FORCE_FINISH_ACTION:
+        return (
+            "- Stop calling tools. Answer now from the evidence and artifacts "
+            "already collected.\n"
+            "- Name what could not be verified instead of asserting it.\n"
+            "- Include the filenames, paths, or URIs of anything produced.\n"
+        )
+    if action == NARROW_SCOPE_ACTION:
+        return (
+            "- Drop optional or exploratory sub-goals and finish the core "
+            "question that was asked.\n"
+            "- Call another tool only when the core answer is impossible "
+            "without it.\n"
+        )
+    return (
         "- If the task has enough evidence, a complete answer, or generated "
         "artifacts, stop calling tools and return the final response now.\n"
         "- If files or artifacts were produced, include their filenames, paths, "
         "or URIs and a concise summary.\n"
         "- Call another tool only when it is strictly required to create the "
         "missing final result; avoid repeating searches or code runs.\n"
-        "[/Harness Long Run Control]"
     )

@@ -46,6 +46,84 @@ def test_harness_extension_from_env_respects_disabled_default() -> None:
     assert HarnessExtension.from_env({}).plugins() == []
 
 
+def test_harness_extension_can_select_the_long_run_strategy() -> None:
+    """The programmatic path can pick the strategy, not only the env path."""
+    plugins = HarnessExtension(
+        components="long_run_control", long_run_strategy="decision"
+    ).plugins()
+
+    assert [plugin.name for plugin in plugins] == ["harness_long_run_control_plugin"]
+    assert plugins[0].strategy == "decision"
+
+
+def test_harness_extension_keeps_the_counter_strategy_by_default() -> None:
+    plugins = HarnessExtension(components="long_run_control").plugins()
+
+    assert plugins[0].strategy == "counter"
+
+
+def test_harness_extension_can_tune_the_long_run_threshold() -> None:
+    """The programmatic path can tune the threshold, not only the env path."""
+    plugins = HarnessExtension(
+        components="long_run_control",
+        long_run_strategy="decision",
+        long_run_ready_threshold=0.2,
+    ).plugins()
+
+    assert plugins[0].ready_threshold == 0.2
+
+
+def test_harness_extension_can_tune_the_long_run_action_confidence() -> None:
+    """级联阈值也要能从代码里给，而不是只能走 env。"""
+    plugins = HarnessExtension(
+        components="long_run_control",
+        long_run_strategy="decision",
+        long_run_min_confidence=0.9,
+    ).plugins()
+
+    assert plugins[0].min_confidence == 0.9
+
+
+def test_harness_extension_keeps_the_confidence_cascade_off_by_default() -> None:
+    plugins = HarnessExtension(components="long_run_control").plugins()
+
+    assert plugins[0].min_confidence == 0.0
+
+
+def test_harness_extension_keeps_the_neutral_threshold_by_default() -> None:
+    plugins = HarnessExtension(components="long_run_control").plugins()
+
+    assert plugins[0].ready_threshold == 0.5
+
+
+def test_harness_extension_can_select_the_skill_prefilter_and_routing() -> None:
+    """The programmatic path reaches the two opt-in judgement components too."""
+
+    from veadk.extensions.harness.modules.skill_prefilter import (
+        HarnessSkillPrefilterConfig,
+    )
+
+    plugins = HarnessExtension(
+        components="skill_prefilter,agent_routing",
+        skill_prefilter_config=HarnessSkillPrefilterConfig(
+            strategy="decision",
+            decision_threshold=0.8,
+        ),
+        routing_strategy="decision",
+        routing_confidence_threshold=0.7,
+    ).plugins()
+    by_name = {plugin.name: plugin for plugin in plugins}
+
+    assert sorted(by_name) == [
+        "harness_agent_routing_plugin",
+        "harness_skill_prefilter_plugin",
+    ]
+    assert by_name["harness_skill_prefilter_plugin"].config.strategy == "decision"
+    assert by_name["harness_skill_prefilter_plugin"].config.decision_threshold == 0.8
+    assert by_name["harness_agent_routing_plugin"].strategy == "decision"
+    assert by_name["harness_agent_routing_plugin"].confidence_threshold == 0.7
+
+
 def test_harness_extension_from_env_builds_configured_plugins() -> None:
     plugins = HarnessExtension.from_env(
         {

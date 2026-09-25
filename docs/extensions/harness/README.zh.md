@@ -55,6 +55,8 @@ plugins = build_harness_plugins(components=["compactor"])
 | `compactor` | `HarnessCompressPlugin` | 压缩过大的工具结果和旧 function response。 |
 | `response_verification` | `HarnessResponseVerificationPlugin` | 记录 tool receipt，并检查最终回答是否有证据支撑。 |
 | `long_run_control` | `HarnessLongRunControlPlugin` | 当运行接近模型调用预算时，注入面向收敛的引导。 |
+| `skill_prefilter` | `HarnessSkillPrefilterPlugin` | 每次请求只广告本次需要的技能；agent 指令本身保留完整列表。 |
+| `agent_routing` | `HarnessAgentRoutingPlugin` | 判定足够确信时直接转给对应子 Agent，其余请求仍由对话模型路由。 |
 
 ## 核心概念
 
@@ -83,6 +85,10 @@ plugins = build_harness_plugins(components=["compactor"])
 | `veadk/extensions/harness/plugins/compactor/` | 工具结果和上下文压缩回调 plugin。 |
 | `veadk/extensions/harness/plugins/response_verification/` | Receipt 记录和最终回答校验回调 plugin。 |
 | `veadk/extensions/harness/plugins/long_run_control/` | 长任务收敛引导回调 plugin。 |
+| `veadk/extensions/harness/modules/skill_prefilter/` | 技能列表解析与逐候选判定。 |
+| `veadk/extensions/harness/modules/agent_routing/` | 转移目标判定。 |
+| `veadk/extensions/harness/plugins/skill_prefilter/` | 技能列表收窄回调 plugin。 |
+| `veadk/extensions/harness/plugins/agent_routing/` | 转移回调 plugin。 |
 | `veadk/extensions/harness/plugins/_shared/` | 多个 plugin 共享的内部回调工具。 |
 | `veadk/extensions/harness/stores/` | Store 协议，以及内存 / JSONL 实现。 |
 
@@ -165,6 +171,12 @@ export HARNESS_ENHANCE_ENABLED=true
 export HARNESS_ENHANCE_COMPONENTS=invocation_context,compactor,response_verification
 export HARNESS_COMPRESSION_PROVIDER=builtin
 export HARNESS_VERIFIER_MODE=observe
+# 可选：把内置规则交给判定模型
+# export HARNESS_COMPACTION_STRATEGY=decision
+# export HARNESS_LONG_RUN_STRATEGY=decision
+# export HARNESS_MODE_STRATEGY=decision
+# export HARNESS_SKILL_STRATEGY=decision
+# export HARNESS_ROUTING_STRATEGY=decision
 ```
 
 等价 YAML：
@@ -199,7 +211,67 @@ veadk agentkit invoke \
 | `HARNESS_MAX_CONTEXT_CHARS` | `24000` | 上下文压缩阈值。 |
 | `HARNESS_MAX_TOOL_RESULT_CHARS` | `4000` | 工具结果压缩阈值。 |
 | `HARNESS_VERIFIER_MODE` | `observe` | 校验行为，支持 `observe` 或 `block`。 |
+| `HARNESS_VERIFIER_STRATEGY` | `deterministic` | 最终回答校验策略：`deterministic` 或 `decision`。 |
+| `HARNESS_VERIFIER_SUPPORT_THRESHOLD` | `0.5` | 最终回答支撑度阈值；判定低于该值即判为失败。 |
+| `HARNESS_VERIFIER_OVERCLAIM_THRESHOLD` | `0.5` | 回答超出回执范围的否决阈值；判定不低于该值直接判失败，即使结论是 `supported`。 |
+| `HARNESS_VERIFIER_MIN_CONFIDENCE` | `0` | 判定置信度低于该值时不做判定，回落到内置规则。 |
+| `HARNESS_LONG_RUN_MIN_CONFIDENCE` | `0` | 引导动作置信度低于该值时只保留默认引导文案。 |
 | `HARNESS_STORE_PATH` | 未设置 | 设置后使用 JSONL event store。 |
+| `HARNESS_COMPACTION_STRATEGY` | `builtin` | 压缩候选策略：`builtin` 或 `decision`。 |
+| `HARNESS_LONG_RUN_STRATEGY` | `counter` | 长任务引导策略：`counter` 或 `decision`。 |
+| `HARNESS_MODE_STRATEGY` | `keywords` | 上下文模式块策略：`keywords` 或 `decision`。 |
+| `HARNESS_COMPACTION_KEEP_THRESHOLD` | `0.5` | 压缩候选：概率高于该值即保留。 |
+| `HARNESS_LONG_RUN_READY_THRESHOLD` | `0.5` | 长任务引导：概率高于该值即引导收尾。 |
+| `HARNESS_MODE_DECISION_THRESHOLD` | `0.5` | 上下文模式块：概率高于该值即注入。 |
+| `HARNESS_SKILL_STRATEGY` | `all` | 技能广告策略：`all` 或 `decision`。 |
+| `HARNESS_SKILL_DECISION_THRESHOLD` | `0.5` | 技能：判定概率不低于该值才继续广告。 |
+| `HARNESS_SKILL_MAX_CANDIDATES` | `40` | 技能：列表超过该数量时不做判定，全部照常广告。 |
+| `HARNESS_ROUTING_STRATEGY` | `model` | 子 Agent 路由策略：`model` 或 `decision`。 |
+| `HARNESS_ROUTING_DECISION_THRESHOLD` | `0.5` | 路由：判定概率不低于该值才直接转移。 |
+
+## 判定模型策略
+
+六个 `*_STRATEGY=decision` 开关把一条规则换成判定模型的判定结果，需要 `DECISION_MODEL_ENABLED=true` 与 API Key；没有配置时各自保留原规则并打印告警。
+
+| 策略 | 被替代的规则 | 判定不可用时 |
+| --- | --- | --- |
+| `HARNESS_COMPACTION_STRATEGY` | 按角色和长度挑选压缩候选 | 内置规则 |
+| `HARNESS_LONG_RUN_STRATEGY` | 仅按模型调用次数计数 | 计数规则，超过强制次数后必定生效 |
+| `HARNESS_MODE_STRATEGY` | 精度/产物关键词匹配 | 关键词匹配 |
+| `HARNESS_VERIFIER_STRATEGY` | 完成类关键词加「有无成功回执」 | 内置规则 |
+| `HARNESS_SKILL_STRATEGY` | 广告全部已加载技能 | 技能列表保持不变 |
+| `HARNESS_ROUTING_STRATEGY` | 由对话模型选择要转移的子 Agent | 由对话模型路由 |
+
+### 判定阈值
+
+每个判定点各自持有阈值，比较的都是「是」在 `[0, 1]` 上的概率：同一个概率在不同判定点上代价不同，所以调高一个点不会连带抬高其它点。设置同时接受 `HARNESS_ENHANCE_` 前缀的别名，越界的值会被夹紧，不可用的值回落到 `0.5`。
+
+| 阈值 | 默认值 | 值调高意味着 |
+| --- | --- | --- |
+| `HARNESS_COMPACTION_KEEP_THRESHOLD` | `0.5` | 更多工具结果原样保留 |
+| `HARNESS_LONG_RUN_READY_THRESHOLD` | `0.5` | 更早把运行推向收尾 |
+| `HARNESS_MODE_DECISION_THRESHOLD` | `0.5` | 更频繁注入模式块 |
+| `HARNESS_VERIFIER_SUPPORT_THRESHOLD` | `0.5` | 要求更充分的证据才放行回答 |
+| `HARNESS_VERIFIER_OVERCLAIM_THRESHOLD` | `0.5` | 更多「超出回执范围」的回答被判失败 |
+| `HARNESS_VERIFIER_MIN_CONFIDENCE` | `0` | 更早放弃没把握的结论（`0` 表示全部采信） |
+| `HARNESS_LONG_RUN_MIN_CONFIDENCE` | `0` | 没把握的动作只保留默认引导文案 |
+| `HARNESS_SKILL_DECISION_THRESHOLD` | `0.5` | 从列表里隐藏更多技能 |
+| `HARNESS_ROUTING_DECISION_THRESHOLD` | `0.5` | 更多请求不经对话模型直接转移 |
+
+判定还会选动作：长任务引导可选 `narrow_scope` / `nudge_to_finish` / `force_finish` 决定注入的引导文案，最终回答校验可选 `retry_tool_call` / `soften_claim` / `drop_claim` / `ask_user` 决定修复指引；动作不可用时保留默认文案，评级仍然生效。
+
+最终回答校验问一个互斥结论（`supported` / `partial` / `unsupported`），加两个正交检查：
+回执是否覆盖主要结论、回答是否超出回执范围。后者是否决位——自称 `supported` 但超出
+回执的回答同样判失败。
+
+命名选项的判定还带着决策模型给该选项的置信度，判定点可以选择不采信没把握的：
+`HARNESS_VERIFIER_MIN_CONFIDENCE`、`HARNESS_LONG_RUN_MIN_CONFIDENCE` 低于该值时保留
+内置结论或默认文案。两者默认 `0`，即所有判定都采信——服务端可能完全不返回置信度。
+
+被抓到的内容永远不会作为指令进入判定：用户请求、最终回答、运行轨迹、工具回执、工具
+输出、记忆文本、会话事件都包在 `<untrusted>` 块里，块内试图下命令的片段统一替换成
+`[defused]` 再发出去。伪造工具输出声称「用户已预先批准」是最便宜的操纵方式，所以它
+只被当作数据处理。
 
 ## 压缩 Provider
 

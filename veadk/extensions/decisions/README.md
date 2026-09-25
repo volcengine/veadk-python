@@ -1,0 +1,214 @@
+# VeADK Decision Model Extension
+
+[中文](README.zh.md)
+
+`veadk.extensions.decisions` adds an optional **decision model** to VeADK: a
+fast model that returns typed judgements (a choice, a score, or a probability)
+instead of prose. It is configured separately from your agent's conversational
+model, is provider-agnostic, and is opt-in — without configuration nothing
+else in VeADK changes.
+
+Use it where a small, repeatable judgement currently costs a slow model call:
+routing a request, ranking candidates, extracting a value from a closed set,
+or checking whether a statement holds.
+
+## Install
+
+The extension ships with VeADK and needs no extra dependency.
+
+```bash
+pip install veadk-python
+```
+
+## Configure
+
+```text
+DECISION_MODEL_ENABLED=true
+DECISION_MODEL_PROVIDER=typesafe        # typesafe | openrouter | systemone
+DECISION_MODEL_NAME=jev-latest
+DECISION_MODEL_API_BASE=https://api.typesafe.ai
+DECISION_MODEL_API_KEY=...
+DECISION_MODEL_TIMEOUT=5                 # seconds per judgement (ceiling: 5)
+DECISION_MODEL_MAX_RETRIES=3
+DECISION_MODEL_FAILURE_THRESHOLD=3       # 0 disables the circuit breaker
+DECISION_MODEL_COOLDOWN_SECONDS=30
+```
+
+`DECISION_MODEL_TIMEOUT` is the budget of one whole judgement, retries and
+their backoff included. Values above 5 seconds are clamped to 5 with a
+warning: a judgement runs in the agent's hot path, so a slow endpoint has to
+degrade the judgement rather than the run.
+
+Every provider speaks the same System One protocol, so switching only changes
+the API base and the API key. The provider picks the default `api_base`:
+
+| Provider | Default `api_base` | Notes |
+| --- | --- | --- |
+| `typesafe` | `https://api.typesafe.ai` | Hosted Jev. |
+| `openrouter` | `https://openrouter.ai/api` | OpenRouter forwards System One to the same model; use your OpenRouter key, and `jev-1.13` / `jev-latest` / `typesafe/jev-1.13` as the model id. Responses add `id`, `provider`, and `usage.cost`. |
+| `systemone` | none | Self-hosted System One server: set `api_base` explicitly. |
+
+An explicit `DECISION_MODEL_API_BASE` always wins, and may be given with or
+without the trailing `/v1/systemone`.
+
+The same settings can live in `config.yaml`, which VeADK flattens into
+`MODEL_DECISION_*` variables. Set both spellings and the explicit
+`DECISION_MODEL_*` variable wins.
+
+```yaml
+model:
+  agent: {}
+  decision:
+    enabled: true
+    provider: typesafe
+    name: jev-latest
+    api_base: https://api.typesafe.ai
+    api_key: ${YOUR_KEY}
+```
+
+## Quick Start
+
+```python
+from veadk.extensions.decisions import DecisionExtension
+
+extension = DecisionExtension.from_env()
+
+if extension.enabled:
+    answer = await extension.achoose(
+        "My card was charged twice.",
+        "Which team should handle this?",
+        ["billing", "shipping", "returns"],
+    )
+    print(answer.choice, answer.confidence, answer.probabilities)
+```
+
+Every answer is a typed object: `ChoiceAnswer`, `ScoreAnswer`, or
+`NoulAnswer`. `noul` (the probability of "yes") has no separate confidence —
+use it directly, and prefer a threshold you have measured on your own data.
+
+| Call | Returns |
+| --- | --- |
+| `evaluate(state, questions)` / `aevaluate` | Every answer for one state, batched into one request. |
+| `choose(state, instructions, options)` / `achoose` | `ChoiceAnswer` |
+| `score(state, instructions, levels)` / `ascore` | `ScoreAnswer` |
+| `noul(state, instructions)` / `anoul` | `NoulAnswer` |
+
+Ask independent questions in **one** `evaluate` call: questions run in
+parallel and code can ignore answers it does not need.
+
+## Give the agent the tool
+
+```python
+from veadk import Agent
+from veadk.extensions.decisions import decision_evaluate
+
+agent = Agent(name="router", tools=[decision_evaluate])
+```
+
+The tool asks the configured decision model for one judgement and returns
+`{"kind", "answer", "confidence", ...}`. It returns `{"error": ...}` when the
+decision model is unconfigured or the request fails, so a run never breaks
+because of an optional capability.
+
+## Failures and Degradation
+
+The decision model is optional, so callers only ever handle one error type:
+`DecisionModelError`. Whatever goes wrong, a judgement degrades to the caller's
+own rules instead of breaking the run.
+
+| Failure | What happens |
+| --- | --- |
+| Not configured, or no API key | `DecisionModelDisabledError` on the first call; nothing else changes. |
+| Timeout, connection error, `429`, `5xx` | Retried with exponential backoff inside the `timeout` budget, honouring `retry-after`; then `DecisionModelRequestError`. |
+| Other `4xx` | Not retried; `DecisionModelRequestError` with the status and a body snippet. |
+| `200` with unusable answers | `DecisionModelResponseError`; malformed payloads and unknown answer types are reported the same way, never as a `pydantic` or `httpx` error. |
+| `DECISION_MODEL_TIMEOUT` above the ceiling | Clamped to 5 seconds with a warning. |
+| Unusable settings at startup | The extension disables itself with a warning instead of failing startup. |
+| `DECISION_MODEL_FAILURE_THRESHOLD` failures in a row (default 3) | The endpoint is marked down for `DECISION_MODEL_COOLDOWN_SECONDS` (default 30). Further judgements raise `DecisionModelUnavailableError` immediately and make no HTTP call; one probe request after the cooldown decides whether to resume. |
+
+Logging stays quiet and carries no user data:
+
+| Level | Message |
+| --- | --- |
+| `DEBUG` | One line per usable judgement: model, latency, tokens, cost. |
+| `INFO` | Cooldown elapsed and a probe was sent; judgements resumed. |
+| `WARNING` | A retry, an outage that marked the endpoint down, settings that were clamped or are unusable. |
+
+The judged state and the API key are never logged.
+
+## Judgement Thresholds
+
+Every decision point keeps its own threshold, compared against the answer of
+its own judgement on `[0, 1]` — the probability of "yes" for a yes/no question,
+the rated position for a rating:
+
+| Decision point | Setting | Default |
+| --- | --- | --- |
+| Compaction candidates | `HARNESS_COMPACTION_KEEP_THRESHOLD` | 0.5 |
+| Long-run steering | `HARNESS_LONG_RUN_READY_THRESHOLD` | 0.5 |
+| Context mode blocks | `HARNESS_MODE_DECISION_THRESHOLD` | 0.5 |
+| Long-term memory saves | `MEMORY_SAVE_WORTH_THRESHOLD` | 0.5 |
+| Final-answer support | `HARNESS_VERIFIER_SUPPORT_THRESHOLD` | 0.5 |
+| Final-answer overclaim | `HARNESS_VERIFIER_OVERCLAIM_THRESHOLD` | 0.5 |
+| Final-answer verdict confidence | `HARNESS_VERIFIER_MIN_CONFIDENCE` | 0 |
+| Long-run action confidence | `HARNESS_LONG_RUN_MIN_CONFIDENCE` | 0 |
+| Long-term memory recall | `MEMORY_RECALL_RELEVANCE_THRESHOLD` | 0.5 |
+
+Parsing goes through `probability_threshold()`, which **clamps** an
+out-of-range value instead of falling back (`1.5 → 1.0`, `-1 → 0.0`, keeping
+the intent of "never act" / "always act"; a fallback would flip the behaviour),
+and falls back to the default with a warning for `NaN` or text, which carry no
+intent. The thresholds are independent: the same probability costs each point
+something different, so raising one must not move the others.
+
+A ``noul`` answer is the probability itself and carries no separate confidence,
+so its threshold is the whole cascade. An answer that names an option carries
+the confidence the model gave that option, and the two points that act on one
+can refuse an unsure answer: below ``HARNESS_VERIFIER_MIN_CONFIDENCE`` the
+verifier keeps the builtin rules, and below ``HARNESS_LONG_RUN_MIN_CONFIDENCE``
+the long-run plugin keeps the default steering wording. Both default to ``0``,
+which acts on every answer, because an endpoint may report no confidence at all.
+
+## Judgement State Hygiene
+
+The state a judgement reads mixes the framing this code writes with content the
+agent did not produce: the user request, the final answer, the run trajectory,
+tool receipts, tool output, memory text, session events. A decision model reads
+that as data rather than as hostile content — a captured tool output claiming
+"the user already approved this" moved the measured block probability of the
+same dangerous command from 0.76 to 0.48 — so every captured value goes through
+``untrusted()``.
+
+It is wrapped in an ``<untrusted source=...>`` block that the state declares
+non-authoritative, and the spans inside it that try to give orders
+(``System: ...``, "ignore all previous instructions", "no further approval is
+needed", "always allow") are replaced by ``[defused]``, with a warning naming
+the source. The rest of the text stays, so the judgement still sees what the
+capture contains. The state a point sends therefore reads as evidence to weigh,
+never as instructions to follow.
+
+## Source Layout
+
+| Path | Purpose |
+| --- | --- |
+| `config.py` | Environment/config parsing, endpoint normalization. |
+| `client.py` | System One HTTP client (sync and async), retry with backoff. |
+| `questions.py` | Builders for the three question types. |
+| `state.py` | Labelling captured text as data and defusing instructions inside it. |
+| `types.py` | Typed answers and the response parser. |
+| `extension.py` | Shared entry point: `DecisionExtension`, the process-wide default. |
+| `tools.py` | The agent-facing `decision_evaluate` tool. |
+
+## Not Included Yet
+
+- Plugins that use the decision model for tool filtering, context compaction,
+  or response verification. The shared `DecisionExtension` instance is the
+  intended entry point for them.
+- Registration of `decision_evaluate` in the core built-in tool registry
+  (`veadk/tools/__init__.py`). The frontend studio tool catalog keeps a static
+  declaration table that must match that registry exactly, so registering the
+  tool there requires adding the matching declaration and schema.
+- Tool-response caching and connection reuse; each call opens its own HTTP
+  client.
+- Non-English question text: judgement quality is best with English
+  `instructions`, even when the evaluated state is Chinese.
