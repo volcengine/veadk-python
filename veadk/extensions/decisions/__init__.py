@@ -49,6 +49,7 @@ from veadk.extensions.decisions.config import (
 from veadk.extensions.decisions.errors import (
     DecisionModelDisabledError,
     DecisionModelError,
+    DecisionModelLowConfidenceError,
     DecisionModelRequestError,
     DecisionModelResponseError,
     DecisionModelUnavailableError,
@@ -62,6 +63,12 @@ from veadk.extensions.decisions.extension import (
     DecisionExtension,
     configure_default_decision_extension,
     get_default_decision_extension,
+)
+from veadk.extensions.decisions.state import (
+    DEFUSED_MARKER,
+    UNTRUSTED_NOTICE,
+    defuse_directives,
+    untrusted,
 )
 from veadk.extensions.decisions.thresholds import (
     DEFAULT_JUDGEMENT_THRESHOLD,
@@ -88,22 +95,27 @@ __all__ = [
     "DecisionModelConfig",
     "DecisionModelDisabledError",
     "DecisionModelError",
+    "DecisionModelLowConfidenceError",
     "DecisionModelRequestError",
     "DecisionModelResponseError",
     "DecisionModelUnavailableError",
     "DecisionResult",
     "DecisionExtension",
     "DecisionUsage",
+    "DEFUSED_MARKER",
     "MAX_TIMEOUT_SECONDS",
     "NoulAnswer",
     "OPENROUTER_API_BASE",
     "ScoreAnswer",
     "SystemOneClient",
+    "UNTRUSTED_NOTICE",
     "choice_question",
+    "defuse_directives",
     "configure_default_decision_extension",
     "decision_evaluate",
     "get_default_decision_extension",
     "noul_question",
     "probability_threshold",
     "score_question",
+    "untrusted",
 ]

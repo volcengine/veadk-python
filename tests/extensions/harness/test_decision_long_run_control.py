@@ -330,6 +330,52 @@ def test_the_judge_asks_about_the_action_in_the_same_request() -> None:
     assert extension.questions[ACTION_QUESTION_ID]["type"] == "choice"
 
 
+def test_an_unsure_action_keeps_the_default_wording() -> None:
+    """引导动作会改行为，判定没把握时只保留「还没收敛」这个信号。"""
+    extension = _StubExtension(
+        {
+            "ready": NoulAnswer(noul=0.2),
+            "action": ChoiceAnswer(choice=NARROW_SCOPE_ACTION, confidence=0.4),
+        }
+    )
+    judge = DecisionConvergenceJudge(extension, min_confidence=0.9)  # type: ignore[arg-type]
+
+    judgement = asyncio.run(judge.ajudge(goal="ship it", trajectory="user: hi"))
+
+    assert judgement.ready == 0.2
+    assert judgement.action is None
+    assert judgement.confidence == 0.4
+
+
+def test_a_confident_action_is_used_above_the_min_confidence() -> None:
+    extension = _StubExtension(
+        {
+            "ready": NoulAnswer(noul=0.2),
+            "action": ChoiceAnswer(choice=NARROW_SCOPE_ACTION, confidence=0.95),
+        }
+    )
+    judge = DecisionConvergenceJudge(extension, min_confidence=0.9)  # type: ignore[arg-type]
+
+    judgement = asyncio.run(judge.ajudge(goal="ship it", trajectory="user: hi"))
+
+    assert judgement.action == NARROW_SCOPE_ACTION
+
+
+def test_the_action_cascade_is_off_by_default() -> None:
+    """服务端可以不报 confidence，默认阈值一旦启用就会让引导动作永远失效。"""
+    extension = _StubExtension(
+        {
+            "ready": NoulAnswer(noul=0.2),
+            "action": ChoiceAnswer(choice=NARROW_SCOPE_ACTION, confidence=0.0),
+        }
+    )
+    judge = DecisionConvergenceJudge(extension)  # type: ignore[arg-type]
+
+    judgement = asyncio.run(judge.ajudge(goal="ship it", trajectory="user: hi"))
+
+    assert judgement.action == NARROW_SCOPE_ACTION
+
+
 def test_an_unknown_action_keeps_the_convergence_probability() -> None:
     extension = _StubExtension(
         {

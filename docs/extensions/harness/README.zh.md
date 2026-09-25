@@ -213,6 +213,9 @@ veadk agentkit invoke \
 | `HARNESS_VERIFIER_MODE` | `observe` | 校验行为，支持 `observe` 或 `block`。 |
 | `HARNESS_VERIFIER_STRATEGY` | `deterministic` | 最终回答校验策略：`deterministic` 或 `decision`。 |
 | `HARNESS_VERIFIER_SUPPORT_THRESHOLD` | `0.5` | 最终回答支撑度阈值；判定低于该值即判为失败。 |
+| `HARNESS_VERIFIER_OVERCLAIM_THRESHOLD` | `0.5` | 回答超出回执范围的否决阈值；判定不低于该值直接判失败，即使结论是 `supported`。 |
+| `HARNESS_VERIFIER_MIN_CONFIDENCE` | `0` | 判定置信度低于该值时不做判定，回落到内置规则。 |
+| `HARNESS_LONG_RUN_MIN_CONFIDENCE` | `0` | 引导动作置信度低于该值时只保留默认引导文案。 |
 | `HARNESS_STORE_PATH` | 未设置 | 设置后使用 JSONL event store。 |
 | `HARNESS_COMPACTION_STRATEGY` | `builtin` | 压缩候选策略：`builtin` 或 `decision`。 |
 | `HARNESS_LONG_RUN_STRATEGY` | `counter` | 长任务引导策略：`counter` 或 `decision`。 |
@@ -249,10 +252,26 @@ veadk agentkit invoke \
 | `HARNESS_LONG_RUN_READY_THRESHOLD` | `0.5` | 更早把运行推向收尾 |
 | `HARNESS_MODE_DECISION_THRESHOLD` | `0.5` | 更频繁注入模式块 |
 | `HARNESS_VERIFIER_SUPPORT_THRESHOLD` | `0.5` | 要求更充分的证据才放行回答 |
+| `HARNESS_VERIFIER_OVERCLAIM_THRESHOLD` | `0.5` | 更多「超出回执范围」的回答被判失败 |
+| `HARNESS_VERIFIER_MIN_CONFIDENCE` | `0` | 更早放弃没把握的结论（`0` 表示全部采信） |
+| `HARNESS_LONG_RUN_MIN_CONFIDENCE` | `0` | 没把握的动作只保留默认引导文案 |
 | `HARNESS_SKILL_DECISION_THRESHOLD` | `0.5` | 从列表里隐藏更多技能 |
 | `HARNESS_ROUTING_DECISION_THRESHOLD` | `0.5` | 更多请求不经对话模型直接转移 |
 
 判定还会选动作：长任务引导可选 `narrow_scope` / `nudge_to_finish` / `force_finish` 决定注入的引导文案，最终回答校验可选 `retry_tool_call` / `soften_claim` / `drop_claim` / `ask_user` 决定修复指引；动作不可用时保留默认文案，评级仍然生效。
+
+最终回答校验问一个互斥结论（`supported` / `partial` / `unsupported`），加两个正交检查：
+回执是否覆盖主要结论、回答是否超出回执范围。后者是否决位——自称 `supported` 但超出
+回执的回答同样判失败。
+
+命名选项的判定还带着决策模型给该选项的置信度，判定点可以选择不采信没把握的：
+`HARNESS_VERIFIER_MIN_CONFIDENCE`、`HARNESS_LONG_RUN_MIN_CONFIDENCE` 低于该值时保留
+内置结论或默认文案。两者默认 `0`，即所有判定都采信——服务端可能完全不返回置信度。
+
+被抓到的内容永远不会作为指令进入判定：用户请求、最终回答、运行轨迹、工具回执、工具
+输出、记忆文本、会话事件都包在 `<untrusted>` 块里，块内试图下命令的片段统一替换成
+`[defused]` 再发出去。伪造工具输出声称「用户已预先批准」是最便宜的操纵方式，所以它
+只被当作数据处理。
 
 ## 压缩 Provider
 

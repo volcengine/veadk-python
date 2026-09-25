@@ -80,7 +80,8 @@ class HarnessResponseVerificationPlugin(BasePlugin):
         super().__init__(name="harness_response_verification_plugin")
         self.verifier = verifier or FinalResponseVerifier()
         self.support_judge = support_judge or build_support_judge(
-            self.verifier.config.strategy
+            self.verifier.config.strategy,
+            min_confidence=self.verifier.config.min_confidence,
         )
         self.store = store or InMemoryHarnessStore()
         self.profile = profile
@@ -139,6 +140,9 @@ class HarnessResponseVerificationPlugin(BasePlugin):
         if judgement is not None:
             payload["judgement"] = {
                 "support": judgement.support,
+                "verdict": judgement.verdict,
+                "coverage": judgement.coverage,
+                "overclaim": judgement.overclaim,
                 "action": judgement.action,
                 "confidence": judgement.confidence,
             }

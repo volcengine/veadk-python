@@ -36,9 +36,11 @@ from veadk.extensions.decisions import (
     DecisionExtension,
     DecisionModelResponseError,
     ScoreAnswer,
+    UNTRUSTED_NOTICE,
     get_default_decision_extension,
     probability_threshold,
     score_question,
+    untrusted,
 )
 from veadk.utils.logger import get_logger
 
@@ -144,11 +146,16 @@ class DecisionRecallJudge:
         )
         lines = [
             "[Memory Recall]",
-            f"request: {_truncate(query, _MAX_REQUEST_CHARS)}",
+            UNTRUSTED_NOTICE,
+            "request: "
+            + untrusted("user_request", _truncate(query, _MAX_REQUEST_CHARS)),
             "memories:",
         ]
         for index, memory in enumerate(memories):
-            lines.append(f"- memory {index}: {_truncate(memory, per_item)}")
+            lines.append(
+                f"- memory {index}: "
+                + untrusted("long_term_memory", _truncate(memory, per_item))
+            )
         lines.append("[/Memory Recall]")
         return "\n".join(lines)
 

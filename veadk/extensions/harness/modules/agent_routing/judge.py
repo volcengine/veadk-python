@@ -34,8 +34,10 @@ from veadk.extensions.decisions import (
     ChoiceAnswer,
     DecisionExtension,
     DecisionModelResponseError,
+    UNTRUSTED_NOTICE,
     choice_question,
     get_default_decision_extension,
+    untrusted,
 )
 from veadk.extensions.harness.utils import summarize_text
 from veadk.utils.logger import get_logger
@@ -115,7 +117,8 @@ class DecisionAgentRouter:
         return "\n".join(
             [
                 "[Agent Routing]",
-                f"user_request: {request or 'unspecified'}",
+                UNTRUSTED_NOTICE,
+                "user_request: " + untrusted("user_request", request or "unspecified"),
                 "[/Agent Routing]",
             ]
         )

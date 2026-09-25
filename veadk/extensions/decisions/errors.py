@@ -39,3 +39,13 @@ class DecisionModelUnavailableError(DecisionModelError):
 
 class DecisionModelResponseError(DecisionModelError):
     """Raised when the endpoint answers with an unusable payload."""
+
+
+class DecisionModelLowConfidenceError(DecisionModelError):
+    """Raised when an answer is too unsure to act on.
+
+    A judgement that names an option with low confidence is not evidence about
+    the state, only about the model's uncertainty. Callers keep their own rules
+    instead of acting on it, which is the cascade the decision model is meant to
+    be used in.
+    """

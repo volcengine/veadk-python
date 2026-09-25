@@ -125,6 +125,9 @@ values, and falls back to `0.5` for an unusable one.
 | Long-run steering | `HARNESS_LONG_RUN_READY_THRESHOLD=0.5` | Steers a run toward its answer sooner |
 | Context mode blocks | `HARNESS_MODE_DECISION_THRESHOLD=0.5` | Injects the mode block more often |
 | Final-answer support | `HARNESS_VERIFIER_SUPPORT_THRESHOLD=0.5` | Requires more evidence before the answer passes |
+| Final-answer overclaim | `HARNESS_VERIFIER_OVERCLAIM_THRESHOLD=0.5` | Fails more answers that claim more than the receipts show |
+| Final-answer confidence | `HARNESS_VERIFIER_MIN_CONFIDENCE=0` | Stops acting on unsure verdicts sooner (`0` acts on every verdict) |
+| Long-run confidence | `HARNESS_LONG_RUN_MIN_CONFIDENCE=0` | Keeps the default steering wording for unsure actions |
 | Skill prefilter | `HARNESS_SKILL_DECISION_THRESHOLD=0.5` | Hides more skills from the list |
 | Agent routing | `HARNESS_ROUTING_DECISION_THRESHOLD=0.5` | Routes more requests without asking the model |
 
@@ -138,6 +141,26 @@ the action shapes what the plugin injects:
 
 An action that names no known option keeps the default wording; the rating it
 came with is still used.
+
+The verifier asks one mutually exclusive outcome — `supported`, `partial`, or
+`unsupported` — plus two checks that read the same answer from different
+angles: whether a receipt covers the main claim, and whether the answer claims
+more than the receipts show. The overclaim check is a veto, so an answer that
+claims more than its receipts fails even when the verdict says `supported`.
+
+A judgement that names an option also carries the confidence the decision model
+gave it, and a point can refuse to act on an unsure one:
+`HARNESS_VERIFIER_MIN_CONFIDENCE` and `HARNESS_LONG_RUN_MIN_CONFIDENCE` keep
+the builtin verdict or the default wording below the configured confidence.
+Both default to `0`, which acts on every judged answer, because an endpoint may
+report no confidence at all.
+
+Captured content never travels as an instruction. Every value a judgement reads
+— the user request, the final answer, the run trajectory, tool receipts, tool
+output, memory text, session events — is wrapped in an `<untrusted>` block, and
+the spans inside it that try to give orders are replaced by `[defused]` before
+the request is sent. A tool output claiming "the user already approved this" is
+the cheapest way to move a judgement, so it is read as data instead.
 
 They need a configured decision model; see
 [decisions](../decisions/README.md) for the `DECISION_MODEL_*` variables. A

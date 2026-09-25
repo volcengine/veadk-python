@@ -69,6 +69,13 @@ class FinalResponseVerifierConfig(HarnessBaseModel):
     support_threshold: float = Field(
         default=DEFAULT_JUDGEMENT_THRESHOLD, ge=0.0, le=1.0
     )
+    # 判定说「回答超出回执范围」到这个概率就直接算失败：正交检查是用来兜住
+    # 一个过于宽松的 supported 结论的。
+    overclaim_threshold: float = Field(
+        default=DEFAULT_JUDGEMENT_THRESHOLD, ge=0.0, le=1.0
+    )
+    # 判定自己没把握（低于该置信度）时不做硬判，回落到内置规则；0 表示关闭。
+    min_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     require_receipt_for_completion_claims: bool = True
     max_repair_candidates: int = Field(default=8, ge=1)
     completion_markers: list[str] = Field(
@@ -148,21 +155,35 @@ class FinalResponseVerifier:
         a judgement replaces the status they produced: the judgement reads the
         answer together with the receipts. What the rules found stays in the
         report, so both verdicts remain visible in the event payload.
+
+        The check that reads the answer from the other side runs first: an
+        answer that claims more than the receipts show fails even when the
+        verdict itself was ``supported``. A judgement with too little
+        confidence never reaches here, because the judge refuses to give one.
         """
         if judgement is None:
             return report
+        if judgement.overclaim >= self.config.overclaim_threshold:
+            return self._fail(
+                report,
+                "the decision model judged the answer to claim more than the "
+                f"receipts show (overclaim={judgement.overclaim:.2f} >= "
+                f"{self.config.overclaim_threshold})",
+            )
         if judgement.support >= self.config.support_threshold:
             return report.model_copy(update={"status": "pass"})
+        return self._fail(
+            report,
+            "the decision model judged the answer unsupported "
+            f"(support={judgement.support:.2f} < "
+            f"{self.config.support_threshold})",
+        )
+
+    @staticmethod
+    def _fail(report: VerificationReport, reason: str) -> VerificationReport:
+        """Return the report failed with one judged reason in front."""
         return report.model_copy(
-            update={
-                "status": "fail",
-                "reasons": [
-                    "the decision model judged the answer unsupported "
-                    f"(support={judgement.support:.2f} < "
-                    f"{self.config.support_threshold})",
-                    *report.reasons,
-                ],
-            }
+            update={"status": "fail", "reasons": [reason, *report.reasons]}
         )
 
     def decide(

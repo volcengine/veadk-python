@@ -35,8 +35,10 @@ from veadk.extensions.decisions import (
     DecisionExtension,
     DecisionModelResponseError,
     NoulAnswer,
+    UNTRUSTED_NOTICE,
     get_default_decision_extension,
     noul_question,
+    untrusted,
 )
 from veadk.extensions.harness.utils import summarize_text
 from veadk.utils.logger import get_logger
@@ -120,13 +122,21 @@ class DecisionCompactionJudge:
         )
         lines = [
             "[Compaction Triage]",
-            f"goal: {summarize_text(goal, max_chars=per_item) or 'unspecified'}",
+            UNTRUSTED_NOTICE,
+            "goal: "
+            + untrusted(
+                "user_request",
+                summarize_text(goal, max_chars=per_item) or "unspecified",
+            ),
             "tool_outputs:",
         ]
         for index, content in evidence.items():
             lines.append(
                 f"- item {index} ({len(content)} chars): "
-                f"{summarize_text(content, max_chars=per_item)}"
+                + untrusted(
+                    "tool_output",
+                    summarize_text(content, max_chars=per_item),
+                )
             )
         lines.append("[/Compaction Triage]")
         return "\n".join(lines)

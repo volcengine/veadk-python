@@ -221,6 +221,9 @@ veadk agentkit invoke \
 | `HARNESS_VERIFIER_MODE` | `observe` | Verification behavior: `observe` or `block`. |
 | `HARNESS_VERIFIER_STRATEGY` | `deterministic` | Final-answer verification: `deterministic` or `decision`. |
 | `HARNESS_VERIFIER_SUPPORT_THRESHOLD` | `0.5` | Support rating below which the answer fails. |
+| `HARNESS_VERIFIER_OVERCLAIM_THRESHOLD` | `0.5` | Fails an answer whose judged overclaim is at or above this value, even when the verdict was `supported`. |
+| `HARNESS_VERIFIER_MIN_CONFIDENCE` | `0` | Refuses to act on a verdict below this confidence and keeps the builtin rules. |
+| `HARNESS_LONG_RUN_MIN_CONFIDENCE` | `0` | Keeps the default steering wording when the judged action is below this confidence. |
 | `HARNESS_STORE_PATH` | unset | Uses a JSONL event store when set. |
 | `HARNESS_COMPACTION_STRATEGY` | `builtin` | Compaction candidates: `builtin` or `decision`. |
 | `HARNESS_LONG_RUN_STRATEGY` | `counter` | Long-run steering: `counter` or `decision`. |
@@ -263,6 +266,9 @@ back to `0.5` for an unusable one.
 | `HARNESS_LONG_RUN_READY_THRESHOLD` | `0.5` | Steers a run toward its answer sooner |
 | `HARNESS_MODE_DECISION_THRESHOLD` | `0.5` | Injects the mode block more often |
 | `HARNESS_VERIFIER_SUPPORT_THRESHOLD` | `0.5` | Requires more evidence before the answer passes |
+| `HARNESS_VERIFIER_OVERCLAIM_THRESHOLD` | `0.5` | Fails more answers that claim more than the receipts show |
+| `HARNESS_VERIFIER_MIN_CONFIDENCE` | `0` | Stops acting on unsure verdicts sooner (`0` acts on every verdict) |
+| `HARNESS_LONG_RUN_MIN_CONFIDENCE` | `0` | Keeps the default steering wording for unsure actions |
 | `HARNESS_SKILL_DECISION_THRESHOLD` | `0.5` | Hides more skills from the list |
 | `HARNESS_ROUTING_DECISION_THRESHOLD` | `0.5` | Routes more requests without asking the model |
 
@@ -271,6 +277,26 @@ A judgement also picks an action: long-run steering chooses `narrow_scope` /
 verification chooses `retry_tool_call` / `soften_claim` / `drop_claim` /
 `ask_user` to shape the repair instruction. An unusable action keeps the
 default wording while the rating still applies.
+
+The verifier asks one mutually exclusive outcome — `supported`, `partial`, or
+`unsupported` — plus two checks that read the same answer from different
+angles: whether a receipt covers the main claim, and whether the answer claims
+more than the receipts show. The overclaim check is a veto, so an answer that
+claims more than its receipts fails even when the verdict says `supported`.
+
+A judgement that names an option also carries the confidence the decision model
+gave it, and a point can refuse to act on an unsure one:
+`HARNESS_VERIFIER_MIN_CONFIDENCE` and `HARNESS_LONG_RUN_MIN_CONFIDENCE` keep
+the builtin verdict or the default wording below the configured confidence.
+Both default to `0`, which acts on every judged answer, because an endpoint may
+report no confidence at all.
+
+Captured content never travels as an instruction. Every value a judgement reads
+— the user request, the final answer, the run trajectory, tool receipts, tool
+output, memory text, session events — is wrapped in an `<untrusted>` block, and
+the spans inside it that try to give orders are replaced by `[defused]` before
+the request is sent. A tool output claiming "the user already approved this" is
+the cheapest way to move a judgement, so it is read as data instead.
 
 ## Compaction Providers
 

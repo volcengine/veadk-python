@@ -305,3 +305,43 @@ def test_routing_keeps_the_choice_with_the_model_by_default():
 
     assert plugin.strategy == "model"
     assert plugin.confidence_threshold == 0.5
+
+
+def test_verifier_confidence_cascade_and_overclaim_veto_are_read_from_env():
+    plugins = build_harness_plugins_from_env(
+        {
+            "HARNESS_ENHANCE_ENABLED": "true",
+            "HARNESS_ENHANCE_COMPONENTS": "response_verification",
+            "HARNESS_VERIFIER_MIN_CONFIDENCE": "0.9",
+            "HARNESS_ENHANCE_VERIFIER_OVERCLAIM_THRESHOLD": "0.7",
+        }
+    )
+
+    config = plugins[0].verifier.config
+    assert config.min_confidence == 0.9
+    assert config.overclaim_threshold == 0.7
+
+
+def test_verifier_keeps_low_confidence_judgements_by_default():
+    """服务端可以不报 confidence，所以级联默认关闭，否则判定会被整条丢掉。"""
+    plugins = build_harness_plugins_from_env(
+        {
+            "HARNESS_ENHANCE_ENABLED": "true",
+            "HARNESS_ENHANCE_COMPONENTS": "response_verification",
+        }
+    )
+
+    assert plugins[0].verifier.config.min_confidence == 0.0
+    assert plugins[0].verifier.config.overclaim_threshold == 0.5
+
+
+def test_long_run_action_min_confidence_is_read_from_env():
+    plugins = build_harness_plugins_from_env(
+        {
+            "HARNESS_ENHANCE_ENABLED": "true",
+            "HARNESS_ENHANCE_COMPONENTS": "long_run_control",
+            "HARNESS_ENHANCE_LONG_RUN_MIN_CONFIDENCE": "0.9",
+        }
+    )
+
+    assert plugins[0].min_confidence == 0.9

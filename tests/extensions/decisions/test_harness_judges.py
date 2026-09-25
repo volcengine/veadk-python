@@ -22,9 +22,14 @@ import pytest
 
 from veadk.extensions.decisions import (
     DecisionModelConfig,
+    DecisionModelLowConfidenceError,
     DecisionModelResponseError,
     DecisionExtension,
 )
+from veadk.extensions.harness.modules.final_response_verifier.support_judge import (
+    DecisionSupportJudge,
+)
+from veadk.extensions.harness.schemas import ToolReceipt
 from veadk.extensions.harness.modules.tool_result_compactor import (
     DecisionCompactionJudge,
     ToolResultCompactor,
@@ -248,3 +253,77 @@ def test_agent_router_leaves_a_low_confidence_choice_to_the_model() -> None:
         target = asyncio.run(router.aroute(user_input="hello", agents=_ROUTING_AGENTS))
 
     assert target is None
+
+
+_VERIFIER_RESPONSE = (
+    200,
+    {},
+    {
+        "model": "fake-system-one",
+        "answers": {
+            "verdict": {
+                "type": "choice",
+                "choice": "unsupported",
+                "confidence": 0.92,
+                "probabilities": {"unsupported": 0.92, "supported": 0.03},
+            },
+            "coverage": {"type": "noul", "noul": 0.05},
+            "overclaim": {"type": "noul", "noul": 0.88},
+            "repair": {"type": "choice", "choice": "retry_tool_call"},
+        },
+    },
+)
+
+
+def test_support_judge_asks_the_verdict_and_its_checks_in_one_request() -> None:
+    receipt = ToolReceipt(name="run_shell", status="success", summary="wrote report.md")
+    with fake_system_one([_VERIFIER_RESPONSE]) as server:
+        judge = DecisionSupportJudge(_extension(server.base_url))
+        judgement = asyncio.run(
+            judge.areview(
+                answer="Done, I deployed the service.",
+                receipts=[receipt],
+                goal="Deploy the service",
+            )
+        )
+
+    assert len(server.calls) == 1
+    call = server.calls[0]
+    assert call.questions["verdict"]["type"] == "choice"
+    assert sorted(call.questions["verdict"]["criteria"]) == [
+        "partial",
+        "supported",
+        "unsupported",
+    ]
+    assert call.questions["coverage"]["type"] == "noul"
+    assert call.questions["overclaim"]["type"] == "noul"
+    assert call.questions["repair"]["type"] == "choice"
+    assert judgement.verdict == "unsupported"
+    assert judgement.support == pytest.approx(0.03)
+    assert judgement.coverage == pytest.approx(0.05)
+    assert judgement.overclaim == pytest.approx(0.88)
+    assert judgement.action == "retry_tool_call"
+    assert judgement.confidence == pytest.approx(0.92)
+
+
+def test_support_judge_refuses_an_unsure_verdict() -> None:
+    """低置信就回落到内置规则，而不是拿没把握的判定去改结论。"""
+    unsure = (
+        200,
+        {},
+        {
+            "model": "fake-system-one",
+            "answers": {
+                "verdict": {
+                    "type": "choice",
+                    "choice": "supported",
+                    "confidence": 0.4,
+                    "probabilities": {"supported": 0.4},
+                }
+            },
+        },
+    )
+    with fake_system_one([unsure]) as server:
+        judge = DecisionSupportJudge(_extension(server.base_url), min_confidence=0.9)
+        with pytest.raises(DecisionModelLowConfidenceError):
+            asyncio.run(judge.areview(answer="Done.", receipts=[]))

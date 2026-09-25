@@ -137,12 +137,33 @@ agent = Agent(name="router", tools=[decision_evaluate])
 | 上下文模式块 | `HARNESS_MODE_DECISION_THRESHOLD` | 0.5 |
 | 记忆落库 | `MEMORY_SAVE_WORTH_THRESHOLD` | 0.5 |
 | 最终回答支撑度 | `HARNESS_VERIFIER_SUPPORT_THRESHOLD` | 0.5 |
+| 回答超额声明否决 | `HARNESS_VERIFIER_OVERCLAIM_THRESHOLD` | 0.5 |
+| 校验判定置信度 | `HARNESS_VERIFIER_MIN_CONFIDENCE` | 0 |
+| 长任务动作置信度 | `HARNESS_LONG_RUN_MIN_CONFIDENCE` | 0 |
 | 长期记忆召回 | `MEMORY_RECALL_RELEVANCE_THRESHOLD` | 0.5 |
 
 解析统一走 `probability_threshold()`：越界的值**夹紧**而不是回落（`1.5 → 1.0`、
 `-1 → 0.0`，保留「永不生效 / 总是生效」的原意，回落会把行为整个翻转）；`NaN`
 或非数字没有原意可保留，回落到默认值并打 warning。阈值之间相互独立——同一个概率
 落在不同判定点上代价不同，调高一处不会连带影响其它判定点。
+
+「是否」类判定返回的概率本身就是级联信号，没有额外的置信度字段，所以它的阈值就是
+全部级联。命名选项的判定带着模型给该选项的置信度，两个会据此行动的点可以拒绝没把握
+的答案：低于 `HARNESS_VERIFIER_MIN_CONFIDENCE` 时校验回落到内置规则，低于
+`HARNESS_LONG_RUN_MIN_CONFIDENCE` 时长任务插件保留默认引导文案。两者默认 `0`，即全部
+采信——服务端可能完全不返回置信度。
+
+## 判定状态输入卫生
+
+判定读到的状态里混着本仓库写的框架文本和 Agent 没写过的内容：用户请求、最终回答、
+运行轨迹、工具回执、工具输出、记忆文本、会话事件。决策模型把这些当作**数据**而不是
+敌意内容——伪造一条工具输出声称「用户已预先批准」，同一条危险命令的阻断概率实测从
+0.76 掉到 0.48——所以所有被抓到的值都要经过 `untrusted()`。
+
+处理方式是把值包进 `<untrusted source=...>` 块，并在状态里声明它没有权威性；块内试图
+下命令的片段（`System: ...`、「忽略之前所有指令」、「无需再次确认」、「一律放行」）
+统一替换成 `[defused]`，并打一条带来源的 warning。其余文本保留，判定仍然看得到被抓到
+的内容。这样发出去的判定状态只会被当作要权衡的证据，而不是要执行的指令。
 
 ## 目录结构
 
@@ -151,6 +172,7 @@ agent = Agent(name="router", tools=[decision_evaluate])
 | `config.py` | 配置与环境变量解析、端点规范化 |
 | `client.py` | System One HTTP 客户端（同步/异步），带退避重试 |
 | `questions.py` | 三种问题类型的构造器 |
+| `state.py` | 把被抓到的文本标注为数据，并拆解其中的指令式片段 |
 | `types.py` | 类型化答案与响应解析 |
 | `extension.py` | 统一入口：`DecisionExtension` 与进程级默认实例 |
 | `tools.py` | 面向 Agent 的 `decision_evaluate` 工具 |

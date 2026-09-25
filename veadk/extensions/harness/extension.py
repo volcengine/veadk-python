@@ -88,6 +88,7 @@ class HarnessExtension:
         verifier_config: FinalResponseVerifierConfig | None = None,
         long_run_strategy: str = "counter",
         long_run_ready_threshold: float = DEFAULT_JUDGEMENT_THRESHOLD,
+        long_run_min_confidence: float = 0.0,
         skill_prefilter_config: HarnessSkillPrefilterConfig | None = None,
         routing_strategy: str = "model",
         routing_confidence_threshold: float = DEFAULT_JUDGEMENT_THRESHOLD,
@@ -97,11 +98,11 @@ class HarnessExtension:
         """Configure Harness plugin assembly.
 
         ``context_config``, ``compaction_config``, ``verifier_config``, and
-        ``long_run_strategy`` / ``long_run_ready_threshold``,
-        ``skill_prefilter_config``, and ``routing_strategy`` /
-        ``routing_confidence_threshold`` only apply when ``env`` is ``None``: an
-        ``env`` mapping makes the Harness environment variables the single
-        source of truth, as :meth:`from_env` intends.
+        ``long_run_strategy`` / ``long_run_ready_threshold`` /
+        ``long_run_min_confidence``, ``skill_prefilter_config``, and
+        ``routing_strategy`` / ``routing_confidence_threshold`` only apply when
+        ``env`` is ``None``: an ``env`` mapping makes the Harness environment
+        variables the single source of truth, as :meth:`from_env` intends.
         """
         normalized_sidecar = normalize_sidecar_config(sidecar)
         self.sidecar = ManagedHarnessSidecar(
@@ -145,6 +146,7 @@ class HarnessExtension:
         self.verifier_config = verifier_config
         self.long_run_strategy = long_run_strategy
         self.long_run_ready_threshold = long_run_ready_threshold
+        self.long_run_min_confidence = long_run_min_confidence
         self.skill_prefilter_config = skill_prefilter_config
         self.routing_strategy = routing_strategy
         self.routing_confidence_threshold = routing_confidence_threshold
@@ -188,6 +190,7 @@ class HarnessExtension:
             verifier_config=self.verifier_config,
             long_run_strategy=self.long_run_strategy,
             long_run_ready_threshold=self.long_run_ready_threshold,
+            long_run_min_confidence=self.long_run_min_confidence,
             skill_prefilter_config=self.skill_prefilter_config,
             routing_strategy=self.routing_strategy,
             routing_confidence_threshold=self.routing_confidence_threshold,

@@ -118,6 +118,9 @@ harness_enhance:
 | 长任务引导 | `HARNESS_LONG_RUN_READY_THRESHOLD=0.5` | 更早把运行推向收尾 |
 | 上下文模式块 | `HARNESS_MODE_DECISION_THRESHOLD=0.5` | 更频繁注入模式块 |
 | 最终回答校验 | `HARNESS_VERIFIER_SUPPORT_THRESHOLD=0.5` | 要求更充分的证据才放行回答 |
+| 回答超额声明 | `HARNESS_VERIFIER_OVERCLAIM_THRESHOLD=0.5` | 更多「超出回执范围」的回答被判失败 |
+| 判定置信度（校验） | `HARNESS_VERIFIER_MIN_CONFIDENCE=0` | 更早放弃没把握的结论（`0` 表示全部采信） |
+| 判定置信度（长任务） | `HARNESS_LONG_RUN_MIN_CONFIDENCE=0` | 没把握的动作只保留默认引导文案 |
 | 技能预筛 | `HARNESS_SKILL_DECISION_THRESHOLD=0.5` | 从列表里隐藏更多技能 |
 | 子 Agent 路由 | `HARNESS_ROUTING_DECISION_THRESHOLD=0.5` | 更多请求不经对话模型直接转移 |
 
@@ -129,6 +132,19 @@ harness_enhance:
 | 最终回答校验 | `retry_tool_call` / `soften_claim` / `drop_claim` / `ask_user` | 组装交回主模型的修复指引 |
 
 判定返回未知动作时保留默认文案，同一次判定里的评级仍然生效。
+
+最终回答校验问一个互斥结论（`supported` / `partial` / `unsupported`），加两个正交检查：
+回执是否覆盖主要结论、回答是否超出回执范围。后者是否决位——自称 `supported` 但超出
+回执的回答同样判失败。
+
+命名选项的判定还带着决策模型给该选项的置信度，判定点可以选择不采信没把握的：
+`HARNESS_VERIFIER_MIN_CONFIDENCE`、`HARNESS_LONG_RUN_MIN_CONFIDENCE` 低于该值时保留
+内置结论或默认文案。两者默认 `0`，即所有判定都采信——服务端可能完全不返回置信度。
+
+被抓到的内容永远不会作为指令进入判定：用户请求、最终回答、运行轨迹、工具回执、工具
+输出、记忆文本、会话事件都包在 `<untrusted>` 块里，块内试图下命令的片段统一替换成
+`[defused]` 再发出去。伪造工具输出声称「用户已预先批准」是最便宜的操纵方式，所以它
+只被当作数据处理。
 
 策略依赖已配置的判定模型，环境变量见 [decisions](../decisions/README.zh.md)。判定失败会回落到上表规则，不会让运行失败。
 

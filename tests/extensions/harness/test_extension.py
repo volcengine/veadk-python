@@ -73,6 +73,23 @@ def test_harness_extension_can_tune_the_long_run_threshold() -> None:
     assert plugins[0].ready_threshold == 0.2
 
 
+def test_harness_extension_can_tune_the_long_run_action_confidence() -> None:
+    """级联阈值也要能从代码里给，而不是只能走 env。"""
+    plugins = HarnessExtension(
+        components="long_run_control",
+        long_run_strategy="decision",
+        long_run_min_confidence=0.9,
+    ).plugins()
+
+    assert plugins[0].min_confidence == 0.9
+
+
+def test_harness_extension_keeps_the_confidence_cascade_off_by_default() -> None:
+    plugins = HarnessExtension(components="long_run_control").plugins()
+
+    assert plugins[0].min_confidence == 0.0
+
+
 def test_harness_extension_keeps_the_neutral_threshold_by_default() -> None:
     plugins = HarnessExtension(components="long_run_control").plugins()
 

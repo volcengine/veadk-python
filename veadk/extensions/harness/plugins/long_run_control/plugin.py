@@ -70,17 +70,21 @@ class HarnessLongRunControlPlugin(BasePlugin):
         convergence_judge: ConvergenceJudge | None = None,
         unconditional_after_model_calls: int = 16,
         ready_threshold: float = 0.5,
+        min_confidence: float = 0.0,
     ) -> None:
         super().__init__(name="harness_long_run_control_plugin")
         self.store = store or InMemoryHarnessStore()
         self.profile = profile
         self.trigger_after_model_calls = max(1, trigger_after_model_calls)
         self.strategy = strategy
-        self.convergence_judge = convergence_judge or build_convergence_judge(strategy)
+        self.convergence_judge = convergence_judge or build_convergence_judge(
+            strategy, min_confidence=min_confidence
+        )
         self.unconditional_after_model_calls = max(
             self.trigger_after_model_calls, unconditional_after_model_calls
         )
         self.ready_threshold = ready_threshold
+        self.min_confidence = min_confidence
         self._model_call_counts: dict[tuple[str, str], int] = {}
 
     async def before_model_callback(

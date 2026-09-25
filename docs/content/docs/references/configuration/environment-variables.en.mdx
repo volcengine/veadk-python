@@ -82,8 +82,11 @@ Prefix `HARNESS_`, used to attach optional Harness plugins to HarnessApp Runtime
 | `HARNESS_VERIFIER_STRATEGY` | Final-answer verification, `deterministic` or `decision`; default `deterministic`. |
 | `HARNESS_COMPACTION_KEEP_THRESHOLD` | Compaction candidates: a candidate is kept when the judged probability is at or above this value; default `0.5`. |
 | `HARNESS_LONG_RUN_READY_THRESHOLD` | Long-run steering: guidance is injected when the judged probability of being ready is at or above this value; default `0.5`. |
+| `HARNESS_LONG_RUN_MIN_CONFIDENCE` | Smallest confidence a judged steering action needs; below it the plugin keeps the default wording and only the convergence probability counts; default `0` (off). |
 | `HARNESS_MODE_DECISION_THRESHOLD` | Context mode blocks: a block is injected when the judged probability is at or above this value; default `0.5`. |
 | `HARNESS_VERIFIER_SUPPORT_THRESHOLD` | Final-answer support: the answer fails when the judged support is below this value; default `0.5`. |
+| `HARNESS_VERIFIER_OVERCLAIM_THRESHOLD` | Final-answer support: the answer fails when the judged probability of claiming more than the receipts show is at or above this value, even when the verdict was `supported`; default `0.5`. |
+| `HARNESS_VERIFIER_MIN_CONFIDENCE` | Smallest confidence a judged verdict needs; below it the judge gives none and the builtin rules decide; default `0` (off). |
 | `HARNESS_SKILL_STRATEGY` | Advertised-skills strategy, `all` or `decision`; default `all`. Requires the `skill_prefilter` component. |
 | `HARNESS_SKILL_DECISION_THRESHOLD` | Advertised skills: a skill stays in the request when the judged probability of needing it is at or above this value; default `0.5`. |
 | `HARNESS_SKILL_MAX_CANDIDATES` | Advertised skills: a list longer than this is not judged, so every skill stays advertised; default `40`. |

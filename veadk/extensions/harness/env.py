@@ -133,6 +133,15 @@ def build_harness_plugins_from_env(
             ),
             name="HARNESS_LONG_RUN_READY_THRESHOLD",
         ),
+        long_run_min_confidence=probability_threshold(
+            _first(
+                values,
+                "HARNESS_LONG_RUN_MIN_CONFIDENCE",
+                "HARNESS_ENHANCE_LONG_RUN_MIN_CONFIDENCE",
+            ),
+            name="HARNESS_LONG_RUN_MIN_CONFIDENCE",
+            default=0.0,
+        ),
         verifier_config=FinalResponseVerifierConfig(
             mode=_verifier_mode(
                 values.get("HARNESS_VERIFIER_MODE")
@@ -150,6 +159,23 @@ def build_harness_plugins_from_env(
                     "HARNESS_ENHANCE_VERIFIER_SUPPORT_THRESHOLD",
                 ),
                 name="HARNESS_VERIFIER_SUPPORT_THRESHOLD",
+            ),
+            overclaim_threshold=probability_threshold(
+                _first(
+                    values,
+                    "HARNESS_VERIFIER_OVERCLAIM_THRESHOLD",
+                    "HARNESS_ENHANCE_VERIFIER_OVERCLAIM_THRESHOLD",
+                ),
+                name="HARNESS_VERIFIER_OVERCLAIM_THRESHOLD",
+            ),
+            min_confidence=probability_threshold(
+                _first(
+                    values,
+                    "HARNESS_VERIFIER_MIN_CONFIDENCE",
+                    "HARNESS_ENHANCE_VERIFIER_MIN_CONFIDENCE",
+                ),
+                name="HARNESS_VERIFIER_MIN_CONFIDENCE",
+                default=0.0,
             ),
         ),
         skill_prefilter_config=HarnessSkillPrefilterConfig(

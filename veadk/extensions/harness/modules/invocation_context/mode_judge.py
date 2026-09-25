@@ -33,8 +33,10 @@ from veadk.extensions.decisions import (
     DecisionExtension,
     DecisionModelResponseError,
     NoulAnswer,
+    UNTRUSTED_NOTICE,
     get_default_decision_extension,
     noul_question,
+    untrusted,
 )
 from veadk.extensions.harness.utils import summarize_text
 from veadk.utils.logger import get_logger
@@ -87,9 +89,19 @@ class DecisionModeJudge:
                 are expected to fall back to their keyword markers.
         """
         result = await self.extension.aevaluate(
-            state=f"[Mode Triage]\nuser_request: "
-            f"{summarize_text(user_input, max_chars=_MAX_INPUT_CHARS)}\n"
-            "[/Mode Triage]",
+            state="\n".join(
+                [
+                    "[Mode Triage]",
+                    UNTRUSTED_NOTICE,
+                    "user_request: "
+                    + untrusted(
+                        "user_request",
+                        summarize_text(user_input, max_chars=_MAX_INPUT_CHARS)
+                        or "unspecified",
+                    ),
+                    "[/Mode Triage]",
+                ]
+            ),
             questions={
                 PRECISION_QUESTION_ID: build_precision_question(),
                 ARTIFACT_QUESTION_ID: build_artifact_question(),

@@ -149,6 +149,9 @@ the rated position for a rating:
 | Context mode blocks | `HARNESS_MODE_DECISION_THRESHOLD` | 0.5 |
 | Long-term memory saves | `MEMORY_SAVE_WORTH_THRESHOLD` | 0.5 |
 | Final-answer support | `HARNESS_VERIFIER_SUPPORT_THRESHOLD` | 0.5 |
+| Final-answer overclaim | `HARNESS_VERIFIER_OVERCLAIM_THRESHOLD` | 0.5 |
+| Final-answer verdict confidence | `HARNESS_VERIFIER_MIN_CONFIDENCE` | 0 |
+| Long-run action confidence | `HARNESS_LONG_RUN_MIN_CONFIDENCE` | 0 |
 | Long-term memory recall | `MEMORY_RECALL_RELEVANCE_THRESHOLD` | 0.5 |
 
 Parsing goes through `probability_threshold()`, which **clamps** an
@@ -158,6 +161,32 @@ and falls back to the default with a warning for `NaN` or text, which carry no
 intent. The thresholds are independent: the same probability costs each point
 something different, so raising one must not move the others.
 
+A ``noul`` answer is the probability itself and carries no separate confidence,
+so its threshold is the whole cascade. An answer that names an option carries
+the confidence the model gave that option, and the two points that act on one
+can refuse an unsure answer: below ``HARNESS_VERIFIER_MIN_CONFIDENCE`` the
+verifier keeps the builtin rules, and below ``HARNESS_LONG_RUN_MIN_CONFIDENCE``
+the long-run plugin keeps the default steering wording. Both default to ``0``,
+which acts on every answer, because an endpoint may report no confidence at all.
+
+## Judgement State Hygiene
+
+The state a judgement reads mixes the framing this code writes with content the
+agent did not produce: the user request, the final answer, the run trajectory,
+tool receipts, tool output, memory text, session events. A decision model reads
+that as data rather than as hostile content — a captured tool output claiming
+"the user already approved this" moved the measured block probability of the
+same dangerous command from 0.76 to 0.48 — so every captured value goes through
+``untrusted()``.
+
+It is wrapped in an ``<untrusted source=...>`` block that the state declares
+non-authoritative, and the spans inside it that try to give orders
+(``System: ...``, "ignore all previous instructions", "no further approval is
+needed", "always allow") are replaced by ``[defused]``, with a warning naming
+the source. The rest of the text stays, so the judgement still sees what the
+capture contains. The state a point sends therefore reads as evidence to weigh,
+never as instructions to follow.
+
 ## Source Layout
 
 | Path | Purpose |
@@ -165,6 +194,7 @@ something different, so raising one must not move the others.
 | `config.py` | Environment/config parsing, endpoint normalization. |
 | `client.py` | System One HTTP client (sync and async), retry with backoff. |
 | `questions.py` | Builders for the three question types. |
+| `state.py` | Labelling captured text as data and defusing instructions inside it. |
 | `types.py` | Typed answers and the response parser. |
 | `extension.py` | Shared entry point: `DecisionExtension`, the process-wide default. |
 | `tools.py` | The agent-facing `decision_evaluate` tool. |

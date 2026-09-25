@@ -39,9 +39,11 @@ from veadk.extensions.decisions import (
     DecisionExtension,
     DecisionModelResponseError,
     NoulAnswer,
+    UNTRUSTED_NOTICE,
     choice_question,
     get_default_decision_extension,
     noul_question,
+    untrusted,
 )
 from veadk.extensions.harness.schemas import ConversationMessage
 from veadk.extensions.harness.utils import summarize_text
@@ -109,11 +111,15 @@ class DecisionConvergenceJudge:
         extension: DecisionExtension,
         *,
         max_state_chars: int = _DEFAULT_STATE_CHARS,
+        min_confidence: float = 0.0,
     ) -> None:
         if max_state_chars < 1:
             raise ValueError("max_state_chars must be positive")
+        if not 0.0 <= min_confidence <= 1.0:
+            raise ValueError("min_confidence must be within [0, 1]")
         self.extension = extension
         self.max_state_chars = max_state_chars
+        self.min_confidence = min_confidence
 
     async def ajudge(self, *, goal: str, trajectory: str) -> LongRunJudgement:
         """Return the convergence probability and the steering action.
@@ -132,9 +138,11 @@ class DecisionConvergenceJudge:
         answer = result.answers.get(READY_QUESTION_ID)
         if not isinstance(answer, NoulAnswer):
             raise DecisionModelResponseError("long-run judge returned no usable answer")
+        action_answer = result.answers.get(ACTION_QUESTION_ID)
         return LongRunJudgement(
             ready=answer.noul,
-            action=_action(result.answers.get(ACTION_QUESTION_ID)),
+            action=_confident_action(action_answer, self.min_confidence),
+            confidence=_choice_confidence(action_answer),
         )
 
     def _state(self, goal: str, trajectory: str) -> str:
@@ -143,12 +151,16 @@ class DecisionConvergenceJudge:
         return "\n".join(
             [
                 "[Long Run Check]",
-                f"goal: {goal_text or 'unspecified'}",
-                "trajectory:",
-                summarize_text(
-                    trajectory,
-                    max_chars=max(
-                        _MIN_MESSAGE_CHARS, self.max_state_chars - len(goal_text)
+                UNTRUSTED_NOTICE,
+                "goal: " + untrusted("user_request", goal_text or "unspecified"),
+                "trajectory: "
+                + untrusted(
+                    "run_trajectory",
+                    summarize_text(
+                        trajectory,
+                        max_chars=max(
+                            _MIN_MESSAGE_CHARS, self.max_state_chars - len(goal_text)
+                        ),
                     ),
                 ),
                 "[/Long Run Check]",
@@ -201,6 +213,34 @@ def _action(answer: Any) -> str | None:
     return answer.choice
 
 
+def _choice_confidence(answer: Any) -> float:
+    """Return the probability the judge gave to the option it named."""
+    return answer.confidence if isinstance(answer, ChoiceAnswer) else 0.0
+
+
+def _confident_action(answer: Any, min_confidence: float) -> str | None:
+    """Return the judged action, or ``None`` when the judge is unsure of it.
+
+    Steering a run towards its answer is the judgement that changes behaviour,
+    so an action the judge is not sure about keeps the default wording: the
+    convergence probability that came with it still counts.
+    """
+    action = _action(answer)
+    if action is None or min_confidence <= 0.0:
+        return action
+    confidence = _choice_confidence(answer)
+    if confidence < min_confidence:
+        logger.info(
+            "long-run judge is not confident about %r (%s < %s); "
+            "keeping the default steering wording",
+            action,
+            confidence,
+            min_confidence,
+        )
+        return None
+    return action
+
+
 def trajectory_text(
     messages: Sequence[ConversationMessage],
     *,
@@ -224,12 +264,14 @@ def build_convergence_judge(
     strategy: str,
     *,
     extension: DecisionExtension | None = None,
+    min_confidence: float = 0.0,
 ) -> DecisionConvergenceJudge | None:
     """Build the judge a strategy asks for.
 
     Args:
         strategy: ``decision`` builds a judge; anything else returns ``None``.
         extension: Decision model to use instead of the process-wide one.
+        min_confidence: Smallest confidence a steering action needs to be used.
 
     Returns:
         A judge, or ``None`` when the strategy is not ``decision`` or no
@@ -244,7 +286,7 @@ def build_convergence_judge(
             "configured; keeping the call-count rule"
         )
         return None
-    return DecisionConvergenceJudge(extension)
+    return DecisionConvergenceJudge(extension, min_confidence=min_confidence)
 
 
 __all__ = [

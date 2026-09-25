@@ -41,8 +41,10 @@ from veadk.extensions.decisions import (
     DecisionExtension,
     DecisionModelResponseError,
     NoulAnswer,
+    UNTRUSTED_NOTICE,
     get_default_decision_extension,
     noul_question,
+    untrusted,
 )
 from veadk.extensions.harness.schemas import HarnessBaseModel
 from veadk.extensions.harness.utils import summarize_text
@@ -128,7 +130,8 @@ class DecisionSkillJudge:
         return "\n".join(
             [
                 "[Skill Triage]",
-                f"user_request: {request or 'unspecified'}",
+                UNTRUSTED_NOTICE,
+                "user_request: " + untrusted("user_request", request or "unspecified"),
                 "[/Skill Triage]",
             ]
         )

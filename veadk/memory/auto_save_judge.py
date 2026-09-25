@@ -34,8 +34,10 @@ from veadk.extensions.decisions import (
     DecisionExtension,
     DecisionModelResponseError,
     NoulAnswer,
+    UNTRUSTED_NOTICE,
     get_default_decision_extension,
     noul_question,
+    untrusted,
 )
 from veadk.utils.logger import get_logger
 
@@ -78,7 +80,14 @@ class DecisionMemorySaveJudge:
                 are expected to fall back to their thresholds.
         """
         result = await self.extension.aevaluate(
-            state=f"[Memory Triage]\nnew_events: {events_text}\n[/Memory Triage]",
+            state="\n".join(
+                [
+                    "[Memory Triage]",
+                    UNTRUSTED_NOTICE,
+                    "new_events: " + untrusted("session_events", events_text),
+                    "[/Memory Triage]",
+                ]
+            ),
             questions={WORTH_QUESTION_ID: build_worth_question()},
         )
         answer = result.answers.get(WORTH_QUESTION_ID)

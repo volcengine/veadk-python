@@ -69,6 +69,7 @@ def build_harness_plugins(
     verifier_config: FinalResponseVerifierConfig | None = None,
     long_run_strategy: str = "counter",
     long_run_ready_threshold: float = DEFAULT_JUDGEMENT_THRESHOLD,
+    long_run_min_confidence: float = 0.0,
     skill_prefilter_config: HarnessSkillPrefilterConfig | None = None,
     routing_strategy: str = "model",
     routing_confidence_threshold: float = DEFAULT_JUDGEMENT_THRESHOLD,
@@ -110,6 +111,7 @@ def build_harness_plugins(
                 profile=profile,
                 strategy=_long_run_strategy(long_run_strategy),
                 ready_threshold=long_run_ready_threshold,
+                min_confidence=long_run_min_confidence,
             )
         )
     if "skill_prefilter" in selected:

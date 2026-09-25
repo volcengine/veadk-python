@@ -82,8 +82,11 @@ volcengine:
 | `HARNESS_VERIFIER_STRATEGY` | 最终回答校验策略，`deterministic` 或 `decision`，默认 `deterministic`。 |
 | `HARNESS_COMPACTION_KEEP_THRESHOLD` | 压缩候选保留阈值，默认 `0.5`；判定保留概率低于该值即压缩。 |
 | `HARNESS_LONG_RUN_READY_THRESHOLD` | 长任务收尾阈值，默认 `0.5`；判定可收尾概率高于该值即注入引导。 |
+| `HARNESS_LONG_RUN_MIN_CONFIDENCE` | 长任务引导动作的最低置信度，默认 `0`（关闭）；判定对该动作没把握时只用默认措辞，保留「还没收敛」的信号。 |
 | `HARNESS_MODE_DECISION_THRESHOLD` | 上下文模式块阈值，默认 `0.5`；判定概率高于该值即注入对应模式块。 |
 | `HARNESS_VERIFIER_SUPPORT_THRESHOLD` | 最终回答支撑度阈值，默认 `0.5`；判定支撑度低于该值即判为失败。 |
+| `HARNESS_VERIFIER_OVERCLAIM_THRESHOLD` | 回答超出回执范围的否决阈值，默认 `0.5`；判定概率不低于该值直接判为失败，即使结论是 `supported`。 |
+| `HARNESS_VERIFIER_MIN_CONFIDENCE` | 最终回答判定的最低置信度，默认 `0`（关闭）；低于该值时不做判定，回落到内置规则。 |
 | `HARNESS_SKILL_STRATEGY` | 技能广告策略，`all` 或 `decision`，默认 `all`；需要 `skill_prefilter` 组件。 |
 | `HARNESS_SKILL_DECISION_THRESHOLD` | 技能广告阈值，默认 `0.5`；判定需要该技能的概率不低于该值才继续广告。 |
 | `HARNESS_SKILL_MAX_CANDIDATES` | 技能候选上限，默认 `40`；技能数量超过该值时不判定，全部照常广告。 |
