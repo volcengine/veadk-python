@@ -84,6 +84,11 @@ volcengine:
 | `HARNESS_LONG_RUN_READY_THRESHOLD` | 长任务收尾阈值，默认 `0.5`；判定可收尾概率高于该值即注入引导。 |
 | `HARNESS_MODE_DECISION_THRESHOLD` | 上下文模式块阈值，默认 `0.5`；判定概率高于该值即注入对应模式块。 |
 | `HARNESS_VERIFIER_SUPPORT_THRESHOLD` | 最终回答支撑度阈值，默认 `0.5`；判定支撑度低于该值即判为失败。 |
+| `HARNESS_SKILL_STRATEGY` | 技能广告策略，`all` 或 `decision`，默认 `all`；需要 `skill_prefilter` 组件。 |
+| `HARNESS_SKILL_DECISION_THRESHOLD` | 技能广告阈值，默认 `0.5`；判定需要该技能的概率不低于该值才继续广告。 |
+| `HARNESS_SKILL_MAX_CANDIDATES` | 技能候选上限，默认 `40`；技能数量超过该值时不判定，全部照常广告。 |
+| `HARNESS_ROUTING_STRATEGY` | 子 Agent 路由策略，`model` 或 `decision`，默认 `model`；需要 `agent_routing` 组件。 |
+| `HARNESS_ROUTING_DECISION_THRESHOLD` | 路由阈值，默认 `0.5`；判定概率不低于该值才直接转移。 |
 
 `harness_enhance` 配置块会在 HarnessApp Runtime 部署时映射为这些环境变量。推荐开发者优先通过 `harness.yaml` 或 `veadk agentkit invoke` 参数启用，环境变量适合平台集成和镜像运行时。
 

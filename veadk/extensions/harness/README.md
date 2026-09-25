@@ -63,6 +63,8 @@ runner = Runner(
 | `HarnessInvocationContextPlugin` | `on_user_message_callback`, `before_model_callback` | Prepares task anchors, recent context, and tool-use guardrails. |
 | `HarnessCompressPlugin` | `before_model_callback`, `after_tool_callback` | Shrinks oversized tool outputs while preserving useful facts. |
 | `HarnessResponseVerificationPlugin` | `after_tool_callback`, `after_model_callback`, `on_event_callback` | Records tool receipts and flags unsupported final claims. |
+| `HarnessSkillPrefilterPlugin` | `before_model_callback` | Rewrites the skill list of a request to the skills one judgement says it needs. |
+| `HarnessAgentRoutingPlugin` | `before_model_callback` | Returns the `transfer_to_agent` call a confident judgement picked. |
 
 ## Runtime Environment
 
@@ -74,6 +76,8 @@ HARNESS_COMPRESSION_PROVIDER=builtin
 HARNESS_COMPACTION_STRATEGY=builtin
 HARNESS_LONG_RUN_STRATEGY=counter
 HARNESS_MODE_STRATEGY=keywords
+HARNESS_SKILL_STRATEGY=all
+HARNESS_ROUTING_STRATEGY=model
 ```
 
 ```python
@@ -95,7 +99,7 @@ harness_enhance:
 
 ## Decision Model Strategies
 
-Three judgement points can ask the configured decision model instead of using
+Six judgement points can ask the configured decision model instead of using
 their built-in rules. Every strategy is opt-in, and without a decision model
 each one keeps its rule and logs a warning.
 
@@ -105,6 +109,8 @@ each one keeps its rule and logs a warning.
 | Long-run steering | `HARNESS_LONG_RUN_STRATEGY=decision` | Model-call counter | Counter, and always after `unconditional_after_model_calls` |
 | Context mode blocks | `HARNESS_MODE_STRATEGY=decision` | Precision and artifact keyword markers | Keyword markers |
 | Final-answer support | `HARNESS_VERIFIER_STRATEGY=decision` | Completion markers plus a successful-receipt check | Builtin rules |
+| Skill prefilter | `HARNESS_SKILL_STRATEGY=decision` | Advertising every loaded skill | Every skill stays advertised |
+| Agent routing | `HARNESS_ROUTING_STRATEGY=decision` | The model picking the transfer target | The model routes |
 
 Every judgement asks for the probability of "yes" in `[0, 1]`, and each point
 keeps its own threshold: raising one point's bar does not raise the others',
@@ -119,6 +125,8 @@ values, and falls back to `0.5` for an unusable one.
 | Long-run steering | `HARNESS_LONG_RUN_READY_THRESHOLD=0.5` | Steers a run toward its answer sooner |
 | Context mode blocks | `HARNESS_MODE_DECISION_THRESHOLD=0.5` | Injects the mode block more often |
 | Final-answer support | `HARNESS_VERIFIER_SUPPORT_THRESHOLD=0.5` | Requires more evidence before the answer passes |
+| Skill prefilter | `HARNESS_SKILL_DECISION_THRESHOLD=0.5` | Hides more skills from the list |
+| Agent routing | `HARNESS_ROUTING_DECISION_THRESHOLD=0.5` | Routes more requests without asking the model |
 
 Two strategies also choose an action instead of only crossing a threshold, and
 the action shapes what the plugin injects:
@@ -140,6 +148,9 @@ environment variables: `compaction_config=ToolResultCompactorConfig(strategy="de
 `context_config=HarnessInvocationContextConfig(mode_strategy="decision")`, and
 `long_run_strategy="decision"` / `long_run_ready_threshold=0.5` on
 `HarnessExtension`, plus `verifier_config=FinalResponseVerifierConfig(strategy="decision", support_threshold=0.5)`.
+The two newer ones are their own components: `components=["skill_prefilter"]`
+with `skill_prefilter_config=HarnessSkillPrefilterConfig(strategy="decision")`,
+and `components=["agent_routing"]` with `routing_strategy="decision"`.
 Passing an `env` mapping instead makes the environment
 variables the only source, as `HarnessExtension.from_env()` does.
 

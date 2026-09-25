@@ -12,28 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Harness plugin entry points for VeADK."""
+"""Skill prefilter plugin exports."""
 
-from veadk.extensions.harness.plugins.entrypoints import (
-    HarnessAgentRoutingPlugin,
-    HarnessCompressPlugin,
-    HarnessContextPlugin,
-    HarnessHallucinationPlugin,
-    HarnessInvocationContextPlugin,
-    HarnessLongRunControlPlugin,
-    HarnessResponseVerificationPlugin,
+from veadk.extensions.harness.plugins.skill_prefilter.plugin import (
     HarnessSkillPrefilterPlugin,
-    build_harness_plugins,
 )
 
-__all__ = [
-    "HarnessAgentRoutingPlugin",
-    "HarnessCompressPlugin",
-    "HarnessContextPlugin",
-    "HarnessHallucinationPlugin",
-    "HarnessInvocationContextPlugin",
-    "HarnessLongRunControlPlugin",
-    "HarnessResponseVerificationPlugin",
-    "HarnessSkillPrefilterPlugin",
-    "build_harness_plugins",
-]
+__all__ = ["HarnessSkillPrefilterPlugin"]

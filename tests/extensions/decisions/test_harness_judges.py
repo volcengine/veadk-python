@@ -30,9 +30,16 @@ from veadk.extensions.harness.modules.tool_result_compactor import (
     ToolResultCompactor,
     ToolResultCompactorConfig,
 )
+from veadk.extensions.harness.modules.agent_routing import DecisionAgentRouter
+from veadk.extensions.harness.modules.skill_prefilter import DecisionSkillJudge
 from veadk.extensions.harness.schemas import CompressionRequest, ConversationMessage
 
 from .fake_system_one import fake_system_one
+
+_ROUTING_AGENTS = {
+    "billing_agent": "handles invoices and refunds",
+    "docs_agent": "answers product questions",
+}
 
 
 def _extension(base_url: str) -> DecisionExtension:
@@ -147,3 +154,97 @@ def test_decision_strategy_end_to_end_keeps_evidence_and_fits() -> None:
     assert result.report.compressed_chars <= 12000
     assert result.messages[1] == messages[1]
     assert result.messages[3] != messages[3]
+
+
+def _noul_script(
+    values: dict[str, float],
+) -> tuple[int, dict[str, str], dict[str, object]]:
+    """Build a response answering ``skill_<index>`` questions."""
+    return (
+        200,
+        {},
+        {
+            "model": "fake-system-one",
+            "answers": {
+                name: {"type": "noul", "noul": value} for name, value in values.items()
+            },
+        },
+    )
+
+
+def test_skill_judge_asks_about_every_candidate_in_one_request() -> None:
+    with fake_system_one([_noul_script({"skill_0": 0.92, "skill_1": 0.08})]) as server:
+        judge = DecisionSkillJudge(_extension(server.base_url))
+        probabilities = asyncio.run(
+            judge.aprobabilities(
+                user_input="render the chart",
+                skills={"chart_skill": "draws charts", "mail_skill": "sends mail"},
+            )
+        )
+
+    assert len(server.calls) == 1
+    call = server.calls[0]
+    assert sorted(call.questions) == ["skill_0", "skill_1"]
+    assert call.questions["skill_1"]["type"] == "noul"
+    assert probabilities["chart_skill"] == pytest.approx(0.92)
+    assert probabilities["mail_skill"] == pytest.approx(0.08)
+    # 候选只出现在问题里：状态没有技能描述，问题之间互相看不见
+    assert "render the chart" in call.state
+    assert "draws charts" not in call.state
+    assert "draws charts" in call.questions["skill_0"]["instructions"]
+
+
+def test_agent_router_returns_a_target_above_its_threshold() -> None:
+    scripted = (
+        200,
+        {},
+        {
+            "model": "fake-system-one",
+            "answers": {
+                "target": {
+                    "type": "choice",
+                    "choice": "docs_agent",
+                    "confidence": 0.83,
+                    "probabilities": {"docs_agent": 0.83, "billing_agent": 0.1},
+                }
+            },
+        },
+    )
+    with fake_system_one([scripted]) as server:
+        router = DecisionAgentRouter(
+            _extension(server.base_url), confidence_threshold=0.8
+        )
+        target = asyncio.run(
+            router.aroute(user_input="how do I rotate a key?", agents=_ROUTING_AGENTS)
+        )
+
+    assert target == "docs_agent"
+    assert len(server.calls) == 1
+    call = server.calls[0]
+    assert call.questions["target"]["criteria"] == _ROUTING_AGENTS
+    assert "how do I rotate a key?" in call.state
+
+
+def test_agent_router_leaves_a_low_confidence_choice_to_the_model() -> None:
+    scripted = (
+        200,
+        {},
+        {
+            "model": "fake-system-one",
+            "answers": {
+                "target": {
+                    "type": "choice",
+                    "choice": "docs_agent",
+                    "confidence": 0.55,
+                    "probabilities": {"docs_agent": 0.55, "billing_agent": 0.45},
+                }
+            },
+        },
+    )
+    with fake_system_one([scripted]) as server:
+        router = DecisionAgentRouter(
+            _extension(server.base_url), confidence_threshold=0.8
+        )
+        target = asyncio.run(router.aroute(user_input="hello", agents=_ROUTING_AGENTS))
+
+    assert target is None

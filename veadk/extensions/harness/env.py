@@ -46,6 +46,10 @@ def build_harness_plugins_from_env(
     from veadk.extensions.harness.modules.invocation_context import (
         HarnessInvocationContextConfig,
     )
+    from veadk.extensions.harness.modules.skill_prefilter import (
+        DEFAULT_MAX_CANDIDATES,
+        HarnessSkillPrefilterConfig,
+    )
     from veadk.extensions.harness.modules.tool_result_compactor import (
         ToolResultCompactorConfig,
     )
@@ -147,6 +151,42 @@ def build_harness_plugins_from_env(
                 ),
                 name="HARNESS_VERIFIER_SUPPORT_THRESHOLD",
             ),
+        ),
+        skill_prefilter_config=HarnessSkillPrefilterConfig(
+            strategy=_decision_strategy(
+                values.get("HARNESS_SKILL_STRATEGY")
+                or values.get("HARNESS_ENHANCE_SKILL_STRATEGY"),
+                default="all",
+            ),
+            decision_threshold=probability_threshold(
+                _first(
+                    values,
+                    "HARNESS_SKILL_DECISION_THRESHOLD",
+                    "HARNESS_ENHANCE_SKILL_DECISION_THRESHOLD",
+                ),
+                name="HARNESS_SKILL_DECISION_THRESHOLD",
+            ),
+            max_candidates=_int_value(
+                _first(
+                    values,
+                    "HARNESS_SKILL_MAX_CANDIDATES",
+                    "HARNESS_ENHANCE_SKILL_MAX_CANDIDATES",
+                ),
+                default=DEFAULT_MAX_CANDIDATES,
+            ),
+        ),
+        routing_strategy=_decision_strategy(
+            values.get("HARNESS_ROUTING_STRATEGY")
+            or values.get("HARNESS_ENHANCE_ROUTING_STRATEGY"),
+            default="model",
+        ),
+        routing_confidence_threshold=probability_threshold(
+            _first(
+                values,
+                "HARNESS_ROUTING_DECISION_THRESHOLD",
+                "HARNESS_ENHANCE_ROUTING_DECISION_THRESHOLD",
+            ),
+            name="HARNESS_ROUTING_DECISION_THRESHOLD",
         ),
     )
 

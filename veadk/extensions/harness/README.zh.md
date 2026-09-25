@@ -61,6 +61,8 @@ runner = Runner(
 | `HarnessInvocationContextPlugin` | `on_user_message_callback`, `before_model_callback` | 准备任务锚点、近期上下文和工具使用约束。 |
 | `HarnessCompressPlugin` | `before_model_callback`, `after_tool_callback` | 压缩过大的工具输出，同时保留关键事实。 |
 | `HarnessResponseVerificationPlugin` | `after_tool_callback`, `after_model_callback`, `on_event_callback` | 记录工具执行 receipt，并标记缺少证据的最终回答。 |
+| `HarnessSkillPrefilterPlugin` | `before_model_callback` | 把请求里的技能列表收窄到本次判定认为需要的技能。 |
+| `HarnessAgentRoutingPlugin` | `before_model_callback` | 判定足够确信时直接返回 `transfer_to_agent` 调用。 |
 
 ## 运行时配置
 
@@ -72,6 +74,8 @@ HARNESS_COMPRESSION_PROVIDER=builtin
 HARNESS_COMPACTION_STRATEGY=builtin
 HARNESS_LONG_RUN_STRATEGY=counter
 HARNESS_MODE_STRATEGY=keywords
+HARNESS_SKILL_STRATEGY=all
+HARNESS_ROUTING_STRATEGY=model
 ```
 
 ```python
@@ -92,7 +96,7 @@ harness_enhance:
 
 ## 判定模型策略
 
-三个判定点可以选择改用已配置的判定模型，替代内置规则。所有策略默认关闭；没有配置判定模型时会各自保留原规则并打印告警。
+六个判定点可以选择改用已配置的判定模型，替代内置规则。所有策略默认关闭；没有配置判定模型时会各自保留原规则并打印告警。
 
 | 策略 | 开关 | 被替代的规则 | 判定不可用时 |
 | --- | --- | --- | --- |
@@ -100,6 +104,8 @@ harness_enhance:
 | 长任务引导 | `HARNESS_LONG_RUN_STRATEGY=decision` | 仅按模型调用次数计数 | 计数规则，并在 `unconditional_after_model_calls` 后强制生效 |
 | 上下文模式块 | `HARNESS_MODE_STRATEGY=decision` | 精度/产物关键词匹配 | 关键词匹配 |
 | 最终回答校验 | `HARNESS_VERIFIER_STRATEGY=decision` | 完成类关键词加「有无成功回执」 | 内置规则 |
+| 技能预筛 | `HARNESS_SKILL_STRATEGY=decision` | 广告全部已加载技能 | 技能列表保持不变 |
+| 子 Agent 路由 | `HARNESS_ROUTING_STRATEGY=decision` | 由对话模型选择要转移的子 Agent | 由对话模型路由 |
 
 判定返回的是「是」在 `[0, 1]` 上的概率，每个点各自持有阈值：同一个概率落在不同点上
 代价不同，所以调高一个点的门槛不会抬高其它点。两个点返回的是评级而不是是否，阈值
@@ -112,6 +118,8 @@ harness_enhance:
 | 长任务引导 | `HARNESS_LONG_RUN_READY_THRESHOLD=0.5` | 更早把运行推向收尾 |
 | 上下文模式块 | `HARNESS_MODE_DECISION_THRESHOLD=0.5` | 更频繁注入模式块 |
 | 最终回答校验 | `HARNESS_VERIFIER_SUPPORT_THRESHOLD=0.5` | 要求更充分的证据才放行回答 |
+| 技能预筛 | `HARNESS_SKILL_DECISION_THRESHOLD=0.5` | 从列表里隐藏更多技能 |
+| 子 Agent 路由 | `HARNESS_ROUTING_DECISION_THRESHOLD=0.5` | 更多请求不经对话模型直接转移 |
 
 两个策略除了过阈值还会选动作，动作决定注入内容：
 
@@ -129,6 +137,9 @@ harness_enhance:
 `context_config=HarnessInvocationContextConfig(mode_strategy="decision")`、
 `HarnessExtension(long_run_strategy="decision", long_run_ready_threshold=0.5)`、
 `verifier_config=FinalResponseVerifierConfig(strategy="decision", support_threshold=0.5)`。
+后两个判定点是独立组件：`components=["skill_prefilter"]` 配
+`skill_prefilter_config=HarnessSkillPrefilterConfig(strategy="decision")`，
+`components=["agent_routing"]` 配 `routing_strategy="decision"`。
 一旦传入 `env` 映射，就以环境变量为唯一来源（`HarnessExtension.from_env()` 即这种形态）。
 
 ## 直接使用模块

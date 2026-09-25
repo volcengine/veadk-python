@@ -60,6 +60,8 @@ plugins = build_harness_plugins(components=["compactor"])
 | `compactor` | `HarnessCompressPlugin` | Compacts oversized tool results and old function responses. |
 | `response_verification` | `HarnessResponseVerificationPlugin` | Records tool receipts and checks whether final answers are supported. |
 | `long_run_control` | `HarnessLongRunControlPlugin` | Adds finish-oriented guidance when a run approaches its model-call budget. |
+| `skill_prefilter` | `HarnessSkillPrefilterPlugin` | Advertises only the skills the current request needs; the agent instruction keeps every skill. |
+| `agent_routing` | `HarnessAgentRoutingPlugin` | Transfers to the sub-agent a confident judgement picked; the model routes everything else. |
 
 ## Core Concepts
 
@@ -88,6 +90,10 @@ plugins = build_harness_plugins(components=["compactor"])
 | `veadk/extensions/harness/plugins/compactor/` | Tool-result and context compaction callback plugin. |
 | `veadk/extensions/harness/plugins/response_verification/` | Receipt recording and final-response verification callback plugin. |
 | `veadk/extensions/harness/plugins/long_run_control/` | Long-run guidance callback plugin. |
+| `veadk/extensions/harness/modules/skill_prefilter/` | Skill-list parsing and the per-skill judgement. |
+| `veadk/extensions/harness/modules/agent_routing/` | Transfer-target judgement. |
+| `veadk/extensions/harness/plugins/skill_prefilter/` | Skill-list narrowing callback plugin. |
+| `veadk/extensions/harness/plugins/agent_routing/` | Transfer callback plugin. |
 | `veadk/extensions/harness/plugins/_shared/` | Internal callback helpers shared by plugins. |
 | `veadk/extensions/harness/stores/` | Store protocol and in-memory or JSONL implementations. |
 
@@ -177,6 +183,8 @@ export HARNESS_VERIFIER_MODE=observe
 # export HARNESS_COMPACTION_STRATEGY=decision
 # export HARNESS_LONG_RUN_STRATEGY=decision
 # export HARNESS_MODE_STRATEGY=decision
+# export HARNESS_SKILL_STRATEGY=decision
+# export HARNESS_ROUTING_STRATEGY=decision
 ```
 
 Equivalent YAML:
@@ -220,10 +228,15 @@ veadk agentkit invoke \
 | `HARNESS_COMPACTION_KEEP_THRESHOLD` | `0.5` | Compaction candidates: keeps a candidate above this probability. |
 | `HARNESS_LONG_RUN_READY_THRESHOLD` | `0.5` | Long-run steering: steers the run to finish above this probability. |
 | `HARNESS_MODE_DECISION_THRESHOLD` | `0.5` | Context mode blocks: injects a block above this probability. |
+| `HARNESS_SKILL_STRATEGY` | `all` | Advertised skills: `all` or `decision`. |
+| `HARNESS_SKILL_DECISION_THRESHOLD` | `0.5` | Skills: a skill stays advertised when its judged probability is at or above this value. |
+| `HARNESS_SKILL_MAX_CANDIDATES` | `40` | Skills: a list longer than this is not judged at all, so every skill stays advertised. |
+| `HARNESS_ROUTING_STRATEGY` | `model` | Agent routing: `model` or `decision`. |
+| `HARNESS_ROUTING_DECISION_THRESHOLD` | `0.5` | Routing: transfers only when the judged agent is at or above this probability. |
 
 ## Decision Model Strategies
 
-The four `*_STRATEGY=decision` settings replace a rule with a judgement from
+The six `*_STRATEGY=decision` settings replace a rule with a judgement from
 the configured decision model. They need `DECISION_MODEL_ENABLED=true` and an
 API key; without one, each strategy keeps its rule and logs a warning.
 
@@ -233,6 +246,8 @@ API key; without one, each strategy keeps its rule and logs a warning.
 | `HARNESS_LONG_RUN_STRATEGY` | Model-call counter | Counter, forced after the unconditional count |
 | `HARNESS_MODE_STRATEGY` | Precision and artifact keyword markers | Keyword markers |
 | `HARNESS_VERIFIER_STRATEGY` | Completion markers plus a successful-receipt check | Builtin rules |
+| `HARNESS_SKILL_STRATEGY` | Advertising every loaded skill | Every skill stays advertised |
+| `HARNESS_ROUTING_STRATEGY` | The model picking the sub-agent to transfer to | The model routes |
 
 ### Judgement Thresholds
 
@@ -248,6 +263,8 @@ back to `0.5` for an unusable one.
 | `HARNESS_LONG_RUN_READY_THRESHOLD` | `0.5` | Steers a run toward its answer sooner |
 | `HARNESS_MODE_DECISION_THRESHOLD` | `0.5` | Injects the mode block more often |
 | `HARNESS_VERIFIER_SUPPORT_THRESHOLD` | `0.5` | Requires more evidence before the answer passes |
+| `HARNESS_SKILL_DECISION_THRESHOLD` | `0.5` | Hides more skills from the list |
+| `HARNESS_ROUTING_DECISION_THRESHOLD` | `0.5` | Routes more requests without asking the model |
 
 A judgement also picks an action: long-run steering chooses `narrow_scope` /
 `nudge_to_finish` / `force_finish` to shape the injected guidance, and

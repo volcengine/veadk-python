@@ -230,3 +230,78 @@ def test_verifier_keeps_the_builtin_rules_by_default():
     assert plugin.verifier.config.strategy == "deterministic"
     assert plugin.verifier.config.support_threshold == 0.5
     assert plugin.support_judge is None
+
+
+def test_skill_prefilter_settings_are_read_from_env():
+    plugins = build_harness_plugins_from_env(
+        {
+            "HARNESS_ENHANCE_ENABLED": "true",
+            "HARNESS_ENHANCE_COMPONENTS": "skill_prefilter",
+            "HARNESS_SKILL_STRATEGY": "decision",
+            "HARNESS_SKILL_DECISION_THRESHOLD": "0.8",
+            "HARNESS_SKILL_MAX_CANDIDATES": "12",
+        }
+    )
+
+    assert [plugin.name for plugin in plugins] == ["harness_skill_prefilter_plugin"]
+    config = plugins[0].config
+    assert config.strategy == "decision"
+    assert config.decision_threshold == 0.8
+    assert config.max_candidates == 12
+    # 没有判定模型时保留完整技能列表，而不是隐藏技能。
+    assert plugins[0].uses_judgement is False
+
+
+def test_skill_prefilter_keeps_every_skill_by_default():
+    plugins = build_harness_plugins_from_env(
+        {
+            "HARNESS_ENHANCE_ENABLED": "true",
+            "HARNESS_ENHANCE_COMPONENTS": "skill_prefilter",
+        }
+    )
+    config = plugins[0].config
+
+    assert config.strategy == "all"
+    assert config.decision_threshold == 0.5
+    assert config.max_candidates == 40
+    # 未选判定模型时，带 ``HARNESS_ENHANCE_`` 前缀的写法也必须被接受。
+    alias = build_harness_plugins_from_env(
+        {
+            "HARNESS_ENHANCE_ENABLED": "true",
+            "HARNESS_ENHANCE_COMPONENTS": "skill_prefilter",
+            "HARNESS_ENHANCE_SKILL_DECISION_THRESHOLD": "1.5",
+        }
+    )[0]
+    assert alias.config.decision_threshold == 1.0
+
+
+def test_routing_settings_are_read_from_env():
+    plugins = build_harness_plugins_from_env(
+        {
+            "HARNESS_ENHANCE_ENABLED": "true",
+            "HARNESS_ENHANCE_COMPONENTS": "routing",
+            "HARNESS_ROUTING_STRATEGY": "decision",
+            "HARNESS_ROUTING_DECISION_THRESHOLD": "0.7",
+        }
+    )
+
+    assert [plugin.name for plugin in plugins] == ["harness_agent_routing_plugin"]
+    plugin = plugins[0]
+    assert plugin.strategy == "decision"
+    assert plugin.confidence_threshold == 0.7
+    # 没有判定模型时交给对话模型路由。
+    assert plugin.router is None
+    assert plugin.uses_judgement is False
+
+
+def test_routing_keeps_the_choice_with_the_model_by_default():
+    plugins = build_harness_plugins_from_env(
+        {
+            "HARNESS_ENHANCE_ENABLED": "true",
+            "HARNESS_ENHANCE_COMPONENTS": "agent_router",
+        }
+    )
+    plugin = plugins[0]
+
+    assert plugin.strategy == "model"
+    assert plugin.confidence_threshold == 0.5

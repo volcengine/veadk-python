@@ -44,6 +44,9 @@ if TYPE_CHECKING:
     from veadk.extensions.harness.modules.invocation_context import (
         HarnessInvocationContextConfig,
     )
+    from veadk.extensions.harness.modules.skill_prefilter import (
+        HarnessSkillPrefilterConfig,
+    )
     from veadk.extensions.harness.modules.tool_result_compactor import (
         ToolResultCompactorConfig,
     )
@@ -85,15 +88,20 @@ class HarnessExtension:
         verifier_config: FinalResponseVerifierConfig | None = None,
         long_run_strategy: str = "counter",
         long_run_ready_threshold: float = DEFAULT_JUDGEMENT_THRESHOLD,
+        skill_prefilter_config: HarnessSkillPrefilterConfig | None = None,
+        routing_strategy: str = "model",
+        routing_confidence_threshold: float = DEFAULT_JUDGEMENT_THRESHOLD,
         sidecar: bool | Mapping[str, Any] | Any | None = None,
         env: Mapping[str, str] | None = None,
     ) -> None:
         """Configure Harness plugin assembly.
 
         ``context_config``, ``compaction_config``, ``verifier_config``, and
-        ``long_run_strategy`` / ``long_run_ready_threshold`` only apply when
-        ``env`` is ``None``: an ``env`` mapping makes the Harness environment
-        variables the single source of truth, as :meth:`from_env` intends.
+        ``long_run_strategy`` / ``long_run_ready_threshold``,
+        ``skill_prefilter_config``, and ``routing_strategy`` /
+        ``routing_confidence_threshold`` only apply when ``env`` is ``None``: an
+        ``env`` mapping makes the Harness environment variables the single
+        source of truth, as :meth:`from_env` intends.
         """
         normalized_sidecar = normalize_sidecar_config(sidecar)
         self.sidecar = ManagedHarnessSidecar(
@@ -137,6 +145,9 @@ class HarnessExtension:
         self.verifier_config = verifier_config
         self.long_run_strategy = long_run_strategy
         self.long_run_ready_threshold = long_run_ready_threshold
+        self.skill_prefilter_config = skill_prefilter_config
+        self.routing_strategy = routing_strategy
+        self.routing_confidence_threshold = routing_confidence_threshold
         self.env = dict(env) if env is not None else None
         self.sidecar.start()
 
@@ -177,6 +188,9 @@ class HarnessExtension:
             verifier_config=self.verifier_config,
             long_run_strategy=self.long_run_strategy,
             long_run_ready_threshold=self.long_run_ready_threshold,
+            skill_prefilter_config=self.skill_prefilter_config,
+            routing_strategy=self.routing_strategy,
+            routing_confidence_threshold=self.routing_confidence_threshold,
         )
 
     @property

@@ -79,6 +79,34 @@ def test_harness_extension_keeps_the_neutral_threshold_by_default() -> None:
     assert plugins[0].ready_threshold == 0.5
 
 
+def test_harness_extension_can_select_the_skill_prefilter_and_routing() -> None:
+    """The programmatic path reaches the two opt-in judgement components too."""
+
+    from veadk.extensions.harness.modules.skill_prefilter import (
+        HarnessSkillPrefilterConfig,
+    )
+
+    plugins = HarnessExtension(
+        components="skill_prefilter,agent_routing",
+        skill_prefilter_config=HarnessSkillPrefilterConfig(
+            strategy="decision",
+            decision_threshold=0.8,
+        ),
+        routing_strategy="decision",
+        routing_confidence_threshold=0.7,
+    ).plugins()
+    by_name = {plugin.name: plugin for plugin in plugins}
+
+    assert sorted(by_name) == [
+        "harness_agent_routing_plugin",
+        "harness_skill_prefilter_plugin",
+    ]
+    assert by_name["harness_skill_prefilter_plugin"].config.strategy == "decision"
+    assert by_name["harness_skill_prefilter_plugin"].config.decision_threshold == 0.8
+    assert by_name["harness_agent_routing_plugin"].strategy == "decision"
+    assert by_name["harness_agent_routing_plugin"].confidence_threshold == 0.7
+
+
 def test_harness_extension_from_env_builds_configured_plugins() -> None:
     plugins = HarnessExtension.from_env(
         {
