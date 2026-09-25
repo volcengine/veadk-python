@@ -2,7 +2,7 @@
 title: "环境变量"
 ---
 
-环境变量是最主要的配置方式，提供密钥、连接信息与服务地址。变量名按领域前缀分组：火山引擎账号、模型、内置工具、数据库、可观测各成一类。每个环境变量都能在 `config.yaml` 中以对应层级结构表达，两者等价。
+环境变量是最主要的配置方式，提供密钥、连接信息与服务地址。变量名按领域前缀分组：火山引擎账号、模型、内置工具、Harness Extension、决策模型、长记忆、数据库、可观测各成一类。每个环境变量都能在 `config.yaml` 中以对应层级结构表达，两者等价。
 
 <Callout type="info">
 密钥统一通过环境变量或 `config.yaml` 提供。下表按领域列出常用变量，仅需配置实际用到的能力对应项。
@@ -86,6 +86,49 @@ volcengine:
 | `HARNESS_VERIFIER_SUPPORT_THRESHOLD` | 最终回答支撑度阈值，默认 `0.5`；判定支撑度低于该值即判为失败。 |
 
 `harness_enhance` 配置块会在 HarnessApp Runtime 部署时映射为这些环境变量。推荐开发者优先通过 `harness.yaml` 或 `veadk agentkit invoke` 参数启用，环境变量适合平台集成和镜像运行时。
+
+## 决策模型
+
+统一前缀 `DECISION_MODEL_`，用于挂载可选的判定模型（Jev）。判定模型与对话模型完全独立，只服务少数判定点；未配置或调用失败时，各调用方回落到原内置规则。`enabled` 与 `api_key` 同时具备才算配置完成。
+
+| 环境变量 | 释义 |
+| :- | :- |
+| `DECISION_MODEL_ENABLED` | 是否启用判定模型，支持 `true` / `false`，默认 `false`。 |
+| `DECISION_MODEL_PROVIDER` | 服务提供方，`typesafe` / `openrouter` / `systemone`，默认 `typesafe`；未知取值按 `typesafe` 处理。 |
+| `DECISION_MODEL_NAME` | 模型名称，默认 `jev-latest`。 |
+| `DECISION_MODEL_API_BASE` | 服务地址；不设置时按 provider 取默认值，未以 `/v1/systemone` 结尾会自动补上。 |
+| `DECISION_MODEL_API_KEY` | 访问密钥；为空视为未配置。 |
+| `DECISION_MODEL_TIMEOUT` | 单次判定预算（秒，含重试与退避），默认 `5`，上限 `5`。 |
+| `DECISION_MODEL_MAX_RETRIES` | 判定请求重试次数，默认 `3`。 |
+| `DECISION_MODEL_FAILURE_THRESHOLD` | 连续失败多少次后熔断，默认 `3`；`0` 表示不熔断。 |
+| `DECISION_MODEL_COOLDOWN_SECONDS` | 熔断后的冷却时长（秒），默认 `30`。 |
+
+```yaml title="config.yaml"
+model:
+  decision:
+    enabled: true
+    provider: openrouter
+    name: typesafe/jev-1.13
+    # api_key:
+    # timeout: 5
+```
+
+`config.yaml` 的 `model.decision.*` 会被展开为 `MODEL_DECISION_*`，与 `DECISION_MODEL_*` 等价；两者同时设置时 `DECISION_MODEL_*` 优先。
+
+HarnessApp Runtime 部署时，`harness.yaml` 的顶层 `decision_model` 块映射为这组变量。
+
+## 长记忆
+
+长记忆的落库与召回各有一个可选判定点。策略都在模块导入时读取，修改后需重启进程；判定不可用或未配置时，回落原有行为。
+
+| 子类 | 环境变量 | 释义 |
+| :- | :- | :- |
+| 落库判定 | `MEMORY_SAVE_STRATEGY` | `threshold` 只走数值阈值；`decision` 交判定模型决定，默认 `threshold`。 |
+| | `MEMORY_SAVE_WORTH_THRESHOLD` | 值得长期记住的概率阈值，默认 `0.5`；低于该值跳过写入、且不推进游标。 |
+| | `MIN_MESSAGES_THRESHOLD` | `threshold` 策略下最少新增消息数，默认 `10`。 |
+| | `MIN_TIME_THRESHOLD` | `threshold` 策略下两次写入的最小间隔（秒），默认 `60`。 |
+| 召回判定 | `MEMORY_RECALL_STRATEGY` | `off` 直接返回后端排序结果；`decision` 逐条评估相关度并丢弃低分项，默认 `off`。 |
+| | `MEMORY_RECALL_RELEVANCE_THRESHOLD` | 相关度阈值，默认 `0.5`；低于该值丢弃。未评估到的记忆、以及超出 20 条判定上限的部分原样保留。 |
 
 ## 数据库
 

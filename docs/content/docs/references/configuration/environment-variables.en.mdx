@@ -2,7 +2,7 @@
 title: "Environment variables"
 ---
 
-Environment variables are the primary configuration method, supplying secrets, connection details, and service addresses. Names are grouped by domain prefix: Volcengine account, models, built-in tools, databases, and observability. Every variable can also be expressed as the equivalent nested structure in `config.yaml`.
+Environment variables are the primary configuration method, supplying secrets, connection details, and service addresses. Names are grouped by domain prefix: Volcengine account, models, built-in tools, Harness Extension, decision model, long-term memory, databases, and observability. Every variable can also be expressed as the equivalent nested structure in `config.yaml`.
 
 <Callout type="info">
 Supply secrets through environment variables or `config.yaml`. The tables below list common variables by domain; configure only those for the capabilities actually used.
@@ -86,6 +86,49 @@ Prefix `HARNESS_`, used to attach optional Harness plugins to HarnessApp Runtime
 | `HARNESS_VERIFIER_SUPPORT_THRESHOLD` | Final-answer support: the answer fails when the judged support is below this value; default `0.5`. |
 
 The `harness_enhance` block maps to these environment variables when deploying a HarnessApp Runtime. Prefer `harness.yaml` or `veadk agentkit invoke` flags for normal developer workflows; use environment variables for platform integration and container runtimes.
+
+## Decision model
+
+Prefix `DECISION_MODEL_`, for attaching the optional judgement model (Jev). It is fully independent of the agent model and serves a small number of judgement points; when it is unconfigured or a call fails, each caller falls back to its built-in rule. Both `enabled` and `api_key` are required for the model to count as configured.
+
+| Variable | Meaning |
+| :- | :- |
+| `DECISION_MODEL_ENABLED` | Enable the judgement model; accepts `true` / `false`; default `false`. |
+| `DECISION_MODEL_PROVIDER` | Service provider, `typesafe` / `openrouter` / `systemone`; default `typesafe`. An unknown value is treated as `typesafe`. |
+| `DECISION_MODEL_NAME` | Model name, default `jev-latest`. |
+| `DECISION_MODEL_API_BASE` | Service address; defaults per provider when unset, and `/v1/systemone` is appended when missing. |
+| `DECISION_MODEL_API_KEY` | Access key; an empty value counts as unconfigured. |
+| `DECISION_MODEL_TIMEOUT` | Budget for one judgement in seconds, retries and backoff included; default `5`, ceiling `5`. |
+| `DECISION_MODEL_MAX_RETRIES` | Retries per judgement request, default `3`. |
+| `DECISION_MODEL_FAILURE_THRESHOLD` | Consecutive failures that trip the circuit breaker, default `3`; `0` disables it. |
+| `DECISION_MODEL_COOLDOWN_SECONDS` | Cooldown length in seconds after tripping, default `30`. |
+
+```yaml title="config.yaml"
+model:
+  decision:
+    enabled: true
+    provider: openrouter
+    name: typesafe/jev-1.13
+    # api_key:
+    # timeout: 5
+```
+
+`model.decision.*` in `config.yaml` expands to `MODEL_DECISION_*`, which is equivalent to `DECISION_MODEL_*`; when both are set, `DECISION_MODEL_*` wins.
+
+When deploying a HarnessApp Runtime, the top-level `decision_model` block in `harness.yaml` maps to this group.
+
+## Long-term memory
+
+Long-term memory has one optional judgement point for saving and one for recall. Both strategies are read at module import time, so a change requires a process restart; an unconfigured or unavailable judgement falls back to the previous behaviour.
+
+| Kind | Variable | Meaning |
+| :- | :- | :- |
+| Save | `MEMORY_SAVE_STRATEGY` | `threshold` uses the numeric thresholds only; `decision` lets the judgement model decide; default `threshold`. |
+| | `MEMORY_SAVE_WORTH_THRESHOLD` | Probability above which a turn is worth remembering, default `0.5`; below it the save is skipped and the cursor does not advance. |
+| | `MIN_MESSAGES_THRESHOLD` | Minimum new messages under the `threshold` strategy, default `10`. |
+| | `MIN_TIME_THRESHOLD` | Minimum seconds between saves under the `threshold` strategy, default `60`. |
+| Recall | `MEMORY_RECALL_STRATEGY` | `off` returns the backend ranking as-is; `decision` rates each memory and drops the low ones; default `off`. |
+| | `MEMORY_RECALL_RELEVANCE_THRESHOLD` | Relevance threshold, default `0.5`; memories below it are dropped. Memories the judgement did not rate, and those beyond the 20-item limit, are kept as-is. |
 
 ## Databases
 
