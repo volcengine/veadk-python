@@ -45,6 +45,9 @@ function toConfig(draft: AgentDraft, root = true): Record<string, unknown> {
   o.name = draft.name;
   o.description = draft.description;
   o.instruction = draft.instruction;
+  if (!draft.agentType || draft.agentType === "llm") {
+    o.contextCompression = draft.contextCompression ?? { mode: "auto" };
+  }
   if (draft.agentType === "loop") o.maxIterations = draft.maxIterations ?? 3;
   const primaryModelName = draft.modelName?.trim() ?? "";
   const modelFallbacks = normalizeModelFallbacks(

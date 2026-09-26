@@ -44,6 +44,9 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  context-compression-gate:
+    uses: ./.github/workflows/context-compression-gate.yaml
+
   harness-sidecar-release-gate:
     if: >-
       github.repository == 'volcengine/veadk-python' &&
@@ -51,6 +54,7 @@ jobs:
     uses: ./.github/workflows/harness-sidecar-release-gate.yaml
 
   verify:
+    needs: context-compression-gate
     if: >-
       github.repository == 'volcengine/veadk-python' &&
       (github.event_name == 'pull_request' || github.ref == 'refs/heads/main')

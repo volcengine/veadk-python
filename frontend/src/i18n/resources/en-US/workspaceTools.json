@@ -278,6 +278,15 @@
     "unnamed": "(Unnamed)"
   },
   "agentTopology": {
+    "contextCompression": {
+      "configured": "Context compression: configured",
+      "compression_disabled": "Context compression: off",
+      "needs_configuration": "Context protection: model capacity required",
+      "invalid_configuration": "Context protection: invalid capacity settings",
+      "unsupported_model_adapter": "Context protection: unsupported model adapter",
+      "unsupported_runtime": "Context protection: unsupported runtime",
+      "unknown": "Context protection: unknown status"
+    },
     "mainAgent": "Main Agent",
     "subAgent": "Sub-agent {{index}}",
     "itemCount_one": "{{count}} item",

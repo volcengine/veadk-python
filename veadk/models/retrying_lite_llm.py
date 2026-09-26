@@ -20,6 +20,7 @@ import asyncio
 import copy
 import math
 from collections.abc import AsyncGenerator
+from contextlib import aclosing
 from typing import Any
 
 from google.adk.models.lite_llm import LiteLlm
@@ -27,6 +28,21 @@ from google.adk.models.llm_request import LlmRequest
 from google.adk.models.llm_response import LlmResponse
 from typing_extensions import override
 
+from veadk.context.attempts import (
+    AttemptLedger,
+    current_attempts,
+    is_context_overflow,
+    next_with_deadline,
+)
+from veadk.context.budget import (
+    ContextBudgetError,
+    check_payload,
+    request_payload,
+)
+from veadk.context.client import BudgetedLiteLLMClient
+from veadk.context.config import resolve_config
+from veadk.context.manager import prepare_context, recover_context
+from veadk.context.runtime import is_summary
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -92,7 +108,10 @@ class RetryingLiteLlm(LiteLlm):
     """
 
     def __init__(self, *, model: str, **kwargs: Any) -> None:
+        context_config = resolve_config(kwargs.pop("context_compression", None))
         super().__init__(model=model, **kwargs)
+        self._context_config = context_config
+        self.llm_client = BudgetedLiteLLMClient(self.llm_client, context_config)
         self._fallbacks_template = copy.deepcopy(
             getattr(self, "_additional_args", {}).get("fallbacks")
         )
@@ -106,40 +125,157 @@ class RetryingLiteLlm(LiteLlm):
         if self._fallbacks_template is not None:
             self._additional_args["fallbacks"] = copy.deepcopy(self._fallbacks_template)
 
+    def with_context_compression(self, config):
+        """Copy policy without mutating a model shared by multiple Agents."""
+        clone = self.model_copy()
+        clone._additional_args = copy.deepcopy(self._additional_args)
+        clone._context_config = resolve_config(
+            {
+                **self._context_config.model_dump(),
+                **resolve_config(config).model_dump(exclude_unset=True),
+            }
+        )
+        delegate = self.llm_client
+        if isinstance(delegate, BudgetedLiteLLMClient):
+            delegate = delegate.delegate
+        clone.llm_client = BudgetedLiteLLMClient(delegate, clone._context_config)
+        return clone
+
+    @property
+    def context_compression_status(self):
+        from veadk.context.status import describe_context
+
+        return describe_context(self, self._context_config)
+
     @override
     async def generate_content_async(
         self,
         llm_request: LlmRequest,
         stream: bool = False,
     ) -> AsyncGenerator[LlmResponse, None]:
-        retry_request = _copy_retry_request(llm_request)
-        emitted = False
+        ledger = AttemptLedger(
+            1 if is_summary.get() else self._context_config.max_model_attempts,
+            self._context_config.request_timeout_seconds,
+            summary_timeout=self._context_config.summary_time_budget_seconds,
+        )
+        token = current_attempts.set(ledger)
         try:
-            self._refresh_fallbacks()
-            async for response in super().generate_content_async(
-                llm_request,
-                stream=stream,
-            ):
-                emitted = True
-                yield response
-            return
-        except Exception as error:
-            if emitted or _status_code(error) != 429:
-                raise
-            delay = _retry_delay_seconds(error)
-            logger.info(
-                "Retrying one pre-output LiteLLM request after HTTP 429 "
-                "delay_seconds=%s",
-                delay,
-            )
-            await asyncio.sleep(delay)
+            async with aclosing(
+                self._generate_managed(llm_request, stream)
+            ) as responses:
+                while True:
+                    try:
+                        response = await next_with_deadline(responses, ledger)
+                    except StopAsyncIteration:
+                        break
+                    yield response
+        finally:
+            try:
+                await ledger.close_streams()
+            finally:
+                current_attempts.reset(token)
 
-        self._refresh_fallbacks()
-        async for response in super().generate_content_async(
-            retry_request,
-            stream=stream,
-        ):
-            yield response
+    async def _generate_managed(self, llm_request: LlmRequest, stream: bool):
+        dispatch_tools = llm_request.tools_dict
+        original_request = _copy_retry_request(llm_request)
+        llm_request = _copy_retry_request(llm_request)
+        await prepare_context(
+            llm_request, self, self._context_config, self._additional_args
+        )
+        from veadk.context.tool_results import READ_CONTEXT_TOOL
+
+        if READ_CONTEXT_TOOL in llm_request.tools_dict:
+            dispatch_tools[READ_CONTEXT_TOOL] = llm_request.tools_dict[
+                READ_CONTEXT_TOOL
+            ]
+        check_payload(
+            {
+                **self._additional_args,
+                **request_payload(llm_request),
+                "model": llm_request.model or self.model,
+            },
+            self._context_config,
+        )
+        quota_retried = False
+        context_recovered = False
+        while True:
+            emitted = False
+            try:
+                self._refresh_fallbacks()
+                async with aclosing(
+                    super().generate_content_async(
+                        _copy_retry_request(llm_request),
+                        stream=stream,
+                    )
+                ) as responses:
+                    async for response in responses:
+                        emitted = True
+                        yield response
+                return
+            except Exception as error:
+                if emitted or is_summary.get():
+                    raise
+                if (
+                    isinstance(error, ContextBudgetError)
+                    and error.code == "input_too_large"
+                    and not context_recovered
+                    and self._context_config.mode != "off"
+                ):
+                    # Client admission failed before any network attempt. Plan
+                    # once more with the measured final-payload overhead.
+                    from veadk.context.budget import count_input
+
+                    context_recovered = True
+                    overhead = max(
+                        256,
+                        error.input_tokens
+                        - count_input(
+                            request_payload(llm_request), self._context_config
+                        )
+                        + 256,
+                    )
+                    llm_request = await recover_context(
+                        original_request,
+                        llm_request,
+                        self,
+                        self._context_config,
+                        self._additional_args,
+                        input_overhead=overhead,
+                    )
+                    if READ_CONTEXT_TOOL in llm_request.tools_dict:
+                        dispatch_tools[READ_CONTEXT_TOOL] = llm_request.tools_dict[
+                            READ_CONTEXT_TOOL
+                        ]
+                    continue
+                if is_context_overflow(error):
+                    if context_recovered or self._context_config.mode == "off":
+                        raise ContextBudgetError("provider_context_limit") from None
+                    context_recovered = True
+                    recovered = await recover_context(
+                        original_request,
+                        llm_request,
+                        self,
+                        self._context_config,
+                        self._additional_args,
+                    )
+                    llm_request = recovered
+                    if READ_CONTEXT_TOOL in recovered.tools_dict:
+                        dispatch_tools[READ_CONTEXT_TOOL] = recovered.tools_dict[
+                            READ_CONTEXT_TOOL
+                        ]
+                    continue
+                if quota_retried or _status_code(error) != 429:
+                    raise
+                quota_retried = True
+                delay = _retry_delay_seconds(error)
+                ledger = current_attempts.get()
+                remaining = ledger.remaining() if ledger is not None else None
+                if remaining is not None and delay >= remaining:
+                    raise ContextBudgetError("request_time_budget_exhausted") from None
+                logger.info(
+                    "Retrying one pre-output LiteLLM HTTP 429; delay_seconds=%s", delay
+                )
+                await asyncio.sleep(delay)
 
 
 __all__ = ["RetryingLiteLlm"]
