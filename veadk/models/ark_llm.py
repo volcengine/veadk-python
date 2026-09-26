@@ -14,53 +14,70 @@
 
 # adapted from Google ADK models adk-python/blob/main/src/google/adk/models/lite_llm.py at f1f44675e4a86b75e72cfd838efd8a0399f23e24 · google/adk-python
 
+import asyncio
 import base64
 import copy
 import json
 import time
-from typing import Any, Dict, Union, AsyncGenerator, Tuple, List, Optional, Literal
-from typing_extensions import override
+from contextlib import aclosing
+from typing import Any, AsyncGenerator, Dict, List, Literal, Optional, Tuple, Union
 
-from google.adk.models import LlmRequest, LlmResponse, Gemini
+from google.adk.models import Gemini
+from google.adk.models.llm_request import LlmRequest
+from google.adk.models.llm_response import LlmResponse
 from google.genai import types
-from pydantic import Field, BaseModel
+from pydantic import BaseModel, Field
+from typing_extensions import override
 from volcenginesdkarkruntime import AsyncArk
+from volcenginesdkarkruntime._exceptions import ArkBadRequestError
 from volcenginesdkarkruntime._streaming import AsyncStream
 from volcenginesdkarkruntime.types.responses import (
-    Response as ArkTypeResponse,
-    ResponseStreamEvent,
     FunctionToolParam,
-    ResponseTextConfigParam,
-    ResponseReasoningItem,
+    ResponseCompletedEvent,
+    ResponseError,
+    ResponseFunctionToolCall,
+    ResponseIncompleteEvent,
     ResponseOutputMessage,
     ResponseOutputText,
-    ResponseFunctionToolCall,
+    ResponseReasoningItem,
     ResponseReasoningSummaryTextDeltaEvent,
+    ResponseStreamEvent,
+    ResponseTextConfigParam,
     ResponseTextDeltaEvent,
-    ResponseCompletedEvent,
-    ResponseIncompleteEvent,
-    ResponseError,
+)
+from volcenginesdkarkruntime.types.responses import (
+    Response as ArkTypeResponse,
 )
 from volcenginesdkarkruntime.types.responses.response_incomplete_details import (
     IncompleteDetails,
 )
 from volcenginesdkarkruntime.types.responses.response_input_message_content_list_param import (
-    ResponseInputTextParam,
-    ResponseInputImageParam,
-    ResponseInputVideoParam,
-    ResponseInputFileParam,
     ResponseInputContentParam,
+    ResponseInputFileParam,
+    ResponseInputImageParam,
+    ResponseInputTextParam,
+    ResponseInputVideoParam,
 )
 from volcenginesdkarkruntime.types.responses.response_input_param import (
-    ResponseInputItemParam,
-    ResponseFunctionToolCallParam,
     EasyInputMessageParam,
     FunctionCallOutput,
+    ResponseFunctionToolCallParam,
+    ResponseInputItemParam,
 )
-from volcenginesdkarkruntime._exceptions import ArkBadRequestError
 
 from veadk.config import settings
 from veadk.consts import DEFAULT_VIDEO_MODEL_API_BASE
+from veadk.context.attempts import AttemptLedger, current_attempts, is_context_overflow
+from veadk.context.budget import (
+    ContextBudgetError,
+    check_payload,
+    fallback_config,
+    resolve_budget,
+    resolve_payload_budget,
+)
+from veadk.context.config import resolve_config
+from veadk.context.manager import prepare_context, recover_context
+from veadk.context.runtime import is_summary
 from veadk.utils.adk_compat import (
     get_previous_interaction_id,
     llm_request_has_field,
@@ -693,6 +710,7 @@ class ArkLlmClient:
         client = AsyncArk(
             base_url=api_base,
             api_key=api_key,
+            max_retries=0,
         )
 
         raw_response = await client.responses.create(**kwargs)
@@ -708,6 +726,7 @@ class ArkLlm(Gemini):
     enable_responses_cache: bool = True
 
     def __init__(self, **kwargs):
+        context_config = resolve_config(kwargs.pop("context_compression", None))
         # adk version check
         if not llm_request_has_field("previous_interaction_id"):
             raise ImportError(
@@ -716,6 +735,7 @@ class ArkLlm(Gemini):
                 "`pip install -U 'google-adk>=1.34.0'`"
             )
         super().__init__(**kwargs)
+        self._context_config = context_config
         self.enable_responses_cache = kwargs.get("enable_responses_cache", True)
         drop_params = kwargs.pop("drop_params", None)
         self._additional_args = dict(kwargs)
@@ -727,6 +747,43 @@ class ArkLlm(Gemini):
         self._additional_args.pop("enable_responses_cache", None)
         if drop_params is not None:
             self._additional_args["drop_params"] = drop_params
+        if (
+            resolve_budget(
+                self.model,
+                context_config,
+                self._additional_args.get("max_output_tokens"),
+            )
+            is not None
+        ):
+            # Ask ADK to construct complete local history from the outset. Never
+            # drop a server-chain ID after ADK has already reduced it to a delta.
+            self.use_interactions_api = False
+
+    def with_context_compression(self, config):
+        clone = self.model_copy()
+        clone._additional_args = copy.deepcopy(self._additional_args)
+        clone._context_config = resolve_config(
+            {
+                **self._context_config.model_dump(),
+                **resolve_config(config).model_dump(exclude_unset=True),
+            }
+        )
+        if (
+            resolve_budget(
+                clone.model,
+                clone._context_config,
+                clone._additional_args.get("max_output_tokens"),
+            )
+            is not None
+        ):
+            clone.use_interactions_api = False
+        return clone
+
+    @property
+    def context_compression_status(self):
+        from veadk.context.status import describe_context
+
+        return describe_context(self, self._context_config)
 
     async def generate_content_async(
         self, llm_request: LlmRequest, stream: bool = False
@@ -740,6 +797,104 @@ class ArkLlm(Gemini):
         Yields:
           LlmResponse: The model response.
         """
+        from veadk.context.attempts import next_with_deadline
+
+        ledger = AttemptLedger(
+            1 if is_summary.get() else self._context_config.max_model_attempts,
+            self._context_config.request_timeout_seconds,
+            summary_timeout=self._context_config.summary_time_budget_seconds,
+        )
+        token = current_attempts.set(ledger)
+        try:
+            async with aclosing(
+                self._generate_managed(llm_request, stream)
+            ) as responses:
+                while True:
+                    try:
+                        response = await next_with_deadline(responses, ledger)
+                    except StopAsyncIteration:
+                        break
+                    yield response
+        finally:
+            current_attempts.reset(token)
+
+    async def _generate_managed(self, llm_request: LlmRequest, stream: bool):
+        from veadk.models.retrying_lite_llm import _copy_retry_request
+
+        dispatch_tools = llm_request.tools_dict
+        original_request = _copy_retry_request(llm_request)
+        llm_request = _copy_retry_request(llm_request)
+        await prepare_context(
+            llm_request, self, self._context_config, self._additional_args
+        )
+        from veadk.context.tool_results import READ_CONTEXT_TOOL
+
+        if READ_CONTEXT_TOOL in llm_request.tools_dict:
+            dispatch_tools[READ_CONTEXT_TOOL] = llm_request.tools_dict[
+                READ_CONTEXT_TOOL
+            ]
+        recovered = False
+        while True:
+            emitted = False
+            try:
+                async with aclosing(
+                    self._generate_prepared(_copy_retry_request(llm_request), stream)
+                ) as responses:
+                    async for response in responses:
+                        emitted = True
+                        yield response
+                return
+            except Exception as error:
+                if (
+                    not emitted
+                    and not is_summary.get()
+                    and not recovered
+                    and self._context_config.mode != "off"
+                    and isinstance(error, ContextBudgetError)
+                    and error.code == "input_too_large"
+                ):
+                    from veadk.context.budget import count_input, request_payload
+
+                    recovered = True
+                    overhead = max(
+                        256,
+                        error.input_tokens
+                        - count_input(
+                            request_payload(llm_request), self._context_config
+                        )
+                        + 256,
+                    )
+                    llm_request = await recover_context(
+                        original_request,
+                        llm_request,
+                        self,
+                        self._context_config,
+                        self._additional_args,
+                        input_overhead=overhead,
+                    )
+                    if READ_CONTEXT_TOOL in llm_request.tools_dict:
+                        dispatch_tools[READ_CONTEXT_TOOL] = llm_request.tools_dict[
+                            READ_CONTEXT_TOOL
+                        ]
+                    continue
+                if emitted or is_summary.get() or not is_context_overflow(error):
+                    raise
+                if recovered or self._context_config.mode == "off":
+                    raise ContextBudgetError("provider_context_limit") from None
+                recovered = True
+                llm_request = await recover_context(
+                    original_request,
+                    llm_request,
+                    self,
+                    self._context_config,
+                    self._additional_args,
+                )
+                if READ_CONTEXT_TOOL in llm_request.tools_dict:
+                    dispatch_tools[READ_CONTEXT_TOOL] = llm_request.tools_dict[
+                        READ_CONTEXT_TOOL
+                    ]
+
+    async def _generate_prepared(self, llm_request: LlmRequest, stream: bool):
         self._maybe_append_user_content(llm_request)
         # logger.debug(_build_request_log(llm_request))
 
@@ -782,7 +937,7 @@ class ArkLlm(Gemini):
         streaming response has reached the caller, switching models would mix
         chunks from two responses, so the original error is propagated.
         """
-        models = [self.model, *(self.fallbacks or [])]
+        models = [self.model, *((self.fallbacks or []) if not is_summary.get() else [])]
 
         for index, model in enumerate(models):
             attempt_args = copy.deepcopy(responses_args)
@@ -798,15 +953,21 @@ class ArkLlm(Gemini):
                 return
             except Exception as error:
                 if yielded_response:
-                    logger.exception(
+                    logger.error(
                         f"Ark Responses API streaming request failed after model `{model}` emitted output; fallback is unsafe"
                     )
+                    raise
+
+                if is_context_overflow(error) or (
+                    isinstance(error, ContextBudgetError)
+                    and error.code != "input_too_large"
+                ):
                     raise
 
                 failure = error
                 if self._is_previous_response_not_found(error):
                     logger.warning(
-                        f"Interaction expired for model `{model}` (PreviousResponseNotFound). Retrying without previous_response_id. Error: {error}"
+                        f"Interaction expired for model `{model}` (PreviousResponseNotFound). Retrying without previous_response_id."
                     )
                     responses_args = copy.deepcopy(responses_args)
                     responses_args.pop("previous_response_id", None)
@@ -822,21 +983,25 @@ class ArkLlm(Gemini):
                         return
                     except Exception as retry_error:
                         if retry_yielded_response:
-                            logger.exception(
+                            logger.error(
                                 f"Ark Responses API streaming retry failed after model `{model}` emitted output; fallback is unsafe"
                             )
                             raise
                         failure = retry_error
+                        if is_context_overflow(retry_error) or isinstance(
+                            retry_error, ContextBudgetError
+                        ):
+                            raise
 
                 if index + 1 < len(models):
                     next_model = models[index + 1]
                     logger.warning(
-                        f"Ark Responses API request with model `{model}` failed. Falling back to `{next_model}`. Error: {failure}"
+                        f"Ark Responses API request with model `{model}` failed. Falling back to `{next_model}`."
                     )
                     continue
 
                 logger.error(
-                    f"Ark Responses API request failed for all configured models. Last model: `{model}`. Error: {failure}"
+                    f"Ark Responses API request failed for all configured models. Last model: `{model}`."
                 )
                 raise failure.with_traceback(failure.__traceback__)
 
@@ -852,19 +1017,59 @@ class ArkLlm(Gemini):
         self, responses_args: dict, stream: bool = False
     ):
         model = responses_args["model"]
+        policy = self._context_config
+        if (
+            model != self.model
+            and resolve_payload_budget({**responses_args, "model": self.model}, policy)
+            is not None
+        ):
+            policy = fallback_config(model, policy, payload=responses_args)
+        # Validate before normalization can drop a chain ID, a schema, or a
+        # conflicting output setting and hide an unaccounted part of input.
+        check_payload(responses_args, policy)
         responses_args = request_reorganization_by_ark(
             responses_args, enable_responses_cache=self.enable_responses_cache
         )
+        if is_summary.get():
+            responses_args.pop("tools", None)
+            responses_args.pop("tool_choice", None)
+            responses_args.pop("context_management", None)
+            from veadk.context.budget import model_limits
+
+            if model_limits(model).get("ark_thinking_controls"):
+                responses_args["reasoning"] = {"effort": "minimal"}
+        check_payload(responses_args, policy)
+        ledger = current_attempts.get() or AttemptLedger(
+            1 if is_summary.get() else policy.max_model_attempts,
+            policy.request_timeout_seconds,
+            summary_timeout=policy.summary_time_budget_seconds,
+        )
+        remaining = ledger.claim()
         if stream:
             responses_args["stream"] = True
-            async for part in await self.llm_client.aresponses(**responses_args):
-                llm_response = event_to_generate_content_response(
-                    event=part, is_partial=True, model_version=model
-                )
-                if llm_response:
-                    yield llm_response
+            response_stream = await asyncio.wait_for(
+                self.llm_client.aresponses(**responses_args), timeout=remaining
+            )
+            from veadk.context.attempts import close_stream, next_with_deadline
+
+            try:
+                iterator = getattr(response_stream, "__aiter__")()
+                while True:
+                    try:
+                        part = await next_with_deadline(iterator, ledger)
+                    except StopAsyncIteration:
+                        break
+                    llm_response = event_to_generate_content_response(
+                        event=part, is_partial=True, model_version=model
+                    )
+                    if llm_response:
+                        yield llm_response
+            finally:
+                await close_stream(response_stream)
         else:
-            raw_response = await self.llm_client.aresponses(**responses_args)
+            raw_response = await asyncio.wait_for(
+                self.llm_client.aresponses(**responses_args), timeout=remaining
+            )
             llm_response = ark_response_to_generate_content_response(raw_response)
             yield llm_response
 

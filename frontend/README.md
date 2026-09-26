@@ -1611,3 +1611,29 @@ it. Deleting a default set stops feedback writes to that set and prevents backgr
 List filtering and counts currently scan only the selected Runtime's objects,
 with bounded parallel reads. This is intended for the initial dataset sizes;
 large collections will need a separate rebuildable query index.
+
+### Automatic recoverable context compression
+
+SDK Agents and all Studio creation paths default to automatic compression,
+including templates, intelligent creation, YAML import and recursive LLM Agents.
+An explicit `mode: "off"` remains off. Both creation views expose context window,
+maximum input, output reserve, compression trigger/target and historical-summary
+trigger. Draft, YAML and generated Python preserve the same policy.
+
+The default Runner stores complete sessions in project SQLite (`.adk/session.db`).
+Old material in model input becomes selected evidence and source references; the
+model can search or page through original records only when needed. The disposable
+retrieval index is opened lazily and closed per invocation. Ark Agents reuse their
+existing first-party embedding access; other providers require explicitly configured
+embedding access. Without it or on optional-service failure, local evidence selection
+and the original-record reader remain available. Embedding adds bounded API work.
+
+Unknown/custom models require a documented context window. External `codex` and
+`piagent` runtimes own their model loops and report `unsupported_runtime`; these
+SDK controls apply to standard ADK LLM Agents, not workflow containers or A2A remotes.
+Changing the policy requires regenerating the project, including during deployment.
+Generated projects pin the running Studio SDK distribution version. Development
+builds require the matching candidate source/wheel instead of an older PyPI release.
+
+Validate with `npm test`, `npm run build`, and the repository-level
+`python tests/run_context_compression_gate.py -q`.

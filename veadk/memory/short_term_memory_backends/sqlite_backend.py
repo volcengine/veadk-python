@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import os
-import sqlite3
 from functools import cached_property
 from typing import Any
 
@@ -36,9 +35,16 @@ class SQLiteSTMBackend(BaseShortTermMemoryBackend):
         self.local_path = os.path.abspath(self.local_path)
         # if the DB file not exists, create it
         if not self._db_exists():
-            os.makedirs(os.path.dirname(self.local_path), exist_ok=True)
-            conn = sqlite3.connect(self.local_path)
-            conn.close()
+            os.makedirs(os.path.dirname(self.local_path), mode=0o700, exist_ok=True)
+            try:
+                fd = os.open(
+                    self.local_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600
+                )
+            except FileExistsError:
+                # Another local worker may initialize the same database first.
+                pass
+            else:
+                os.close(fd)
 
         if should_use_async_db_drivers():
             self._db_url = f"sqlite+aiosqlite:///{self.local_path}"

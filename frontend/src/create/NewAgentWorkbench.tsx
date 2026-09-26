@@ -12,6 +12,7 @@ import { Input } from "@openai/apps-sdk-ui/components/Input";
 import { Select, type Option } from "@openai/apps-sdk-ui/components/Select";
 import { Switch } from "@openai/apps-sdk-ui/components/Switch";
 import { Textarea } from "@openai/apps-sdk-ui/components/Textarea";
+import { ContextCompressionFields } from "./ContextCompressionFields";
 
 import {
   listIdentityUserPools,
@@ -1266,6 +1267,14 @@ export function NewAgentWorkbench({
                       <p className="new-agent-workbench__error" role="alert">
                         {t("workbench.validation.apiKeyRequired")}
                       </p>
+                    ) : null}
+                    {showModelFallbacks ? (
+                      <ContextCompressionFields
+                        variant="workbench"
+                        value={draft.contextCompression}
+                        onChange={(contextCompression) => onDraftPatch({ contextCompression })}
+                        disabled={deploying}
+                      />
                     ) : null}
                     <div className="new-agent-workbench__field">
                       <span>{t("workbench.agent.skills")}</span>

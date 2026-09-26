@@ -1,0 +1,87 @@
+---
+title: 上下文压缩
+description: 默认保存完整会话，按需压缩模型输入并回查原文
+---
+
+普通 `veadk.Agent` 和 Studio 新生成的标准 Agent 默认开启可恢复上下文压缩。
+达到输入预算的 80% 时开始整理长材料和工具结果，目标为 60%；达到 95% 时允许整理旧对话。
+模型输入保留当前问题相关证据，其余旧片段改为来源引用。模型需要细节时自行调用
+`veadk_read_context` 搜索或分页读取原文，不会每次强制回查。
+
+## 默认使用
+
+```python
+from veadk import Agent, Runner
+
+agent = Agent(name="assistant")
+runner = Runner(agent=agent, app_name="my_app", user_id="user")
+# 在现有异步应用中：await runner.run("你的问题", session_id="session")
+```
+
+未指定 Session 后端时，Runner 将完整会话保存在当前项目 `.adk/session.db`。
+重新启动后，用相同应用、用户和 Session ID 可继续会话。压缩只改变发给模型的输入，
+不会用摘要覆盖数据库原文。已显式配置的 Session 后端保持有效；内存后端不保证重启恢复。
+SQLite 适合本地或单实例持久卷，多实例应使用共享数据库 Session 后端。
+
+## 配置输入上限和阈值
+
+```python
+agent = Agent(
+    name="assistant",
+    context_compression={
+        "mode": "auto",
+        "context_window": 64000,
+        "input_limit": 48000,
+        "output_reserve": 8000,
+        "trigger_ratio": 0.8,
+        "target_ratio": 0.6,
+        "summary_trigger_ratio": 0.95,
+    },
+)
+```
+
+| 字段 | 含义 |
+| --- | --- |
+| `context_window` | 模型或部署的上下文总上限。已知模型可自动识别；自定义端点需要配置。 |
+| `input_limit` | 开发者设置的最大输入预算。实际值还受模型上限、输出预留和安全余量约束。 |
+| `output_reserve` | 规划输入时为输出预留的空间，不会单独设置生成长度上限。 |
+| `trigger_ratio` | 何时开始压缩，默认 0.8。 |
+| `target_ratio` | 压缩后的目标比例，默认 0.6。 |
+| `summary_trigger_ratio` | 何时允许整理旧对话，默认 0.95。 |
+
+比例基于可用输入预算，必须满足 `0 < target_ratio < trigger_ratio <= summary_trigger_ratio <= 1`。
+它们不是固定压缩率；近期问题、系统指令、工具调用配对、签名和必要证据会影响实际缩减量。
+完整请求会再次检查容量。无法安全缩到上限以内时返回明确的预算错误，避免盲目截断。
+当前估算采用保守 UTF-8 字节上界，因此填写 token 容量时可能比服务端实际计数更早触发。
+图片等媒体没有可靠容量估计时还需提供 `media_token_reserve`，不能保证所有图片超限都自动恢复。
+
+Studio 两种创建界面的模型设置均提供开关和上述阈值，比例显示为百分数。
+草稿、YAML、嵌套 LLM Agent 和生成 Python 使用同一配置；修改后需要重新生成项目。
+
+## 检索与开销
+
+默认按当前问题用关键词与 embedding 混合选择原文证据，检索索引保存在
+`.adk/context-index.sqlite3`，无需手工绑定检索器或预索引。短输入不会打开索引或调用 embedding。
+首次压缩按需建立索引，后续复用已完成的向量；大材料自动使用分层索引。
+
+Ark Agent 使用同一官方端点的已有访问配置。可以通过现有 `MODEL_EMBEDDING_NAME`、
+`MODEL_EMBEDDING_DIM`、`MODEL_EMBEDDING_API_BASE`、`MODEL_EMBEDDING_API_KEY` 配置 embedding。
+其他服务或代理端点的密钥不会自动转给 Ark，需要显式提供 embedding 访问配置。
+检索共享 5 秒截止时间；默认每次 Agent 调用最多 64 次 embedding 请求、4 路并发、不自动重试。
+未配置、超时、部分索引或服务异常时使用本地证据选择，原文仍可回查。embedding 和必要摘要另计调用费用。
+
+可设置 `retrieval="lexical"` 只使用本地证据选择，或修改 `index_path` 和 `embedding_max_calls`。
+这些字段放在 `context_compression` 字典中。已有 `use_context_retriever(...)` 自定义绑定优先，
+由调用者负责关闭；默认检索器由 SDK 在每次调用结束时关闭，不残留后台请求。
+
+## 关闭和能力状态
+
+```python
+agent = Agent(name="assistant", context_compression=False)
+print(agent.context_compression_status)  # 仅容量和状态，不包含提示词或凭证。
+```
+
+关闭后不改变模型输入，但已知容量仍会检查。自定义 BaseLlm 适配器、外部 `codex`／`piagent`
+执行器和实时音视频不自动获得本 SDK 模型循环的压缩能力，应查看实际能力状态。
+恢复工具只读取当前应用、用户、Session、Agent 和分支授权的原始记录；索引不能代替授权源。
+压缩可能遗漏有用信息，实际质量应以自己的业务题单验证。

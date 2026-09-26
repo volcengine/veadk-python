@@ -16,6 +16,7 @@ import { useTranslation } from "react-i18next";
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "motion/react";
 import { Checkbox } from "@openai/apps-sdk-ui/components/Checkbox";
+import { ContextCompressionFields } from "./ContextCompressionFields";
 import { RadioGroup } from "@openai/apps-sdk-ui/components/RadioGroup";
 import {
   ArrowUp,
@@ -6227,6 +6228,14 @@ export function CustomCreate({
                                     onSecretChange={patchCustomModelSecret}
                                   />
                                 )}
+                                {showModelFallbacks ? (
+                                  <ContextCompressionFields
+                                    variant="traditional"
+                                    value={node.contextCompression}
+                                    onChange={(contextCompression) => patch({ contextCompression })}
+                                    disabled={building || newWorkbenchDeploying}
+                                  />
+                                ) : null}
                               </div>
                             </Section>
 

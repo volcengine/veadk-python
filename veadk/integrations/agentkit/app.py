@@ -36,7 +36,6 @@ from google.adk.agents.base_agent import BaseAgent
 from google.adk.agents.remote_a2a_agent import RemoteA2aAgent
 from google.adk.agents.run_config import StreamingMode
 from google.adk.apps.app import App
-from google.adk.cli.api_server import RunAgentRequest
 from google.adk.runners import Runner as AdkRunner
 from google.adk.utils.context_utils import Aclosing
 from google.genai import types
@@ -48,8 +47,18 @@ from veadk.agent_metadata import (
 )
 from veadk.agent_search import search_agent_component
 from veadk.cli.frontend_invocation import FrontendInvocationPlugin
+from veadk.context.status import agent_context_metadata
 from veadk.memory.short_term_memory import ShortTermMemory
 from veadk.utils.logger import get_logger
+
+try:
+    from google.adk.cli.api_server import RunAgentRequest
+except ModuleNotFoundError as error:
+    if error.name != "google.adk.cli.api_server":
+        raise
+    # Public in ADK 1.34; ADK 2.2 marks this old re-export private. This branch
+    # executes only when the new module is absent.
+    from google.adk.cli.adk_web_server import RunAgentRequest  # pyright: ignore[reportPrivateImportUsage]
 
 if TYPE_CHECKING:
     from agentkit.identity import RuntimeIdentity  # pyright: ignore[reportMissingImports]
@@ -193,6 +202,7 @@ def _agent_node(
         "instruction": instruction if isinstance(instruction, str) else "",
         "type": _agent_type(agent),
         "model": _model_name(getattr(agent, "model", "")),
+        **agent_context_metadata(agent),
         "tools": [
             _tool_label(tool)
             for tool in getattr(agent, "tools", []) or []
@@ -449,6 +459,7 @@ def _add_introspection_routes(
         return {
             **{key: node[key] for key in ("id", "name", "description", "type")},
             "model": node["model"],
+            **agent_context_metadata(root_agent),
             "tools": node["tools"],
             "skills": node["skills"],
             "components": node["components"],
@@ -998,7 +1009,7 @@ def create_agentkit_app(
     """Create an AgentKit-compatible FastAPI app for ``root_agent``.
 
     The app includes AgentKit's conversation APIs, VeADK health and topology
-    endpoints, the bundled Web UI, local short-term memory fallback, and the
+    endpoints, the bundled Web UI, project SQLite session fallback, and the
     optional Feishu channel lifecycle.
 
     Args:
@@ -1039,7 +1050,9 @@ def create_agentkit_app(
     app_plugins = list(getattr(adk_app, "plugins", None) or [])
     short_term_memory = getattr(root_agent, "short_term_memory", None)
     if short_term_memory is None:
-        short_term_memory = ShortTermMemory(backend="local")
+        short_term_memory = ShortTermMemory(
+            backend="sqlite", local_database_path=".adk/session.db"
+        )
 
     agent_server_kwargs: dict[str, Any] = {"short_term_memory": short_term_memory}
     if adk_app is not None:
