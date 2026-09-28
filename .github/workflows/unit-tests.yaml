@@ -61,7 +61,14 @@ jobs:
         # `codex_smoke` is excluded here rather than relying on its
         # CODEX_RUN_SMOKE opt-in alone: it spawns a real Codex subprocess and
         # binds two real loopback ports, which must never run under `-n 16`.
-        pytest -n 16 -m "not codex_smoke"
+        pytest -n 16 -m "not codex_smoke" --junitxml=unit-tests.xml
+
+    - name: Report failure locations and dependency versions
+      if: failure()
+      run: |
+        if [ -x .venv/bin/python ]; then
+          .venv/bin/python .github/scripts/report_pytest_failures.py unit-tests.xml
+        fi
 
   # Real Codex binary + real OS sandbox + real shim socket, against a stubbed
   # model backend (no credentials, no network egress). Kept out of the matrix
