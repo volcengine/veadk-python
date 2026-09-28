@@ -25,6 +25,8 @@ on:
       - 'tests/models/**'
       - 'tests/run_context_compression_gate.py'
       - 'tests/test_context_release_gate.py'
+      - 'tests/test_ci_failure_summary.py'
+      - '.github/scripts/report_pytest_failures.py'
       - '.github/workflows/context-compression-gate.yaml'
       - '.github/workflows/publish-tag-to-pypi.yaml'
       - '.github/workflows/publish-studio-release.yaml'
@@ -72,4 +74,7 @@ jobs:
       - name: Check installed dependency consistency
         run: python -m pip check
       - name: Run isolated SDK and Runner contracts
-        run: python tests/run_context_compression_gate.py -q
+        run: python tests/run_context_compression_gate.py -q --junitxml="$GITHUB_WORKSPACE/context-contracts.xml"
+      - name: Report failure locations and dependency versions
+        if: failure()
+        run: python .github/scripts/report_pytest_failures.py context-contracts.xml

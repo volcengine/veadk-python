@@ -48,6 +48,7 @@ def main() -> int:
         "tests/models",
         "tests/test_agent.py",
         "tests/test_context_release_gate.py",
+        "tests/test_ci_failure_summary.py",
         "tests/agent/test_workflow_execution.py",
         "tests/agent/test_workflow_agent_contract.py",
         "tests/agent/test_parallel_cleanup.py",
