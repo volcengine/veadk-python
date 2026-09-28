@@ -16,14 +16,25 @@ npm run dev:components
 
 ## 内容与使用
 
+导航依次为 Foundation、Base、Block、AI App、Node、Layout，组内按组件名称排序
+Base 对应基础组件，Block 对应复合组件；同一组件的变种集中在一个页面，例如 Input 包含 Leading Icon 和 Trailing Icon
+Form Label Row 和 Glass Icon Button Group 独立归入 Block，Card Layout 归入 Layout，不作为基础组件的外观变种
+Progress 对应 LongRunningState 组件，正文 Text 和代码 Code 分别在二级标题下独立展示，各自支持步骤推进和重新开始；`#progress` 与原来的 `#long-running-state` 均可访问
+组件名称使用一级标题，变种使用二级标题，参数与属性统一放在页面底部
+桌面右侧的本页目录可跳转到各变种和参数区；窄屏使用可展开的组件目录和本页目录
+变种链接采用 `#组件/小节`，例如 `#button/button-loading-title`；原有组件、Tabs、Card、玻璃按钮和 Input 链接继续可用，迁移到独立页面的旧小节链接也会定位到对应组件
+
+
 组件实现在 `src/components/`，预览示例位于本目录的 `examples/`，示例直接使用真实组件
 
-- 设计规范：颜色、字体、尺寸、间距、圆角和动效 Tokens
-- 基础组件：Button、Tabs、Label、FormLabel、InputWithTailIcon、InputWithHeaderIcon、Textarea、Select、DatePicker、Menu、Switch、Checkbox、Radio、RadioCard、PillTag、Divider、Dropdown、ScrollArea、Table、Toast、Loading、EmptyState、ErrorState、Slider
-- 复合组件：Sidebar、Item、卡片、Header、FormField、FormLabelRow、DashedZone、CodeBlock、LongRunningState、ModalButton、Drawer、FileExplorer、FileUpload 和玻璃按钮组
-- 布局：AppLayout、CardLayout、ModalLayout、ResourcePageLayout、DetailPageLayout、IndexLayout
-- 节点组件：BasicNode、AgentNode、CanvasBackground
-- AI APP：PromptInput、ConversationFlow，对话流包含完整分析、富内容、多模态输入、多模态回复、授权与错误五个可交互示例
+- Foundation：Specification 前端开发规范，以及颜色、字体、尺寸、间距、圆角和动效 Tokens
+- Base：Button、Tabs、Label、FormLabel、Input、Textarea、Select、DatePicker、Menu、Switch、Checkbox、Radio、RadioCard、PillTag、Divider、Dropdown、ScrollArea、Table、Toast、Loading、EmptyState、ErrorState、Slider
+- Block：Sidebar、Item、卡片、Header、FormField、FormLabelRow、DashedZone、CodeBlock、Progress（LongRunningState）、ModalButton、Drawer、FileExplorer、FileUpload 和玻璃按钮组
+- Layout：AppLayout、CardLayout、ModalLayout、ResourcePageLayout、DetailPageLayout、IndexLayout
+- Node：BasicNode、AgentNode、CanvasBackground
+- AI App：PromptInput、ConversationFlow，对话流包含完整分析、富内容、多模态输入、多模态回复、授权与错误五个可交互示例
+
+Specification 通过 `#specification` 访问，以 [Specification.md](foundation/Specification.md) 为唯一内容来源，支持页内目录和复制规范，AI 开发前可直接读取该文档
 
 ConversationFlow 按顺序展示思考、工具输入输出、子智能体移交、最终回复和执行指标
 用户消息靠右，模型回复靠左，不显示头像和名称；复用默认 600px 高的 ScrollArea，通过 height / scrollAreaProps 配置，示例不包含输入框和执行计划
@@ -31,9 +42,10 @@ ECharts / Mermaid 实际渲染，支持源码切换和放大查看；文件预�
 `fromStudioTurns` 可接入现有 Studio 消息；组件行为、数据字段及全部回调见预览下方参数表与 [对话流说明](../components/ai-app/ConversationFlow/README.md)
 
 Button、Tabs 和 Card 的变体集中展示，旧预览链接仍可访问
-Primary 和 Secondary 普通按钮默认同为 32px 高、上下 5px 内边距，图标按钮保持 28px
+Button 的每种样式并排展示 Compact、Default、Large，按钮底端对齐，尺寸说明放在按钮下方；文字按钮高度为 28 / 32 / 36px、字号为 12 / 14 / 16px、图标为 14 / 16 / 18px，Pill 共用相同尺寸；纯图标按钮高度为 20 / 28 / 36px
+尺寸说明读取各按钮实际渲染的高度、字号或图标尺寸，尺寸变量变化时同步更新
 透明 Icon Button 通过 hoverEffect 选择 background（默认，悬停显示背景）或 icon（仅高亮图标）；两种模式共用尺寸和主题 tokens，会话尾部不覆盖 Button 的图标、圆角或 hover 样式
-示例按 Figma 画布尺寸展示；示例数据和页面导航不属于组件 API
+固定宽度的 Header、Canvas Background 和 Resource Page 示例保留设计尺寸，在各自的 ScrollArea 内横向查看；示例数据和页面导航不属于组件 API
 ModalLayout 提供 header、空白 body 插槽和 footer，实际遮罩与焦点管理由使用方提供
 FormLabel 的 required 表示必填标记，表单控件需要同时设置原生 required 属性
 Textarea 的 counter 为独立插槽，预览保留原稿计数
@@ -59,7 +71,7 @@ Toast 复用中性面板、状态色和 Button，支持提示、成功、警告�
 悬停或键盘聚焦时暂停计时；F6 可聚焦通知区，Escape 关闭当前聚焦通知，新增通知不抢焦点，支持减少动态效果偏好
 Toast 是独立展示层；ToastProvider、useToast 和 ToastOptions 的参数表见 Toast 预览
 
-Loading 复现提供的 Infinity Path（48 × 24px、2 秒循环）与 Ring Sweep（40 × 40px、1 秒循环），支持 size、无障碍 label 和 decorative 属性，减少动态效果时显示静态图形
+Loading 提供 Infinity Path（默认 32 × 16px、2 秒循环）与 Ring Sweep（默认 20 × 20px、1 秒循环），支持 size、无障碍 label 和 decorative 属性，减少动态效果时显示静态图形
 ScrollArea 加载时直接复用 Infinity Path，使用 24 × 12px 画布使路径与行内文字大小协调，仅显示图标；加载状态保留屏幕阅读器提示，颜色随明暗主题切换
 
 EmptyState 默认显示 40px 圆形背景与 24px 空文件夹图标；icon 仅替换内部图标，传 null 隐藏图标区域，actions 接收任意数量的 Button，横排并在空间不足时换行
@@ -69,8 +81,11 @@ ResourcePageLayout 的 loading 状态在资源区域居中显示 Infinity Path�
 
 DetailPageLayout 不包含 Sidebar，内容随容器宽度展开，保留 Header、Tabs、Runtime 与顶部光效
 
-LongRunningState 使用居中的双栏工作区，左侧通过 steps 和 currentStep 展示任务进度与步骤，当前步骤使用 Infinity Path，已完成步骤显示对勾并支持回看；selectedStep / onSelectedStepChange 可控制历史选择，查看历史不改变执行进度，可返回当前步骤继续跟随
-右侧复用 Drawer 的明暗主题玻璃材质与 ScrollArea 展示 details，detailsMaxHeight 默认 360px，代码日志复用 CodeBlock 高亮并可隐藏行号；切换时详情即时替换并在原位短暂淡入，始终只显示一层正文，左侧位置稳定，窄容器上下排列，支持减少动态效果、减少透明度与高对比度偏好
+LongRunningState 整体左对齐，从上到下依次为 14px 当前进度名称、快速循环滑动的加载条和无背景的 ScrollArea 内容区
+名称切换时先向上渐隐，下一名称从下方向上滑入；执行中加载条以 1.1 秒周期循环滑动，不将未知进度伪装为百分比，完成后停止并保留最后的内容
+detailsMaxHeight 默认 240px，代码日志可复用透明背景的 CodeBlock；步骤切换后内容滚回顶部，同一步骤追加内容时保留阅读位置，支持减少动态效果偏好
+
+ConversationFlow 新追加的步骤先展开所需空间，再渐显内容；状态更新和展开历史详情不会重复进场，重试后重新追加的步骤会重新播放，减少动态效果时直接显示
 
 ModalButton 的入口复用 Button，弹窗复用 ModalLayout，body 默认留空；提供遮罩、进出动效、焦点管理及 Esc 关闭，异步确认可使用 closeOnConfirm=false 与受控 open
 Drawer 是距屏幕上下与右侧各 16px 的浮动卡片，默认宽 480px，正文复用 ScrollArea；surface 默认 glass，深色使用烟灰玻璃，浅色使用白色磨砂玻璃，真实模糊后方内容并显示柔和高光，也可设为 solid；两者的层级低于 Menu、Select 和 Toast

@@ -2,9 +2,8 @@ import { useCallback, useEffect, useRef, useState, type ComponentProps } from "r
 import { ConversationFlow, type ConversationAssistantMessage, type ConversationBlock, type ConversationFeedback, type ConversationMessage, type ConversationStatus } from "../../components/ai-app/ConversationFlow";
 import { ConversationSurface } from "../../components/ai-app/ConversationFlow/ConversationSurface";
 import { Button } from "../../components/primitives/Button";
-import { UnderlineTabs } from "../../components/primitives/UnderlineTabs";
 import { FileExplorer, type FileExplorerEntry } from "../../components/composites/FileExplorer";
-import { ComponentApi } from "../api/ComponentApi";
+
 import chartImage from "./assets/conversation-media/chart.png";
 import trendVideo from "./assets/conversation-media/trend.mp4";
 import summaryAudio from "./assets/conversation-media/summary.m4a?url";
@@ -347,13 +346,12 @@ const scenes = [
 ] as const;
 
 export function ConversationFlowPreview() {
-  const [scene, setScene] = useState("analysis");
-  return <section className="conversation-flow-preview" aria-labelledby="conversation-flow-preview-title">
-    <h2 className="component-preview-title" id="conversation-flow-preview-title">Conversation Flow</h2>
-    <UnderlineTabs items={scenes} value={scene} onValueChange={setScene} aria-label="对话流场景" />
-    <div key={scene} className="conversation-flow-preview__panel" id={`conversation-${scene}-panel`} role="tabpanel" aria-labelledby={`conversation-${scene}-tab`}>
-      {scene === "analysis" ? <AnalysisDemo /> : scene === "rich" ? <RichContentDemo /> : scene === "multimodal" ? <MultimodalDemo /> : scene === "multimodal-response" ? <MultimodalDemo response /> : <AuthorizationDemo />}
-    </div>
-    <ComponentApi names={["ConversationFlow", "ConversationMarkdown", "ConversationVisualization", "ConversationSurface"]} />
-  </section>;
+  return <div className="conversation-flow-preview components-preview-variants">
+    {scenes.map(scene => <section key={scene.value} aria-labelledby={`conversation-${scene.value}-title`}>
+      <h2 data-preview-heading tabIndex={-1} id={`conversation-${scene.value}-title`}>{scene.label}</h2>
+      <div className="conversation-flow-preview__panel">
+        {scene.value === "analysis" ? <AnalysisDemo /> : scene.value === "rich" ? <RichContentDemo /> : scene.value === "multimodal" ? <MultimodalDemo /> : scene.value === "multimodal-response" ? <MultimodalDemo response /> : <AuthorizationDemo />}
+      </div>
+    </section>)}
+  </div>;
 }

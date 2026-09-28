@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { FileExplorer, type FileExplorerEntry } from "../../components/composites/FileExplorer";
-import { ComponentApi } from "../api/ComponentApi";
+
 import "./FileExplorerPreview.css";
 
 const demoFiles: readonly FileExplorerEntry[] = [
@@ -208,15 +208,14 @@ export function FileExplorerPreview() {
   ]);
   const [editStatus, setEditStatus] = useState("");
   return (
-    <section className="file-explorer-preview" aria-labelledby="file-explorer-preview-title">
-      <h2 className="component-preview-title" id="file-explorer-preview-title">File Explorer</h2>
-      <h3 className="file-explorer-preview__heading">只读 · 自动格式化与换行</h3>
+    <section className="file-explorer-preview" aria-labelledby="component-page-title">
+      <h2 data-preview-heading tabIndex={-1} id="file-explorer-variant-1" className="file-explorer-preview__heading">只读 · 自动格式化与换行</h2>
       <FileExplorer
         entries={demoFiles}
         defaultSelectedId="src/components/button.tsx"
         defaultExpandedIds={["src", "src/components", "examples"]}
       />
-      <h3 className="file-explorer-preview__heading">编辑与保存</h3>
+      <h2 data-preview-heading tabIndex={-1} id="file-explorer-variant-2" className="file-explorer-preview__heading">编辑与保存</h2>
       <FileExplorer
         allowEdit
         entries={editableFiles}
@@ -229,7 +228,6 @@ export function FileExplorerPreview() {
         style={{ height: 360 }}
       />
       <p className="file-explorer-preview__status" role="status">{editStatus}</p>
-      <ComponentApi names={["FileExplorer"]} />
     </section>
   );
 }

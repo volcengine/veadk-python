@@ -1,3 +1,8 @@
+.header-preview-viewport {
+  width: 100%;
+  max-width: 100%;
+}
+
 .header-preview-specimen {
   width: 1042px;
 }

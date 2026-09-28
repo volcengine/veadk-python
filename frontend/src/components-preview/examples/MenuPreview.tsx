@@ -2,7 +2,7 @@ import { useState } from "react";
 import { ExternalLinkIcon } from "../../components/icons/ExternalLinkIcon";
 import { PlusIcon } from "../../components/icons/PlusIcon";
 import { Menu, type MenuEntry, type MenuItem } from "../../components/primitives/Menu";
-import { ComponentApi } from "../api/ComponentApi";
+
 import "./MenuPreview.css";
 
 function DuplicateIcon() {
@@ -86,39 +86,38 @@ export function MenuPreview() {
     setSelection(item.label);
   }
 
-  return <section aria-labelledby="menu-preview-title">
-    <h2 id="menu-preview-title" className="component-preview-title">Menu</h2>
+  return <section aria-labelledby="component-page-title">
     <div className="menu-preview__examples">
       <section aria-labelledby="menu-basic-title">
-        <h3 id="menu-basic-title">基础菜单</h3>
+        <h2 data-preview-heading tabIndex={-1} id="menu-basic-title">基础菜单</h2>
         <Menu label="操作" items={basicItems} onSelect={handleSelect} />
       </section>
       <section aria-labelledby="menu-grouped-title">
-        <h3 id="menu-grouped-title">分组与图标</h3>
+        <h2 data-preview-heading tabIndex={-1} id="menu-grouped-title">分组与图标</h2>
         <Menu label="项目操作" items={groupedItems} onSelect={handleSelect} />
       </section>
       <section aria-labelledby="menu-nested-title">
-        <h3 id="menu-nested-title">多级菜单</h3>
+        <h2 data-preview-heading tabIndex={-1} id="menu-nested-title">多级菜单</h2>
         <Menu label="更多操作" items={nestedItems} onSelect={handleSelect} />
       </section>
       <section aria-labelledby="menu-state-title">
-        <h3 id="menu-state-title">禁用与空状态</h3>
+        <h2 data-preview-heading tabIndex={-1} id="menu-state-title">禁用与空状态</h2>
         <div className="menu-preview__states">
           <Menu label="不可用" items={basicItems} disabled />
           <Menu label="空菜单" items={[]} />
         </div>
       </section>
       <section aria-labelledby="menu-scroll-title">
-        <h3 id="menu-scroll-title">长菜单</h3>
+        <h2 data-preview-heading tabIndex={-1} id="menu-scroll-title">长菜单</h2>
         <Menu label="选择空间" items={workspaceItems} maxHeight={200} onSelect={handleSelect} />
       </section>
       <section aria-labelledby="menu-hover-title">
-        <h3 id="menu-hover-title">悬停展开</h3>
+        <h2 data-preview-heading tabIndex={-1} id="menu-hover-title">悬停展开</h2>
         <Menu label="悬停打开" items={groupedItems} openOnHover onSelect={handleSelect} />
       </section>
     </div>
     <section className="menu-preview__positioning" aria-labelledby="menu-positioning-title">
-      <h3 id="menu-positioning-title">自动定位</h3>
+      <h2 data-preview-heading tabIndex={-1} id="menu-positioning-title">自动定位</h2>
       <p>根据按钮位置和窗口空间自动调整方向与对齐</p>
       <div className="menu-preview__positioning-row">
         <Menu label="左侧入口" items={groupedItems} onSelect={handleSelect} />
@@ -126,8 +125,12 @@ export function MenuPreview() {
       </div>
     </section>
     <p className="menu-preview__feedback" role="status">{selection ? `已选择：${selection}` : "选择菜单项查看操作反馈"}</p>
-    <ComponentApi names={["Menu"]} />
-    <section className="component-api menu-preview__entry-api" aria-labelledby="menu-entry-title">
+
+  </section>;
+}
+
+export function MenuEntryApi() {
+  return <section className="component-api menu-preview__entry-api" aria-labelledby="menu-entry-title">
       <h3 id="menu-entry-title">MenuEntry 数据结构</h3>
       <div className="component-api__scroll">
         <table>
@@ -137,6 +140,5 @@ export function MenuPreview() {
           </tr>)}</tbody>
         </table>
       </div>
-    </section>
-  </section>;
+    </section>;
 }

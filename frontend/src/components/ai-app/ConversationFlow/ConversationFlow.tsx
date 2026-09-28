@@ -6,6 +6,7 @@ import type { ConversationAssistantMessage, ConversationFlowProps, ConversationM
 import { ConversationCheckIcon, ConversationCopyIcon, ConversationDislikeIcon, ConversationErrorIcon, ConversationLikeIcon, ConversationRetryIcon, ConversationStopIcon } from "./ConversationFlowIcons";
 import { ConversationBlocks, ConversationStepView, conversationStatusLabels, formatConversationDuration } from "./ConversationBlocks";
 import { ConversationMessageTimingScope, ConversationTimingProvider, useConversationElapsedTime } from "./ConversationTiming";
+import { ConversationMessageEntranceScope, ConversationStepEntranceProvider } from "./ConversationStepEntrance";
 import "./ConversationFlow.css";
 
 function MessageMetrics({ message }: { message: ConversationAssistantMessage }) {
@@ -94,13 +95,13 @@ function MessageView({ message, onRetry, onFeedback, onStop }: { message: Conver
 }
 
 export function ConversationFlow({ messages, onRetry, onFeedback, onStop, height = 600, scrollAreaProps, className = "", style, ...props }: ConversationFlowProps) {
-  return <ConversationTimingProvider messages={messages}><div {...props} className={`studio-conversation-flow ${className}`.trim()} style={{ height, ...style }}>
+  return <ConversationTimingProvider messages={messages}><ConversationStepEntranceProvider messages={messages}><div {...props} className={`studio-conversation-flow ${className}`.trim()} style={{ height, ...style }}>
     <ScrollArea {...scrollAreaProps} orientation="vertical" tabIndex={scrollAreaProps?.tabIndex ?? 0} aria-label={scrollAreaProps?.["aria-label"] ?? "对话消息滚动区域"} className={`studio-conversation-flow__scroll ${scrollAreaProps?.className ?? ""}`.trim()}>
     <ol className="studio-conversation-flow__messages" aria-label="对话消息">
       {messages.map(message => <ConversationMessageTimingScope key={message.id} messageId={message.id}>
-        <MessageView message={message} onRetry={onRetry} onFeedback={onFeedback} onStop={onStop} />
+        <ConversationMessageEntranceScope messageId={message.id}><MessageView message={message} onRetry={onRetry} onFeedback={onFeedback} onStop={onStop} /></ConversationMessageEntranceScope>
       </ConversationMessageTimingScope>)}
     </ol>
     </ScrollArea>
-  </div></ConversationTimingProvider>;
+  </div></ConversationStepEntranceProvider></ConversationTimingProvider>;
 }

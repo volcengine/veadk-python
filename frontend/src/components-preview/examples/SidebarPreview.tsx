@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ComponentApi } from "../api/ComponentApi";
+
 import { Sidebar, SidebarAgentIcon, SidebarGroupTitle, SidebarItem, SidebarItemWithIcon } from "../../components/composites/Sidebar";
 import { Button } from "../../components/primitives/Button";
 import { Menu } from "../../components/primitives/Menu";
@@ -47,25 +47,26 @@ export function SidebarPreview() {
 
   return (
     <section aria-labelledby="sidebar-preview-title">
-      <h2 id="sidebar-preview-title" className="component-preview-title">Sidebar</h2>
+      <h2 data-preview-heading tabIndex={-1} id="sidebar-preview-title" className="component-preview-title">Complete Sidebar</h2>
       <ToastProvider><CompleteSidebarExample /></ToastProvider>
       <div className="sidebar-preview-examples">
         <section className="sidebar-preview-specimen" aria-labelledby="sidebar-preview-projects-title">
+          <h2 data-preview-heading tabIndex={-1} id="sidebar-preview-default-title">Sidebar Item</h2>
           <SidebarGroupTitle id="sidebar-preview-projects-title">Projects</SidebarGroupTitle>
           <SidebarItem>Search</SidebarItem>
           <SidebarItem icon={<SidebarAgentIcon />}>Agents</SidebarItem>
         </section>
         <section aria-labelledby="sidebar-preview-hover-title">
-          <h3 className="sidebar-preview-state-title" id="sidebar-preview-hover-title">Hover</h3>
+          <h2 data-preview-heading tabIndex={-1} className="sidebar-preview-state-title" id="sidebar-preview-hover-title">Hover</h2>
           <SidebarItem icon={<SidebarAgentIcon />} data-state="hover">Agents</SidebarItem>
         </section>
         <section aria-labelledby="sidebar-preview-selected-title">
-          <h3 className="sidebar-preview-state-title" id="sidebar-preview-selected-title">Selected</h3>
+          <h2 data-preview-heading tabIndex={-1} className="sidebar-preview-state-title" id="sidebar-preview-selected-title">Selected</h2>
           <SidebarItem icon={<SidebarAgentIcon />} selected>Agents</SidebarItem>
         </section>
       </div>
       <section className="sidebar-preview-with-icon" aria-labelledby="sidebar-preview-with-icon-title">
-        <h3 className="component-preview-title" id="sidebar-preview-with-icon-title">会话 Item with icon</h3>
+        <h2 data-preview-heading tabIndex={-1} className="component-preview-title" id="sidebar-preview-with-icon-title">会话 Item with icon</h2>
         <div className="sidebar-preview-icon-specimen">
           <SidebarGroupTitle>Recent</SidebarGroupTitle>
           <SidebarItemWithIcon
@@ -99,7 +100,6 @@ export function SidebarPreview() {
         </div>
         <output className="sidebar-preview-action" aria-live="polite">{notice}</output>
       </section>
-      <ComponentApi names={["Sidebar", "SidebarAccount", "SidebarGroupTitle", "SidebarItem", "SidebarItemWithIcon"]} />
     </section>
   );
 }

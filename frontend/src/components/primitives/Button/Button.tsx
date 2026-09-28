@@ -4,7 +4,7 @@ import "./Button.css";
 
 export type ButtonProps = ComponentProps<"button"> & {
   variant?: "primary" | "secondary" | "outline" | "ghost" | "link" | "pill";
-  /** default 保留各变体尺寸；large 为 36px；compact 用于 20px 无内边距图标按钮 */
+  /** compact / default / large：文字按钮高 28 / 32 / 36px，字号 12 / 14 / 16px，图标 14 / 16 / 18px；纯图标按钮高 20 / 28 / 36px */
   size?: "default" | "large" | "compact";
   startIcon?: ReactNode;
   /** 文字右侧图标；link 类型在悬停或键盘聚焦时显示 */
@@ -45,7 +45,7 @@ export function Button({
       {!iconOnly && endIcon && <span className="studio-button__icon studio-button__end-icon" aria-hidden="true">{endIcon}</span>}
       {loading && (
         <span className="studio-button__loading" aria-hidden="true">
-          <Loading variant="ring" size={16} decorative />
+          <Loading variant="ring" size="var(--studio-button-icon-size)" decorative />
         </span>
       )}
     </button>

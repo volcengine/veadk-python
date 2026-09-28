@@ -5,7 +5,7 @@ import { PromptInput } from "../../components/ai-app/PromptInput";
 import { Item } from "../../components/composites/Item";
 import blocksIcon from "../../components/layouts/IndexLayout/assets/blocks.svg";
 import codepenIcon from "../../components/layouts/IndexLayout/assets/codepen.svg";
-import { ComponentApi } from "../api/ComponentApi";
+
 import { promptPlaceholders } from "./promptInputExamples";
 import "./IndexLayoutPreview.css";
 
@@ -16,7 +16,7 @@ export function IndexLayoutPreview() {
 
   return (
     <section aria-labelledby="index-layout-preview-title">
-      <h2 className="component-preview-title" id="index-layout-preview-title">Index layout</h2>
+      <h2 data-preview-heading tabIndex={-1} className="component-preview-title" id="index-layout-preview-title">Default</h2>
       <IndexLayout
         tabs={<GlassTabs
           aria-label="Workspace mode"
@@ -33,7 +33,6 @@ export function IndexLayoutPreview() {
             icon={<span className="index-layout-preview__shortcut-icon" style={{ maskImage: `url(${codepenIcon})` }} />} />
         </>}
       />
-      <ComponentApi names={["IndexLayout"]} />
     </section>
   );
 }

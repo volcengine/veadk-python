@@ -1,4 +1,3 @@
-import { ComponentApi } from "../api/ComponentApi";
 import { PromptInput, SingleLinePromptInput } from "../../components/ai-app/PromptInput";
 import { promptPlaceholders } from "./promptInputExamples";
 
@@ -10,13 +9,15 @@ const adjustmentPlaceholders = [
 
 export function PromptInputPreview() {
   return (
-    <section aria-labelledby="prompt-input-preview-title">
-      <h2 id="prompt-input-preview-title" className="component-preview-title">Prompt Input</h2>
-      <PromptInput placeholders={promptPlaceholders} />
-      <div style={{ marginTop: 32 }}>
+    <section aria-labelledby="component-page-title">
+      <section className="components-preview-variant" aria-labelledby="prompt-input-multiline-title">
+        <h2 data-preview-heading tabIndex={-1} id="prompt-input-multiline-title">Multiline</h2>
+        <PromptInput placeholders={promptPlaceholders} />
+      </section>
+      <section className="components-preview-variant" aria-labelledby="prompt-input-single-line-title">
+        <h2 data-preview-heading tabIndex={-1} id="prompt-input-single-line-title">Single Line</h2>
         <SingleLinePromptInput aria-label="Single line prompt" placeholders={adjustmentPlaceholders} />
-      </div>
-      <ComponentApi names={["PromptInput", "SingleLinePromptInput"]} />
+      </section>
     </section>
   );
 }
