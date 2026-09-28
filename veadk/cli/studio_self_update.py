@@ -969,7 +969,7 @@ def extract_studio_bundle(archive: Path, destination: Path) -> None:
     )
 
     try:
-        validate_studio_bundle_dependencies(destination)
+        validate_studio_bundle_dependencies(destination, use_target_cli_pin=True)
     except ValueError as error:
         raise StudioReleaseError(str(error)) from error
     (destination / "run.sh").chmod(0o755)
