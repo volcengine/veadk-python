@@ -15197,6 +15197,7 @@ def _run_frontend_server(
     from frontend.server.evaluation.routes import (
         mount_routes as mount_evaluation_routes,
     )
+
     @app.post("/web/runtime-mcp-credentials")
     async def _web_runtime_mcp_credentials(
         credential_request: _RuntimeMcpCredentialsRequest,
@@ -15271,7 +15272,6 @@ def _run_frontend_server(
             {"credentials": credentials},
             headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
         )
-
 
     mount_evaluation_routes(
         app,

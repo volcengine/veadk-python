@@ -2064,9 +2064,6 @@ export default function App() {
       setSandboxSession((current) => current?.intelligentDevelopment ? { ...current, busy } : current);
     },
   });
-  const activeAgent = activeAgentBySession[sessionId] ?? "";
-  const seenAgents = seenAgentsBySession[sessionId] ?? EMPTY_STRING_SET;
-  const execPath = execPathBySession[sessionId] ?? EMPTY_STRING_ARR;
   const rootCapabilityNode = agentInfo?.graph;
   const rootAgentNames = [
     agentInfo?.name,

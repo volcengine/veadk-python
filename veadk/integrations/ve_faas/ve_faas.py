@@ -179,9 +179,9 @@ def _format_release_failure_text(
                 )
             )
 
-    console_text = _redact_release_text(raw_logs).strip() or labels[
-        "empty_console_logs"
-    ]
+    console_text = (
+        _redact_release_text(raw_logs).strip() or labels["empty_console_logs"]
+    )
     tos_text = "\n\n".join(linked_log_sections) or labels["empty_tos_logs"]
 
     status_text = _redact_release_text(

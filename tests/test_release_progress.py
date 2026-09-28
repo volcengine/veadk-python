@@ -130,9 +130,7 @@ def test_progress_redacts_credentials_and_signed_queries(progress) -> None:
 def test_release_failure_formatter_redacts_all_diagnostic_sources(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    source_url = (
-        "https://build.example/step.log?X-Tos-Signature=source-secret-value"
-    )
+    source_url = "https://build.example/step.log?X-Tos-Signature=source-secret-value"
     monkeypatch.setattr(
         ve_faas_module,
         "_download_release_log_url",
@@ -169,9 +167,7 @@ def test_release_failure_formatter_redacts_download_errors(
     )
 
     output = ve_faas_module._format_release_failure_text(
-        raw_logs=(
-            "https://build.example/step.log?X-Tos-Signature=source-secret-value"
-        ),
+        raw_logs=("https://build.example/step.log?X-Tos-Signature=source-secret-value"),
         full_response={"Result": {"Status": "deploy_fail"}},
     )
 
