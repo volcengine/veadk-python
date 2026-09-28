@@ -36,7 +36,7 @@ CODEX_WORKER_TOOL_DEFAULTS: dict[str, Any] = {
     "memory_mb": 4096,
     "role_name": "IDRoleForArkClawShareAgent",
 }
-TOS_MOUNT_BASE_PATH = "/sandbox-session/default/default"
+TOS_MOUNT_BASE_PATH = "/"
 TOS_MOUNT_LOCAL_PATH = "/data/output"
 
 _READY_TIMEOUT_SECONDS = 600.0

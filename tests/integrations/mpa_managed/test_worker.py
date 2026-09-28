@@ -96,7 +96,7 @@ def test_managed_worker_create_includes_tos_output_mount():
                 "MountPoints": [
                     {
                         "BucketName": "mpa-output",
-                        "BucketPath": "/sandbox-session/default/default",
+                        "BucketPath": "/",
                         "Endpoint": "http://tos-r.ivolces.com",
                         "LocalMountPath": "/data/output",
                         "ReadOnly": False,
@@ -141,7 +141,7 @@ def test_worker_tos_metadata_mismatch_fails_closed():
         "MountPoints": [
             {
                 "BucketName": "mpa-output",
-                "BucketPath": "/sandbox-session/default/default",
+                "BucketPath": "/",
                 "Endpoint": "http://tos-r.ivolces.com",
                 "LocalMountPath": "/data/output",
                 "ReadOnly": False,
