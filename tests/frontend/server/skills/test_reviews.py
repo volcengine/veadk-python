@@ -29,6 +29,8 @@ from frontend.server.skills.consts import (
     REVIEW_STATUS_TAG,
     REVIEW_SOURCE_SKILL_TAG,
     SHARED_SOURCE_VERSION_TAG,
+    SKILL_VISIBILITY_SHARED,
+    SKILL_VISIBILITY_TAG,
 )
 from frontend.server.skills.models import SkillIdentity
 from frontend.server.skills.repository import (
@@ -349,6 +351,7 @@ def test_approval_publishes_exact_snapshot_and_retains_audit_on_retry(setup):
     }
     assert shared_tags["author"] == "alice"
     assert shared_tags[SHARED_SOURCE_VERSION_TAG] == "v3"
+    assert shared_tags[SKILL_VISIBILITY_TAG] == SKILL_VISIBILITY_SHARED
     assert REVIEW_SOURCE_SKILL_TAG not in shared_tags
     require_review_read(cloud, "shared", skill_id=approved["sharedSkillId"])
     assert decide(repository, pending["id"], actor="another-admin") == approved
@@ -397,10 +400,23 @@ def test_failed_final_tag_write_resumes_without_duplicate_public_copy(setup):
         decide(repository, pending["id"], "returned", "cannot return while publishing")
     assert error.value.code == "SKILL_REVIEW_PUBLISHING"
     cloud.fail_tag_call = 0
+    shared_id = cloud.relations["shared"][0].skill_id
+    cloud.skills[shared_id].tags = [
+        tag for tag in cloud.skills[shared_id].tags if tag.key != SKILL_VISIBILITY_TAG
+    ]
+    cloud.tag_calls.clear()
     approved = decide(repository, pending["id"], actor="second-admin")
     assert approved["reviewedBy"] == "admin"
     assert approved["status"] == "approved"
     assert len(cloud.relations["shared"]) == 1
+    shared_tags = {tag.key: tag.value for tag in cloud.skills[shared_id].tags}
+    assert shared_tags[SKILL_VISIBILITY_TAG] == SKILL_VISIBILITY_SHARED
+    assert any(
+        call[1]["ResourceIds"] == [shared_id]
+        and call[1]["Tags"]
+        == [{"Key": SKILL_VISIBILITY_TAG, "Value": SKILL_VISIBILITY_SHARED}]
+        for call in cloud.tag_calls
+    )
 
 
 def test_failed_initial_tags_never_publish_and_failed_publication_can_retry(setup):

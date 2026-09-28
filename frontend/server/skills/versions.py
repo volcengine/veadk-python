@@ -101,12 +101,14 @@ class SkillVersionRepository:
                 status_code=404,
             )
         personal = not is_shared_space(space) and not is_review_space(space)
-        author = _tags(skill).get("author") or _tags(space).get("author")
-        if personal and author and author != identity.author and not identity.is_admin:
+        space_owner = _tags(space).get("author", "")
+        if personal and space_owner != identity.author and not identity.is_admin:
             raise SkillRepositoryError(
-                "SKILL_VERSION_FORBIDDEN", "只能查看自己创建的技能版本", status_code=403
+                "SKILL_VERSION_FORBIDDEN",
+                "只能查看自己创建的技能空间中的版本",
+                status_code=403,
             )
-        can_update = personal and (identity.is_admin or author == identity.author)
+        can_update = personal and (identity.is_admin or space_owner == identity.author)
         return space, skill, relations, can_update
 
     def list(
