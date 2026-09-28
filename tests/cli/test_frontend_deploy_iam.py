@@ -292,6 +292,17 @@ def test_frontend_policy_allows_release_download() -> None:
     assert "vefaas:ReleaseApplication" in actions
     assert "tag:TagResources" in actions
     assert "tag:UntagResources" in actions
+    assert {
+        "aidap:CreateWorkspace",
+        "aidap:DescribeWorkspaces",
+        "aidap:DescribeWorkspaceDetail",
+        "aidap:DescribeBranches",
+        "aidap:DescribeComputes",
+        "aidap:DescribeWorkspaceEndpoint",
+        "aidap:DescribeDBAccounts",
+        "aidap:DescribeDatabases",
+        "aidap:DescribeDBAccountConnection",
+    }.issubset(actions)
 
 
 def test_frontend_policy_allows_complete_managed_pg_workflow() -> None:
