@@ -17,6 +17,7 @@
 import asyncio
 import json
 import re
+from types import SimpleNamespace
 
 import pytest
 from google.adk.models.llm_response import LlmResponse
@@ -513,18 +514,36 @@ async def test_protected_facts_match_decoded_values_not_json_escapes(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("parent_seconds", [None, 0.01])
-async def test_summary_timeout_is_distinct_and_respects_parent_deadline(parent_seconds):
+async def test_summary_timeout_is_distinct_and_respects_parent_deadline(
+    parent_seconds, monkeypatch
+):
+    from veadk.context import attempts
+
     closed = asyncio.Event()
+    clock = SimpleNamespace(now=0.0)
+    if parent_seconds is not None:
+        # Advance the parent clock only after entering the model. CPU-heavy
+        # request preparation must not turn this cleanup test into the separate
+        # "expired parent prevents model call" contract below.
+        monkeypatch.setattr(
+            attempts, "time", SimpleNamespace(monotonic=lambda: clock.now)
+        )
 
     class SlowSummarizer(EvidenceSummarizer):
         async def generate_content_async(self, request, stream=False):
             try:
+                if parent_seconds is not None:
+                    clock.now = parent_seconds + 1
                 await asyncio.Event().wait()
                 yield  # pragma: no cover
             finally:
                 closed.set()
 
-    ledger = AttemptLedger(3, parent_seconds) if parent_seconds else None
+    ledger = (
+        AttemptLedger(3, parent_seconds, started=clock.now)
+        if parent_seconds is not None
+        else None
+    )
     token = current_attempts.set(ledger)
     try:
         with pytest.raises(ContextBudgetError) as caught:
@@ -539,7 +558,7 @@ async def test_summary_timeout_is_distinct_and_respects_parent_deadline(parent_s
                         summary_time_budget_ratio=1,
                     ),
                 ),
-                timeout=0.5,
+                timeout=5,
             )
         expected = "request_time_budget_exhausted" if ledger else "summary_timeout"
         assert caught.value.code == expected

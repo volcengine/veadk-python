@@ -21,6 +21,7 @@ on:
       - 'veadk/extensions/harness/plugins/compactor/**'
       - 'tests/context/**'
       - 'tests/agent/**'
+      - 'tests/cli/test_generated_agent_backend_codegen*.py'
       - 'evaluations/context_compression/**'
       - 'tests/models/**'
       - 'tests/run_context_compression_gate.py'
