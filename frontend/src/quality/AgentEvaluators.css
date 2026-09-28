@@ -1,0 +1,33 @@
+.agent-evaluators {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  min-width: 0;
+  font-family: var(--studio-font-family-ui);
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--studio-text-primary);
+}
+
+.agent-evaluators__toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+.agent-evaluators__group { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.agent-evaluators__group-title { margin: 0; font: inherit; font-weight: 600; overflow-wrap: anywhere; }
+.agent-evaluators__actions { display: flex; flex-wrap: wrap; gap: 8px; margin-left: auto; }
+.agent-evaluators__error { margin: 0; color: var(--studio-danger); }
+.agent-evaluators__grid { display: grid; grid-template-columns: minmax(0, 1fr); align-items: start; gap: 16px; animation: agent-evaluators-enter var(--studio-motion-duration-normal, 160ms) ease-out; }
+.agent-evaluators__card-content { display: flex; flex-direction: column; gap: 20px; }
+.agent-evaluators__skeleton-lines { display: flex; flex-direction: column; gap: 10px; }
+.agent-evaluators__description { margin: 0; color: var(--studio-text-secondary); overflow-wrap: anywhere; }
+.agent-evaluators__field { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; min-width: 0; }
+.agent-evaluators__field h4 { margin: 0; font: inherit; font-weight: 600; }
+.agent-evaluators__dimensions { display: flex; flex-direction: column; gap: 8px; width: 100%; min-width: 0; }
+.agent-evaluators__dimension-details { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 0; padding-bottom: 12px; overflow-wrap: anywhere; }
+.agent-evaluators__dimension-text { grid-column: 1 / -1; }
+.agent-evaluators__dimension-details dt { margin-bottom: 4px; color: var(--studio-text-secondary); }
+.agent-evaluators__dimension-details dd { margin: 0; }
+.agent-evaluators__prompt { margin: 0; width: 100%; white-space: pre-wrap; overflow-wrap: anywhere; }
+.agent-evaluators__prompt[data-expanded] { max-height: 360px; overflow-y: auto; scrollbar-gutter: stable; }
+.agent-evaluators__prompt:focus-visible { outline: 2px solid var(--studio-text-secondary); outline-offset: 2px; }
+
+@keyframes agent-evaluators-enter { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+@media (prefers-reduced-motion: reduce) { .agent-evaluators__grid { animation: none; } }

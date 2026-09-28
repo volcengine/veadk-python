@@ -15,6 +15,8 @@ export type ButtonProps = ComponentProps<"button"> & {
   hoverEffect?: "background" | "icon";
   /** 显示旋转加载图标并禁用按钮 */
   loading?: boolean;
+  /** 加载时在旋转图标旁显示简短文案，同时作为无障碍名称；纯图标按钮不显示 */
+  loadingLabel?: string;
 };
 
 export function Button({
@@ -27,15 +29,18 @@ export function Button({
   iconOnly = false,
   hoverEffect = "background",
   loading = false,
+  loadingLabel,
   disabled,
   children,
   ...props
 }: ButtonProps) {
+  const visibleLoadingLabel = loading && !iconOnly ? loadingLabel : undefined;
   return (
     <button
       {...props}
       type={type}
       disabled={disabled || loading}
+      aria-label={visibleLoadingLabel || props["aria-label"]}
       aria-busy={loading || props["aria-busy"]}
       data-hover-effect={iconOnly ? hoverEffect : undefined}
       className={`studio-button studio-button--${variant} studio-button--size-${size}${iconOnly ? " studio-button--icon-only" : ""}${loading ? " studio-button--loading" : ""} ${className}`.trim()}
@@ -46,6 +51,7 @@ export function Button({
       {loading && (
         <span className="studio-button__loading" aria-hidden="true">
           <Loading variant="ring" size="var(--studio-button-icon-size)" decorative />
+          {visibleLoadingLabel && <span>{visibleLoadingLabel}</span>}
         </span>
       )}
     </button>

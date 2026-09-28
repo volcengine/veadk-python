@@ -25,6 +25,10 @@ const descriptions: Record<string, string> = {
 };
 
 const componentNotes: Record<string, Record<string, string>> = {
+  Dropdown: {
+    fullWidth: "填满父容器，长标题自动换行；适用于多项纵向排列的手风琴",
+    open: "受控展开状态，可与 onOpenChange 组合为单项展开的手风琴；默认收起",
+  },
   InfoCard: {
     actions: "标题行右侧操作区域，支持 Button、IconButtonGroup 等 React 内容；长标题自动省略，操作区不收缩",
     ref: "卡片根 article 元素引用",
@@ -151,7 +155,8 @@ const componentNotes: Record<string, Record<string, string>> = {
     loadingLabel: "仅供屏幕阅读器读取的加载状态，默认正在加载资源",
   },
   Button: {
-    loading: "默认 false；只显示居中的 Ring 图标并自动禁用按钮，设置 aria-busy，保留原宽高与无障碍名称",
+    loading: "默认 false；显示居中的 Ring 图标并自动禁用按钮，设置 aria-busy，保留原宽高",
+    loadingLabel: "可选的简短加载文案，与 Ring 图标一起显示，并作为加载时的无障碍名称；不传或使用纯图标按钮时保留原行为",
     variant: "primary 主按钮、secondary 次按钮、outline 半透明描边按钮、ghost 透明按钮、link 链接样式按钮、pill 胶囊按钮；各样式共享尺寸选项，文字按钮默认高度为 32px",
     size: "compact / default / large 的文字按钮高度为 28 / 32 / 36px，字号为 12 / 14 / 16px，图标为 14 / 16 / 18px，各样式共用；iconOnly 高度为 20 / 28 / 36px",
     iconOnly: "纯图标按钮，compact / default / large 为 20 / 28 / 36px 方形，统一 6px 圆角；图标通过 startIcon 传入，需提供 aria-label，可组合不同 variant",

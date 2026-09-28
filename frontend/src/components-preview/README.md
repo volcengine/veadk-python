@@ -43,6 +43,8 @@ ECharts / Mermaid 实际渲染，支持源码切换和放大查看；文件预�
 
 Button、Tabs 和 Card 的变体集中展示，旧预览链接仍可访问
 Button 的每种样式并排展示 Compact、Default、Large，按钮底端对齐，尺寸说明放在按钮下方；文字按钮高度为 28 / 32 / 36px、字号为 12 / 14 / 16px、图标为 14 / 16 / 18px，Pill 共用相同尺寸；纯图标按钮高度为 20 / 28 / 36px
+Button 的 loadingLabel 可在加载图标旁显示简短文案，保持按钮原有宽度；不传时只显示图标，纯图标按钮保持原有无障碍名称
+Dropdown 支持 fullWidth 填满父容器并换行长标题，结合 open 和 onOpenChange 可组成一次展开一项的手风琴，收起内容保留 inert 和无障碍状态
 尺寸说明读取各按钮实际渲染的高度、字号或图标尺寸，尺寸变量变化时同步更新
 透明 Icon Button 通过 hoverEffect 选择 background（默认，悬停显示背景）或 icon（仅高亮图标）；两种模式共用尺寸和主题 tokens，会话尾部不覆盖 Button 的图标、圆角或 hover 样式
 固定宽度的 Header、Canvas Background 和 Resource Page 示例保留设计尺寸，在各自的 ScrollArea 内横向查看；示例数据和页面导航不属于组件 API
@@ -163,6 +165,7 @@ Table 复用 ScrollArea 的横向、双向滚动和滚动条效果，示例固�
 Button 的 iconOnly 提供纯图标按钮，可组合 primary、secondary、ghost 样式，使用 startIcon 和 aria-label；Table 操作列直接复用，不另写按钮样式
 Button 的 link 样式支持 endIcon，图标随字号缩放；悬停或键盘聚焦时文字下方虚线与右侧图标同时淡入，移开淡出，并保留图标占位，示例使用 ExternalLinkIcon
 InputWithHeaderIcon 复用 InputWithTailIcon 的原生输入逻辑，前置图标可替换或绑定点击回调
+InputWithTailIcon 的 tailIcon 设为 null 时不保留尾部图标占位，数字输入框的原生步进箭头随输入区对齐到右侧内边距
 SidebarItemWithIcon 的长标题默认尾部渐隐，悬停后缓慢滚到末尾、移开复位；trailing / hoverTrailing 支持尾部图标或按钮组切换，标题宽度自动适配
 Radio 按 Figma 740:296852 内的单选控件实现，16 × 16px，未选中白色圆底，选中深色圆底与 6px 白点；使用原生单选输入，同 name 互斥，支持可选标签与受控值
 RadioCard 复现该节点的完整卡片，默认 472 × 68px，包含 44px 图标容器、20px 图标、标题、副标题和右侧 Radio，整张卡片可点击；预览三张卡片间距为 12px

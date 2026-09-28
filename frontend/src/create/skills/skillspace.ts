@@ -71,10 +71,10 @@ export interface SkillSpacePageOptions {
   project?: string;
 }
 
-async function jfetch<T>(url: string): Promise<T> {
+async function jfetch<T>(url: string, signal?: AbortSignal): Promise<T> {
   const res = await fetch(withAuth(url), {
     headers: withLocaleHeaders(withLocalUser({ accept: "application/json" })),
-    signal: requestSignal(undefined, DEFAULT_REQUEST_TIMEOUT_MS),
+    signal: requestSignal(signal, DEFAULT_REQUEST_TIMEOUT_MS),
   });
   if (!res.ok) {
     throw await skillApiErrorFromResponse(
@@ -134,6 +134,7 @@ export async function getSkillDetail(
   project?: string,
   skillName?: string,
   skillSpaceName?: string,
+  signal?: AbortSignal,
 ): Promise<SkillDetail> {
   const params: string[] = [];
   if (version) params.push(`version=${encodeURIComponent(version)}`);
@@ -144,6 +145,7 @@ export async function getSkillDetail(
   const q = params.length > 0 ? `?${params.join("&")}` : "";
   return jfetch<SkillDetail>(
     `/web/skill-spaces/${encodeURIComponent(spaceId)}/skills/${encodeURIComponent(skillId)}${q}`,
+    signal,
   );
 }
 

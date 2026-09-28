@@ -519,6 +519,57 @@ See [deployment and operation](service/studio_release_notifier/README.md).
   always use placeholders
   instead of credentials. Long descriptions, names, component summaries, IDs,
   and environment values stay inside the scrollable panel.
+- **Agent quality management**: Agent details include a separate Quality
+  management entry with Evaluation preferences, Evaluation sets, Evaluators, and
+  Evaluation results tabs. Existing Evaluations and feedback workflows are unchanged.
+  - Start with a named evaluation preference: business goals, scenarios, acceptance
+    criteria, unacceptable mistakes, and an emphasis on results, process, or both.
+    Four text areas offer independently generated, selectable suggestions from the
+    Agent context. The model then proposes editable dataset and evaluator preferences;
+    their six text areas also offer independent suggestions aligned with the overall
+    preferences. Selecting an option appends it, and deselecting removes its matching
+    line without replacing other text. Typing does not restart requests. Completed
+    suggestions are cached for the same context and language; retry only requests
+    unfinished fields. No dataset or evaluator is generated before user confirmation.
+  - Confirming the component preferences generates the dataset and evaluator bundle
+    concurrently. Each preference links to its generated components, which can be
+    filtered in their respective tabs. Changing preferences marks previous outputs
+    as needing an update. Partial component successes are retained, and retries skip
+    components already generated with the same preferences. Closing the dialog
+    preserves completed work and the preference draft in page state.
+  - Dataset generation accepts an integer count from 50 to 300, defaulting to 100.
+    Empty, fractional and out-of-range input shows inline errors and blocks saving
+    or generation. Batches contain at most 20 cases, with at most four batches in
+    parallel, a scaled timeout, exact-count checks and normalized duplicate-input
+    detection. Disconnecting cancels dataset generation. Each case includes a concrete
+    input, expected outcome, optional expected actions and verifiable checks, viewable
+    in a drawer. Direct generation is also available with Agent-based brief autofill.
+  - Three evaluator categories—overall, tool capability, and Skill—use concurrent
+    model calls and appear as vertically stacked cards with skeleton loading. The
+    model derives 1–5 dimensions per evaluator from the Agent's documented requirements.
+    Dimension accordions show a localized name, description, scoring basis, minimum
+    and maximum score, and a rationale identifying the relevant Agent instructions or
+    capabilities. Standalone prompts repeat these requirements and specify how to
+    handle unavailable capabilities or missing execution evidence. Regeneration
+    replaces existing definitions only after success.
+  - Generation uses the full available Agent topology, root and child system prompts,
+    tool descriptions, Skill instructions, mounted components including knowledge
+    bases and memory, safe configuration fields, and versioned environment manifests.
+    Resource ownership, configuration versus runtime metadata, and unavailable
+    information remain explicit. Prepared context reuses loaded Agent metadata and
+    shares mounted-resource reads across generation steps; changed metadata invalidates
+    it. Runtime requests use verified app identifiers, and unrelated editor recovery
+    does not restart suggestions. Deployment credentials and raw configuration are
+    excluded from the prepared context.
+  - All generation uses the same provider-specific model as Agent form generation,
+    Pydantic output schemas through Agent/Runner and Ark Responses, with thinking
+    disabled. Volcengine and BytePlus use their respective endpoints and credentials.
+    Failures expose complete captured provider responses, error codes, request IDs and
+    exception traces in expandable details, with credential values redacted. Parallel
+    calls retain diagnostics from failed siblings even if another request times out.
+  - Preferences, datasets and evaluators currently remain in page memory and are lost
+    when leaving Quality management or reloading. Evaluation execution and result
+    analysis are not available yet
 - **Custom-agent workbench**: configure an agent with a rich Markdown
   system-prompt editor (including heading and list shortcuts), choose Harness
   Sidecar optimizations, then debug with expandable, copyable runner error

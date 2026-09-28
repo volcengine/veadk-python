@@ -44,7 +44,9 @@
   padding: 20px 24px 24px;
 }
 .studio-modal-layout__cancel.studio-button,
-.studio-modal-layout__confirm.studio-button { width: 80px; }
+.studio-modal-layout__confirm.studio-button { min-width: 80px; }
+
+.studio-modal-layout[data-size="large"] { width: 640px; height: 680px; }
 
 /* Figma 805:397210 / 855:464225: ellipse 187 × 88, blur sigma 68.85 */
 .studio-modal-layout--glow {

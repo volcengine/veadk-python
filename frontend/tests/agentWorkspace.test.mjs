@@ -130,7 +130,7 @@ test("focused agent details can render without the workspace tabs or list sideba
   assert.match(appSource, /runtimeApp: detailConnection\?\.apps\[0\]/);
   assert.match(workspaceSource, /const knownApp = selectedAgent\?\.runtimeApp \?\? ""[\s\S]*?getRuntimeAgentInfo\([\s\S]*?knownApp/);
   assert.match(clientSource, /loadDraft = true/);
-  assert.match(clientSource, /return fetchAgentInfo\(app, ep, false\)/);
+  assert.match(clientSource, /return fetchAgentInfo\(app, ep, options\.loadDraft \?\? false\)/);
 });
 
 test("focused agent details use the shared resource detail header", () => {
@@ -235,7 +235,7 @@ test("agent details show capability badges and deployment state before the flow"
 test("agent details expose detected integration methods without inventing unavailable endpoints", () => {
   assert.match(
     workspaceSource,
-    /type AgentSection = "basic" \| "usage" \| "evaluations" \| "optimizations" \| "integrations" \| "versions"/,
+    /type AgentSection = "basic" \| "usage" \| "evaluations" \| "quality" \| "optimizations" \| "integrations" \| "versions"/,
   );
   assert.match(
     workspaceSource,

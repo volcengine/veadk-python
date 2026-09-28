@@ -13,6 +13,8 @@
   transition: box-shadow var(--studio-motion-duration-fast, 140ms) ease-out;
 }
 
+.studio-textarea[data-full-width] { width: 100%; max-width: 100%; resize: vertical; }
+
 .studio-textarea__input {
   box-sizing: border-box;
   display: block;
@@ -44,6 +46,11 @@
 .studio-textarea__input:focus-visible {
   outline: none;
   box-shadow: none;
+}
+
+.studio-textarea:has(> textarea:focus-visible) {
+  outline: 2px solid var(--studio-focus-ring, var(--studio-text-secondary));
+  outline-offset: -2px;
 }
 
 .studio-textarea__counter {
