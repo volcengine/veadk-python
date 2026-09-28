@@ -293,6 +293,22 @@ def test_frontend_policy_allows_release_download() -> None:
     assert "tag:TagResources" in actions
     assert "tag:UntagResources" in actions
     assert {
+        "apig:ListGateways",
+        "apig:CreateGateway",
+        "apig:GetGateway",
+        "apig:CreateIMChannelGateway",
+        "apig:GetIMChannelGatewayStatus",
+    }.issubset(actions)
+    assert {
+        "ecs:DescribeZones",
+        "vpc:CreateSubnet",
+        "vpc:CreateVpc",
+        "vpc:DescribeSubnetAttributes",
+        "vpc:DescribeSubnets",
+        "vpc:DescribeVpcAttributes",
+        "vpc:DescribeVpcs",
+    }.issubset(actions)
+    assert {
         "aidap:CreateWorkspace",
         "aidap:DescribeWorkspaces",
         "aidap:DescribeWorkspaceDetail",
