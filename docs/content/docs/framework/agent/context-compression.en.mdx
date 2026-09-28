@@ -32,6 +32,26 @@ provider token usage. Irreducible protected input fails before an oversized requ
 media requires a suitable `media_token_reserve` when its size cannot be estimated.
 Output reserve plans space; it does not by itself cap generated output.
 
+Reviewed capacities live in `veadk/context/model_capacity.py`, with provider/model
+IDs, context/input/output ceilings, source URLs and verification dates. The SDK
+checks this table first, then exact entries in the installed LiteLLM local catalogue.
+It makes no capacity API calls or runtime downloads and never guesses by model family.
+Ark's public model-version metadata does not yet establish the full capacity contract.
+An explicit window may reduce, but cannot exceed, a known smaller model limit.
+
+If neither local table covers the model, supply a verified `context_window` and an
+output budget. Otherwise `ContextBudgetError` with `model_capacity_required` is raised
+before sending, including for unknown `ep-*` deployments and when compression is off.
+Unknown fallbacks use `fallback_capacity_required`; they cannot inherit the primary
+model's window. `input_limit` alone does not establish deployment capacity. Status
+queries remain available and report `needs_configuration` for a missing capacity.
+
+The reviewed table uses a 16,384-token planning reserve; explicit generation limits
+and Ark's answer/reasoning semantics may change the effective reserve. Where only
+an input cap is published (Gemini), it also serves as a conservative shared ceiling;
+input and output maxima are never added to invent a larger context window. Capacity
+coverage does not claim live compatibility testing for every provider or modality.
+
 Both Studio creation views expose these controls in model settings, with percentages
 for ratios. Drafts, nested LLM Agents, YAML and generated Python preserve the policy.
 Explicit `mode: "off"` remains off. Regenerate a project after changing its policy.
@@ -49,8 +69,8 @@ Set `retrieval: "lexical"` to avoid embedding, or configure `index_path` and
 `embedding_max_calls` in the policy. Explicit `use_context_retriever(...)` bindings
 remain caller-owned; the default retriever closes after each invocation.
 
-Use `context_compression=False` to disable transformations. Known input limits still
-apply. Inspect `agent.context_compression_status` for capacity gaps or unsupported
+Use `context_compression=False` to disable transformations. Capacity admission still
+applies, including rejection of unknown capacities. Inspect `agent.context_compression_status` for capacity gaps or unsupported
 custom model adapters/external runtimes. These controls apply to the standard ADK
 model loop; external `codex`/`piagent` runtimes and live audio/video own their loops.
 SQLite requires persistent storage for restart recovery and is not shared across

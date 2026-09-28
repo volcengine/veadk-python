@@ -1,3 +1,17 @@
+# Copyright (c) 2025 Beijing Volcano Engine Technology Co., Ltd. and/or its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Native streaming parser + SDK compression + SQLite, with no network."""
 
 import asyncio
@@ -15,7 +29,7 @@ from google.genai import types
 from litellm import ModelResponse, ModelResponseStream
 
 from veadk import Agent
-from veadk.context.attempts import current_attempts
+from veadk.context.attempts import current_attempts, timeout
 from veadk.context.budget import check_payload
 from veadk.context.config import ContextCompressionConfig
 from veadk.context.runtime import current_scope, is_summary
@@ -347,7 +361,7 @@ async def test_interrupted_stream_does_not_commit_final_or_replay_business(
             collect(runner(service, client, fetch), "Continue checking the source.")
         )
         if failure == "hold":
-            async with asyncio.timeout(2):
+            async with timeout(2):
                 while not client.streams:
                     await asyncio.sleep(0)
                 await client.streams[0].blocked.wait()

@@ -23,7 +23,8 @@ from google.adk.models.lite_llm import LiteLlm, LiteLLMClient
 from google.adk.models.llm_request import LlmRequest
 from google.adk.models.llm_response import LlmResponse
 from google.genai import types
-from litellm import ContextWindowExceededError, ModelResponse
+from litellm import ModelResponse
+from litellm.exceptions import ContextWindowExceededError
 
 from veadk.context.attempts import current_attempts
 from veadk.context.budget import ContextBudgetError
@@ -74,7 +75,10 @@ class RecoveryClient(LiteLLMClient):
         self.requests = []
         self.always_fail = always_fail
 
-    async def acompletion(self, **kwargs):
+    async def acompletion(self, model, messages, tools=None, stream=False, **kwargs):
+        kwargs = dict(
+            kwargs, model=model, messages=messages, tools=tools, stream=stream
+        )
         self.requests.append(copy.deepcopy(kwargs))
         if kwargs.get("response_format"):
             text = SUMMARY
@@ -168,11 +172,17 @@ async def test_quota_retry_and_fallback_share_one_attempt_limit(monkeypatch):
         def __init__(self):
             self.requests = []
 
-        async def acompletion(self, **kwargs):
-            self.requests.append(kwargs)
-            error = RuntimeError("synthetic quota failure")
-            error.status_code = 429
-            raise error
+        async def acompletion(
+            self, model, messages, tools=None, stream=False, **kwargs
+        ):
+            self.requests.append(
+                dict(kwargs, model=model, messages=messages, tools=tools, stream=stream)
+            )
+
+            class QuotaError(RuntimeError):
+                status_code = 429
+
+            raise QuotaError("synthetic quota failure")
 
     async def no_sleep(_delay):
         return None
@@ -182,8 +192,20 @@ async def test_quota_retry_and_fallback_share_one_attempt_limit(monkeypatch):
     llm = RetryingLiteLlm(
         model="unknown-primary",
         llm_client=client,
-        fallbacks=["unknown-fallback"],
-        context_compression={"max_model_attempts": 3},
+        fallbacks=[
+            {
+                "model": "unknown-fallback",
+                "context_compression": {
+                    "context_window": 64000,
+                    "output_reserve": 4096,
+                },
+            }
+        ],
+        context_compression={
+            "max_model_attempts": 3,
+            "context_window": 64000,
+            "output_reserve": 4096,
+        },
     )
     with pytest.raises(ContextBudgetError, match="model_attempt_budget_exhausted"):
         _ = [r async for r in llm.generate_content_async(request())]

@@ -58,6 +58,39 @@ agent = Agent(
 Studio 两种创建界面的模型设置均提供开关和上述阈值，比例显示为百分数。
 草稿、YAML、嵌套 LLM Agent 和生成 Python 使用同一配置；修改后需要重新生成项目。
 
+## 模型容量从哪里来
+
+容量数据维护在 `veadk/context/model_capacity.py`，每个版本记录总窗口、最大输入、
+最大输出、官方来源和核实日期。当前覆盖方舟 Seed / DeepSeek / GLM、OpenAI、Claude、Gemini，
+按明确的 provider 和模型 ID 匹配；例如 Seed 2.1 Pro `260628` 为 256,000，`260915` 为 1,024,000。
+
+当前没有实时查询方舟容量：公开版本配置接口尚未定义完整的输入、输出及共享窗口契约。
+SDK 优先查经核实的内置表，再查随 LiteLLM 安装的本地精确条目，不下载目录或按模型家族猜容量。
+显式 `context_window` 可以缩小已知上限；不能突破已知更小容量。
+
+两个本地表都未覆盖且没有显式容量时，在发送前抛出 `ContextBudgetError`，
+错误码为 `model_capacity_required`，并给出配置指引；备用模型缺少容量时报
+`fallback_capacity_required`。未知 `ep-...` 接入点必须按该部署的实际限制配置，
+不能继承另一接入点的窗口。只配置 `input_limit` 不能代替模型总窗口。
+
+```python
+# 私有部署示例：这些容量值必须由部署方核实后填写。
+agent = Agent(
+    name="private_assistant",
+    model_name="ep-your-deployment",
+    model_provider="openai",
+    context_compression={
+        "context_window": 64000,
+        "output_reserve": 8192,
+    },
+)
+```
+
+默认规划预留与模型最大输出是两回事。表内默认预留为 16,384 tokens；
+明确的模型输出参数和方舟回答/思维链语义还会影响实际预算。
+Gemini 只公布输入/输出上限时，保守地将输入上限也作为共享预算上限，不将两者相加。
+容量识别不代表所有模型的服务权限、媒体或参数兼容性均已实测。
+
 ## 检索与开销
 
 默认按当前问题用关键词与 embedding 混合选择原文证据，检索索引保存在
@@ -81,7 +114,7 @@ agent = Agent(name="assistant", context_compression=False)
 print(agent.context_compression_status)  # 仅容量和状态，不包含提示词或凭证。
 ```
 
-关闭后不改变模型输入，但已知容量仍会检查。自定义 BaseLlm 适配器、外部 `codex`／`piagent`
+关闭后不改变模型输入，但容量准入仍然生效，未知容量也会在发送前报错。自定义 BaseLlm 适配器、外部 `codex`／`piagent`
 执行器和实时音视频不自动获得本 SDK 模型循环的压缩能力，应查看实际能力状态。
 恢复工具只读取当前应用、用户、Session、Agent 和分支授权的原始记录；索引不能代替授权源。
 压缩可能遗漏有用信息，实际质量应以自己的业务题单验证。

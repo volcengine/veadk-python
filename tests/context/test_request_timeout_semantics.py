@@ -56,6 +56,7 @@ async def test_default_does_not_add_total_timeout(
         assert streaming is stream
         elapsed_clock.now += summary_seconds
         ledger = current_attempts.get()
+        assert ledger is not None
         observed.append(ledger.claim())
         elapsed_clock.now += main_seconds
         yield LlmResponse(content=types.Content(parts=[types.Part(text="done")]))
@@ -75,7 +76,10 @@ async def test_explicit_total_deadline_still_includes_summary(
 ):
     async def managed(self, request, stream):
         elapsed_clock.now += 33
-        assert 86 < current_attempts.get().claim() <= 88
+        ledger = current_attempts.get()
+        assert ledger is not None
+        remaining = ledger.claim()
+        assert remaining is not None and 86 < remaining <= 88
         elapsed_clock.now += 90
         yield LlmResponse()
 
@@ -142,11 +146,17 @@ async def test_native_http_timeouts_and_body_are_preserved(monkeypatch, configur
             else configured
         )
     for adapter in (LiteLlm, RetryingLiteLlm):
+        policy = (
+            {"context_compression": {"context_window": 64000, "output_reserve": 8192}}
+            if adapter is RetryingLiteLlm
+            else {}
+        )
         model = adapter(
             model="openai/offline-model",
             api_key="synthetic-offline",
             api_base="https://ark.cn-beijing.volces.com/api/v3",
             **additional,
+            **policy,
         )
         request = LlmRequest(contents=[types.Content(parts=[types.Part(text="hello")])])
         _ = [r async for r in model.generate_content_async(request)]
@@ -178,6 +188,7 @@ async def test_custom_summary_budget_reaches_adapter_ledger(
 ):
     async def managed(self, request, stream):
         ledger = current_attempts.get()
+        assert ledger is not None
         elapsed_clock.now += 20
         assert 24 < ledger.summary_remaining(0.75) < 26
         elapsed_clock.now += 26
