@@ -1791,7 +1791,7 @@ async def test_reading_unchanged_turn_state_does_not_extend_inactivity(
             )
             elapsed += 2
             terminal_callback = loop.call_later(
-                0.01,
+                0.5,
                 self.queue.put_nowait,
                 json.dumps(
                     {
