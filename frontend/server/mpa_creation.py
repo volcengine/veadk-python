@@ -6,8 +6,8 @@ import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from uuid import UUID
 from typing import Any
+from uuid import UUID
 
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import (
@@ -21,13 +21,22 @@ from pydantic import (
 
 from veadk.integrations.mpa.managed.config import (
     ConfigurationError,
-    load_profile,
-    validate_image_reference,
+    load_studio_profile,
     validate_creation_resources,
+    validate_image_reference,
     with_creation_resources,
 )
 from veadk.integrations.mpa.managed.credentials import load_volcengine_credentials
 from veadk.integrations.mpa.managed.tasks import CreationTasks, TaskError, owner_key
+
+
+def _studio_task_path() -> Path:
+    return Path(
+        os.getenv(
+            "VEADK_MPA_TASK_DB",
+            "/tmp/veadk-studio/mpa-creation.sqlite3",
+        )
+    )
 
 
 class CreationRequest(BaseModel):
@@ -42,6 +51,7 @@ class CreationRequest(BaseModel):
     pgPort: str = Field(default="", max_length=5)
     openvikingUrl: str = Field(default="", max_length=1024)
     openvikingResourceId: str = Field(default="", max_length=128)
+    openvikingApiKey: str = Field(default="", max_length=512, repr=False)
 
     @field_validator("runtimeImage", "workerImage")
     @classmethod
@@ -62,23 +72,21 @@ def mount_mpa_creation_routes(
     def get_tasks():
         nonlocal tasks
         if tasks is None:
-            tasks = CreationTasks(
-                Path(os.getenv("VEADK_MPA_TASK_DB", ".adk/mpa-creation.sqlite3"))
-            )
+            task_path = _studio_task_path()
+            tasks = CreationTasks(task_path)
         return tasks
 
     def profile(region):
         if not supported:
             raise ConfigurationError("MPA creation requires the Volcengine provider")
-        path = os.getenv("VEADK_MPA_CREATE_CONFIG", "mpa-create.config.yaml")
-        result = load_profile(path, region=region)
+        result = load_studio_profile(region=region)
         try:
             load_volcengine_credentials(result.managed.credential_file)
         except ValueError:
             raise ConfigurationError(
                 "Configure server deployment credentials"
             ) from None
-        return path, result
+        return None, result
 
     @app.get("/web/mpa-creation/config")
     async def inspect(request: Request, region: str):
@@ -104,8 +112,11 @@ def mount_mpa_creation_routes(
         try:
             path, config = profile(body.region)
             payload = body.model_dump(mode="json")
-            resources = validate_creation_resources(payload)
             with_creation_resources(config, payload)
+            openviking_api_key = payload.pop("openvikingApiKey")
+            resources = validate_creation_resources(
+                {**payload, "openvikingApiKey": openviking_api_key}
+            )
             images = config.image_defaults()
             for field in ("runtimeImage", "workerImage"):
                 if payload[field]:
@@ -123,6 +134,7 @@ def mount_mpa_creation_routes(
                 config_path=path,
                 timeout=config.managed.timeout_seconds,
                 images=images,
+                secrets={"openvikingApiKey": openviking_api_key},
             )
         except ConfigurationError as exc:
             raise HTTPException(400, str(exc)) from None

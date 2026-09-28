@@ -153,7 +153,14 @@ class CreationTasks:
             **json.loads(row["payload"]),
         }
 
-    async def start(self, owner, payload, *, config_path, timeout, images=None):
+    async def start(
+        self, owner, payload, *, config_path, timeout, images=None, secrets=None
+    ):
+        if "openvikingApiKey" in payload:
+            raise TaskError("Secrets must not be included in stored task inputs")
+        secrets = secrets or {}
+        if set(secrets) - {"openvikingApiKey"}:
+            raise TaskError("Unsupported creation secret")
         encoded = json.dumps(payload, sort_keys=True)
         # Reconcile stopped supervisors before acquiring the write transaction.
         # get() may write interrupted status and must not nest a SQLite writer.
@@ -199,13 +206,13 @@ class CreationTasks:
                 ),
             )
         task = asyncio.create_task(
-            self._run(task_id, owner, payload, config_path, timeout)
+            self._run(task_id, owner, payload, config_path, timeout, secrets)
         )
         self.running[task_id] = task
         task.add_done_callback(lambda _: self.running.pop(task_id, None))
         return self.get(owner, task_id)
 
-    async def _run(self, task_id, owner, payload, config_path, timeout):
+    async def _run(self, task_id, owner, payload, config_path, timeout, secrets):
         process = None
         succeeded = None
         terminal = {"state": "failed", "error": "creationFailed"}
@@ -223,7 +230,7 @@ class CreationTasks:
             )
             process = await asyncio.shield(spawn)
             data = {
-                "config": str(config_path),
+                "config": None if config_path is None else str(config_path),
                 "agentId": payload["agentId"],
                 "description": payload["description"],
                 "owner": owner,
@@ -240,6 +247,8 @@ class CreationTasks:
                     if key in payload
                 },
             }
+            if secrets.get("openvikingApiKey"):
+                data["resources"]["openvikingApiKey"] = secrets["openvikingApiKey"]
             assert process.stdin is not None and process.stdout is not None
             process.stdin.write(json.dumps(data).encode())
             await process.stdin.drain()

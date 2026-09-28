@@ -4,7 +4,13 @@ from unittest.mock import AsyncMock
 import pytest
 
 from veadk.integrations.mpa.managed import service
-from veadk.integrations.mpa.managed.config import Managed, Profile, Runtime, Worker
+from veadk.integrations.mpa.managed.config import (
+    Managed,
+    Profile,
+    Runtime,
+    Worker,
+    with_creation_resources,
+)
 from veadk.integrations.mpa.managed.database import DeploymentError
 from tests.integrations.mpa_managed.test_agent_deployment import (
     Registry,
@@ -17,8 +23,9 @@ from tests.integrations.mpa_managed.test_agent_deployment import (
 @pytest.mark.parametrize("source", ["reference", "template", "flat"])
 @pytest.mark.parametrize("image", [None, "registry.example/mpa:pinned"])
 @pytest.mark.parametrize("split_workspaces", [False, True])
+@pytest.mark.parametrize("openviking", [False, True])
 def test_network_gateway_worker_precede_runtime(
-    monkeypatch, source, image, split_workspaces
+    monkeypatch, source, image, split_workspaces, openviking
 ):
     async def run():
         entry = Registry()
@@ -43,6 +50,23 @@ def test_network_gateway_worker_precede_runtime(
             ),
         )
         profile.managed.runtime.image = image
+        profile.managed.runtime.env.update(
+            OPENVIKING_URL="https://old.example.test/openviking",
+            OPENVIKING_RESOURCE_ID="ov-old",
+            OPENVIKING_API_KEY="old-key",
+            OPENVIKING_USER="old-user",
+            OPENVIKING_EXTRA="old-extra",
+        )
+        profile.template["Envs"].extend(
+            [
+                {
+                    "Key": "OPENVIKING_URL",
+                    "Value": "https://template.example.test/openviking",
+                },
+                {"Key": "OPENVIKING_API_KEY", "Value": "template-key"},
+                {"Key": "OPENVIKING_USER", "Value": "template-user"},
+            ]
+        )
         if split_workspaces:
             from veadk.integrations.mpa.managed.config import PostgresWorkspaces
 
@@ -54,6 +78,16 @@ def test_network_gateway_worker_precede_runtime(
         if source == "reference":
             profile.managed.from_runtime = "r-source"
             cloud.runtimes["r-source"] = template()
+            cloud.runtimes["r-source"]["Envs"].extend(
+                [
+                    {
+                        "Key": "OPENVIKING_URL",
+                        "Value": "https://reference.example.test/openviking",
+                    },
+                    {"Key": "OPENVIKING_API_KEY", "Value": "reference-key"},
+                    {"Key": "OPENVIKING_USER", "Value": "reference-user"},
+                ]
+            )
         elif source == "flat":
             profile.template = None
             profile.values = {
@@ -68,6 +102,16 @@ def test_network_gateway_worker_precede_runtime(
             }
             if image is None:
                 profile.values["image"] = "registry/image:v1"
+        profile = with_creation_resources(
+            profile,
+            {
+                "openvikingUrl": "https://selected.example.test/openviking",
+                "openvikingResourceId": "ov-selected",
+                "openvikingApiKey": "selected-key",
+            }
+            if openviking
+            else {},
+        )
         monkeypatch.setattr(service, "RuntimeCloud", lambda **kw: cloud)
         monkeypatch.setattr(service, "AgentDeploymentRegistry", lambda url: entry)
         databases = Databases()
@@ -95,6 +139,21 @@ def test_network_gateway_worker_precede_runtime(
         async def create(request):
             assert events == ["gateway", "worker"]
             assert request["ToolId"] == "t-one"
+            openviking_env = {
+                key: value
+                for key, value in service.env_map(request).items()
+                if key.startswith("OPENVIKING_")
+            }
+            assert openviking_env == (
+                {
+                    "OPENVIKING_URL": "https://selected.example.test/openviking",
+                    "OPENVIKING_RESOURCE_ID": "ov-selected",
+                    "OPENVIKING_API_KEY": "selected-key",
+                    "OPENVIKING_USER": "default",
+                }
+                if openviking
+                else {}
+            )
             assert request["ArtifactUrl"] == (image or "registry/image:v1")
             env = service.env_map(request)
             assert env["MPA_USER_POOL_NAME"] == "studio-pool"

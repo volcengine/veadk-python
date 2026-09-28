@@ -24,6 +24,16 @@ const PG_CONSOLE_URL =
 const OPENVIKING_CONSOLE_URL =
   "https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing/ov-6689fabdf032294/context-management?accountId=default&userId=default&projectName=default";
 
+function freshInput(region: string): MpaCreationInput {
+  const id = crypto.randomUUID();
+  return {
+    region,
+    requestId: id,
+    agentId: `mi-${id.replace(/-/g, "").slice(0, 24)}`,
+    description: "",
+  };
+}
+
 function initial(region: string): {
   input: MpaCreationInput;
   taskId?: string;
@@ -56,15 +66,7 @@ function initial(region: string): {
   } catch {
     /* A fresh form is safe when browser storage is unavailable. */
   }
-  const id = crypto.randomUUID();
-  return {
-    input: {
-      region,
-      requestId: id,
-      agentId: `mi-${id.replace(/-/g, "").slice(0, 24)}`,
-      description: "",
-    },
-  };
+  return { input: freshInput(region) };
 }
 
 export function MpaCreateDialog({
@@ -80,6 +82,7 @@ export function MpaCreateDialog({
   const key = (name: string) => `myAgents.mpaCreate.${name}`;
   const [saved] = useState(() => initial(region));
   const [input, setInput] = useState(saved.input);
+  const [openvikingApiKey, setOpenvikingApiKey] = useState("");
   const [step, setStep] = useState(
     saved.submitted || saved.taskId
       ? 2
@@ -113,6 +116,7 @@ export function MpaCreateDialog({
   const openvikingValid = validOpenViking(
     input.openvikingUrl,
     input.openvikingResourceId,
+    openvikingApiKey,
   );
   useEffect(() => {
     if (submitted || taskId) return;
@@ -231,7 +235,10 @@ export function MpaCreateDialog({
     const controller = new AbortController();
     action.current = controller;
     try {
-      const value = await startMpaCreation(input, controller.signal);
+      const value = await startMpaCreation(
+        { ...input, openvikingApiKey },
+        controller.signal,
+      );
       if (!alive.current || controller.signal.aborted) return;
       persist(value.taskId);
       setTaskId(value.taskId);
@@ -271,6 +278,38 @@ export function MpaCreateDialog({
       lock.current = false;
       if (alive.current) setBusy(false);
     }
+  }
+  function startAnotherAgent() {
+    if (
+      busy ||
+      loading ||
+      (task?.state !== "failed" && task?.state !== "cancelled")
+    )
+      return;
+    const nextInput: MpaCreationInput = {
+      ...freshInput(region),
+      runtimeImage: config?.runtimeImage ?? "",
+      workerImage: config?.workerImage ?? "",
+      pgHost: autoPg ? "" : (config?.pgHost ?? ""),
+      pgPort: autoPg ? "" : (config?.pgPort ?? ""),
+    };
+    try {
+      sessionStorage.setItem(
+        `mpa-create:${region}`,
+        JSON.stringify({ input: nextInput, step: 0 }),
+      );
+    } catch {
+      /* The new in-memory draft remains usable without browser storage. */
+    }
+    setInput(nextInput);
+    setOpenvikingApiKey("");
+    setStep(0);
+    setTaskId(undefined);
+    setSubmitted(false);
+    setTask(null);
+    setError("");
+    setConfirmCancel(false);
+    finished.current = false;
   }
   return (
     <>
@@ -515,6 +554,23 @@ export function MpaCreateDialog({
                         }
                       />
                     </label>
+                    <label>
+                      {t(key("openvikingApiKey"))}
+                      <input
+                        type="password"
+                        name="openvikingApiKey"
+                        value={openvikingApiKey}
+                        maxLength={512}
+                        disabled={
+                          busy || running || task?.state === "succeeded"
+                        }
+                        autoComplete="off"
+                        spellCheck={false}
+                        onChange={(event) =>
+                          setOpenvikingApiKey(event.target.value)
+                        }
+                      />
+                    </label>
                     {!openvikingValid && (
                       <p role="alert">{t(key("openvikingInvalid"))}</p>
                     )}
@@ -594,6 +650,16 @@ export function MpaCreateDialog({
                     <Button variant="outline" disabled={busy} onClick={onClose}>
                       {t(key("close"))}
                     </Button>
+                    {(task?.state === "failed" ||
+                      task?.state === "cancelled") && (
+                      <Button
+                        variant="outline"
+                        disabled={busy || loading}
+                        onClick={startAnotherAgent}
+                      >
+                        {t(key("newAgent"))}
+                      </Button>
+                    )}
                     {!submitted && step > 0 && (
                       <Button
                         variant="outline"

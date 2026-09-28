@@ -282,6 +282,116 @@ it("keeps a submitted short ID unchanged for task retry", async () => {
     "mi-1234567890ab",
   );
 });
+
+it.each(["failed", "cancelled"] as const)(
+  "starts a different agent after a %s task without changing the old task",
+  async (state) => {
+    const oldInput = {
+      region: "cn-beijing",
+      requestId: "12345678-90ab-4cde-8f01-23456789abcd",
+      agentId: "mi-1234567890ab4cde8f012345",
+      description: "Old agent",
+    };
+    sessionStorage.setItem(
+      "mpa-create:cn-beijing",
+      JSON.stringify({
+        input: oldInput,
+        taskId: "old-task",
+        submitted: true,
+        step: 2,
+      }),
+    );
+    vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
+      configured: true,
+      region: "cn-beijing",
+      runtimeImage: "registry.example/mpa:v1",
+      workerImage: "registry.example/worker:v1",
+    });
+    vi.mocked(api.getMpaCreation).mockResolvedValue({
+      ...oldInput,
+      taskId: "old-task",
+      state,
+      stage: "network",
+      error: "creationFailed",
+    });
+    await mount();
+    await edit("openvikingApiKey", "private-test-key");
+    expect(button("retry")).toBeDefined();
+    await act(async () => button("newAgent").click());
+    const freshId = field("agentId").value;
+    expect(freshId).toMatch(/^mi-[0-9a-f]{24}$/);
+    expect(freshId).not.toBe(oldInput.agentId);
+    expect(field("runtimeImage").value).toBe("registry.example/mpa:v1");
+    expect(field("workerImage").value).toBe("registry.example/worker:v1");
+    await goToFinal();
+    expect(field("openvikingApiKey").value).toBe("");
+    expect(field("openvikingUrl").value).toBe("");
+    expect(field("openvikingResourceId").value).toBe("");
+    expect(document.body.textContent).not.toContain(
+      "myAgents.mpaCreate.states.failed",
+    );
+    expect(document.body.textContent).not.toContain(
+      "myAgents.mpaCreate.states.cancelled",
+    );
+    expect(api.startMpaCreation).not.toHaveBeenCalled();
+    expect(api.cancelMpaCreation).not.toHaveBeenCalled();
+    const stored = JSON.parse(sessionStorage.getItem("mpa-create:cn-beijing")!);
+    expect(stored.input.agentId).toBe(freshId);
+    expect(stored.input.requestId).not.toBe(oldInput.requestId);
+    expect(stored.taskId).toBeUndefined();
+    expect(JSON.stringify(stored)).not.toContain("private-test-key");
+    await act(async () => root.render(null));
+    await mount();
+    await act(async () => button("previousStep").click());
+    await act(async () => button("previousStep").click());
+    expect(field("agentId").value).toBe(freshId);
+    expect(api.getMpaCreation).toHaveBeenCalledTimes(1);
+    vi.mocked(api.startMpaCreation).mockImplementation(async (request) => ({
+      ...request,
+      taskId: "new-task",
+      state: "running",
+      stage: "network",
+    }));
+    await goToFinal();
+    await act(async () => submitButton().click());
+    expect(vi.mocked(api.startMpaCreation).mock.calls[0][0]).toMatchObject({
+      agentId: freshId,
+      requestId: stored.input.requestId,
+    });
+  },
+);
+
+it("does not offer a new identity for a running or uncertain task", async () => {
+  const input = {
+    region: "cn-beijing",
+    requestId: "12345678-90ab-4cde-8f01-23456789abcd",
+    agentId: "mi-1234567890ab4cde8f012345",
+    description: "Old agent",
+  };
+  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
+    configured: true,
+    region: "cn-beijing",
+  });
+  sessionStorage.setItem(
+    "mpa-create:cn-beijing",
+    JSON.stringify({ input, submitted: true, step: 2 }),
+  );
+  await mount();
+  expect(button("newAgent")).toBeUndefined();
+  await act(async () => root.render(null));
+  sessionStorage.setItem(
+    "mpa-create:cn-beijing",
+    JSON.stringify({ input, taskId: "running-task", submitted: true, step: 2 }),
+  );
+  vi.mocked(api.getMpaCreation).mockResolvedValue({
+    ...input,
+    taskId: "running-task",
+    state: "running",
+    stage: "deploying",
+  });
+  await mount();
+  expect(button("newAgent")).toBeUndefined();
+});
 it("passes PG and OpenViking selections to creation and keeps secrets out of session storage", async () => {
   vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
     configured: true,
@@ -297,14 +407,18 @@ it("passes PG and OpenViking selections to creation and keeps secrets out of ses
   await act(async () => button("next").click());
   await edit("openvikingUrl", "https://api.example.test/openviking");
   await edit("openvikingResourceId", "ov-test");
+  await edit("openvikingApiKey", "private-ov-key-for-test");
+  expect(field("openvikingApiKey").type).toBe("password");
   await act(async () => submitButton().click());
   expect(vi.mocked(api.startMpaCreation).mock.calls[0][0]).toMatchObject({
     pgHost: "db.example",
     pgPort: "5433",
     openvikingUrl: "https://api.example.test/openviking",
     openvikingResourceId: "ov-test",
+    openvikingApiKey: "private-ov-key-for-test",
   });
   const saved = sessionStorage.getItem("mpa-create:cn-beijing")!;
+  expect(saved).not.toContain("private-ov-key-for-test");
   expect(saved).not.toContain("apiKey");
   expect(saved).not.toContain("password");
 });
@@ -315,11 +429,19 @@ it("blocks malformed OpenViking settings before submission", async () => {
   });
   await mount();
   await goToFinal();
+  expect(submitButton().disabled).toBe(false);
+  await edit("openvikingApiKey", "test-key");
+  expect(submitButton().disabled).toBe(true);
+  await edit("openvikingApiKey", "");
   await edit("openvikingUrl", "http://insecure.example.test");
   expect(submitButton().disabled).toBe(true);
   await edit("openvikingUrl", "https://api.example.test:443/openviking");
   expect(submitButton().disabled).toBe(true);
   await edit("openvikingUrl", "https://api.example.test/openviking");
+  expect(submitButton().disabled).toBe(true);
+  await edit("openvikingResourceId", "ov-test");
+  expect(submitButton().disabled).toBe(true);
+  await edit("openvikingApiKey", "test-ov-key");
   expect(submitButton().disabled).toBe(false);
 });
 function submitButton() {

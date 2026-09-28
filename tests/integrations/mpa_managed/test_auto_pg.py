@@ -614,8 +614,7 @@ def test_config_route_auto_does_not_call_cloud_or_return_credentials(
     from frontend.server import mpa_creation
     from veadk.integrations.mpa.managed.pg_cloud import PGCloud
 
-    path = auto_profile(tmp_path, monkeypatch)
-    monkeypatch.setenv("VEADK_MPA_CREATE_CONFIG", str(path))
+    monkeypatch.setenv("VEADK_MPA_CONFIG_MODEL_AGENT_API_KEY", "test-model-key")
     monkeypatch.setattr(mpa_creation, "load_volcengine_credentials", lambda *_: None)
     start = AsyncMock(return_value={"id": "task"})
     from veadk.integrations.mpa.managed.tasks import CreationTasks

@@ -12,10 +12,11 @@ export function validPgTarget(host = "", port = ""): boolean {
   );
 }
 
-export function validOpenViking(url = "", resourceId = ""): boolean {
+export function validOpenViking(url = "", resourceId = "", apiKey = ""): boolean {
   const selectedUrl = url.trim();
   const selectedId = resourceId.trim();
-  if (!selectedUrl) return !selectedId;
+  if (!selectedUrl && !selectedId && !apiKey) return true;
+  if (!selectedUrl || !selectedId || !apiKey.trim()) return false;
   if (selectedUrl.length > 1024 || /\s/.test(selectedUrl)) return false;
   const authority = selectedUrl.replace(/^https:\/\//, "").split("/", 1)[0];
   if (authority.includes(":")) return false;
@@ -29,8 +30,7 @@ export function validOpenViking(url = "", resourceId = ""): boolean {
       !parsed.port &&
       !parsed.search &&
       !parsed.hash &&
-      (!selectedId ||
-        (selectedId.length <= 128 && /^ov-[a-zA-Z0-9_-]+$/.test(selectedId)))
+      selectedId.length <= 128 && /^ov-[a-zA-Z0-9_-]+$/.test(selectedId)
     );
   } catch {
     return false;

@@ -3,7 +3,7 @@
 # Managed creation (prepares network/APIG/database/skills/worker):
 #   veadk mpa provision --config mpa-create.config.yaml --agent-id customer-service
 # Preview without cloud/database calls: add --dry-run.
-# Studio uses the same private file via VEADK_MPA_CREATE_CONFIG (absolute path).
+# Studio uses a built-in Beijing profile and does not read this CLI YAML file.
 # The managed path is implemented entirely in VeADK.
 # Setup/recovery: veadk/integrations/mpa/managed/README.md (README.zh.md).
 #

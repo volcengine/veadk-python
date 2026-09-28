@@ -81,13 +81,7 @@ def test_blank_images_normalize_and_digest_is_accepted():
 def test_authorized_config_returns_defaults_and_task_freezes_them(
     tmp_path, monkeypatch
 ):
-    path = profile_file(
-        tmp_path,
-        monkeypatch,
-        runtime={"image": "registry.example/mpa:default"},
-        worker={"image": "registry.example/worker:default"},
-    )
-    monkeypatch.setenv("VEADK_MPA_CREATE_CONFIG", str(path))
+    monkeypatch.setenv("VEADK_MPA_CONFIG_MODEL_AGENT_API_KEY", "test-model-key")
     monkeypatch.setattr(
         mpa_creation, "load_volcengine_credentials", lambda *args: object()
     )
@@ -106,11 +100,13 @@ def test_authorized_config_returns_defaults_and_task_freezes_them(
     }
     with TestClient(app) as client:
         config = client.get("/web/mpa-creation/config?region=cn-beijing").json()
-        assert config["runtimeImage"] == "registry.example/mpa:default"
+        assert config["runtimeImage"].endswith(
+            "/mpa_agent_studio:studio-a1f9627-20260923-172555"
+        )
         response = client.post("/web/mpa-creation/tasks", json=payload)
         assert response.status_code == 202
         assert response.json()["images"] == {
-            "runtimeImage": "registry.example/mpa:default",
+            "runtimeImage": config["runtimeImage"],
             "workerImage": "registry.example/worker:custom",
         }
         rejected = client.post(

@@ -15,6 +15,9 @@ export interface MpaCreationInput {
   openvikingUrl?: string;
   openvikingResourceId?: string;
 }
+export interface MpaCreationRequest extends MpaCreationInput {
+  openvikingApiKey?: string;
+}
 export interface MpaCreationTask extends MpaCreationInput {
   taskId: string;
   state: "running" | "cancelling" | "succeeded" | "failed" | "cancelled";
@@ -82,7 +85,7 @@ export const getMpaCreationConfig = (region: string, signal: AbortSignal) =>
     signal,
   );
 export const startMpaCreation = (
-  input: MpaCreationInput,
+  input: MpaCreationRequest,
   signal: AbortSignal,
 ) => request<MpaCreationTask>("tasks", signal, input);
 export const getMpaCreation = (id: string, signal: AbortSignal) =>

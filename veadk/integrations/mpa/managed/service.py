@@ -170,6 +170,22 @@ async def provision(
     apply_runtime_settings(template, profile.managed.runtime)
     apply_identity_settings(template, profile.values)
     env = env_map(template)
+    if profile.openviking_enabled is not None:
+        selected_openviking = (
+            {
+                key: value
+                for key, value in profile.managed.runtime.env.items()
+                if key.startswith("OPENVIKING_")
+            }
+            if profile.openviking_enabled
+            else {}
+        )
+        for key in list(env):
+            if key.startswith("OPENVIKING_"):
+                env.pop(key)
+        env.update(selected_openviking)
+    else:
+        env.setdefault("OPENVIKING_USER", "default")
     for key in (
         "AGENTKIT_RUNTIME_ID",
         "A2A_PUBLIC_URL",

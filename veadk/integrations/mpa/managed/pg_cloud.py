@@ -4,11 +4,40 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from typing import Any
 
 from sqlalchemy.engine import URL
 
 from .database import DeploymentError
+
+
+def _debug_event(hypothesis: str, location: str, message: str, data: dict) -> None:
+    url = os.getenv("DEBUG_SERVER_URL", "").strip()
+    session_id = os.getenv("DEBUG_SESSION_ID", "").strip()
+    if not url or not session_id:
+        return
+    try:
+        import urllib.request
+
+        payload = {
+            "sessionId": session_id,
+            "runId": "pre-fix",
+            "hypothesisId": hypothesis,
+            "location": location,
+            "msg": message,
+            "data": data,
+        }
+        urllib.request.urlopen(
+            urllib.request.Request(
+                url,
+                data=json.dumps(payload).encode(),
+                headers={"Content-Type": "application/json"},
+            ),
+            timeout=1,
+        ).read()
+    except Exception:  # noqa: BLE001, S110
+        pass
 
 
 class PGCloudError(DeploymentError):
@@ -104,7 +133,7 @@ def parse_connection(result):
             database=values["PGDATABASE"],
             query={"sslmode": sslmode},
         ).render_as_string(hide_password=False)
-    except Exception:
+    except Exception:  # noqa: BLE001
         raise DeploymentError(
             "AIDAP returned invalid or insecure PostgreSQL connection parameters"
         ) from None
@@ -116,10 +145,22 @@ class PGCloud:
 
     async def call(self, method, request_type, **params):
         def run():
-            import volcenginesdkcore
             import volcenginesdkaidap
+            import volcenginesdkcore
 
             credential = self.credentials()
+            _debug_event(
+                "A-B",
+                "pg_cloud.py:call:start",
+                "[DEBUG] Starting AIDAP request",
+                {
+                    "method": method,
+                    "requestType": request_type,
+                    "region": self.region,
+                    "parameterNames": sorted(params),
+                    "hasSessionToken": bool(credential.session_token),
+                },
+            )
             config: Any = volcenginesdkcore.Configuration()
             config.ak, config.sk = (
                 credential.access_key_id,
@@ -134,7 +175,14 @@ class PGCloud:
             try:
                 api = volcenginesdkaidap.AIDAPApi(client)
                 request = getattr(volcenginesdkaidap, request_type)(**params)
-                return getattr(api, method)(request, _request_timeout=30).to_dict()
+                result = getattr(api, method)(request, _request_timeout=30).to_dict()
+                _debug_event(
+                    "B-D",
+                    "pg_cloud.py:call:success",
+                    "[DEBUG] AIDAP request succeeded",
+                    {"method": method, "resultKeys": sorted(result)},
+                )
+                return result
             finally:
                 client.rest_client.pool_manager.clear()
 
@@ -142,7 +190,7 @@ class PGCloud:
             return await asyncio.to_thread(run)
         except DeploymentError:
             raise
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             try:
                 code = json.loads(getattr(exc, "body", "") or "{}")["ResponseMetadata"][
                     "Error"
@@ -151,6 +199,12 @@ class PGCloud:
                     raise ValueError
             except (ValueError, TypeError, KeyError):
                 code = "CloudRequestFailed"
+            _debug_event(
+                "B-C",
+                "pg_cloud.py:call:error",
+                "[DEBUG] AIDAP request failed",
+                {"method": method, "code": code, "errorType": type(exc).__name__},
+            )
             raise PGCloudError(method, code) from None
 
     async def listing(self, method, request, collection, **params):
@@ -177,7 +231,32 @@ class PGCloud:
             project_name=project,
             search=name,
         )
-        return [r for r in rows if r.get("workspace_name") == name]
+        matches = [r for r in rows if r.get("workspace_name") == name]
+        _debug_event(
+            "C-D",
+            "pg_cloud.py:find",
+            "[DEBUG] Completed Workspace discovery",
+            {
+                "project": project,
+                "name": name,
+                "matchCount": len(matches),
+                "matches": [
+                    {
+                        key: row.get(key)
+                        for key in (
+                            "workspace_id",
+                            "account_id",
+                            "region_id",
+                            "project_name",
+                            "workspace_name",
+                            "workspace_status",
+                        )
+                    }
+                    for row in matches
+                ],
+            },
+        )
+        return matches
 
     async def detail(self, ident):
         result = await self.call(
