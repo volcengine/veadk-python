@@ -140,6 +140,19 @@ def validate_creation_resources(values: dict[str, str]) -> dict[str, str]:
     return selected
 
 
+def validate_creation_tos(values: dict[str, str]) -> dict[str, str]:
+    """Validate optional per-creation TOS mount credentials."""
+    selected = {
+        key: str(values.get(key, "")).strip()
+        for key in ("tosAccessKey", "tosSecretKey", "tosBucket")
+    }
+    if any(selected.values()) and not all(selected.values()):
+        raise ConfigurationError(
+            "TOS access key, secret key, and bucket are all required"
+        )
+    return selected
+
+
 def validate_image_reference(value: str) -> str:
     value = value.strip()
     if not value:
@@ -434,6 +447,26 @@ def with_creation_resources(profile: Profile, resources: dict[str, str]) -> Prof
     return replace(
         profile, managed=managed, openviking_enabled=bool(selected["openvikingUrl"])
     )
+
+
+def with_creation_tos(profile: Profile, values: dict[str, str]) -> Profile:
+    selected = validate_creation_tos(values)
+    if not any(selected.values()):
+        return profile
+    managed = profile.managed.model_copy(deep=True)
+    worker = managed.worker.model_dump()
+    worker.update(
+        tos_access_key=selected["tosAccessKey"],
+        tos_secret_key=selected["tosSecretKey"],
+        tos_bucket=selected["tosBucket"],
+    )
+    try:
+        managed.worker = Worker.model_validate(worker)
+    except ValidationError:
+        raise ConfigurationError(
+            "TOS mount settings require a newly created worker"
+        ) from None
+    return replace(profile, managed=managed)
 
 
 def _secret(name: str) -> str:

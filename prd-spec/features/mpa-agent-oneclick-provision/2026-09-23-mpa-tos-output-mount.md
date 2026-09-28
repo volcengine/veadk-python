@@ -14,7 +14,8 @@ but the Tool and its Sessions currently have no TOS output mount. Outputs under
 ## Goals
 
 1. Accept `tos-access-key`, `tos-secret-key`, and `tos-bucket` in the existing
-   private MPA YAML for both `mpa create` and managed `mpa provision`.
+   private MPA YAML for both `mpa create` and managed `mpa provision`; also let
+   the Studio creation page override the complete tuple for one creation.
 2. Put the TOS credentials only in the Tool `TosMountConfig`; do not copy them
    into Runtime environment variables, dry-run output, logs, or registry rows.
 3. Mount TOS read-write at `/data/output` and derive its endpoint from the Tool
@@ -33,8 +34,11 @@ but the Tool and its Sessions currently have no TOS output mount. Outputs under
 
 ## Design
 
-The flat YAML keys remain the single secret input contract. Managed profile
-loading copies the validated tuple into the in-memory worker options. A newly
+The flat YAML keys provide server-side defaults. The Studio creation page may
+submit a complete override tuple. The server removes AK/SK from the recoverable
+request payload and passes them only in memory through the creation child's
+stdin; browser sessionStorage, task SQLite, and task responses do not retain or
+return them. A newly
 created Tool receives an access-key `TosMountConfig` with the canonical base
 path `/sandbox-session/default/default` and local path `/data/output`. VeADK
 sets `MPA_CODEX_WORKER_TOS_MOUNT_ENABLED=true` and the non-secret bucket name
@@ -50,6 +54,8 @@ silently creating an unmounted Session. Existing Sessions remain unchanged.
 
 - Complete TOS YAML produces the expected Tool mount configuration and Runtime
   flag in both legacy and managed provisioning.
+- Complete Studio TOS input overrides the newly created Worker, partial input is
+  rejected, and AK/SK never enter browser recovery, task SQLite, or responses.
 - Partial TOS YAML fails locally without exposing secret values.
 - Two Session IDs produce distinct bucket paths and the same `/data/output`
   local path.

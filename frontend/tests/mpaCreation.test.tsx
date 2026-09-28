@@ -444,6 +444,30 @@ it("blocks malformed OpenViking settings before submission", async () => {
   await edit("openvikingApiKey", "test-ov-key");
   expect(submitButton().disabled).toBe(false);
 });
+it("passes complete TOS settings without saving credentials in session storage", async () => {
+  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
+    configured: true,
+    region: "cn-beijing",
+  });
+  vi.mocked(api.startMpaCreation).mockReturnValue(new Promise(() => {}));
+  await mount();
+  await goToFinal();
+  await edit("tosAccessKey", "sensitive-ak");
+  expect(submitButton().disabled).toBe(true);
+  await edit("tosSecretKey", "sensitive-sk");
+  await edit("tosBucket", "session-output");
+  expect(submitButton().disabled).toBe(false);
+  await act(async () => submitButton().click());
+  expect(vi.mocked(api.startMpaCreation).mock.calls[0][0]).toMatchObject({
+    tosAccessKey: "sensitive-ak",
+    tosSecretKey: "sensitive-sk",
+    tosBucket: "session-output",
+  });
+  const saved = sessionStorage.getItem("mpa-create:cn-beijing")!;
+  expect(saved).not.toContain("sensitive-ak");
+  expect(saved).not.toContain("sensitive-sk");
+  expect(saved).toContain("session-output");
+});
 function submitButton() {
   return button("submit");
 }

@@ -115,6 +115,21 @@
   line-height: 1.8;
   color: var(--studio-text-secondary);
 }
+.mpa-create-tos {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 4px 0 0;
+  padding: 16px;
+  border: 1px solid var(--studio-border-default);
+  border-radius: 10px;
+}
+.mpa-create-tos legend {
+  padding: 0 6px;
+  color: var(--studio-text-primary);
+  font-size: 14px;
+  font-weight: 600;
+}
 .mpa-create-actions {
   display: flex;
   flex-wrap: wrap;

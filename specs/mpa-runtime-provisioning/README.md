@@ -85,6 +85,11 @@ an access-key TOS mount with `/sandbox-session/default/default` as its base and
 `/data/output` as its read-write local path. Credentials MUST remain in the
 Tool request. The Runtime receives `MPA_CODEX_WORKER_TOS_MOUNT_ENABLED=true`
 and the non-secret bucket name, but never AK/SK.
+The Studio creation page may submit a complete tuple for one creation and
+override the YAML defaults. AK/SK pass only in memory through child-process
+stdin and MUST NOT enter sessionStorage, task SQLite, or task responses. Partial
+input MUST be rejected. A profile using an existing Worker must first select a
+new Worker image for the creation.
 
 For every newly created Sandbox Session, mpa-agent MUST set
 `CreateSessionRequest.TosMountPoints` using AgentKit's

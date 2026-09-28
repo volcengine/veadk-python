@@ -13,7 +13,8 @@ Session 配置 TOS 输出挂载，因此 `/data/output` 没有按会话隔离的
 ## 目标
 
 1. 现有私有 MPA YAML 接受 `tos-access-key`、`tos-secret-key`、`tos-bucket`，
-   同时覆盖 `mpa create` 与托管 `mpa provision`。
+   同时覆盖 `mpa create` 与托管 `mpa provision`；Studio 创建页也可为单次创建
+   传入完整三元组并覆盖 YAML 默认值。
 2. AK/SK 只进入 Tool 的 `TosMountConfig`，不得进入 Runtime 环境变量、dry-run
    输出、日志或部署注册表。
 3. TOS 以读写方式挂载到 `/data/output`，Endpoint 根据 Tool 地域推导。
@@ -29,8 +30,10 @@ Session 配置 TOS 输出挂载，因此 `/data/output` 没有按会话隔离的
 
 ## 设计
 
-顶层 YAML 三个字段是唯一的密钥输入契约。托管配置加载时，把校验后的完整三元组
-复制到内存中的 worker options。新 Tool 使用 access-key 类型的
+顶层 YAML 三个字段提供服务端默认值。Studio 创建页可选输入完整三元组，提交后从
+可恢复请求 payload 中剥离 AK/SK，仅通过创建子进程 stdin 在内存中覆盖本次 worker
+options；浏览器 sessionStorage、任务 SQLite 和任务查询响应均不得保存或返回 AK/SK。
+新 Tool 使用 access-key 类型的
 `TosMountConfig`，基础路径固定为 `/sandbox-session/default/default`，本地路径
 固定为 `/data/output`。VeADK 只向 Runtime 注入
 `MPA_CODEX_WORKER_TOS_MOUNT_ENABLED=true` 和非敏感 bucket 名，不注入 TOS
@@ -44,6 +47,8 @@ AK/SK。
 ## 验收标准
 
 - 完整 TOS YAML 在旧版和托管编排中都生成正确的 Tool 挂载配置及 Runtime 开关。
+- Studio 完整 TOS 输入覆盖本次新建 Worker，部分输入被拒绝，AK/SK 不进入浏览器
+  恢复数据、任务 SQLite 或任务响应。
 - 不完整的 TOS YAML 在本地失败，且错误信息不泄露密钥。
 - 两个 Session ID 生成不同的 BucketPath，本地路径都为 `/data/output`。
 - 未启用时不增加 GetTool 请求。

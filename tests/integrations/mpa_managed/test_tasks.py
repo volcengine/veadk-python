@@ -287,6 +287,55 @@ def test_openviking_key_reaches_child_without_persisting_or_returning_it(tmp_pat
     asyncio.run(run())
 
 
+def test_tos_credentials_reach_child_without_persistence(tmp_path):
+    import json
+
+    async def run():
+        service = CreationTasks(tmp_path / "tasks.sqlite3")
+        received = tmp_path / "tos.json"
+        result = {
+            "runtime_id": "r-test",
+            "skill_space_id": "ss-test",
+            "gateway_id": "gw-test",
+            "agent_id": "mi-test",
+            "region": "cn-beijing",
+            "state": "ready",
+        }
+        code = (
+            "import json,sys,pathlib; "
+            "data=json.loads(sys.stdin.read()); "
+            f"pathlib.Path({str(received)!r}).write_text(json.dumps(data['tos'])); "
+            f"print('MPA_EVENT '+json.dumps({{'result': {result!r}}}))"
+        )
+        service.command = lambda: [sys.executable, "-c", code]
+        payload = {
+            "requestId": "99999999-9999-4999-8999-999999999999",
+            "agentId": "mi-test",
+            "description": "",
+            "region": "cn-beijing",
+        }
+        tos = {
+            "tosAccessKey": "sensitive-ak",
+            "tosSecretKey": "sensitive-sk",
+            "tosBucket": "session-output",
+        }
+        task = await service.start(
+            "owner", payload, config_path="unused", timeout=60, tos=tos
+        )
+        await asyncio.gather(*service.running.values())
+        response = service.get("owner", task["taskId"])
+        assert response["state"] == "succeeded"
+        assert json.loads(received.read_text()) == tos
+        assert "sensitive-ak" not in str(response)
+        assert "sensitive-sk" not in str(response)
+        database = service.path.read_bytes().decode(errors="ignore")
+        assert "sensitive-ak" not in database
+        assert "sensitive-sk" not in database
+        await service.close()
+
+    asyncio.run(run())
+
+
 def test_stopped_supervisor_retries_original_task_without_nested_writer(tmp_path):
     async def run():
         service = CreationTasks(tmp_path / "tasks.sqlite3")

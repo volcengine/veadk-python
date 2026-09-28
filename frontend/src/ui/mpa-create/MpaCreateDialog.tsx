@@ -34,6 +34,10 @@ function freshInput(region: string): MpaCreationInput {
   };
 }
 
+function withoutTosCredentials(input: MpaCreationInput): MpaCreationInput {
+  return { ...input, tosAccessKey: undefined, tosSecretKey: undefined };
+}
+
 function initial(region: string): {
   input: MpaCreationInput;
   taskId?: string;
@@ -58,10 +62,13 @@ function initial(region: string): {
       ) {
         return {
           ...saved,
-          input: { ...saved.input, agentId: `mi-${suffix.slice(0, 24)}` },
+          input: withoutTosCredentials({
+            ...saved.input,
+            agentId: `mi-${suffix.slice(0, 24)}`,
+          }),
         };
       }
-      return saved;
+      return { ...saved, input: withoutTosCredentials(saved.input) };
     }
   } catch {
     /* A fresh form is safe when browser storage is unavailable. */
@@ -118,12 +125,21 @@ export function MpaCreateDialog({
     input.openvikingResourceId,
     openvikingApiKey,
   );
+  const tosValues = [
+    input.tosAccessKey,
+    input.tosSecretKey,
+    input.tosBucket,
+  ].map((value) => value?.trim() ?? "");
+  const tosValid =
+    tosValues.every(Boolean) || tosValues.every((value) => !value);
+  const tosLocked =
+    busy || (submitted && (!task || running || task.state === "succeeded"));
   useEffect(() => {
     if (submitted || taskId) return;
     try {
       sessionStorage.setItem(
         `mpa-create:${region}`,
-        JSON.stringify({ input, step }),
+        JSON.stringify({ input: withoutTosCredentials(input), step }),
       );
     } catch {
       /* Draft contains nonsecret settings only; storage is optional. */
@@ -133,7 +149,12 @@ export function MpaCreateDialog({
     try {
       sessionStorage.setItem(
         `mpa-create:${region}`,
-        JSON.stringify({ input, taskId: id, submitted: true, step: 2 }),
+        JSON.stringify({
+          input: withoutTosCredentials(input),
+          taskId: id,
+          submitted: true,
+          step: 2,
+        }),
       );
     } catch {
       /* Server identity still makes retries idempotent. */
@@ -222,6 +243,7 @@ export function MpaCreateDialog({
       !imagesValid ||
       !pgValid ||
       !openvikingValid ||
+      !tosValid ||
       step !== 2 ||
       running ||
       task?.state === "succeeded"
@@ -575,6 +597,37 @@ export function MpaCreateDialog({
                       <p role="alert">{t(key("openvikingInvalid"))}</p>
                     )}
                     <p>{t(key("openvikingCredentials"))}</p>
+                    <fieldset className="mpa-create-tos">
+                      <legend>{t(key("tosTitle"))}</legend>
+                      <p>{t(key("tosDescription"))}</p>
+                      {(
+                        ["tosAccessKey", "tosSecretKey", "tosBucket"] as const
+                      ).map((field) => (
+                        <label key={field}>
+                          {t(key(field))}
+                          <input
+                            name={field}
+                            type={field === "tosBucket" ? "text" : "password"}
+                            value={input[field] ?? ""}
+                            maxLength={256}
+                            disabled={tosLocked}
+                            autoComplete={
+                              field === "tosBucket" ? "off" : "new-password"
+                            }
+                            spellCheck={false}
+                            aria-invalid={!tosValid}
+                            onChange={(event) =>
+                              setInput((previous) => ({
+                                ...previous,
+                                [field]: event.target.value,
+                              }))
+                            }
+                          />
+                        </label>
+                      ))}
+                      {!tosValid && <p role="alert">{t(key("tosInvalid"))}</p>}
+                      <p>{t(key("tosCredentials"))}</p>
+                    </fieldset>
                   </>
                 )}
                 {loading ? (
@@ -697,6 +750,7 @@ export function MpaCreateDialog({
                           !imagesValid ||
                           !pgValid ||
                           !openvikingValid ||
+                          !tosValid ||
                           !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(input.agentId)
                         }
                         onClick={() => void submit()}

@@ -14,11 +14,18 @@ export interface MpaCreationInput {
   pgPort?: string;
   openvikingUrl?: string;
   openvikingResourceId?: string;
+  tosAccessKey?: string;
+  tosSecretKey?: string;
+  tosBucket?: string;
 }
 export interface MpaCreationRequest extends MpaCreationInput {
   openvikingApiKey?: string;
 }
-export interface MpaCreationTask extends MpaCreationInput {
+export interface MpaCreationTask
+  extends Omit<
+    MpaCreationInput,
+    "tosAccessKey" | "tosSecretKey" | "tosBucket"
+  > {
   taskId: string;
   state: "running" | "cancelling" | "succeeded" | "failed" | "cancelled";
   stage: string;

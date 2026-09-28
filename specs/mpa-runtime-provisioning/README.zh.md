@@ -84,6 +84,9 @@ Studio/CLI 通过共享编排遵循相同保证。平台 operation 清单与 boo
 为 `/sandbox-session/default/default`，本地读写路径为 `/data/output`。凭证必须只
 保留在 Tool 请求中；Runtime 只收到
 `MPA_CODEX_WORKER_TOS_MOUNT_ENABLED=true` 和非敏感 bucket 名，不接收 AK/SK。
+Studio 创建页可以为单次创建传入完整三元组并覆盖 YAML 默认值；AK/SK 只经子进程
+stdin 在内存中传递，不得进入 sessionStorage、任务 SQLite 或任务查询响应。部分输入
+必须拒绝；使用已有 Worker 时必须先通过本次创建的 Worker 镜像覆盖为新建 Worker。
 
 每次新建 Sandbox Session 时，mpa-agent 必须按 AgentKit 标准会话路径
 `/sandbox-session/tool-{tool_id}/session-{session_id}/` 设置
