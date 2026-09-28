@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import ContextCompressionConfig
+from .model_capacity import get_model_capacity
 
 
 class ContextBudgetError(ValueError):
@@ -38,9 +39,19 @@ class ContextBudgetError(ValueError):
         self.code = code
         self.input_tokens = input_tokens
         self.budget = budget
+        guidance = (
+            "Model capacity is unknown. Use a reviewed provider/model ID from "
+            "veadk.context.model_capacity, or set "
+            'Agent(context_compression={"context_window": <verified total tokens>, '
+            '"output_reserve": <reserved output tokens>}). '
+            "For ep-* or private deployments, verify the deployment's limits; "
+            "configure each fallback separately. No LLM request was sent to this model."
+            if code in {"model_capacity_required", "fallback_capacity_required"}
+            else "Reduce input or configure a supported larger window."
+        )
         super().__init__(
             f"Context management: {code}; estimated input={input_tokens}, "
-            f"budget={budget}. Reduce input or configure a supported larger window."
+            f"budget={budget}. {guidance}"
         )
 
 
@@ -60,37 +71,35 @@ def _catalogue() -> dict:
     path = Path(spec.origin).parent / "model_prices_and_context_window_backup.json"
     if not path.is_file():
         return {}
-    return json.loads(path.read_text(encoding="utf-8"))
+    try:
+        catalogue = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return catalogue if isinstance(catalogue, dict) else {}
 
 
 def model_limits(model: str) -> dict:
-    # Official Ark model list, verified 2026-09-17:
-    # https://www.volcengine.com/docs/82379/1330310
-    # This exact revision advertises 256k context/input and a 4k default answer.
-    # Use 256,000 as a conservative floor (do not assume k means 1,024).
-    # The provider's 4,096 answer default EXCLUDES reasoning. The additional
-    # 12,288 tokens below are SDK planning headroom, not a provider limit or a
-    # guarantee that arbitrary reasoning will finish. Never send this reserve
-    # as a generation parameter; preserve the caller's native output settings.
-    bare_ark = model.removeprefix("openai/").removeprefix("volcengine/")
-    if bare_ark == "doubao-seed-2-1-pro-260628":
-        return {
-            "context_window": 256000,
-            "max_input_tokens": 256000,
-            "max_output_tokens": 256000,
-            "default_output_reserve": 16384,
-            "default_answer_tokens": 4096,
-            "reasoning_token_reserve": 12288,
-            "answer_only_max_tokens": True,
-            "ark_thinking_controls": True,
-        }
+    reviewed = get_model_capacity(model)
+    if reviewed:
+        return reviewed
     catalogue = _catalogue()
-    if model in catalogue:
-        return catalogue[model]
-    # OpenAI-compatible Ark requests use an openai/ transport prefix. Match
-    # only an exact catalogue model name; never infer limits from a family.
-    bare = model.removeprefix("openai/")
-    return catalogue.get("volcengine/" + bare, catalogue.get(bare, {}))
+    # An installed LiteLLM catalogue is a secondary local table. Never strip
+    # arbitrary provider prefixes, use family prefixes, or make network calls.
+    candidates = [model]
+    if model.startswith("openai/"):
+        bare = model.removeprefix("openai/")
+        candidates.extend(("volcengine/" + bare, bare))
+    for candidate in candidates:
+        entry = catalogue.get(candidate)
+        if not isinstance(entry, dict):
+            continue
+        provider = entry.get("litellm_provider")
+        if candidate != model and provider not in {"openai", "volcengine"}:
+            continue
+        window = entry.get("context_window") or entry.get("max_input_tokens")
+        if type(window) is int and window > 0:
+            return dict(entry)
+    return {}
 
 
 def resolve_budget(
@@ -278,12 +287,10 @@ def request_payload(request) -> dict:
     }
 
 
-def check_payload(
-    payload: dict, config: ContextCompressionConfig
-) -> ContextBudget | None:
+def check_payload(payload: dict, config: ContextCompressionConfig) -> ContextBudget:
     budget = resolve_payload_budget(payload, config)
     if budget is None:
-        return None
+        raise ContextBudgetError("model_capacity_required")
     if payload.get("previous_response_id") or payload.get("conversation"):
         raise ContextBudgetError("unaccounted_server_history")
     tokens = count_input(payload, config)

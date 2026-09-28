@@ -69,5 +69,7 @@ jobs:
           python-version: ${{ matrix.python }}
       - name: Install fixed ADK compatibility target
         run: python -m pip install -e '.[dev]' 'google-adk==${{ matrix.adk }}'
+      - name: Check installed dependency consistency
+        run: python -m pip check
       - name: Run isolated SDK and Runner contracts
         run: python tests/run_context_compression_gate.py -q

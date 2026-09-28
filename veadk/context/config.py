@@ -24,9 +24,9 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 class ContextCompressionConfig(BaseModel):
     """Manage model input without changing the session's original events.
 
-    Explicit model/deployment limits take precedence over the local capability
-    catalogue. Unknown models require ``context_window`` for budget protection.
-    ``off`` disables transformations, not known-capacity admission checks.
+    Explicit model/deployment limits may reduce reviewed local capacities.
+    Unknown models require ``context_window`` and an output budget before any
+    model request. ``off`` disables transformations, not admission checks.
     ``output_reserve`` reserves space during input planning; it never sets a
     model generation limit. Explicit provider total limits are accounted for
     separately. Without such a limit, reasoning can outgrow the reserve and

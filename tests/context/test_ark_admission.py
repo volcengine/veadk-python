@@ -15,6 +15,7 @@
 """Ark normalization must not erase evidence used by admission checks."""
 
 import asyncio
+from typing import Any
 
 import pytest
 
@@ -26,7 +27,7 @@ class RecordingArkClient(ArkLlmClient):
     def __init__(self):
         self.requests = []
 
-    async def aresponses(self, **kwargs):
+    async def aresponses(self, **kwargs) -> Any:
         self.requests.append(kwargs)
         raise RuntimeError("synthetic transport failure")
 
@@ -151,7 +152,11 @@ async def test_ark_transport_stream_is_closed_after_a_stall(monkeypatch):
     llm = ArkLlm(
         model="openai/synthetic",
         llm_client=client,
-        context_compression={"request_timeout_seconds": 0.02},
+        context_compression={
+            "request_timeout_seconds": 0.02,
+            "context_window": 64000,
+            "output_reserve": 4096,
+        },
     )
     monkeypatch.setattr(
         "veadk.models.ark_llm.event_to_generate_content_response",
