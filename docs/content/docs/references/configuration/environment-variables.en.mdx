@@ -123,6 +123,8 @@ model:
 
 `model.decision.*` in `config.yaml` expands to `MODEL_DECISION_*`, which is equivalent to `DECISION_MODEL_*`; when both are set, `DECISION_MODEL_*` wins.
 
+Only these names are read, never a provider SDK's own (such as `TYPESAFE_API_KEY`): a judgement request carries the user's own text, so the credentials and endpoint should not be decided implicitly by a variable another tool exported. An environment already set up under those names needs one line of bridging: `export DECISION_MODEL_API_KEY="$TYPESAFE_API_KEY"`.
+
 When deploying a HarnessApp Runtime, the top-level `decision_model` block in `harness.yaml` maps to this group.
 
 ## Long-term memory
@@ -136,7 +138,7 @@ Long-term memory has one optional judgement point for saving and one for recall.
 | | `MIN_MESSAGES_THRESHOLD` | Minimum new messages under the `threshold` strategy, default `10`. |
 | | `MIN_TIME_THRESHOLD` | Minimum seconds between saves under the `threshold` strategy, default `60`. |
 | Recall | `MEMORY_RECALL_STRATEGY` | `off` returns the backend ranking as-is; `decision` rates each memory and drops the low ones; default `off`. |
-| | `MEMORY_RECALL_RELEVANCE_THRESHOLD` | Relevance threshold, default `0.5`; memories below it are dropped. Memories the judgement did not rate, and those beyond the 20-item limit, are kept as-is. |
+| | `MEMORY_RECALL_RELEVANCE_THRESHOLD` | Relevance threshold, default `0.5`; memories below it are dropped. Relevance is a four-level rating (`irrelevant` / `related` / `useful` / `required`) scaled onto `[0, 1]` (`0` / `0.33` / `0.67` / `1`) before the comparison, so the default keeps memories that are at least `useful`. Memories the judgement did not rate, and those beyond the 20-item limit, are kept as-is. |
 
 ## Databases
 

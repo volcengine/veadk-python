@@ -49,6 +49,14 @@ DECISION_MODEL_COOLDOWN_SECONDS=30
 同样的配置也可以写在 `config.yaml` 里——VeADK 会把配置压平成 `MODEL_DECISION_*`
 环境变量。两种写法同时存在时，显式的 `DECISION_MODEL_*` 优先。
 
+只认上面这套变量名，不去读提供商 SDK 自己的变量（如 TypeSafe 的 `TYPESAFE_API_KEY`）：
+判定请求带着用户原文，凭证和端点由别人导出的变量隐式决定太危险。已经按那些名字配好
+的环境，加一行桥接即可，显式且可审计：
+
+```bash
+export DECISION_MODEL_API_KEY="$TYPESAFE_API_KEY"
+```
+
 ```yaml
 model:
   agent: {}
@@ -146,6 +154,10 @@ agent = Agent(name="router", tools=[decision_evaluate])
 `-1 → 0.0`，保留「永不生效 / 总是生效」的原意，回落会把行为整个翻转）；`NaN`
 或非数字没有原意可保留，回落到默认值并打 warning。阈值之间相互独立——同一个概率
 落在不同判定点上代价不同，调高一处不会连带影响其它判定点。
+
+长期记忆召回问的是四档评分（`irrelevant` / `related` / `useful` / `required`），
+答案先折算到 `[0, 1]`（`0` / `0.33` / `0.67` / `1`）再与阈值比较，所以默认 `0.5`
+的含义是「只保留至少 `useful` 的记忆」；只保留 `required` 就调到 `1.0`。
 
 「是否」类判定返回的概率本身就是级联信号，没有额外的置信度字段，所以它的阈值就是
 全部级联。命名选项的判定带着模型给该选项的置信度，两个会据此行动的点可以拒绝没把握

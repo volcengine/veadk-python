@@ -55,6 +55,16 @@ The same settings can live in `config.yaml`, which VeADK flattens into
 `MODEL_DECISION_*` variables. Set both spellings and the explicit
 `DECISION_MODEL_*` variable wins.
 
+Only the names above are read, never a provider SDK's own (TypeSafe's
+`TYPESAFE_API_KEY`, say): a judgement request carries the user's own text, so
+letting a variable exported for another tool decide the credentials and the
+endpoint is too implicit. An environment already set up under those names needs
+one explicit, auditable line of bridging:
+
+```bash
+export DECISION_MODEL_API_KEY="$TYPESAFE_API_KEY"
+```
+
 ```yaml
 model:
   agent: {}
@@ -160,6 +170,8 @@ the intent of "never act" / "always act"; a fallback would flip the behaviour),
 and falls back to the default with a warning for `NaN` or text, which carry no
 intent. The thresholds are independent: the same probability costs each point
 something different, so raising one must not move the others.
+
+Memory recall asks for a four-level rating (`irrelevant` / `related` / `useful` / `required`), and the answer is scaled onto `[0, 1]` (`0` / `0.33` / `0.67` / `1`) before it is compared with the threshold, so the default `0.5` means "keep only memories that are at least `useful`"; set `1.0` to keep only `required` ones.
 
 A ``noul`` answer is the probability itself and carries no separate confidence,
 so its threshold is the whole cascade. An answer that names an option carries

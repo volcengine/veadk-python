@@ -123,6 +123,8 @@ model:
 
 `config.yaml` 的 `model.decision.*` 会被展开为 `MODEL_DECISION_*`，与 `DECISION_MODEL_*` 等价；两者同时设置时 `DECISION_MODEL_*` 优先。
 
+只读这套变量名，不读提供商 SDK 自己的变量（如 `TYPESAFE_API_KEY`）：判定请求带用户原文，凭证与端点不宜由别人导出的变量隐式决定。已按那些名字配好的环境加一行桥接即可：`export DECISION_MODEL_API_KEY="$TYPESAFE_API_KEY"`。
+
 HarnessApp Runtime 部署时，`harness.yaml` 的顶层 `decision_model` 块映射为这组变量。
 
 ## 长记忆
@@ -136,7 +138,7 @@ HarnessApp Runtime 部署时，`harness.yaml` 的顶层 `decision_model` 块映�
 | | `MIN_MESSAGES_THRESHOLD` | `threshold` 策略下最少新增消息数，默认 `10`。 |
 | | `MIN_TIME_THRESHOLD` | `threshold` 策略下两次写入的最小间隔（秒），默认 `60`。 |
 | 召回判定 | `MEMORY_RECALL_STRATEGY` | `off` 直接返回后端排序结果；`decision` 逐条评估相关度并丢弃低分项，默认 `off`。 |
-| | `MEMORY_RECALL_RELEVANCE_THRESHOLD` | 相关度阈值，默认 `0.5`；低于该值丢弃。未评估到的记忆、以及超出 20 条判定上限的部分原样保留。 |
+| | `MEMORY_RECALL_RELEVANCE_THRESHOLD` | 相关度阈值，默认 `0.5`；低于该值丢弃。相关度问的是四档评分（`irrelevant` / `related` / `useful` / `required`），先折算到 `[0, 1]`（`0` / `0.33` / `0.67` / `1`）再比较，默认即「只保留至少 `useful` 的记忆」。未评估到的记忆、以及超出 20 条判定上限的部分原样保留。 |
 
 ## 数据库
 

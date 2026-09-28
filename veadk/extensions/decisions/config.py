@@ -180,7 +180,11 @@ class DecisionModelConfig(BaseModel):
 
 
 def _lookup(values: Mapping[str, str], name: str) -> str | None:
-    """Read one setting from either accepted environment spelling."""
+    """Read one setting from either accepted environment spelling.
+
+    Only VeADK's own names are read, never a provider SDK's: a variable another
+    tool exported must not decide where evidence-bearing judgements are sent.
+    """
     for prefix in (ENV_PREFIX, CONFIG_YAML_PREFIX):
         value = values.get(f"{prefix}{name}")
         if value not in (None, ""):

@@ -52,7 +52,9 @@ QUESTION_ID_PREFIX = "memory"
 #: 召回判定策略：``decision`` 才会构建判定器，其它值都按关闭处理。
 MEMORY_RECALL_STRATEGY = getenv("MEMORY_RECALL_STRATEGY", "off")
 
-#: 相关度阈值：判定低于该值的记忆视为不相关并被丢弃。
+#: 相关度阈值，与折算后的相关度同量纲（``0..1``）：判定低于该值的记忆视为
+#: 不相关并被丢弃。默认 ``0.5`` 落在 ``related`` 与 ``useful`` 之间，即只保留
+#: 「至少有用」的记忆。
 MEMORY_RECALL_RELEVANCE_THRESHOLD = probability_threshold(
     getenv(
         "MEMORY_RECALL_RELEVANCE_THRESHOLD",
@@ -118,6 +120,10 @@ class DecisionRecallJudge:
     ) -> Mapping[int, float]:
         """Return the relevance of every memory, keyed by its index.
 
+        Relevance is ``0..1``, comparable with
+        :data:`MEMORY_RECALL_RELEVANCE_THRESHOLD`: ``0`` is irrelevant, the
+        top level ("required") is ``1``.
+
         Raises:
             DecisionModelError: If the decision model cannot answer. Callers
                 are expected to keep every match in that case.
@@ -171,7 +177,11 @@ def _relevance_question(index: int) -> dict[str, Any]:
 def _relevance_scores(
     answers: Mapping[str, DecisionAnswer], count: int
 ) -> dict[int, float]:
-    """Map the answers back to memory indexes.
+    """Map the answers back to memory indexes as ``0..1`` relevance.
+
+    A Score answer is a probability-weighted position on the levels asked for,
+    so it arrives on a ``0..len(levels)-1`` scale; the threshold it is compared
+    against is a ``0..1`` one, so the position is scaled onto ``[0, 1]`` first.
 
     Raises:
         DecisionModelResponseError: If one memory has no usable answer.
@@ -179,13 +189,14 @@ def _relevance_scores(
             judgement.
     """
     scores: dict[int, float] = {}
+    span = len(_RELEVANCE_LEVELS) - 1
     for index in range(count):
         answer = answers.get(f"{QUESTION_ID_PREFIX}_{index}")
         if not isinstance(answer, ScoreAnswer):
             raise DecisionModelResponseError(
                 f"recall judge returned no usable answer for memory {index}"
             )
-        scores[index] = answer.score
+        scores[index] = min(1.0, max(0.0, answer.score / span))
     return scores
 
 

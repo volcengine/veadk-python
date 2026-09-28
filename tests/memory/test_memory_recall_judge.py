@@ -38,6 +38,7 @@ from veadk.memory.long_term_memory_backends.base_backend import (
 )
 from veadk.memory.recall_judge import (
     MAX_JUDGED_MEMORIES,
+    MEMORY_RECALL_RELEVANCE_THRESHOLD,
     DecisionRecallJudge,
     build_recall_judge,
 )
@@ -138,8 +139,8 @@ def test_recall_strategy_is_opt_in() -> None:
 def test_the_judge_asks_one_score_question_per_memory() -> None:
     extension = _StubExtension(
         {
-            "memory_0": ScoreAnswer(score=0.1),
-            "memory_1": ScoreAnswer(score=0.9),
+            "memory_0": ScoreAnswer(score=0.0),
+            "memory_1": ScoreAnswer(score=3.0),
         }
     )
     judge = DecisionRecallJudge(extension)  # type: ignore[arg-type]
@@ -148,9 +149,31 @@ def test_the_judge_asks_one_score_question_per_memory() -> None:
         judge.arelevance(query="pricing?", memories=["a greeting", "a stated limit"])
     )
 
-    assert scores == {0: 0.1, 1: 0.9}
+    assert scores == {0: 0.0, 1: 1.0}
     assert set(extension.questions) == {"memory_0", "memory_1"}
     assert {question["type"] for question in extension.questions.values()} == {"score"}
+
+
+def test_the_score_is_scaled_onto_the_threshold_range() -> None:
+    """A Score answer arrives on the level scale, the threshold is ``0..1``.
+
+    ``related`` (level 1 of 4) is below the default ``0.5`` and is dropped;
+    ``useful`` (level 2) is above it and is kept.
+    """
+    extension = _StubExtension(
+        {
+            "memory_0": ScoreAnswer(score=1.0),
+            "memory_1": ScoreAnswer(score=2.0),
+            "memory_2": ScoreAnswer(score=9.0),
+        }
+    )
+    judge = DecisionRecallJudge(extension)  # type: ignore[arg-type]
+
+    scores = asyncio.run(judge.arelevance(query="pricing?", memories=["a", "b", "c"]))
+
+    assert scores == {0: pytest.approx(1 / 3), 1: pytest.approx(2 / 3), 2: 1.0}
+    assert MEMORY_RECALL_RELEVANCE_THRESHOLD < 2 / 3
+    assert MEMORY_RECALL_RELEVANCE_THRESHOLD > 1 / 3
 
 
 def test_a_memory_without_an_answer_is_rejected() -> None:
