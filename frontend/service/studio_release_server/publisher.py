@@ -951,6 +951,8 @@ def _build_local_requirements(
     frontend_assets: Path,
     dependency_wheels: Path,
     env: Mapping[str, str],
+    *,
+    thin_package_dir: Path | None = None,
 ) -> str:
     wheel_source = package_dir / "wheel-source"
     stage_studio_wheel_source(source_root, frontend_assets, wheel_source)
@@ -984,16 +986,20 @@ def _build_local_requirements(
         if path.name != _AGENTKIT_CLI_ARCHIVE
     )
     try:
-        return build_studio_offline_runtime(
+        requirements = build_studio_offline_runtime(
             source_root,
             package_dir,
             veadk_wheel=built_wheels[0],
             dependency_sources=dependency_sources,
             environment=env,
             optimize_cold_start=True,
+            thin_package_dir=thin_package_dir,
         )
     except ValueError as error:
         raise StudioPublisherError(str(error)) from error
+    if thin_package_dir is not None:
+        shutil.copy2(package_dir / _AGENTKIT_CLI_ARCHIVE, thin_package_dir)
+    return requirements
 
 
 def _studio_run_script(*, thin: bool = False) -> str:
@@ -1428,12 +1434,14 @@ def build_studio_release(
             )
         package_dir = workspace / "package"
         package_dir.mkdir()
+        thin_package_dir = workspace / "thin-package" if thin else None
         requirements = _build_local_requirements(
             source_root,
             package_dir,
             resolved_frontend,
             dependency_wheels,
             env,
+            thin_package_dir=thin_package_dir,
         )
         (package_dir / "run.sh").write_text(
             _studio_run_script(),
@@ -1445,15 +1453,15 @@ def build_studio_release(
         bundle = output_dir / f"studio-bundle-{version}.zip"
         _zip_directory(package_dir, bundle)
         thin_bundle: Path | None = None
-        if thin:
+        if thin_package_dir is not None:
             runtime_epoch, _artifact_dir = stage_studio_thin_runtime(
                 source_root,
-                package_dir,
+                thin_package_dir,
                 output_dir,
                 provider=provider,
             )
             thin_bundle = output_dir / f"studio-bundle-{version}-thin.zip"
-            _zip_directory(package_dir, thin_bundle)
+            _zip_directory(thin_package_dir, thin_bundle)
     ensure_studio_bundle_agentkit_cli(bundle, dependency_wheels)
     content = bundle.read_bytes()
     thin_content = thin_bundle.read_bytes() if thin_bundle is not None else b""

@@ -106,6 +106,7 @@ def build_studio_offline_runtime(
     dependency_sources: Sequence[Path],
     environment: Mapping[str, str] | None = None,
     optimize_cold_start: bool = False,
+    thin_package_dir: Path | None = None,
 ) -> str:
     """Bundle every locked Linux dependency and return offline requirements."""
     lock_source = source_root / "uv.lock"
@@ -230,6 +231,28 @@ def build_studio_offline_runtime(
     if optimize_cold_start:
         if sys.implementation.name != "cpython" or sys.version_info[:2] != (3, 12):
             raise ValueError("Studio cold-start optimization requires CPython 3.12.")
+    if thin_package_dir is not None:
+        # Public artifacts must retain the exact PyPI bytes recorded in uv.lock.
+        # Snapshot before full-bundle optimization, with an independent hash lock.
+        shutil.copytree(wheelhouse, thin_package_dir)
+        thin_veadk = thin_package_dir / staged_veadk.name
+        if optimize_cold_start:
+            _augment_checked_hash_wheel(
+                thin_veadk, _COLD_START_WHEEL_ROOTS["veadk-python"]
+            )
+        thin_lock = thin_package_dir / STUDIO_RUNTIME_LOCK
+        shutil.copy2(runtime_lock, thin_lock)
+        _pin_runtime_lock_to_wheelhouse(thin_lock, thin_package_dir, thin_veadk)
+        thin_requirements = build_studio_offline_requirements(
+            thin_package_dir, wheel_prefix="./"
+        )
+        _verify_offline_resolution(
+            thin_package_dir,
+            thin_requirements,
+            uv=uv,
+            environment=build_environment,
+        )
+    if optimize_cold_start:
         _enhance_studio_cold_start_wheels(wheelhouse)
     _pin_runtime_lock_to_wheelhouse(runtime_lock, wheelhouse, staged_veadk)
     for wheel in sorted(wheelhouse.glob("*.whl")):
