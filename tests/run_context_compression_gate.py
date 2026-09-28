@@ -55,6 +55,8 @@ def main() -> int:
         "tests/cli/test_generated_agent_request_models.py",
         "tests/cli/test_generated_agent_planner.py",
         "tests/cli/test_generated_agent_backend_codegen.py",
+        "tests/cli/test_generated_agent_backend_codegen_extended.py::test_minimal_project_matches_frontend_codegen_golden",
+        "tests/cli/test_generated_agent_backend_codegen_extended.py::test_full_project_matches_frontend_codegen_golden",
         "tests/integrations/agentkit/test_app.py",
     ]
     command = [

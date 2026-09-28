@@ -17,6 +17,7 @@
 import asyncio
 import copy
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -39,15 +40,40 @@ def selected_text(values, selected):
 async def test_cold_timeout_returns_original_lexical_evidence_and_resumes_index(
     tmp_path, monkeypatch
 ):
-    monkeypatch.setattr(retrieval, "RETRIEVAL_TIMEOUT", 0.4)
+    from veadk.context import hybrid_retriever
+
+    # This contract verifies the interruption point and durable recovery, not
+    # whether SQLite preparation fits within 400 ms on a shared CI runner.
+    monkeypatch.setattr(retrieval, "RETRIEVAL_TIMEOUT", 10)
     path = tmp_path / "index.sqlite3"
     values = [content("user", source_text(35))]
     embedder = StallAfterCompletedBatch()
     retriever = HybridContextRetriever(path, embedder)
     scope = scope_for(values, retriever)
     before = copy.deepcopy(scope.session)
+
+    async def expire_after_first_batch(awaitable, *, timeout):
+        task = asyncio.create_task(awaitable)
+        try:
+            await asyncio.wait_for(embedder.waiting.wait(), timeout=5)
+            # Use real wait_for cancellation/cleanup once the durable first
+            # batch exists; only the ranker's local timer is controlled.
+            return await asyncio.wait_for(task, timeout=0)
+        finally:
+            if not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+
     try:
-        selected = await select_history(scope, values, "car")
+        with monkeypatch.context() as local:
+            local.setattr(
+                hybrid_retriever,
+                "asyncio",
+                SimpleNamespace(
+                    **{**vars(asyncio), "wait_for": expire_after_first_batch}
+                ),
+            )
+            selected = await select_history(scope, values, "car")
         assert selected and "car" in selected_text(values, selected)
         assert scope.session == before and embedder.cancelled
         assert scope.evidence_retrieval_status == "selected"

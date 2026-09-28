@@ -164,6 +164,9 @@ async def test_native_http_timeouts_and_body_are_preserved(monkeypatch, configur
 
 
 def test_summary_stays_bounded_without_a_main_deadline(elapsed_clock):
+    # Use exactly representable times: adding 50 then 40 to a fractional
+    # process clock can leave a positive floating-point residue at 90 seconds.
+    elapsed_clock.now = 1000.0
     ledger = AttemptLedger(3, None, started=elapsed_clock.now)
     elapsed_clock.now += 50
     assert ledger.summary_remaining(0.75) == 40
