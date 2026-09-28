@@ -153,7 +153,7 @@ def test_network_gateway_worker_precede_runtime(
 
         async def create(request):
             assert events == ["gateway", "worker"]
-            assert request["ToolId"] == "t-one"
+            assert "ToolId" not in request
             runtime_tags = {
                 item["Key"]: item["Value"] for item in request.get("Tags", [])
             }
@@ -229,6 +229,7 @@ def test_network_gateway_worker_precede_runtime(
         )
         assert result["runtime_id"] == "r-agent"
         assert result["gateway_id"] == "gw-one"
+        assert cloud.runtimes[result["runtime_id"]]["ToolId"] == "t-one"
         if split_workspaces:
             assert entry.row["admin_workspace_id"] == "ws-admin"
             assert entry.row["business_workspace_id"] == "ws-business"
