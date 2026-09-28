@@ -736,3 +736,95 @@ async def test_auto_save_callback_does_not_resave_old_events_on_session_switch(
         ("old_session", ["old message"]),
         ("new_session", ["new message"]),
     ]
+
+
+class _WorthSavingJudge:
+    """Record the event text it judged and return a fixed probability."""
+
+    def __init__(self, probability: float) -> None:
+        self.probability = probability
+        self.states: list[str] = []
+
+    async def aworth_saving(self, *, events_text: str) -> float:
+        self.states.append(events_text)
+        return self.probability
+
+
+def _save_callback_context(session: Session, memory: Any) -> SimpleNamespace:
+    class SessionService:
+        async def get_session(self, **kwargs):
+            return session
+
+    return SimpleNamespace(
+        _invocation_context=SimpleNamespace(
+            agent=SimpleNamespace(
+                long_term_memory=memory,
+                auto_save_memory_policy="all",
+            ),
+            app_name="support_app",
+            user_id="alice",
+            session=session,
+            session_service=SessionService(),
+        )
+    )
+
+
+class _RecordingSaveMemory:
+    def __init__(self) -> None:
+        self.calls: list[list[str]] = []
+
+    async def add_session_to_memory(self, session: Session, **kwargs):
+        self.calls.append(
+            [
+                part.text
+                for event in session.events
+                for part in event.content.parts
+                if part.text
+            ]
+        )
+
+
+@pytest.mark.asyncio
+async def test_auto_save_callback_saves_a_turn_the_judgement_keeps(monkeypatch):
+    save_session_callback._session_save_cache.clear()
+    save_session_callback._active_sessions.clear()
+    monkeypatch.setattr(save_session_callback, "MIN_TIME_THRESHOLD", 10**6)
+    monkeypatch.setattr(save_session_callback, "MIN_MESSAGES_THRESHOLD", 10)
+    judge = _WorthSavingJudge(0.99)
+    monkeypatch.setattr(save_session_callback, "_memory_save_judge", lambda: judge)
+    session = _session_with_events([_user_text_event("I prefer dark mode")])
+    memory = _RecordingSaveMemory()
+
+    await save_session_callback.save_session_to_long_term_memory(
+        _save_callback_context(session, memory)
+    )
+
+    assert memory.calls == [["I prefer dark mode"]]
+    assert judge.states == ["user: I prefer dark mode"]
+
+
+@pytest.mark.asyncio
+async def test_auto_save_callback_keeps_the_cursor_when_the_judgement_skips(
+    monkeypatch,
+):
+    save_session_callback._session_save_cache.clear()
+    save_session_callback._active_sessions.clear()
+    monkeypatch.setattr(save_session_callback, "MIN_TIME_THRESHOLD", 10**6)
+    monkeypatch.setattr(save_session_callback, "MIN_MESSAGES_THRESHOLD", 10)
+    judge = _WorthSavingJudge(0.01)
+    monkeypatch.setattr(save_session_callback, "_memory_save_judge", lambda: judge)
+    session = _session_with_events([_user_text_event("hello")])
+    memory = _RecordingSaveMemory()
+    callback_context = _save_callback_context(session, memory)
+
+    await save_session_callback.save_session_to_long_term_memory(callback_context)
+    session.events.append(_user_text_event("I prefer dark mode"))
+    await save_session_callback.save_session_to_long_term_memory(callback_context)
+    assert memory.calls == []
+
+    # 判定改口后，之前被跳过的事件必须一起落盘，不能丢
+    judge.probability = 0.99
+    await save_session_callback.save_session_to_long_term_memory(callback_context)
+
+    assert memory.calls == [["hello", "I prefer dark mode"]]
+    assert judge.states[1] == "user: hello\nuser: I prefer dark mode"

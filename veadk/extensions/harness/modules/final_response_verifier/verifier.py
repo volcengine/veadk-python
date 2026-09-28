@@ -12,17 +12,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Deterministic final-response verification."""
+"""Final-response verification: builtin rules, optionally judged.
+
+The builtin rules are deterministic and stay the default. The ``decision``
+strategy adds a judgement that rates the answer against the run's receipts and
+picks the repair the answer needs; see ``support_judge``.
+"""
 
 from __future__ import annotations
 
 import ast
 import json
 import re
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from pydantic import Field
 
+from veadk.extensions.decisions import DEFAULT_JUDGEMENT_THRESHOLD
 from veadk.extensions.harness.schemas import (
     ToolReceipt,
     EvidenceRef,
@@ -30,6 +36,11 @@ from veadk.extensions.harness.schemas import (
     VerificationDecision,
     VerificationReport,
 )
+
+if TYPE_CHECKING:
+    from veadk.extensions.harness.modules.final_response_verifier.support_judge import (
+        SupportJudgement,
+    )
 
 _ASCII_MARKER_RE = re.compile(r"^[a-z0-9_ -]+$")
 _HTML_TAG_RE = re.compile(
@@ -51,9 +62,20 @@ _NEGATED_CJK_MARKER_PREFIXES = ("尚未", "没有", "沒有", "未", "没", "不
 
 
 class FinalResponseVerifierConfig(HarnessBaseModel):
-    """Settings for deterministic verification."""
+    """Settings for final-response verification."""
 
     mode: Literal["observe", "block"] = "observe"
+    strategy: Literal["deterministic", "decision"] = "deterministic"
+    support_threshold: float = Field(
+        default=DEFAULT_JUDGEMENT_THRESHOLD, ge=0.0, le=1.0
+    )
+    # 判定说「回答超出回执范围」到这个概率就直接算失败：正交检查是用来兜住
+    # 一个过于宽松的 supported 结论的。
+    overclaim_threshold: float = Field(
+        default=DEFAULT_JUDGEMENT_THRESHOLD, ge=0.0, le=1.0
+    )
+    # 判定自己没把握（低于该置信度）时不做硬判，回落到内置规则；0 表示关闭。
+    min_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     require_receipt_for_completion_claims: bool = True
     max_repair_candidates: int = Field(default=8, ge=1)
     completion_markers: list[str] = Field(
@@ -122,29 +144,88 @@ class FinalResponseVerifier:
             evidence=evidence,
         )
 
-    def decide(self, report: VerificationReport) -> VerificationDecision:
-        """Map a verification report to a plugin intervention."""
+    def apply_judgement(
+        self,
+        report: VerificationReport,
+        judgement: SupportJudgement | None,
+    ) -> VerificationReport:
+        """Return the report with a decision-model verdict applied.
 
+        The builtin rules only read completion markers and receipt statuses, so
+        a judgement replaces the status they produced: the judgement reads the
+        answer together with the receipts. What the rules found stays in the
+        report, so both verdicts remain visible in the event payload.
+
+        The check that reads the answer from the other side runs first: an
+        answer that claims more than the receipts show fails even when the
+        verdict itself was ``supported``. A judgement with too little
+        confidence never reaches here, because the judge refuses to give one.
+        """
+        if judgement is None:
+            return report
+        if judgement.overclaim >= self.config.overclaim_threshold:
+            return self._fail(
+                report,
+                "the decision model judged the answer to claim more than the "
+                f"receipts show (overclaim={judgement.overclaim:.2f} >= "
+                f"{self.config.overclaim_threshold})",
+            )
+        if judgement.support >= self.config.support_threshold:
+            return report.model_copy(update={"status": "pass"})
+        return self._fail(
+            report,
+            "the decision model judged the answer unsupported "
+            f"(support={judgement.support:.2f} < "
+            f"{self.config.support_threshold})",
+        )
+
+    @staticmethod
+    def _fail(report: VerificationReport, reason: str) -> VerificationReport:
+        """Return the report failed with one judged reason in front."""
+        return report.model_copy(
+            update={"status": "fail", "reasons": [reason, *report.reasons]}
+        )
+
+    def decide(
+        self,
+        report: VerificationReport,
+        *,
+        judgement: SupportJudgement | None = None,
+    ) -> VerificationDecision:
+        """Map a verification report to a plugin intervention.
+
+        Without a judgement this is the builtin behaviour. With one, the judged
+        status decides the intervention and the judged repair action shapes the
+        instruction, while ``mode`` still decides whether a failure blocks.
+        """
+        report = self.apply_judgement(report, judgement)
+        action_guidance = judgement.guidance if judgement is not None else ""
         if report.status == "pass":
             return VerificationDecision(action="allow", report=report)
         if self.config.mode == "block" and report.status == "fail":
             return VerificationDecision(
                 action="block",
                 reason="; ".join(report.reasons),
-                instruction=(
-                    "The answer was blocked because it made unsupported "
-                    "tool-backed completion claims."
+                instruction=self.build_repair_instruction(
+                    report, action_guidance=action_guidance
                 ),
                 report=report,
             )
         return VerificationDecision(
             action="observe",
             reason="; ".join(report.reasons),
+            instruction=self.build_repair_instruction(
+                report, action_guidance=action_guidance
+            ),
             report=report,
         )
 
     def build_repair_instruction(
-        self, report: VerificationReport, *, goal: str = ""
+        self,
+        report: VerificationReport,
+        *,
+        goal: str = "",
+        action_guidance: str = "",
     ) -> str:
         """Create a compact repair instruction for callers that support retry."""
 
@@ -153,7 +234,7 @@ class FinalResponseVerifier:
             "[Harness Repair]",
             "The previous answer failed verification.",
             f"Problems: {reason_text}.",
-            "Retry the same task with evidence-backed claims only.",
+            action_guidance or "Retry the same task with evidence-backed claims only.",
             "Do not claim that files, deployments, or artifacts exist unless a tool receipt proves it.",
         ]
         if goal:

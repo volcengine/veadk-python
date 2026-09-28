@@ -15,21 +15,25 @@
 """Harness plugin entry points for VeADK."""
 
 from veadk.extensions.harness.plugins.entrypoints import (
+    HarnessAgentRoutingPlugin,
     HarnessCompressPlugin,
     HarnessContextPlugin,
     HarnessHallucinationPlugin,
     HarnessInvocationContextPlugin,
     HarnessLongRunControlPlugin,
     HarnessResponseVerificationPlugin,
+    HarnessSkillPrefilterPlugin,
     build_harness_plugins,
 )
 
 __all__ = [
+    "HarnessAgentRoutingPlugin",
     "HarnessCompressPlugin",
     "HarnessContextPlugin",
     "HarnessHallucinationPlugin",
     "HarnessInvocationContextPlugin",
     "HarnessLongRunControlPlugin",
     "HarnessResponseVerificationPlugin",
+    "HarnessSkillPrefilterPlugin",
     "build_harness_plugins",
 ]

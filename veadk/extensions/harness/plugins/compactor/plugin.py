@@ -26,6 +26,7 @@ from veadk.extensions.harness.plugins._shared.callback_utils import (
     run_context_from_callback,
     run_context_from_tool,
     tool_name,
+    user_text_from_callback,
 )
 from veadk.extensions.harness.plugins.content_adapter import contents_to_messages
 from veadk.extensions.harness.schemas import (
@@ -71,12 +72,17 @@ class HarnessCompressPlugin(BasePlugin):
         self.compaction_reports.extend(tool_reports)
         if not messages:
             return None
-        result = self.compactor.compress_messages(
-            CompressionRequest(
-                messages=messages,
-                max_context_chars=self.compactor.config.max_context_chars,
-            )
+        request = CompressionRequest(
+            messages=messages,
+            max_context_chars=self.compactor.config.max_context_chars,
         )
+        if self.compactor.uses_judgement:
+            result = await self.compactor.acompress_messages(
+                request,
+                goal=user_text_from_callback(callback_context),
+            )
+        else:
+            result = self.compactor.compress_messages(request)
         if result.report.changed or tool_reports:
             self.store.append_event(
                 HarnessEvent(

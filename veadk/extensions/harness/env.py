@@ -39,11 +39,16 @@ def build_harness_plugins_from_env(
     values = env or os.environ
     if not harness_enabled_from_env(values):
         return []
+    from veadk.extensions.decisions import probability_threshold
     from veadk.extensions.harness.modules.final_response_verifier import (
         FinalResponseVerifierConfig,
     )
     from veadk.extensions.harness.modules.invocation_context import (
         HarnessInvocationContextConfig,
+    )
+    from veadk.extensions.harness.modules.skill_prefilter import (
+        DEFAULT_MAX_CANDIDATES,
+        HarnessSkillPrefilterConfig,
     )
     from veadk.extensions.harness.modules.tool_result_compactor import (
         ToolResultCompactorConfig,
@@ -80,26 +85,150 @@ def build_harness_plugins_from_env(
         profile=profile,
         store=store,
         context_config=HarnessInvocationContextConfig(
-            max_context_chars=max_context_chars
+            mode_strategy=_decision_strategy(
+                values.get("HARNESS_MODE_STRATEGY")
+                or values.get("HARNESS_ENHANCE_MODE_STRATEGY"),
+                default="keywords",
+            ),
+            mode_decision_threshold=probability_threshold(
+                _first(
+                    values,
+                    "HARNESS_MODE_DECISION_THRESHOLD",
+                    "HARNESS_ENHANCE_MODE_DECISION_THRESHOLD",
+                ),
+                name="HARNESS_MODE_DECISION_THRESHOLD",
+            ),
+            max_context_chars=max_context_chars,
         ),
         compaction_config=ToolResultCompactorConfig(
             provider=values.get("HARNESS_COMPRESSION_PROVIDER")
             or values.get("HARNESS_ENHANCE_COMPRESSION_PROVIDER")
             or "builtin",
+            strategy=_decision_strategy(
+                values.get("HARNESS_COMPACTION_STRATEGY")
+                or values.get("HARNESS_ENHANCE_COMPACTION_STRATEGY"),
+                default="builtin",
+            ),
+            decision_keep_threshold=probability_threshold(
+                _first(
+                    values,
+                    "HARNESS_COMPACTION_KEEP_THRESHOLD",
+                    "HARNESS_ENHANCE_COMPACTION_KEEP_THRESHOLD",
+                ),
+                name="HARNESS_COMPACTION_KEEP_THRESHOLD",
+            ),
             max_context_chars=max_context_chars,
             max_tool_result_chars=max_tool_result_chars,
+        ),
+        long_run_strategy=_decision_strategy(
+            values.get("HARNESS_LONG_RUN_STRATEGY")
+            or values.get("HARNESS_ENHANCE_LONG_RUN_STRATEGY"),
+            default="counter",
+        ),
+        long_run_ready_threshold=probability_threshold(
+            _first(
+                values,
+                "HARNESS_LONG_RUN_READY_THRESHOLD",
+                "HARNESS_ENHANCE_LONG_RUN_READY_THRESHOLD",
+            ),
+            name="HARNESS_LONG_RUN_READY_THRESHOLD",
+        ),
+        long_run_min_confidence=probability_threshold(
+            _first(
+                values,
+                "HARNESS_LONG_RUN_MIN_CONFIDENCE",
+                "HARNESS_ENHANCE_LONG_RUN_MIN_CONFIDENCE",
+            ),
+            name="HARNESS_LONG_RUN_MIN_CONFIDENCE",
+            default=0.0,
         ),
         verifier_config=FinalResponseVerifierConfig(
             mode=_verifier_mode(
                 values.get("HARNESS_VERIFIER_MODE")
                 or values.get("HARNESS_ENHANCE_VERIFIER_MODE")
-            )
+            ),
+            strategy=_decision_strategy(
+                values.get("HARNESS_VERIFIER_STRATEGY")
+                or values.get("HARNESS_ENHANCE_VERIFIER_STRATEGY"),
+                default="deterministic",
+            ),
+            support_threshold=probability_threshold(
+                _first(
+                    values,
+                    "HARNESS_VERIFIER_SUPPORT_THRESHOLD",
+                    "HARNESS_ENHANCE_VERIFIER_SUPPORT_THRESHOLD",
+                ),
+                name="HARNESS_VERIFIER_SUPPORT_THRESHOLD",
+            ),
+            overclaim_threshold=probability_threshold(
+                _first(
+                    values,
+                    "HARNESS_VERIFIER_OVERCLAIM_THRESHOLD",
+                    "HARNESS_ENHANCE_VERIFIER_OVERCLAIM_THRESHOLD",
+                ),
+                name="HARNESS_VERIFIER_OVERCLAIM_THRESHOLD",
+            ),
+            min_confidence=probability_threshold(
+                _first(
+                    values,
+                    "HARNESS_VERIFIER_MIN_CONFIDENCE",
+                    "HARNESS_ENHANCE_VERIFIER_MIN_CONFIDENCE",
+                ),
+                name="HARNESS_VERIFIER_MIN_CONFIDENCE",
+                default=0.0,
+            ),
+        ),
+        skill_prefilter_config=HarnessSkillPrefilterConfig(
+            strategy=_decision_strategy(
+                values.get("HARNESS_SKILL_STRATEGY")
+                or values.get("HARNESS_ENHANCE_SKILL_STRATEGY"),
+                default="all",
+            ),
+            decision_threshold=probability_threshold(
+                _first(
+                    values,
+                    "HARNESS_SKILL_DECISION_THRESHOLD",
+                    "HARNESS_ENHANCE_SKILL_DECISION_THRESHOLD",
+                ),
+                name="HARNESS_SKILL_DECISION_THRESHOLD",
+            ),
+            max_candidates=_int_value(
+                _first(
+                    values,
+                    "HARNESS_SKILL_MAX_CANDIDATES",
+                    "HARNESS_ENHANCE_SKILL_MAX_CANDIDATES",
+                ),
+                default=DEFAULT_MAX_CANDIDATES,
+            ),
+        ),
+        routing_strategy=_decision_strategy(
+            values.get("HARNESS_ROUTING_STRATEGY")
+            or values.get("HARNESS_ENHANCE_ROUTING_STRATEGY"),
+            default="model",
+        ),
+        routing_confidence_threshold=probability_threshold(
+            _first(
+                values,
+                "HARNESS_ROUTING_DECISION_THRESHOLD",
+                "HARNESS_ENHANCE_ROUTING_DECISION_THRESHOLD",
+            ),
+            name="HARNESS_ROUTING_DECISION_THRESHOLD",
         ),
     )
 
 
 def _truthy(value: str | None) -> bool:
     return bool(value and value.strip().lower() in {"1", "true", "yes", "on"})
+
+
+def _first(values: Mapping[str, str], *names: str) -> str | None:
+    """Return the first configured value among the accepted env spellings."""
+
+    for name in names:
+        value = values.get(name)
+        if value not in (None, ""):
+            return str(value)
+    return None
 
 
 def _int_value(value: str | None, *, default: int) -> int:
@@ -109,6 +238,11 @@ def _int_value(value: str | None, *, default: int) -> int:
         return int(value)
     except ValueError:
         return default
+
+
+def _decision_strategy(value: str | None, *, default: str) -> str:
+    """Return ``decision`` when explicitly requested, else the default."""
+    return "decision" if (value or "").strip().lower() == "decision" else default
 
 
 def _verifier_mode(value: str | None) -> Literal["observe", "block"]:

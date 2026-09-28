@@ -18,6 +18,8 @@ from veadk.extensions.harness.modules.tool_result_compactor.builtin_provider imp
     BuiltinCompressionProvider,
 )
 from veadk.extensions.harness.modules.tool_result_compactor.compactor import (
+    DECISION_KEEP_REASON,
+    DECISION_SUMMARIZE_REASON,
     ContextCompactionPolicy,
     ContextCompressionPolicy,
     ToolResultCompactor,
@@ -25,17 +27,27 @@ from veadk.extensions.harness.modules.tool_result_compactor.compactor import (
     ToolResultCompressor,
     ToolResultCompressorConfig,
 )
+from veadk.extensions.harness.modules.tool_result_compactor.decision_judge import (
+    CompactionJudge,
+    DecisionCompactionJudge,
+    build_compaction_judge,
+)
 from veadk.extensions.harness.modules.tool_result_compactor.headroom_provider import (
     HeadroomCompressionProvider,
 )
 
 __all__ = [
     "BuiltinCompressionProvider",
+    "CompactionJudge",
     "ContextCompactionPolicy",
     "ContextCompressionPolicy",
+    "DECISION_KEEP_REASON",
+    "DECISION_SUMMARIZE_REASON",
+    "DecisionCompactionJudge",
     "HeadroomCompressionProvider",
     "ToolResultCompactor",
     "ToolResultCompactorConfig",
     "ToolResultCompressor",
     "ToolResultCompressorConfig",
+    "build_compaction_judge",
 ]
