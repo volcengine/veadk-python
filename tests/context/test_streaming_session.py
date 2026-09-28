@@ -159,6 +159,7 @@ class Client(LiteLLMClient):
         self.mode = mode
         self.requests = []
         self.streams = []
+        self.stream_ready = asyncio.Event()
         self.summary_requests = []
 
     async def acompletion(self, **kwargs):
@@ -232,6 +233,7 @@ class Client(LiteLLMClient):
             ]
         stream = Stream(values, hold=hold, fail=fail)
         self.streams.append(stream)
+        self.stream_ready.set()
         return stream
 
 
@@ -355,15 +357,17 @@ async def test_interrupted_stream_does_not_commit_final_or_replay_business(
     tmp_path, failure
 ):
     service, fetch, _source, count, original = await setup(tmp_path)
+    task = None
     try:
         client = Client(failure)
         task = asyncio.create_task(
             collect(runner(service, client, fetch), "Continue checking the source.")
         )
         if failure == "hold":
-            async with timeout(2):
-                while not client.streams:
-                    await asyncio.sleep(0)
+            # Wait for the interruption phase without busy-polling SQLite and
+            # context preparation. This is a hung-test watchdog, not a model SLA.
+            async with timeout(10):
+                await client.stream_ready.wait()
                 await client.streams[0].blocked.wait()
             task.cancel()
             with pytest.raises(asyncio.CancelledError):
@@ -395,6 +399,10 @@ async def test_interrupted_stream_does_not_commit_final_or_replay_business(
         assert "371.29" in "".join(p.text or "" for p in final.content.parts)
         assert count[0] == 1
     finally:
+        if task is not None:
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
         await service.close()
     assert current_scope.get() is None and current_attempts.get() is None
 
