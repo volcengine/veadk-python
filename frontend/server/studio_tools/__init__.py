@@ -14,40 +14,49 @@
 
 """Studio BFF-owned dynamic tools and the Runtime WebSocket bridge."""
 
-from frontend.server.studio_tools.codex_sandbox import (
-    CodexSandboxConnection,
-    CodexSandboxDelegate,
-    register_codex_sandbox_tool,
-)
-from frontend.server.studio_tools.connector import (
-    StudioChannelError,
-    StudioToolRun,
-    open_studio_tool_run,
-    runtime_supports_bff_tools,
-)
-from frontend.server.studio_tools.local import (
-    LocalStudioToolDispatcher,
-    build_local_studio_tools,
-    ensure_local_studio_toolset,
-    local_progress_sse_event,
-    stream_local_studio_response,
-)
-from frontend.server.studio_tools.registry import (
-    StudioTool,
-    StudioToolCatalogSnapshot,
-    StudioToolExecutionContext,
-    StudioToolRegistry,
-    StudioToolRuntimeError,
-    build_studio_tool_registry,
-)
-from frontend.server.studio_tools.sandbox_shell import (
-    AgentkitEnvironmentSandboxResolver,
-    SandboxExecutionTarget,
-    SandboxResolutionError,
-    SandboxTargetResolver,
-    execute_in_sandbox,
-    register_sandbox_shell_tool,
-)
+from __future__ import annotations
+
+import importlib
+from typing import Any
+
+
+_EXPORT_MODULES = {
+    "AgentkitEnvironmentSandboxResolver": "sandbox_shell",
+    "CodexSandboxConnection": "codex_sandbox",
+    "CodexSandboxDelegate": "codex_sandbox",
+    "LocalStudioToolDispatcher": "local",
+    "SandboxExecutionTarget": "sandbox_shell",
+    "SandboxResolutionError": "sandbox_shell",
+    "SandboxTargetResolver": "sandbox_shell",
+    "StudioChannelError": "connector",
+    "StudioTool": "registry",
+    "StudioToolCatalogSnapshot": "registry",
+    "StudioToolExecutionContext": "registry",
+    "StudioToolRegistry": "registry",
+    "StudioToolRun": "connector",
+    "StudioToolRuntimeError": "registry",
+    "build_local_studio_tools": "local",
+    "build_studio_tool_registry": "registry",
+    "ensure_local_studio_toolset": "local",
+    "execute_in_sandbox": "sandbox_shell",
+    "local_progress_sse_event": "local",
+    "open_studio_tool_run": "connector",
+    "register_codex_sandbox_tool": "codex_sandbox",
+    "register_sandbox_shell_tool": "sandbox_shell",
+    "runtime_supports_bff_tools": "connector",
+    "stream_local_studio_response": "local",
+}
+
+
+def __getattr__(name: str) -> Any:
+    module_name = _EXPORT_MODULES.get(name)
+    if module_name is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    module = importlib.import_module(f"{__name__}.{module_name}")
+    value = getattr(module, name)
+    globals()[name] = value
+    return value
+
 
 __all__ = [
     "AgentkitEnvironmentSandboxResolver",

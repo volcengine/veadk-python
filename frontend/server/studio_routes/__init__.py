@@ -14,18 +14,33 @@
 
 """Studio BFF-owned dynamic HTTP routes and persistent Runtime connector."""
 
-from frontend.server.studio_routes.connector import (
-    StudioRouteChannelError,
-    StudioRouteChannelManager,
-    runtime_supports_bff_routes,
-    serve_studio_route_channel,
-)
-from frontend.server.studio_routes.registry import (
-    StudioRoute,
-    StudioRouteRegistry,
-    StudioRouteResponse,
-    build_studio_route_registry,
-)
+from __future__ import annotations
+
+import importlib
+from typing import Any
+
+
+_EXPORT_MODULES = {
+    "StudioRouteChannelError": "connector",
+    "StudioRouteChannelManager": "connector",
+    "runtime_supports_bff_routes": "connector",
+    "serve_studio_route_channel": "connector",
+    "StudioRoute": "registry",
+    "StudioRouteRegistry": "registry",
+    "StudioRouteResponse": "registry",
+    "build_studio_route_registry": "registry",
+}
+
+
+def __getattr__(name: str) -> Any:
+    module_name = _EXPORT_MODULES.get(name)
+    if module_name is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    module = importlib.import_module(f"{__name__}.{module_name}")
+    value = getattr(module, name)
+    globals()[name] = value
+    return value
+
 
 __all__ = [
     "StudioRoute",

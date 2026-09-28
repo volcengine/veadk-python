@@ -388,7 +388,7 @@ class VeFaaS:
         # Create function
         res = self.client.create_function(
             volcenginesdkvefaas.CreateFunctionRequest(
-                command="./run.sh",
+                command="bash ./run.sh",
                 name=function_name,
                 description="Created by VeADK (Volcengine Agent Development Kit)",
                 tags=[TagForCreateFunctionInput(key="provider", value="veadk")],
@@ -705,6 +705,7 @@ class VeFaaS:
         function_id: str,
         path: str,
         environment_overrides: dict[str, str] | None = None,
+        normalize_studio_entrypoint: bool = False,
     ) -> None:
         """Replace a function bundle and submit its Application release.
 
@@ -718,6 +719,7 @@ class VeFaaS:
             function_id=function_id,
             path=path,
             environment_overrides=environment_overrides,
+            normalize_studio_entrypoint=normalize_studio_entrypoint,
         )
         self._set_function_min_instance(function_id)
         self._start_application_release(application_id)
@@ -741,13 +743,16 @@ class VeFaaS:
             request_options["memory_mb"] = memory_mb
         if request_timeout is not None:
             request_options["request_timeout"] = request_timeout
-        if environment_overrides:
+        function: Any | None = None
+        if environment_overrides or normalize_studio_entrypoint:
             function = cast(
                 Any,
                 self.client.get_function(
                     volcenginesdkvefaas.GetFunctionRequest(id=function_id)
                 ),
             )
+        if environment_overrides:
+            assert function is not None
             environment = {
                 item.key: item.value for item in (getattr(function, "envs", None) or [])
             }
@@ -756,6 +761,10 @@ class VeFaaS:
                 volcenginesdkvefaas.EnvForUpdateFunctionInput(key=key, value=value)
                 for key, value in environment.items()
             ]
+        if normalize_studio_entrypoint:
+            assert function is not None
+            if str(getattr(function, "command", "") or "").strip() == "./run.sh":
+                request_options["command"] = "bash ./run.sh"
 
         self._upload_and_mount_code(function_id, path)
         self.client.update_function(

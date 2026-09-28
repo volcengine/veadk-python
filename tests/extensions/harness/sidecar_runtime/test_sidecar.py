@@ -28,6 +28,7 @@ from secrets import token_urlsafe
 import pytest
 
 from veadk.extensions.harness.sidecar_runtime.sidecar import (
+    _configure_structured_mcp_upstreams,
     HarnessSidecarError,
     HarnessSidecarRuntimeUnavailable,
     doctor_harness_sidecar,
@@ -38,6 +39,27 @@ from veadk.extensions.harness.sidecar_runtime.sidecar_config import (
     HarnessSidecarConfig,
     SidecarBindingSpec,
 )
+
+
+def test_zero_structured_mcp_is_valid_and_does_not_reactivate_legacy_upstream() -> None:
+    config = HarnessSidecarConfig(
+        profile="ops",
+        model_proxy={"enabled": False},
+        mcp_gateway={"enabled": True},
+    )
+    runtime_env = {
+        "MCP_SERVERS_JSON": "[]",
+        "MCP_URLS": "https://stale-mcp.example.com/mcp",
+        "MCP_API_KEY": "stale-test-key",
+    }
+
+    resolved, relays = _configure_structured_mcp_upstreams(config, runtime_env)
+
+    assert resolved is config
+    assert relays == []
+    assert "MCP_SERVERS_JSON" not in runtime_env
+    assert "MCP_URLS" not in runtime_env
+    assert "MCP_API_KEY" not in runtime_env
 
 
 @pytest.fixture

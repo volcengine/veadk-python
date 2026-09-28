@@ -44,6 +44,7 @@ import {
   getSession,
   getStudioAccess,
   getRuntimeStudioToolCapabilities,
+  getRuntimeMcpCredentials,
   getRuntimes,
   isMpaRuntimeApp,
   isMpaA2aRuntimeApp,
@@ -180,7 +181,10 @@ import { WorkspaceCreate, WorkspaceCreateIcon } from "./create/WorkspaceCreate";
 import { CodePackageCreate } from "./create/CodePackageCreate";
 import { MigrationWorkspace } from "./migrations/MigrationWorkspace";
 import type { AgentDraft } from "./create/types";
-import { configuredMcpEnvKeys } from "./create/mcpAuth";
+import {
+  configuredMcpEnvKeys,
+  hydrateMcpCredentialValues,
+} from "./create/mcpAuth";
 import {
   hydrateRuntimeModelSelection,
   isRuntimeModelSelectionEnv,
@@ -2772,8 +2776,7 @@ export default function App() {
       }));
     }
     updateDeploymentTask(linkedTask);
-    openDeploymentDetail(linkedTask);
-  }, [editingDraftId, flushPendingWorkspaceDraft, openDeploymentDetail, updateDeploymentTask]);
+  }, [editingDraftId, flushPendingWorkspaceDraft, updateDeploymentTask]);
 
   const finishDeployment = useCallback(
     async (result: DeployResult) => {
@@ -7856,11 +7859,33 @@ export default function App() {
                     hydratedDraft,
                     arkModelIds,
                   );
+                  let editorDraft = classifiedDraft;
+                  if (configuredMcpEnvKeys(classifiedDraft).length > 0) {
+                    try {
+                      const credentials = await getRuntimeMcpCredentials({
+                        runtimeId: capability.runtime.runtimeId,
+                        region: capability.runtime.region,
+                        appName: capability.agent.appName,
+                        etag: capability.etag,
+                      });
+                      editorDraft = hydrateMcpCredentialValues(
+                        classifiedDraft,
+                        credentials,
+                      );
+                    } catch (credentialError) {
+                      setError(
+                        credentialError instanceof Error
+                          ? credentialError.message
+                          : appText("errors.runtimeDeploymentConfigUnavailable"),
+                      );
+                      return;
+                    }
+                  }
                   exitAgentDetailContext();
-                  setImportedDraft(classifiedDraft);
+                  setImportedDraft(editorDraft);
                   setCustomCreateMode("custom");
                   setCustomCreationSurface(
-                    classifiedDraft.dynamicAgentDelegation === true
+                    editorDraft.dynamicAgentDelegation === true
                       ? "vulcan"
                       : "traditional",
                   );
@@ -7885,7 +7910,7 @@ export default function App() {
                         ? "source-preserving"
                         : "regenerate",
                     mpaProfileOnly: false,
-                    configuredMcpEnvKeys: configuredMcpEnvKeys(classifiedDraft),
+                    configuredMcpEnvKeys: configuredMcpEnvKeys(editorDraft),
                     configuredRuntimeEnvKeys:
                       capability.runtime.configuredEnvKeys,
                   });

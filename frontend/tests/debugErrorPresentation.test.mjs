@@ -77,11 +77,15 @@ test("creation and deployment keep friendly context and the original error", () 
   );
   assert.match(
     clientSource,
-    /catch \(error\) \{[\s\S]*?isDeploymentAbortError\(error\)[\s\S]*?new DeploymentStatusUnconfirmedError\(\{ taskId, cause: error \}\)/,
+    /const recoverFinal = async \(cause\?: unknown\)[\s\S]*?isDeploymentAbortError\(cause\)[\s\S]*?new DeploymentStatusUnconfirmedError\(\{ taskId, cause \}\)/,
   );
   assert.match(
     clientSource,
-    /if \(!final\) throw new DeploymentStatusUnconfirmedError\(\{ taskId \}\)/,
+    /catch \(error\) \{[\s\S]*?final = await recoverFinal\(error\)[\s\S]*?if \(!final\) \{[\s\S]*?final = await recoverFinal\(\)/,
+  );
+  assert.match(
+    clientSource,
+    /pollDeploymentRecovery<DeployFrame>[\s\S]*?\/web\/deploy-agentkit\/status[\s\S]*?baseRuntimeVersion: opts\.baseRuntimeVersion/,
   );
   assert.match(
     projectPreviewSource,

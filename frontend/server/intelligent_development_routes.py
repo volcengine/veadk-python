@@ -27,11 +27,10 @@ from collections.abc import AsyncGenerator, Callable
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import anyio
-from agentkit.toolkit.cli.sandbox.env_config import build_exec_session_envs
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from starlette.types import Receive, Scope, Send
@@ -49,7 +48,6 @@ from frontend.server.intelligent_development_task import (
     CredentialResolver,
     parse_intent_decision,
 )
-from frontend.server.sandbox_remote import SandboxRemoteTransport
 from veadk.cli.codex_app_server import (
     CodexAppServerError,
     CodexPermissionSettings,
@@ -74,12 +72,45 @@ from veadk.cli.frontend_sandbox import (
     SandboxValidationError,
     mount_sandbox_routes,
 )
-from veadk.cli.frontend_skill_creator import _sandbox_model_config
 from veadk.cli.studio_model_catalog import (
     provider_allows_studio_development_model,
 )
 from veadk.utils.cloud_provider import cloud_provider_from_env
 from veadk.utils.logger import get_logger
+
+if TYPE_CHECKING:
+    from agentkit.sdk.tools.types import EnvsItemForCreateSession
+    from frontend.server.sandbox_remote import SandboxRemoteTransport
+else:
+
+    def SandboxRemoteTransport(endpoint: str):  # noqa: N802
+        """Preserve the injectable transport factory without loading it at startup."""
+        from frontend.server.sandbox_remote import (
+            SandboxRemoteTransport as _SandboxRemoteTransport,
+        )
+
+        return _SandboxRemoteTransport(endpoint)
+
+
+def build_exec_session_envs(
+    *args: Any, **kwargs: Any
+) -> list[EnvsItemForCreateSession] | None:
+    """Load AgentKit Sandbox environment helpers on the first session request."""
+    from agentkit.toolkit.cli.sandbox.env_config import (
+        build_exec_session_envs as _build_exec_session_envs,
+    )
+
+    return _build_exec_session_envs(*args, **kwargs)
+
+
+def _sandbox_model_config(provider: str) -> tuple[str, str]:
+    """Load Skill creator model configuration only for Sandbox development."""
+    from veadk.cli.frontend_skill_creator import (
+        _sandbox_model_config as _resolve_sandbox_model_config,
+    )
+
+    return _resolve_sandbox_model_config(provider)
+
 
 INTELLIGENT_DEVELOPMENT_PREFIX = "/web/intelligent-development"
 INTELLIGENT_DEVELOPMENT_TOOL_NAME = "intelligent-development"

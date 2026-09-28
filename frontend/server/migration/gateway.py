@@ -23,26 +23,10 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-import requests
-from agentkit.sdk.tools import types as tools_types
-from agentkit.toolkit.cli.sandbox.env_config import build_exec_session_envs
-from agentkit.toolkit.cli.sandbox.sandbox_client import (
-    SANDBOX_FILE_DOWNLOAD_ROUTE,
-    build_bash_exec_url,
-    build_file_url,
-)
-
 from veadk.cli.agentkit_sandbox_region import (
     is_agentkit_resource_not_found,
     sandbox_region_candidates,
 )
-from veadk.cli.agentkit_session_metadata import (
-    build_create_session_request,
-    build_list_sessions_request,
-    call_session_client,
-    session_username,
-)
-from veadk.cli.frontend_skill_creator import _sandbox_model_config
 from veadk.utils.cloud_provider import cloud_provider_from_env
 
 _TOOL_ID_ENV = "SANDBOX_DEV"
@@ -78,6 +62,92 @@ _RELEASED_SESSION_STATUSES = {
 }
 
 logger = logging.getLogger(__name__)
+
+
+def _requests() -> Any:
+    import requests
+
+    return requests
+
+
+class _LazyRequests:
+    """Preserve the patchable module surface without importing it at startup."""
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(_requests(), name)
+
+
+requests = _LazyRequests()
+
+
+def _tools_types() -> Any:
+    from agentkit.sdk.tools import types
+
+    return types
+
+
+def build_exec_session_envs(*args: Any, **kwargs: Any) -> Any:
+    from agentkit.toolkit.cli.sandbox.env_config import (
+        build_exec_session_envs as _impl,
+    )
+
+    return _impl(*args, **kwargs)
+
+
+def build_bash_exec_url(*args: Any, **kwargs: Any) -> str:
+    from agentkit.toolkit.cli.sandbox.sandbox_client import (
+        build_bash_exec_url as _impl,
+    )
+
+    return _impl(*args, **kwargs)
+
+
+def build_file_url(*args: Any, **kwargs: Any) -> str:
+    from agentkit.toolkit.cli.sandbox.sandbox_client import build_file_url as _impl
+
+    return _impl(*args, **kwargs)
+
+
+def _sandbox_file_download_route() -> str:
+    from agentkit.toolkit.cli.sandbox.sandbox_client import (
+        SANDBOX_FILE_DOWNLOAD_ROUTE,
+    )
+
+    return SANDBOX_FILE_DOWNLOAD_ROUTE
+
+
+def build_create_session_request(*args: Any, **kwargs: Any) -> Any:
+    from veadk.cli.agentkit_session_metadata import (
+        build_create_session_request as _impl,
+    )
+
+    return _impl(*args, **kwargs)
+
+
+def build_list_sessions_request(*args: Any, **kwargs: Any) -> Any:
+    from veadk.cli.agentkit_session_metadata import (
+        build_list_sessions_request as _impl,
+    )
+
+    return _impl(*args, **kwargs)
+
+
+def call_session_client(*args: Any, **kwargs: Any) -> Any:
+    from veadk.cli.agentkit_session_metadata import call_session_client as _impl
+
+    return _impl(*args, **kwargs)
+
+
+def session_username(*args: Any, **kwargs: Any) -> str:
+    from veadk.cli.agentkit_session_metadata import session_username as _impl
+
+    return _impl(*args, **kwargs)
+
+
+def _sandbox_model_config(*args: Any, **kwargs: Any) -> Any:
+    from veadk.cli.frontend_skill_creator import _sandbox_model_config as _impl
+
+    return _impl(*args, **kwargs)
 
 
 class MigrationGatewayError(RuntimeError):
@@ -221,7 +291,7 @@ class MigrationSandboxGateway:
                 "管理员未配置 Dev Sandbox。",
                 status_code=503,
             )
-        request = tools_types.GetToolRequest(ToolId=self._tool_id)
+        request = _tools_types().GetToolRequest(ToolId=self._tool_id)
         for index, region in enumerate(self._regions):
             try:
                 return self._client(region).get_tool(request), region
@@ -337,12 +407,12 @@ class MigrationSandboxGateway:
                     username=owner_id,
                 )
             else:
-                request = tools_types.ListSessionsRequest(
+                request = _tools_types().ListSessionsRequest(
                     ToolId=self._tool_id,
                     MaxResults=100,
                     NextToken=next_token,
                     Filters=[
-                        tools_types.FiltersItemForListSessions(
+                        _tools_types().FiltersItemForListSessions(
                             Name="UserSessionId",
                             Values=[task_id],
                         )
@@ -488,7 +558,7 @@ class MigrationSandboxGateway:
                 response = call_session_client(
                     self._client(region),
                     "get_session",
-                    tools_types.GetSessionRequest(
+                    _tools_types().GetSessionRequest(
                         ToolId=self._tool_id,
                         SessionId=initial.session_id,
                     ),
@@ -664,7 +734,7 @@ class MigrationSandboxGateway:
         endpoint = self._require_endpoint(session)
         try:
             response = requests.get(
-                build_file_url(endpoint, SANDBOX_FILE_DOWNLOAD_ROUTE),
+                build_file_url(endpoint, _sandbox_file_download_route()),
                 params={"path": path, "change_policy": "abort"},
                 timeout=_READ_TIMEOUT,
                 stream=True,
@@ -724,7 +794,7 @@ class MigrationSandboxGateway:
         deadline = time.monotonic() + timeout_seconds + 30
         start_marker = _BACKGROUND_START_MARKERS.get(operation, "")
 
-        def response_data(response: requests.Response) -> dict[str, object]:
+        def response_data(response: Any) -> dict[str, object]:
             if response.status_code >= 400:
                 raise MigrationGatewayError(
                     "MIGRATION_REMOTE_EXEC_FAILED",
@@ -858,7 +928,7 @@ class MigrationSandboxGateway:
     def delete_session(self, session: MigrationSandboxSession) -> None:
         try:
             self._client(session.region).delete_session(
-                tools_types.DeleteSessionRequest(
+                _tools_types().DeleteSessionRequest(
                     ToolId=session.tool_id,
                     SessionId=session.session_id,
                 )

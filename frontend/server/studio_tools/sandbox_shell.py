@@ -37,8 +37,6 @@ from frontend.server.studio_tools.registry import (
     StudioToolExecutionError,
     StudioToolRegistry,
 )
-from veadk.cli.agentkit_session_metadata import build_create_session_request
-from veadk.cli.codex_app_server import sandbox_service_url
 
 _READY_STATUS = "ready"
 _FAILED_TOOL_STATUSES = frozenset(
@@ -50,6 +48,24 @@ _POLL_INTERVAL_SECONDS = 2.0
 _MAX_RESPONSE_BYTES = 128 * 1024
 _MAX_OUTPUT_BYTES = 96 * 1024
 _ALLOWED_TARGET_HEADERS = frozenset({"authorization", "x-api-key"})
+
+
+def build_create_session_request(*args: Any, **kwargs: Any) -> Any:
+    """Build Session metadata only when a mounted Sandbox needs a Session."""
+
+    from veadk.cli.agentkit_session_metadata import (
+        build_create_session_request as _build_request,
+    )
+
+    return _build_request(*args, **kwargs)
+
+
+def sandbox_service_url(endpoint: str, path: str) -> str:
+    """Resolve the Sandbox data-plane URL only for an actual tool call."""
+
+    from veadk.cli.codex_app_server import sandbox_service_url as _service_url
+
+    return _service_url(endpoint, path)
 
 
 class SandboxTargetResolver(Protocol):

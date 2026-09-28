@@ -21,10 +21,8 @@ import json
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import replace
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
-
-from google.adk.tools.base_tool import BaseTool
 
 from frontend.server.studio_tools.registry import (
     StudioToolCatalogSnapshot,
@@ -32,12 +30,10 @@ from frontend.server.studio_tools.registry import (
     StudioToolExecutionError,
     StudioToolRuntimeError,
 )
-from veadk.integrations.agentkit.studio_channel import (
-    StudioExternalToolset,
-    StudioRemoteTool,
-    bind_studio_tools,
-)
 from veadk.integrations.agentkit.studio_channel.protocol import StudioToolManifest
+
+if TYPE_CHECKING:
+    from google.adk.tools.base_tool import BaseTool
 
 logger = logging.getLogger(__name__)
 
@@ -142,6 +138,8 @@ def build_local_studio_tools(
 ) -> tuple[BaseTool, ...]:
     """Build immutable model-visible wrappers for one local Agent run."""
 
+    from veadk.integrations.agentkit.studio_channel.tool import StudioRemoteTool
+
     dispatcher = LocalStudioToolDispatcher(
         catalog=catalog,
         context=context,
@@ -164,6 +162,8 @@ def ensure_local_studio_toolset(
     selected_names: Sequence[str],
 ) -> None:
     """Attach the run-scoped Studio toolset to a cached local ADK runner."""
+
+    from veadk.integrations.agentkit.studio_channel.tool import StudioExternalToolset
 
     app = getattr(runner, "app", None)
     root_agent = getattr(app, "root_agent", None)
@@ -223,14 +223,20 @@ async def stream_local_studio_response(
 ) -> AsyncIterator[bytes | str]:
     """Merge direct tool progress into the local ADK SSE response."""
 
+    from veadk.integrations.agentkit.studio_channel.tool import bind_studio_tools
+
     source_task: asyncio.Task[bytes | str] | None = None
     progress_task: asyncio.Task[bytes] | None = None
     iterator = source.__aiter__()
+
+    async def next_source() -> bytes | str:
+        return await anext(iterator)
+
     try:
         with bind_studio_tools(tools):
             while True:
                 if source_task is None:
-                    source_task = asyncio.create_task(anext(iterator))
+                    source_task = asyncio.create_task(next_source())
                 if progress_task is None:
                     progress_task = asyncio.create_task(progress_events.get())
                 done, _ = await asyncio.wait(
@@ -260,7 +266,7 @@ async def stream_local_studio_response(
         )
         aclose = getattr(iterator, "aclose", None)
         if callable(aclose):
-            await aclose()
+            await cast(Callable[[], Awaitable[None]], aclose)()
 
 
 __all__ = [

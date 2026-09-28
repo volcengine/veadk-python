@@ -17,10 +17,9 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from functools import cache
+from types import SimpleNamespace
 from typing import Any
-
-from agentkit.sdk.tools import types as tools_types
-from pydantic import Field
 
 SESSION_DISPLAY_NAME_MAX_LENGTH = 40
 SESSION_METADATA_VALUE_MAX_BYTES = 63
@@ -31,67 +30,131 @@ SESSION_USERNAME_METADATA_KEY = "Username"
 _SESSION_DISPLAY_NAME_TRUNCATION_MARK = "…"
 
 
-class _SessionMetadata(tools_types.ToolsBaseModel):
-    key: str = Field(alias="Key")
-    type: str | None = Field(default=None, alias="Type")
-    value: str = Field(alias="Value")
+@cache
+def _session_models() -> SimpleNamespace:
+    """Build SDK compatibility models only for an actual Session request."""
 
+    from agentkit.sdk.tools import types as tools_types
+    from pydantic import Field, create_model
 
-class _SessionEnv(tools_types.ToolsBaseModel):
-    key: str = Field(alias="Key")
-    value: str = Field(alias="Value")
-
-
-class _CreateSessionRequestCompat(tools_types.CreateSessionRequest):
-    metadata: list[_SessionMetadata] | None = Field(default=None, alias="Metadata")
-
-
-class _CreateSessionRequestFullCompat(tools_types.ToolsBaseModel):
-    tool_id: str = Field(alias="ToolId")
-    ttl: int | None = Field(default=None, alias="Ttl")
-    ttl_unit: str | None = Field(default=None, alias="TtlUnit")
-    user_session_id: str | None = Field(default=None, alias="UserSessionId")
-    metadata: list[_SessionMetadata] | None = Field(default=None, alias="Metadata")
-    envs: list[_SessionEnv] | None = Field(default=None, alias="Envs")
-
-
-class _ListSessionsRequestCompat(tools_types.ListSessionsRequest):
-    metadata: list[_SessionMetadata] | None = Field(default=None, alias="Metadata")
-
-
-class _GetSessionResponseCompat(tools_types.ToolsBaseModel):
-    created_at: str | None = Field(default=None, alias="CreatedAt")
-    endpoint: str | None = Field(default=None, alias="Endpoint")
-    expire_at: str | None = Field(default=None, alias="ExpireAt")
-    internal_endpoint: str | None = Field(default=None, alias="InternalEndpoint")
-    session_id: str | None = Field(default=None, alias="SessionId")
-    status: str | None = Field(default=None, alias="Status")
-    tool_type: str | None = Field(default=None, alias="ToolType")
-    user_session_id: str | None = Field(default=None, alias="UserSessionId")
-    metadata: list[_SessionMetadata] | None = Field(default=None, alias="Metadata")
-
-
-class _SessionInfoCompat(_GetSessionResponseCompat):
-    pass
-
-
-class _ListSessionsResponseCompat(tools_types.ToolsBaseModel):
-    next_token: str | None = Field(default=None, alias="NextToken")
-    session_infos: list[_SessionInfoCompat] | None = Field(
-        default=None,
-        alias="SessionInfos",
+    session_metadata = create_model(
+        "_SessionMetadata",
+        __base__=tools_types.ToolsBaseModel,
+        __module__=__name__,
+        key=(str, Field(alias="Key")),
+        type=(str | None, Field(default=None, alias="Type")),
+        value=(str, Field(alias="Value")),
     )
-
-
-class _SnapshotInfoCompat(tools_types.SnapshotsForListSessionSnapshots):
-    session_metadata: list[_SessionMetadata] | None = Field(
-        default=None, alias="SessionMetadata"
+    session_env = create_model(
+        "_SessionEnv",
+        __base__=tools_types.ToolsBaseModel,
+        __module__=__name__,
+        key=(str, Field(alias="Key")),
+        value=(str, Field(alias="Value")),
     )
-
-
-class _ListSessionSnapshotsResponseCompat(tools_types.ToolsBaseModel):
-    next_token: str | None = Field(default=None, alias="NextToken")
-    snapshots: list[_SnapshotInfoCompat] | None = Field(default=None, alias="Snapshots")
+    create_request_compat = create_model(
+        "_CreateSessionRequestCompat",
+        __base__=tools_types.CreateSessionRequest,
+        __module__=__name__,
+        metadata=(
+            list[session_metadata] | None,
+            Field(default=None, alias="Metadata"),
+        ),
+    )
+    create_request_full_compat = create_model(
+        "_CreateSessionRequestFullCompat",
+        __base__=tools_types.ToolsBaseModel,
+        __module__=__name__,
+        tool_id=(str, Field(alias="ToolId")),
+        ttl=(int | None, Field(default=None, alias="Ttl")),
+        ttl_unit=(str | None, Field(default=None, alias="TtlUnit")),
+        user_session_id=(
+            str | None,
+            Field(default=None, alias="UserSessionId"),
+        ),
+        metadata=(
+            list[session_metadata] | None,
+            Field(default=None, alias="Metadata"),
+        ),
+        envs=(list[session_env] | None, Field(default=None, alias="Envs")),
+    )
+    list_request_compat = create_model(
+        "_ListSessionsRequestCompat",
+        __base__=tools_types.ListSessionsRequest,
+        __module__=__name__,
+        metadata=(
+            list[session_metadata] | None,
+            Field(default=None, alias="Metadata"),
+        ),
+    )
+    get_response_compat = create_model(
+        "_GetSessionResponseCompat",
+        __base__=tools_types.ToolsBaseModel,
+        __module__=__name__,
+        created_at=(str | None, Field(default=None, alias="CreatedAt")),
+        endpoint=(str | None, Field(default=None, alias="Endpoint")),
+        expire_at=(str | None, Field(default=None, alias="ExpireAt")),
+        internal_endpoint=(
+            str | None,
+            Field(default=None, alias="InternalEndpoint"),
+        ),
+        session_id=(str | None, Field(default=None, alias="SessionId")),
+        status=(str | None, Field(default=None, alias="Status")),
+        tool_type=(str | None, Field(default=None, alias="ToolType")),
+        user_session_id=(
+            str | None,
+            Field(default=None, alias="UserSessionId"),
+        ),
+        metadata=(
+            list[session_metadata] | None,
+            Field(default=None, alias="Metadata"),
+        ),
+    )
+    session_info_compat = create_model(
+        "_SessionInfoCompat",
+        __base__=get_response_compat,
+        __module__=__name__,
+    )
+    list_response_compat = create_model(
+        "_ListSessionsResponseCompat",
+        __base__=tools_types.ToolsBaseModel,
+        __module__=__name__,
+        next_token=(str | None, Field(default=None, alias="NextToken")),
+        session_infos=(
+            list[session_info_compat] | None,
+            Field(default=None, alias="SessionInfos"),
+        ),
+    )
+    snapshot_info_compat = create_model(
+        "_SnapshotInfoCompat",
+        __base__=tools_types.SnapshotsForListSessionSnapshots,
+        __module__=__name__,
+        session_metadata=(
+            list[session_metadata] | None,
+            Field(default=None, alias="SessionMetadata"),
+        ),
+    )
+    list_snapshots_response_compat = create_model(
+        "_ListSessionSnapshotsResponseCompat",
+        __base__=tools_types.ToolsBaseModel,
+        __module__=__name__,
+        next_token=(str | None, Field(default=None, alias="NextToken")),
+        snapshots=(
+            list[snapshot_info_compat] | None,
+            Field(default=None, alias="Snapshots"),
+        ),
+    )
+    return SimpleNamespace(
+        tools_types=tools_types,
+        session_metadata=session_metadata,
+        session_env=session_env,
+        create_request_compat=create_request_compat,
+        create_request_full_compat=create_request_full_compat,
+        list_request_compat=list_request_compat,
+        get_response_compat=get_response_compat,
+        list_response_compat=list_response_compat,
+        list_snapshots_response_compat=list_snapshots_response_compat,
+    )
 
 
 def _model_supports_alias(model: Any, alias: str) -> bool:
@@ -128,11 +191,13 @@ def build_create_session_request(
     envs: Mapping[str, str] | None = None,
 ) -> Any:
     """Build a native or compatibility CreateSession request."""
+    models = _session_models()
+    tools_types = models.tools_types
     metadata = []
     if display_name:
         display_name = session_display_name_metadata_value(display_name)
         metadata.append(
-            _SessionMetadata(
+            models.session_metadata(
                 Key=SESSION_DISPLAY_NAME_METADATA_KEY,
                 Type="String",
                 Value=display_name,
@@ -140,7 +205,7 @@ def build_create_session_request(
         )
     if username:
         metadata.append(
-            _SessionMetadata(
+            models.session_metadata(
                 Key=SESSION_USERNAME_METADATA_KEY,
                 Type="String",
                 Value=username,
@@ -148,7 +213,7 @@ def build_create_session_request(
         )
     if creator_name:
         metadata.append(
-            _SessionMetadata(
+            models.session_metadata(
                 Key=SESSION_CREATOR_NAME_METADATA_KEY,
                 Type="String",
                 Value=creator_name,
@@ -156,7 +221,7 @@ def build_create_session_request(
         )
     if agent_kind:
         metadata.append(
-            _SessionMetadata(
+            models.session_metadata(
                 Key=SESSION_AGENT_KIND_METADATA_KEY,
                 Type="String",
                 Value=agent_kind,
@@ -166,9 +231,9 @@ def build_create_session_request(
     supports_metadata = _model_supports_alias(request_type, "Metadata")
     supports_envs = _model_supports_alias(request_type, "Envs")
     if metadata and not supports_metadata:
-        request_type = _CreateSessionRequestCompat
+        request_type = models.create_request_compat
     if envs and not supports_envs:
-        request_type = _CreateSessionRequestFullCompat
+        request_type = models.create_request_full_compat
     request_data: dict[str, Any] = {
         "ToolId": tool_id,
         "Ttl": ttl_seconds,
@@ -178,7 +243,7 @@ def build_create_session_request(
     if metadata:
         request_data["Metadata"] = metadata
     if envs:
-        env_type = getattr(tools_types, "EnvsItemForCreateSession", _SessionEnv)
+        env_type = getattr(tools_types, "EnvsItemForCreateSession", models.session_env)
         request_data["Envs"] = [
             env_type(Key=key, Value=value)
             for key, value in envs.items()
@@ -195,9 +260,11 @@ def build_list_sessions_request(
     username: str | None = None,
 ) -> Any:
     """Build ListSessions with an optional Username metadata filter."""
+    models = _session_models()
+    tools_types = models.tools_types
     request_type: Any = tools_types.ListSessionsRequest
     if username is not None and not _model_supports_alias(request_type, "Metadata"):
-        request_type = _ListSessionsRequestCompat
+        request_type = models.list_request_compat
     request_data: dict[str, Any] = {
         "ToolId": tool_id,
         "MaxResults": max_results,
@@ -205,7 +272,7 @@ def build_list_sessions_request(
     }
     if username is not None:
         request_data["Metadata"] = [
-            _SessionMetadata(
+            models.session_metadata(
                 Key=SESSION_USERNAME_METADATA_KEY,
                 Value=username,
             )
@@ -215,22 +282,24 @@ def build_list_sessions_request(
 
 def call_session_client(client: Any, method_name: str, request: Any) -> Any:
     """Invoke a Session API while preserving Metadata on older SDK releases."""
+    models = _session_models()
+    tools_types = models.tools_types
     native_response_model: Any | None = None
     compat_response_model: Any | None = None
     api_action = ""
     metadata_alias = "Metadata"
     if method_name == "get_session":
         native_response_model = tools_types.GetSessionResponse
-        compat_response_model = _GetSessionResponseCompat
+        compat_response_model = models.get_response_compat
         api_action = "GetSession"
     elif method_name == "list_sessions":
         native_response_model = tools_types.SessionInfosForListSessions
-        compat_response_model = _ListSessionsResponseCompat
+        compat_response_model = models.list_response_compat
         api_action = "ListSessions"
 
     elif method_name == "list_session_snapshots":
         native_response_model = tools_types.SnapshotsForListSessionSnapshots
-        compat_response_model = _ListSessionSnapshotsResponseCompat
+        compat_response_model = models.list_snapshots_response_compat
         api_action = "ListSessionSnapshots"
         metadata_alias = "SessionMetadata"
 

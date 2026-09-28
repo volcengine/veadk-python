@@ -22,17 +22,12 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 from uuid import uuid4
 
-from google.adk.agents.run_config import RunConfig, StreamingMode
-from google.adk.runners import InMemoryRunner
-from google.genai import types
-
 from frontend.server.studio_tools.registry import (
     StudioTool,
     StudioToolExecutionContext,
     StudioToolExecutionError,
     StudioToolRegistry,
 )
-from veadk import Agent
 
 BRANCH_COMPARE_TOOL_NAME = "branch_compare"
 DEFAULT_BRANCH_MODEL = "doubao-seed-2-0-lite-260428"
@@ -151,6 +146,15 @@ async def _generate_with_model(
     instruction: str,
     report_delta: BranchDeltaReporter,
 ) -> str:
+    # Building the Studio tool catalog is part of the Function readiness path.
+    # Import the model runtime only when this optional tool is actually invoked;
+    # these modules account for a large share of a cold Python startup.
+    from google.adk.agents.run_config import RunConfig, StreamingMode
+    from google.adk.runners import InMemoryRunner
+    from google.genai import types
+
+    from veadk import Agent
+
     model_name = os.getenv("VEADK_STUDIO_BRANCH_MODEL", DEFAULT_BRANCH_MODEL).strip()
     agent = Agent(
         name=f"studio_branch_{uuid4().hex[:12]}",

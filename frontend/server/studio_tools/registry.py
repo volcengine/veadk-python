@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING, Any, cast
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError, ValidationError
 
-from veadk.integrations.agentkit.studio_channel import (
+from veadk.integrations.agentkit.studio_channel.protocol import (
     StudioToolManifest,
     catalog_revision,
 )

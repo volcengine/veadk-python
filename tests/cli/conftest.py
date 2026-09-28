@@ -1,4 +1,4 @@
-# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd. and/or its affiliates.
+# Copyright (c) 2025 Beijing Volcano Engine Technology Co., Ltd. and/or its affiliates.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,8 +14,33 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 import pytest
 from unittest.mock import AsyncMock, MagicMock
+
+from tests.cli.provider_environment import preserve_cli_provider_environment
+
+
+@pytest.fixture(autouse=True)
+def _isolate_cli_provider_environment() -> Iterator[None]:
+    """Keep direct Studio server calls from leaking provider selection."""
+
+    with preserve_cli_provider_environment():
+        yield
+
+
+@pytest.fixture(autouse=True)
+def _stub_studio_local_scheduler(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep CLI tests independent of live Cronjob and TOS polling."""
+
+    async def _offline_local_scheduler(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(
+        "frontend.service.studio_scheduler.run_local_scheduler",
+        _offline_local_scheduler,
+    )
 
 
 @pytest.fixture(autouse=True)

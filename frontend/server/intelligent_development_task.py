@@ -31,7 +31,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import PurePosixPath
-from typing import Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 from uuid import uuid4
 
 import yaml
@@ -43,7 +43,19 @@ from frontend.server.intelligent_development import (
     StudioCredentials,
     release_path,
 )
-from frontend.server.sandbox_remote import SandboxRemoteTransport
+
+if TYPE_CHECKING:
+    from frontend.server.sandbox_remote import SandboxRemoteTransport
+else:
+
+    def SandboxRemoteTransport(endpoint: str):  # noqa: N802
+        """Preserve the injectable transport factory without loading it at startup."""
+        from frontend.server.sandbox_remote import (
+            SandboxRemoteTransport as _SandboxRemoteTransport,
+        )
+
+        return _SandboxRemoteTransport(endpoint)
+
 
 CredentialResolver = Callable[[], StudioCredentials]
 

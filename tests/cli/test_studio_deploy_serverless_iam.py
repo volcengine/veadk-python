@@ -14,6 +14,7 @@
 
 import importlib
 import json
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, call
 
@@ -27,6 +28,22 @@ from veadk.cli.studio_deploy_serverless_iam import (
     SYSTEM_POLICIES,
     ensure_serverless_application_role,
 )
+from veadk.cli.studio_dependencies import STUDIO_AGENTKIT_CLI_ARTIFACT
+
+
+def _stage_test_agentkit_cli_archive(destination: Path, **_kwargs: object) -> Path:
+    destination.mkdir(parents=True, exist_ok=True)
+    archive = destination / STUDIO_AGENTKIT_CLI_ARTIFACT.filename
+    archive.write_bytes(b"test-agentkit-cli")
+    return archive
+
+
+@pytest.fixture(autouse=True)
+def _avoid_network_cli_archive_download(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "veadk.cli.studio_package.stage_studio_agentkit_cli_archive",
+        _stage_test_agentkit_cli_archive,
+    )
 
 
 def _install_iam_service(monkeypatch: pytest.MonkeyPatch, service: MagicMock) -> None:

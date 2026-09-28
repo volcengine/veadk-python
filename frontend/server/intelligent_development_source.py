@@ -24,6 +24,7 @@ import zipfile
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from frontend.server.deployment_source import (
     DeploymentSourceError,
@@ -37,7 +38,6 @@ from frontend.server.intelligent_development_projects import (
     IntelligentDevelopmentVersionNotFound,
     SourceVersionProducer,
 )
-from frontend.server.sandbox_remote import SandboxRemoteTransport
 from frontend.server.source_project_limits import (
     SOURCE_PROJECT_MAX_BYTES,
     SOURCE_PROJECT_MAX_FILES,
@@ -48,6 +48,19 @@ from veadk.cli.frontend_sandbox import (
     SandboxSessionNotFoundError,
     SandboxSessionUnavailableError,
 )
+
+if TYPE_CHECKING:
+    from frontend.server.sandbox_remote import SandboxRemoteTransport
+else:
+
+    def SandboxRemoteTransport(endpoint: str):  # noqa: N802
+        """Preserve the injectable transport factory without loading it at startup."""
+        from frontend.server.sandbox_remote import (
+            SandboxRemoteTransport as _SandboxRemoteTransport,
+        )
+
+        return _SandboxRemoteTransport(endpoint)
+
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _MAX_ARTIFACT_BYTES = SOURCE_PROJECT_MAX_BYTES

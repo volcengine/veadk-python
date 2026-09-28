@@ -99,6 +99,21 @@ export function runtimeEnvVars(
   return [...env].map(([key, value]) => ({ key, value }));
 }
 
+/** Keep explicit MCP credentials in debug requests without exposing other managed secrets. */
+export function runtimeDebugEnvVars(
+  specs: RuntimeEnvSpec[],
+  values: Record<string, string>,
+  explicitMcpEnvValues: Record<string, string>,
+): { key: string; value: string }[] {
+  const env = new Map(
+    runtimeEnvVars(specs, values).map(({ key, value }) => [key, value]),
+  );
+  for (const [key, value] of Object.entries(explicitMcpEnvValues)) {
+    if (value.trim()) env.set(key, value);
+  }
+  return [...env].map(([key, value]) => ({ key, value }));
+}
+
 export function firstMissingRuntimeEnv(
   specs: RuntimeEnvSpec[],
   values: Record<string, string>,

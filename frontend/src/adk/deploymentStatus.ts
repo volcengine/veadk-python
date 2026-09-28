@@ -30,3 +30,50 @@ export function isDeploymentAbortError(error: unknown): boolean {
       error.name === "AbortError",
   );
 }
+
+export async function pollDeploymentRecovery<T extends { done?: boolean }>({
+  load,
+  signal,
+  timeoutMs = 30 * 60_000,
+  intervalMs = 2_000,
+  shouldRetry = () => true,
+}: {
+  load: (signal?: AbortSignal) => Promise<T>;
+  signal?: AbortSignal;
+  timeoutMs?: number;
+  intervalMs?: number;
+  shouldRetry?: (error: unknown) => boolean;
+}): Promise<T | null> {
+  if (signal?.aborted) {
+    throw signal.reason ?? new DOMException("Aborted", "AbortError");
+  }
+  const deadline = Date.now() + Math.max(0, timeoutMs);
+  while (!signal?.aborted && Date.now() <= deadline) {
+    try {
+      const status = await load(signal);
+      if (status.done) return status;
+    } catch (error) {
+      if (signal?.aborted || isDeploymentAbortError(error)) throw error;
+      if (!shouldRetry(error)) throw error;
+      // Instance replacement can also interrupt an individual status read.
+      // Keep polling until the bounded recovery window expires.
+    }
+    if (signal?.aborted) {
+      throw signal.reason ?? new DOMException("Aborted", "AbortError");
+    }
+    if (intervalMs <= 0) continue;
+    await new Promise<void>((resolve, reject) => {
+      const onAbort = () => {
+        globalThis.clearTimeout(timer);
+        signal?.removeEventListener("abort", onAbort);
+        reject(signal?.reason ?? new DOMException("Aborted", "AbortError"));
+      };
+      const timer = globalThis.setTimeout(() => {
+        signal?.removeEventListener("abort", onAbort);
+        resolve();
+      }, intervalMs);
+      signal?.addEventListener("abort", onAbort, { once: true });
+    });
+  }
+  return null;
+}

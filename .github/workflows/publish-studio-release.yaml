@@ -215,11 +215,73 @@ jobs:
           VOLCENGINE_SECRET_KEY: smoke
         run: |
           set -euo pipefail
-          package_dir="$RUNNER_TEMP/studio-release-package"
-          runtime_venv="$RUNNER_TEMP/studio-release-runtime"
-          export package_dir runtime_venv
+          test "$(uname -s)" = "Linux"
+          test "$(uname -m)" = "x86_64"
+          test "$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')" = "3.12"
+          COLD_START_DEADLINE_SECONDS=60
+          STUDIO_MAX_BUNDLE_BYTES=$((256 * 1024 * 1024))
+          bundle=("$RUNNER_TEMP"/studio-release-output/studio-bundle-*.zip)
+          test "${#bundle[@]}" -eq 1
+          test "$(stat -c %s "${bundle[0]}")" -lt "$STUDIO_MAX_BUNDLE_BYTES"
 
-          uv run --frozen --group dev python - <<'PY'
+          permission_probe_root="$(mktemp -d)"
+          permission_probe="$permission_probe_root/package"
+          permission_probe_bin="$permission_probe_root/bin"
+          permission_probe_state="$permission_probe_root/state"
+          mkdir "$permission_probe" "$permission_probe_bin" "$permission_probe_state"
+          chmod 755 "$permission_probe_root" "$permission_probe" "$permission_probe_bin"
+          chmod 700 "$permission_probe_state"
+          sudo chown nobody "$permission_probe_state"
+          unzip -q "${bundle[0]}" -d "$permission_probe"
+          test "$(stat -c %a "$permission_probe/run.sh")" = "755"
+          test "$(stat -c %a "$permission_probe/agentkit-linux-x64.tar.gz")" = "644"
+          cat >"$permission_probe_bin/python3" <<'SH'
+          #!/bin/bash
+          set -eu
+          if [[ "$*" == *"veadk.cli.studio_companion"* ]]; then
+            test -r "$VEADK_STUDIO_AGENTKIT_CLI_ARCHIVE"
+            touch "$PERMISSION_PROBE_STATE/companion-started"
+            while [ ! -f "$PERMISSION_PROBE_STATE/studio-started" ]; do sleep 0.01; done
+            exit 0
+          fi
+          touch "$PERMISSION_PROBE_STATE/studio-started"
+          while [ ! -f "$PERMISSION_PROBE_STATE/companion-started" ]; do sleep 0.01; done
+          SH
+          chmod 755 "$permission_probe_bin/python3"
+          direct_stderr="$permission_probe_root/direct.stderr"
+          if sudo -u nobody -H env \
+            PATH="$permission_probe_bin:/usr/bin:/bin" \
+            PERMISSION_PROBE_STATE="$permission_probe_state" \
+            "$permission_probe/run.sh" 2>"$direct_stderr"; then
+            echo "entrypoint accepted an unexpected Studio exit" >&2
+            exit 1
+          fi
+          grep -qx "studio_process_exited_unexpectedly" "$direct_stderr"
+          sudo -u nobody -H rm \
+            "$permission_probe_state/companion-started" \
+            "$permission_probe_state/studio-started"
+          chmod 644 "$permission_probe/run.sh"
+          normalized_stderr="$permission_probe_root/normalized.stderr"
+          if sudo -u nobody -H env \
+            PATH="$permission_probe_bin:/usr/bin:/bin" \
+            PERMISSION_PROBE_STATE="$permission_probe_state" \
+            bash "$permission_probe/run.sh" 2>"$normalized_stderr"; then
+            echo "normalized entrypoint accepted an unexpected Studio exit" >&2
+            exit 1
+          fi
+          grep -qx "studio_process_exited_unexpectedly" "$normalized_stderr"
+
+          smoke_studio() {
+            provider="$1"
+            port="$2"
+            package_dir="$RUNNER_TEMP/studio-release-package-${provider}"
+            runtime_venv="$RUNNER_TEMP/studio-release-runtime-${provider}"
+            log="$RUNNER_TEMP/studio-${provider}.log"
+            response="$RUNNER_TEMP/studio-${provider}-ui-config.json"
+            export package_dir
+            test ! -e "$package_dir"
+            test ! -e "$runtime_venv"
+            uv run --frozen --group dev python - <<'PY'
           import os
           from pathlib import Path
 
@@ -229,37 +291,11 @@ jobs:
           bundle = next(output_dir.glob("studio-bundle-*.zip"))
           extract_studio_bundle(bundle, Path(os.environ["package_dir"]))
           PY
-
-          uv venv "$runtime_venv"
-          (
-            cd "$package_dir"
-            uv pip install --python "$runtime_venv/bin/python" -r requirements.txt
-          )
-
-          (
-            cd "$package_dir"
-            "$runtime_venv/bin/python" - <<'PY'
-          from pathlib import Path
-
-          import frontend
-          import veadk
-          import frontend.server.cronjobs
-          import frontend.service.studio_release_server
-          import frontend.service.studio_scheduler
-
-          runtime_root = Path(veadk.__file__).resolve().parents[1]
-          assert Path(frontend.__file__).resolve().is_relative_to(runtime_root)
-          webui = Path(veadk.__file__).resolve().parent / "webui" / "index.html"
-          assert webui.is_file()
-          print(f"Validated installed Studio packages from {runtime_root}")
-          PY
-          )
-
-          smoke_studio() {
-            provider="$1"
-            port="$2"
-            log="$RUNNER_TEMP/studio-${provider}.log"
-            response="$RUNNER_TEMP/studio-${provider}-ui-config.json"
+            uv venv --python 3.12 "$runtime_venv"
+            (
+              cd "$package_dir"
+              uv pip install --python "$runtime_venv/bin/python" -r requirements.txt
+            )
             (
               cd "$package_dir"
               PATH="$runtime_venv/bin:$PATH" \
@@ -269,7 +305,8 @@ jobs:
                 ./run.sh
             ) >"$log" 2>&1 &
             pid=$!
-            for _ in {1..60}; do
+            started=$SECONDS
+            while (( SECONDS - started < COLD_START_DEADLINE_SECONDS )); do
               if ! kill -0 "$pid" 2>/dev/null; then
                 cat "$log"
                 return 1
@@ -297,6 +334,27 @@ jobs:
 
           smoke_studio byteplus 18877
           smoke_studio volcengine 18878
+
+          package_dir="$RUNNER_TEMP/studio-release-package-volcengine"
+          runtime_venv="$RUNNER_TEMP/studio-release-runtime-volcengine"
+          (
+            cd "$package_dir"
+            "$runtime_venv/bin/python" - <<'PY'
+          from pathlib import Path
+
+          import frontend
+          import veadk
+          import frontend.server.cronjobs
+          import frontend.service.studio_release_server
+          import frontend.service.studio_scheduler
+
+          runtime_root = Path(veadk.__file__).resolve().parents[1]
+          assert Path(frontend.__file__).resolve().is_relative_to(runtime_root)
+          webui = Path(veadk.__file__).resolve().parent / "webui" / "index.html"
+          assert webui.is_file()
+          print(f"Validated installed Studio packages from {runtime_root}")
+          PY
+          )
 
   release-context:
     if: >-

@@ -48,6 +48,7 @@ __all__ = [
     "McpRecovery",
     "merge_mcp_recoveries",
     "mcp_reuse_supplied_credentials",
+    "mcp_editor_credential_values",
     "mcp_editor_draft_without_credentials",
     "mcp_secret_values_for_draft_references",
     "mcp_secret_values_from_runtime_environment",
@@ -1130,6 +1131,56 @@ def mcp_editor_draft_without_credentials(
     return sanitized
 
 
+def mcp_editor_credential_values(
+    *,
+    draft: Mapping[str, Any],
+    recovered_values: Mapping[str, str],
+) -> tuple[dict[str, str], ...]:
+    """Return only credentials bound to MCP slots in one trusted draft.
+
+    This helper is intentionally separate from the ordinary editor payload.
+    Callers must enforce Runtime ownership/update permissions and return the
+    result only from a non-cacheable response.
+    """
+
+    credentials: list[dict[str, str]] = []
+    seen_references: set[str] = set()
+    for agent_name, (_path, node) in _draft_node_index(draft).items():
+        raw_tools = node.get("mcpTools")
+        if raw_tools is None:
+            continue
+        if not isinstance(raw_tools, list):
+            raise LegacyRecoveryError("legacy_overlay_mcp_invalid")
+        for raw_tool in raw_tools:
+            if not isinstance(raw_tool, Mapping):
+                raise LegacyRecoveryError("legacy_overlay_mcp_invalid")
+            if str(raw_tool.get("transport") or "http") != "http":
+                continue
+            reference = str(raw_tool.get("authTokenEnv") or "").strip()
+            if not reference:
+                continue
+            if (
+                re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", reference) is None
+                or reference in seen_references
+            ):
+                raise LegacyRecoveryError("legacy_mcp_auth_reference_invalid")
+            seen_references.add(reference)
+            value = str(recovered_values.get(reference) or "")
+            if not value:
+                continue
+            url = _safe_mcp_url(raw_tool.get("url"))
+            credentials.append(
+                {
+                    "agentName": agent_name,
+                    "name": str(raw_tool.get("name") or "").strip(),
+                    "url": url,
+                    "authTokenEnv": reference,
+                    "value": _validated_secret(value),
+                }
+            )
+    return tuple(credentials)
+
+
 def _source_preserving_mcp_configuration(
     draft: Mapping[str, Any],
 ) -> dict[str, list[dict[str, Any]]]:
@@ -1297,7 +1348,11 @@ def recover_mcp_from_runtime_environment(
             payload = json.loads(raw_servers)
         except (TypeError, ValueError) as error:
             raise LegacyRecoveryError("legacy_mcp_servers_json_invalid") from error
-        if not isinstance(payload, list) or not 1 <= len(payload) <= 32:
+        # Managed Sidecar persists an explicit empty list when MCP-capable
+        # components are enabled but the user configured no MCP servers.  That
+        # is a valid, stable state and must survive later source-preserving
+        # updates without manufacturing a server or requiring new input.
+        if not isinstance(payload, list) or len(payload) > 32:
             raise LegacyRecoveryError("legacy_mcp_servers_json_invalid")
         tools: list[dict[str, Any]] = []
         seen_names: set[str] = set()
