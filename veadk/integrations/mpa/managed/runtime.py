@@ -21,7 +21,6 @@ import copy
 import hashlib
 import json
 import time
-import uuid
 
 import httpx
 from sqlalchemy.engine import make_url
@@ -171,20 +170,6 @@ class RuntimeCloud:
         from agentkit.sdk.runtime.types import UpdateRuntimeRequest
 
         await self.call("update_runtime", UpdateRuntimeRequest.model_validate(request))
-
-    async def delete(self, runtime_id):
-        from agentkit.sdk.runtime.types import DeleteRuntimeRequest
-
-        await self.call("delete_runtime", DeleteRuntimeRequest(RuntimeId=runtime_id))
-
-    async def instances(self, runtime_id):
-        from agentkit.sdk.runtime.types import ListRuntimeInstancesRequest
-
-        result = await self.call(
-            "list_runtime_instances",
-            ListRuntimeInstancesRequest(RuntimeId=runtime_id),
-        )
-        return result.get("InstanceItems") or []
 
     async def is_ready(self, runtime):
         nets = {
@@ -357,21 +342,6 @@ class AgentRuntimeDeployer:
             "Runtime deployment is still pending; rerun the same command to resume"
         )
 
-    async def is_empty_failed_create(self, runtime_id):
-        runtime = await self.cloud.get(runtime_id)
-        return not (
-            runtime.get("Status") != "Error"
-            or runtime.get("CurrentVersionNumber") not in (None, 0)
-            or runtime.get("NetworkConfigurations")
-            or await self.cloud.instances(runtime_id)
-        )
-
-    async def replace_empty_failed_create(self, runtime_id):
-        if not await self.is_empty_failed_create(runtime_id):
-            return False
-        await self.cloud.delete(runtime_id)
-        return True
-
     async def deploy(
         self,
         template: dict,
@@ -406,13 +376,6 @@ class AgentRuntimeDeployer:
                 )
             runtime_id = runtime_id or record.get("runtime_id", "")
             current = await self.cloud.get(runtime_id) if runtime_id else None
-            pending_empty_failed = bool(
-                current
-                and record.get("pending")
-                and await self.is_empty_failed_create(runtime_id)
-            )
-            if pending_empty_failed:
-                current = None
             from veadk.integrations.mpa.managed.database import database_name
 
             name = database_name(account, self.region, agent_id)
@@ -573,13 +536,8 @@ class AgentRuntimeDeployer:
                     "An unfinished deployment has different inputs; resume its original configuration first"
                 )
             record.update(pending=True, request_hash=digest)
-            if pending_empty_failed:
-                await self.cloud.delete(runtime_id)
-                record.update(client_token=str(uuid.uuid4()), runtime_id="")
-                runtime_id = ""
             await entry.save(record)
-            created_runtime = not runtime_id
-            if created_runtime:
+            if not runtime_id:
                 # A lost response is retried using the same persisted ClientToken.
                 runtime_id = await self.cloud.create(
                     {**create_desired, "ClientToken": record["client_token"]}
@@ -589,30 +547,7 @@ class AgentRuntimeDeployer:
             await self.databases.seed_runtime(name, agent_id, runtime_id)
         # Cloud endpoint allocation and app initialization must not hold the
         # account lock: app initialization acquires it to provision shared APIG.
-        try:
-            current = await self.wait_platform(runtime_id)
-        except DeploymentError:
-            if not created_runtime or not await self.replace_empty_failed_create(
-                runtime_id
-            ):
-                raise
-            async with self.registry.lock(account, self.region, agent_id) as entry:
-                record = await entry.read()
-                if (
-                    record.get("request_hash") != digest
-                    or record.get("runtime_id") != runtime_id
-                ):
-                    raise DeploymentError(
-                        "Deployment registration changed during Runtime recovery"
-                    )
-                record["client_token"] = str(uuid.uuid4())
-                runtime_id = await self.cloud.create(
-                    {**create_desired, "ClientToken": record["client_token"]}
-                )
-                record["runtime_id"] = runtime_id
-                await entry.save(record)
-                await self.databases.seed_runtime(name, agent_id, runtime_id)
-            current = await self.wait_platform(runtime_id)
+        current = await self.wait_platform(runtime_id)
         validate_runtime(current, agent_id=agent_id, database=name, template=template)
         nets = {
             n["NetworkType"].lower(): n["Endpoint"]

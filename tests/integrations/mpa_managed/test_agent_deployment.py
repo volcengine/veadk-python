@@ -112,7 +112,6 @@ class Cloud:
         self.registry = registry
         self.runtimes = {}
         self.creates = []
-        self.deletes = []
         self.updates = []
         self.lose_create_response = False
         self.spaces = {}
@@ -184,13 +183,6 @@ class Cloud:
     async def update(self, request):
         self.updates.append(request)
         self.runtimes[request["RuntimeId"]].update(request)
-
-    async def instances(self, runtime_id):
-        return copy.deepcopy(self.runtimes[runtime_id].get("InstanceItems") or [])
-
-    async def delete(self, runtime_id):
-        self.deletes.append(runtime_id)
-        self.runtimes.pop(runtime_id)
 
     async def is_ready(self, runtime) -> bool:
         assert not self.registry.mutex.locked(), (
