@@ -16,12 +16,17 @@ import json
 from types import SimpleNamespace
 from unittest.mock import Mock, call
 
+import pytest
 from google.adk.models.llm_request import LlmRequest
+from google.adk.models.llm_response import LlmResponse
 from google.adk.tools.function_tool import FunctionTool
+from google.genai import types
 from opentelemetry.sdk.trace import TracerProvider
 
 from veadk.tracing.telemetry.attributes.extractors.llm_attributes_extractors import (
     llm_gen_ai_request_functions,
+    llm_gen_ai_usage_cache_creation_input_tokens,
+    llm_gen_ai_usage_cache_read_input_tokens,
     llm_gen_ai_usage_output_tokens,
 )
 from veadk.tracing.telemetry.attributes.extractors.types import ExtractorResponse
@@ -116,6 +121,45 @@ def test_missing_output_token_count_is_not_written_to_span():
     ExtractorResponse.update_span(span, "gen_ai.usage.output_tokens", response)
 
     span.set_attribute.assert_not_called()
+
+
+@pytest.mark.parametrize("cached_tokens", [600, 0, None])
+def test_cached_tokens_are_only_reported_as_cache_reads(cached_tokens):
+    params = SimpleNamespace(
+        llm_response=LlmResponse(
+            usage_metadata=types.GenerateContentResponseUsageMetadata(
+                cached_content_token_count=cached_tokens,
+            )
+        )
+    )
+    provider = TracerProvider()
+    try:
+        with provider.get_tracer(__name__).start_as_current_span("cache-usage") as span:
+            ExtractorResponse.update_span(
+                span,
+                "gen_ai.usage.cache_read_input_tokens",
+                llm_gen_ai_usage_cache_read_input_tokens(params),
+            )
+            ExtractorResponse.update_span(
+                span,
+                "gen_ai.usage.cache_creation_input_tokens",
+                llm_gen_ai_usage_cache_creation_input_tokens(params),
+            )
+            expected = (
+                {"gen_ai.usage.cache_read_input_tokens": cached_tokens}
+                if cached_tokens is not None
+                else {}
+            )
+            assert dict(span.attributes) == expected
+    finally:
+        provider.shutdown()
+
+
+def test_missing_usage_omits_cache_attributes():
+    params = SimpleNamespace(llm_response=LlmResponse())
+
+    assert llm_gen_ai_usage_cache_read_input_tokens(params).content is None
+    assert llm_gen_ai_usage_cache_creation_input_tokens(params).content is None
 
 
 def test_falsy_attribute_values_are_written_to_span():

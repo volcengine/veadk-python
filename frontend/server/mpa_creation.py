@@ -1,3 +1,17 @@
+# Copyright (c) 2025 Beijing Volcano Engine Technology Co., Ltd. and/or its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Authorized Studio entry points for VeADK-owned MPA creation."""
 
 from __future__ import annotations
@@ -99,7 +113,8 @@ def mount_mpa_creation_routes(
 
     @app.post("/web/mpa-creation/tasks", status_code=202)
     async def create(request: Request):
-        identity = owner_key(owner(request))
+        studio_runtime_owner = owner(request)
+        identity = owner_key(studio_runtime_owner)
         content = bytearray()
         async for chunk in request.stream():
             content.extend(chunk)
@@ -135,6 +150,7 @@ def mount_mpa_creation_routes(
                 timeout=config.managed.timeout_seconds,
                 images=images,
                 secrets={"openvikingApiKey": openviking_api_key},
+                studio_runtime_owner=studio_runtime_owner,
             )
         except ConfigurationError as exc:
             raise HTTPException(400, str(exc)) from None

@@ -141,9 +141,33 @@ class FeishuBotSetupService:
         return payload
 
 
+class _LazyFeishuBotSetupProvider:
+    """Load QR and HTTP dependencies only when setup is first requested."""
+
+    def __init__(self) -> None:
+        self._delegate: FeishuBotSetupProvider | None = None
+        self._lock = threading.Lock()
+
+    def _resolve(self) -> FeishuBotSetupProvider:
+        if self._delegate is not None:
+            return self._delegate
+        with self._lock:
+            if self._delegate is None:
+                from .feishu_app_registration import FeishuAppRegistrationProvider
+
+                self._delegate = FeishuAppRegistrationProvider()
+        return self._delegate
+
+    def create(self, *, agent_name: str) -> ProviderSession:
+        return self._resolve().create(agent_name=agent_name)
+
+    def poll(self, provider_id: str) -> ProviderResult:
+        return self._resolve().poll(provider_id)
+
+    def cancel(self, provider_id: str) -> None:
+        self._resolve().cancel(provider_id)
+
+
 def create_feishu_bot_setup_service() -> FeishuBotSetupService:
     """Create the service backed by Feishu's official app-registration flow."""
-
-    from .feishu_app_registration import FeishuAppRegistrationProvider
-
-    return FeishuBotSetupService(FeishuAppRegistrationProvider())
+    return FeishuBotSetupService(_LazyFeishuBotSetupProvider())

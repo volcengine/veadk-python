@@ -66,7 +66,7 @@ const componentNotes: Record<string, Record<string, string>> = {
   },
   LongRunningState: {
     steps: "按执行顺序排列：id 为稳定唯一标识，title 为步骤名称，details 支持文字或 React 内容",
-    currentStep: "当前执行步骤的 id，左侧此步骤显示 Loading，右侧展示对应详情；null 表示暂无执行步骤",
+    currentStep: "当前执行步骤的 id；名称向上淡出并滑入下一名称，加载条快速循环滑动，下方无背景 ScrollArea 展示对应详情；null 表示暂无执行步骤",
   },
   ModalButton: {
     label: "触发按钮内容，点击后打开复用 ModalLayout 的弹窗",
@@ -126,8 +126,8 @@ const componentNotes: Record<string, Record<string, string>> = {
     style: "外层容器样式，可调整宽度、内边距或最小高度",
   },
   Loading: {
-    variant: "infinity 无限路径（默认 48 × 24px、2 秒循环）；ring 圆环（默认 40 × 40px、1 秒循环）",
-    size: "图形宽度，单位 px；infinity 高度为宽度的一半，ring 宽高相同且描边按比例缩放",
+    variant: "infinity 无限路径（默认 32 × 16px、2 秒循环）；ring 圆环（默认 20 × 20px、1 秒循环）",
+    size: "图形宽度，数字单位为 px，也支持 CSS 长度；infinity 高度为宽度的一半，ring 宽高相同且描边按比例缩放",
     label: "仅供屏幕阅读器读取的加载状态文案，不显示在图标旁",
     decorative: "设为 true 时隐藏无障碍状态，由按钮等外层提供名称和加载状态",
   },
@@ -152,11 +152,11 @@ const componentNotes: Record<string, Record<string, string>> = {
   },
   Button: {
     loading: "默认 false；只显示居中的 Ring 图标并自动禁用按钮，设置 aria-busy，保留原宽高与无障碍名称",
-    variant: "primary 主按钮、secondary 次按钮、outline 半透明描边按钮，默认高度统一为 32px；ghost 透明按钮、link 链接样式按钮",
-    size: "default 保留各变体原始尺寸；large 为 36px，Header 的两个按钮共用；compact 仅用于 iconOnly，20 × 20px 且无内边距，Modal 关闭按钮复用",
-    iconOnly: "纯图标按钮，默认 28 × 28px，large 为 36 × 36px；图标通过 startIcon 传入，需提供 aria-label，可组合不同 variant",
+    variant: "primary 主按钮、secondary 次按钮、outline 半透明描边按钮、ghost 透明按钮、link 链接样式按钮、pill 胶囊按钮；各样式共享尺寸选项，文字按钮默认高度为 32px",
+    size: "compact / default / large 的文字按钮高度为 28 / 32 / 36px，字号为 12 / 14 / 16px，图标为 14 / 16 / 18px，各样式共用；iconOnly 高度为 20 / 28 / 36px",
+    iconOnly: "纯图标按钮，compact / default / large 为 20 / 28 / 36px 方形，统一 6px 圆角；图标通过 startIcon 传入，需提供 aria-label，可组合不同 variant",
     hoverEffect: "ghost 纯图标按钮支持 background（默认，悬停显示背景）与 icon（仅高亮图标，悬停和按下均保持透明背景），两种使用相同尺寸与明暗主题 tokens",
-    endIcon: "右侧图标；link 样式下尺寸跟随字号，悬停或键盘聚焦时与文字下方虚线一起淡入，移开淡出",
+    endIcon: "右侧图标，尺寸跟随字号；link 样式下在悬停或键盘聚焦时与文字下方虚线一起淡入，移开淡出",
   },
   Radio: {
     name: "同一组 Radio 使用相同 name，只能选中一项",
@@ -246,7 +246,7 @@ const componentNotes: Record<string, Record<string, string>> = {
 
 const commonNative = new Set(["children", "className", "style", "id", "value", "defaultValue", "checked", "defaultChecked", "disabled", "readOnly", "onChange", "onClick", "name", "placeholder", "required", "maxLength", "type", "htmlFor", "aria-label"]);
 
-export function ComponentApi({ names }: { names: string[] }) {
+export function ComponentApi({ names }: { names: readonly string[] }) {
   return <div className="component-api">
     {names.map(name => {
       const doc = docs[name];

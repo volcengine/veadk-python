@@ -162,7 +162,7 @@ class PortalMetricRecorder:
 
     Metrics Collected:
     - LLM invocation counts and frequencies
-    - Token consumption (input/output) with histogram distribution
+    - Token consumption (input/output/cache_read) with histogram distribution
     - Operation latency with performance bucket analysis
     - Error rates and exception details
     - Span-level performance metrics for APMPlus dashboards
@@ -258,7 +258,7 @@ class PortalMetricRecorder:
 
         Metrics Recorded:
         - Invocation count with model and operation attributes
-        - Input/output token usage with separate tracking
+        - Input/output token usage and the cached subset of input tokens
         - Operation duration from span timing data
         - Error counts and exception details
         - Span latency for performance analysis
@@ -290,6 +290,7 @@ class PortalMetricRecorder:
             # upload token usage
             input_token = llm_response.usage_metadata.prompt_token_count
             output_token = llm_response.usage_metadata.candidates_token_count
+            cache_read_token = llm_response.usage_metadata.cached_content_token_count
 
             if input_token:
                 token_attributes = {**attributes, "gen_ai_token_type": "input"}
@@ -297,6 +298,10 @@ class PortalMetricRecorder:
             if output_token:
                 token_attributes = {**attributes, "gen_ai_token_type": "output"}
                 self.token_usage.record(output_token, attributes=token_attributes)
+            # Cache reads are already included in input tokens, not extra usage
+            if cache_read_token is not None:
+                token_attributes = {**attributes, "gen_ai_token_type": "cache_read"}
+                self.token_usage.record(cache_read_token, attributes=token_attributes)
 
             # Get llm duration
             span = trace.get_current_span()

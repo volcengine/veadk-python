@@ -18,10 +18,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-import volcenginesdkcore
-import volcenginesdkid as sdk
 from urllib3.exceptions import HTTPError
-from volcenginesdkcore.rest import ApiException
 
 from veadk.utils.cloud_provider import (
     CloudProvider,
@@ -30,6 +27,13 @@ from veadk.utils.cloud_provider import (
 )
 
 from .errors import UserManagementError
+
+
+def _identity_sdk() -> Any:
+    """Load generated Identity models only when a directory call is made."""
+    import volcenginesdkid
+
+    return volcenginesdkid
 
 
 @dataclass(frozen=True)
@@ -81,9 +85,21 @@ class IdentityDirectory:
         self.region = region
         self.credentials = credentials
 
+    def _resolve_credentials(self) -> tuple[str, str, str | None]:
+        try:
+            return self.credentials()
+        except UserManagementError:
+            raise
+        except Exception as error:
+            raise UserManagementError(503, "identity_unavailable") from error
+
     def _call(self, action: str, body: Any) -> Any:
+        import volcenginesdkcore
+        from volcenginesdkcore.rest import ApiException
+
+        sdk = _identity_sdk()
         # Resolve credentials for each call so rotating cloud credentials remain valid
-        ak, sk, token = self.credentials()
+        ak, sk, token = self._resolve_credentials()
         # The generated SDK types host as None although it accepts URL strings
         config: Any = volcenginesdkcore.Configuration()
         config.ak, config.sk, config.session_token = ak, sk, token or ""
@@ -102,6 +118,7 @@ class IdentityDirectory:
             raise UserManagementError(503, "identity_unavailable") from error
 
     def users(self) -> list[PoolUser]:
+        sdk = _identity_sdk()
         users: list[PoolUser] = []
         page = 1
         while True:
@@ -120,6 +137,7 @@ class IdentityDirectory:
             page += 1
 
     def user(self, uid: str) -> PoolUser:
+        sdk = _identity_sdk()
         return PoolUser.from_sdk(
             self._call(
                 "get_user",
@@ -131,6 +149,7 @@ class IdentityDirectory:
         )
 
     def groups(self) -> list[IdentityGroup]:
+        sdk = _identity_sdk()
         groups: list[IdentityGroup] = []
         page = 1
         while True:
@@ -152,6 +171,7 @@ class IdentityDirectory:
             page += 1
 
     def create_group(self, name: str, description: str) -> IdentityGroup:
+        sdk = _identity_sdk()
         result = self._call(
             "create_group",
             sdk.CreateGroupRequest(
@@ -163,6 +183,7 @@ class IdentityDirectory:
         return IdentityGroup(result.uid, name, description)
 
     def describe_group(self, uid: str, description: str) -> None:
+        sdk = _identity_sdk()
         self._call(
             "update_group",
             sdk.UpdateGroupRequest(
@@ -173,6 +194,7 @@ class IdentityDirectory:
         )
 
     def add(self, group_uid: str, user_uid: str) -> None:
+        sdk = _identity_sdk()
         self._call(
             "add_users_to_group",
             sdk.AddUsersToGroupRequest(
@@ -183,6 +205,7 @@ class IdentityDirectory:
         )
 
     def remove(self, group_uid: str, user_uid: str) -> None:
+        sdk = _identity_sdk()
         self._call(
             "remove_users_from_group",
             sdk.RemoveUsersFromGroupRequest(

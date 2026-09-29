@@ -220,6 +220,32 @@ def normalize_studio_harness_intent(value: Any | None) -> StudioHarnessIntent:
     )
 
 
+def studio_harness_selectable_intent_signature(
+    value: Any | None,
+) -> tuple[bool, str, tuple[tuple[str, bool], ...]]:
+    """Return the stable selectable meaning of one Studio Sidecar intent.
+
+    The legacy ``ops`` preset stored only its explicitly enabled gateway option,
+    while current Studio drafts expand the preset's fixed components.  Those
+    representations mean the same thing.  The default profile remains fully
+    explicit so custom/default-profile changes are never weakened.
+    """
+
+    intent = normalize_studio_harness_intent(value)
+    overrides = dict(intent.component_overrides)
+    if intent.enabled and intent.profile == "ops":
+        for component_id in STUDIO_HARNESS_PROFILE_DEFAULTS["ops"]:
+            overrides[component_id] = True
+    return (
+        intent.enabled,
+        intent.profile,
+        tuple(
+            (component_id, overrides[component_id])
+            for component_id in STUDIO_HARNESS_COMPONENT_IDS
+        ),
+    )
+
+
 def studio_harness_intent_payload(value: Any | None) -> dict[str, Any]:
     """Return the stable camelCase Draft/YAML representation."""
 
@@ -682,5 +708,6 @@ __all__ = [
     "sidecar_config_from_env",
     "studio_harness_env_example",
     "studio_harness_intent_payload",
+    "studio_harness_selectable_intent_signature",
     "studio_harness_runtime_env",
 ]

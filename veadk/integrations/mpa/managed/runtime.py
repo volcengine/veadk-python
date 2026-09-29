@@ -1,3 +1,17 @@
+# Copyright (c) 2025 Beijing Volcano Engine Technology Co., Ltd. and/or its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Deployment of a Runtime, persistent database and Skill Space per agent."""
 
 from __future__ import annotations
@@ -12,6 +26,7 @@ import httpx
 from sqlalchemy.engine import make_url
 
 from veadk.integrations.mpa.managed.database import DeploymentError, agent_suffix
+from veadk.integrations.mpa.tags import MPA_AGENT_TYPE_TAG, MPA_AGENT_TYPE_VALUE
 from veadk.integrations.mpa.managed.network import (
     AccountNetworkProvisioner,
     NetworkOptions,
@@ -324,7 +339,13 @@ class AgentRuntimeDeployer:
             "Runtime deployment is still pending; rerun the same command to resume"
         )
 
-    async def deploy(self, template: dict, *, runtime_id: str = "") -> dict:
+    async def deploy(
+        self,
+        template: dict,
+        *,
+        runtime_id: str = "",
+        legacy_tag_items: list[dict] | None = None,
+    ) -> dict:
         from agentkit.sdk.runtime.types import CreateRuntimeRequest
         from veadk.integrations.mpa.managed.skills import ensure_skill_space
 
@@ -447,25 +468,48 @@ class AgentRuntimeDeployer:
             tags = [
                 t
                 for t in desired.get("Tags", [])
-                if t["Key"] != "veadk:agent-type" and not t["Key"].startswith("sys:")
+                if t["Key"] != MPA_AGENT_TYPE_TAG and not t["Key"].startswith("sys:")
             ]
-            desired["Tags"] = tags + [{"Key": "veadk:agent-type", "Value": "mpa"}]
+            desired["Tags"] = tags + [
+                {"Key": MPA_AGENT_TYPE_TAG, "Value": MPA_AGENT_TYPE_VALUE}
+            ]
+            create_desired = desired
             digest = hashlib.sha256(
                 json.dumps(desired, sort_keys=True, separators=(",", ":")).encode()
             ).hexdigest()
             if record.get("pending") and record.get("request_hash") != digest:
                 candidates = [desired]
-                if env["SHARED_APIG_DATABASE_URL"] != self.shared_url:
-                    legacy_env = {**env, "SHARED_APIG_DATABASE_URL": self.shared_url}
+                if legacy_tag_items is not None:
+                    legacy_tags = [
+                        dict(item)
+                        for item in legacy_tag_items
+                        if item["Key"] != MPA_AGENT_TYPE_TAG
+                        and not item["Key"].startswith("sys:")
+                    ]
                     candidates.append(
                         {
                             **desired,
+                            "Tags": legacy_tags
+                            + [
+                                {
+                                    "Key": MPA_AGENT_TYPE_TAG,
+                                    "Value": MPA_AGENT_TYPE_VALUE,
+                                }
+                            ],
+                        }
+                    )
+                if env["SHARED_APIG_DATABASE_URL"] != self.shared_url:
+                    legacy_env = {**env, "SHARED_APIG_DATABASE_URL": self.shared_url}
+                    candidates += [
+                        {
+                            **candidate,
                             "Envs": [
                                 {"Key": k, "Value": v}
                                 for k, v in sorted(legacy_env.items())
                             ],
                         }
-                    )
+                        for candidate in list(candidates)
+                    ]
                 if not runtime_id:
                     candidates += [
                         {**candidate, "Name": "mpa-agent-" + suffix}
@@ -482,7 +526,7 @@ class AgentRuntimeDeployer:
                         # A lost create response requires the original payload
                         # and token. Finalization below uses the normalized env.
                         if not runtime_id:
-                            desired = candidate
+                            create_desired = candidate
                         break
             if record.get("pending") and record.get("request_hash") != digest:
                 raise DeploymentError(
@@ -493,7 +537,7 @@ class AgentRuntimeDeployer:
             if not runtime_id:
                 # A lost response is retried using the same persisted ClientToken.
                 runtime_id = await self.cloud.create(
-                    {**desired, "ClientToken": record["client_token"]}
+                    {**create_desired, "ClientToken": record["client_token"]}
                 )
             record["runtime_id"] = runtime_id
             await entry.save(record)

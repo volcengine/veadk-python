@@ -40,7 +40,7 @@ export function TableHeaderControlsPreview() {
   ];
 
   return <section className="table-preview__example" aria-labelledby="table-header-controls-title">
-    <h3 id="table-header-controls-title" className="table-preview__heading">表头排序与筛选</h3>
+    <h2 data-preview-heading tabIndex={-1} id="table-header-controls-title" className="table-preview__heading">表头排序与筛选</h2>
     <p className="table-preview__description">点击 Score 箭头切换升序、降序和原顺序；Result 可筛选 Pass 或 Fail</p>
     <Table aria-label="Cases with header controls" columns={columns} data={visibleRows} rowKey={row => row.id} minWidth={640} maxHeight={320} hideScrollbar={false} emptyContent="No matching cases" />
     <p className="table-preview__feedback" role="status">{visibleRows.length} / {cases.length} cases · {direction === "asc" ? "Score ascending" : direction === "desc" ? "Score descending" : "Original order"}</p>

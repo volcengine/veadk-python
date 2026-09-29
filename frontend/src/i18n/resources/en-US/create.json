@@ -206,8 +206,8 @@
     }
   },
   "intelligent": {
-    "title": "Intelligent mode",
-    "subtitle": "Describe your goal and Codex will plan, build, debug, and temporarily validate the agent in a sandbox.",
+    "title": "Intelligent build",
+    "subtitle": "Describe what you need. Build, debug, and validate your agent.",
     "model": {
       "label": "Model",
       "placeholder": "Select a model",
@@ -241,6 +241,29 @@
       "preparing": "Creating the task environment…",
       "starting": "Environment ready. Starting Codex…",
       "next": "Next, Codex will plan the approach, then build, run, and validate the agent."
+    },
+    "tasks": {
+      "title": "Tasks in progress",
+      "hint": "Work continues when you leave. Return to follow progress or add instructions.",
+      "refresh": "Refresh tasks",
+      "loading": "Loading tasks…",
+      "empty": "No tasks in progress",
+      "emptyHint": "Once a build starts, you can return to it here.",
+      "loadError": "Unable to load tasks. Please retry.",
+      "openError": "Unable to open this task. Please retry.",
+      "startedAt": "Started {{time}}",
+      "open": "Open task",
+      "opening": "Connecting…",
+      "states": {
+        "queued": "Queued",
+        "running": "Building",
+        "recovering": "Reconnecting",
+        "waiting_user": "Awaiting your reply",
+        "stopping": "Stopping",
+        "succeeded": "Completed",
+        "failed": "Incomplete",
+        "cancelled": "Stopped"
+      }
     }
   },
   "projectLibrary": {
@@ -697,7 +720,6 @@
       },
       "duplicateName": "Agent names must be unique within this structure",
       "missingDescription": "Description is required",
-      "mcpAuthRequired": "Confirm how to handle authentication after changing the MCP address",
       "mcpDuplicateName": "MCP names must be unique",
       "mcpDuplicateUrl": "Remove the duplicate MCP endpoint before publishing",
       "missingSubagent": "A subagent is required",
@@ -1076,16 +1098,9 @@
       "namePlaceholder": "Name (optional)",
       "urlPlaceholder": "MCP service URL",
       "pathWarning": "This is a gateway root address. Use it only when the root path is the MCP endpoint; otherwise include the complete service path.",
-      "configuredPlaceholder": "Authentication is stored securely",
       "tokenPlaceholder": "Bearer token (optional)",
-      "changedUrlWarning": "The MCP address changed. Choose how to handle the stored authentication.",
-      "reuseCredential": "Keep using it",
-      "replaceCredential": "Replace authentication",
-      "noAuth": "Use no authentication",
-      "reuseHint": "The stored authentication will be reused when you publish.",
-      "changeToReplace": "Replace instead",
-      "credentialConfigured": "Studio securely stores the authentication.",
-      "removeCredential": "Remove authentication",
+      "showToken": "Show Bearer token",
+      "hideToken": "Hide Bearer token",
       "commandPlaceholder": "Command, such as npx",
       "argsPlaceholder": "Arguments separated by spaces",
       "stdioHint": "The stdio tool starts in the deployment environment. Make sure its command and dependencies are available.",
@@ -1283,5 +1298,26 @@
     "directories_one": "{{count}} directory",
     "directories_other": "{{count}} directories",
     "separator": ", "
+  },
+  "modelApiKey": {
+    "enabled": "Enabled",
+    "disabled": "Disabled",
+    "unknownStatus": "Unknown status",
+    "allPermissions": "All permissions",
+    "customPermissions": "Custom permissions",
+    "unknownPermissions": "Unknown permissions",
+    "unnamed": "Unnamed API Key",
+    "search": "Search name, status or permissions",
+    "noMatches": "No matching API Keys",
+    "noModelPermission": "Not permitted by this API Key",
+    "modelAvailable": "Available",
+    "permissionState": {
+      "Available": "Available for chat",
+      "Shutdown": "Shut down",
+      "VideoGeneration": "Video generation model",
+      "Unsupported": "Not a chat model",
+      "NotActivated": "Not activated",
+      "Unknown": "Model status unavailable"
+    }
   }
 }

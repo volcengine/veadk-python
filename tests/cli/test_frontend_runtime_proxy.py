@@ -708,6 +708,7 @@ def test_runtime_tool_capabilities_expose_safe_local_metadata(
         "execute_in_sandbox",
         "get_env_manifest",
         "list_envs",
+        "studio_write_artifact",
     }
     assert all("input_schema" not in item for item in body["tools"])
 
@@ -2451,7 +2452,10 @@ def test_runtime_list_filters_agent_category_before_pagination(
                     "tag_filters": tag_filters,
                 }
             )
-            if tag_filters == [("veadk:agent-type", ("mpa",))]:
+            if tag_filters == [
+                ("veadk:agent-type", ("mpa",)),
+                ("veadk:managed", ("true",)),
+            ]:
                 return SimpleNamespace(
                     resource_tag_mapping_list=[
                         SimpleNamespace(
@@ -2465,7 +2469,8 @@ def test_runtime_list_filters_agent_category_before_pagination(
                                 SimpleNamespace(
                                     key="veadk:agent-type",
                                     value="mpa",
-                                )
+                                ),
+                                SimpleNamespace(key="veadk:managed", value="true"),
                             ],
                         )
                     ],
@@ -2483,7 +2488,8 @@ def test_runtime_list_filters_agent_category_before_pagination(
                             SimpleNamespace(
                                 key="veadk:agent-type",
                                 value="mpa",
-                            )
+                            ),
+                            SimpleNamespace(key="veadk:managed", value="true"),
                         ],
                     )
                 ],
@@ -2524,7 +2530,10 @@ def test_runtime_list_filters_agent_category_before_pagination(
     assert {
         "trns": (),
         "resource_type_filters": ("agentkit:runtime",),
-        "tag_filters": [("veadk:agent-type", ("mpa",))],
+        "tag_filters": [
+            ("veadk:agent-type", ("mpa",)),
+            ("veadk:managed", ("true",)),
+        ],
     } in tag_calls
     assert list_calls_after_mpa == []
     assert ("cn-beijing", "0", 2) in list_calls
@@ -2581,6 +2590,7 @@ def test_runtime_list_filters_mpa_owner_with_tag_service(
             tag_calls.append(filters)
             assert filters == [
                 ("veadk:agent-type", ("mpa",)),
+                ("veadk:managed", ("true",)),
                 ("veadk:owner", ("developer",)),
             ]
             return SimpleNamespace(
@@ -2589,6 +2599,7 @@ def test_runtime_list_filters_mpa_owner_with_tag_service(
                         resource_id="runtime-owned-mpa",
                         tags=[
                             SimpleNamespace(key="veadk:agent-type", value="mpa"),
+                            SimpleNamespace(key="veadk:managed", value="true"),
                             SimpleNamespace(key="veadk:owner", value="developer"),
                             SimpleNamespace(key="veadk:author", value="developer"),
                         ],
@@ -2614,9 +2625,135 @@ def test_runtime_list_filters_mpa_owner_with_tag_service(
     assert tag_calls == [
         [
             ("veadk:agent-type", ("mpa",)),
+            ("veadk:managed", ("true",)),
             ("veadk:owner", ("developer",)),
         ]
     ]
+
+
+@pytest.mark.parametrize(
+    ("detail_error", "expected_status"),
+    [
+        (RuntimeError("InvalidAgentKitRuntime.NotFound: stale tag"), 200),
+        (RuntimeError("Runtime detail permission denied"), 502),
+    ],
+)
+def test_mpa_runtime_list_distinguishes_stale_tags_from_hydration_failures(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    detail_error: Exception,
+    expected_status: int,
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path)
+
+    class _FakeRuntimeClient:
+        def __init__(self, **kwargs: Any) -> None:
+            del kwargs
+
+        def list_runtimes(self, _request: Any) -> SimpleNamespace:
+            raise AssertionError("MPA category must not scan Runtime list pages")
+
+        def get_runtime(self, _request: Any) -> SimpleNamespace:
+            raise detail_error
+
+    monkeypatch.setattr(
+        "agentkit.sdk.runtime.client.AgentkitRuntimeClient", _FakeRuntimeClient
+    )
+
+    class _FakeTagApi:
+        def __init__(self, _api_client: object) -> None:
+            pass
+
+        def get_resources(self, _request: Any) -> SimpleNamespace:
+            return SimpleNamespace(
+                resource_tag_mapping_list=[
+                    SimpleNamespace(
+                        resource_id="runtime-tagged",
+                        tags=[
+                            SimpleNamespace(key="veadk:agent-type", value="mpa"),
+                            SimpleNamespace(key="veadk:managed", value="true"),
+                        ],
+                    )
+                ],
+                next_token="",
+            )
+
+    monkeypatch.setattr("volcenginesdktag.TAGApi", _FakeTagApi)
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/web/runtimes",
+            params={
+                "region": "cn-beijing",
+                "page_size": 2,
+                "agentCategory": "mpa",
+            },
+        )
+
+    assert response.status_code == expected_status
+    if expected_status == 200:
+        assert response.json() == {"runtimes": [], "nextToken": ""}
+
+
+def test_mpa_runtime_list_ignores_cross_region_tag_mappings_before_hydration(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path)
+    get_calls: list[str] = []
+
+    class _FakeRuntimeClient:
+        def __init__(self, **kwargs: Any) -> None:
+            del kwargs
+
+        def list_runtimes(self, _request: Any) -> SimpleNamespace:
+            raise AssertionError("MPA category must not scan Runtime list pages")
+
+        def get_runtime(self, request: Any) -> SimpleNamespace:
+            get_calls.append(request.runtime_id)
+            raise AssertionError("cross-region mappings must not be hydrated")
+
+    monkeypatch.setattr(
+        "agentkit.sdk.runtime.client.AgentkitRuntimeClient", _FakeRuntimeClient
+    )
+
+    class _FakeTagApi:
+        def __init__(self, _api_client: object) -> None:
+            pass
+
+        def get_resources(self, _request: Any) -> SimpleNamespace:
+            return SimpleNamespace(
+                resource_tag_mapping_list=[
+                    SimpleNamespace(
+                        resource_id="runtime-other-region",
+                        resource_trn=(
+                            "trn:agentkit:cn-shanghai:account:"
+                            "runtime/runtime-other-region"
+                        ),
+                        tags=[
+                            SimpleNamespace(key="veadk:agent-type", value="mpa"),
+                            SimpleNamespace(key="veadk:managed", value="true"),
+                        ],
+                    )
+                ],
+                next_token="",
+            )
+
+    monkeypatch.setattr("volcenginesdktag.TAGApi", _FakeTagApi)
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/web/runtimes",
+            params={
+                "region": "cn-beijing",
+                "page_size": 2,
+                "agentCategory": "mpa",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"runtimes": [], "nextToken": ""}
+    assert get_calls == []
 
 
 def test_mpa_agent_view_resolves_runtime_by_mpa_instance_tag(
@@ -3668,10 +3805,13 @@ def test_runtime_proxy_retry_policy(
     app = _create_frontend_app(monkeypatch, tmp_path, provider=provider)
     runtime_client_regions: list[str] = []
 
-    async def _noop_sleep(delay: float) -> None:
-        pass
+    real_sleep = cli_frontend.asyncio.sleep
 
-    monkeypatch.setattr("veadk.cli.cli_frontend.asyncio.sleep", _noop_sleep)
+    async def _yield_sleep(delay: float) -> None:
+        # Background Studio tasks share asyncio.sleep and must still yield.
+        await real_sleep(0)
+
+    monkeypatch.setattr("veadk.cli.cli_frontend.asyncio.sleep", _yield_sleep)
 
     class _FakeRuntimeClient:
         def __init__(self, **kwargs: Any) -> None:

@@ -1,3 +1,7 @@
+import { SandboxSpinnerIcon } from "./ui/icons/SandboxControlIcons";
+import { useDevelopmentRun } from "./create/useDevelopmentRun";
+import { developmentRunStatus } from "./create/developmentPresentation";
+import { DevelopmentTaskNotice, type DevelopmentTaskSnapshot } from "./create/DevelopmentTaskNotice";
 import { UserManagement } from "./users/UserManagement";
 import { SandboxFileContext } from "./ui/SandboxFileLink";
 import {
@@ -40,6 +44,7 @@ import {
   getSession,
   getStudioAccess,
   getRuntimeStudioToolCapabilities,
+  getRuntimeMcpCredentials,
   getRuntimes,
   isMpaRuntimeApp,
   isMpaA2aRuntimeApp,
@@ -133,6 +138,7 @@ import { SystemInfo } from "./ui/SystemInfo";
 import { DeveloperResources } from "./ui/DeveloperResources";
 import { ReviewCenter } from "./reviews/ReviewCenter";
 import { GitHubIntegration } from "./ui/GitHubIntegration";
+import { GitLabIntegration } from "./ui/GitLabIntegration";
 import { FeishuBotIntegration } from "./automations/feishu/FeishuBotIntegration";
 import { CodingAgentsIntegration } from "./automations/coding-agents/CodingAgentsIntegration";
 import type { AutomationCategoryId } from "./automations/types";
@@ -155,6 +161,7 @@ import {
 } from "./adk/connections";
 import { defaultCloudRegion, formatCloudRegion } from "./adk/cloudProvider";
 import { Blocks, ThinkingPlaceholder } from "./ui/Blocks";
+import { RuntimeArtifacts } from "./runtime-artifacts/RuntimeArtifacts";
 import { Composer } from "./ui/Composer";
 import { InvocationChips } from "./ui/InvocationChips";
 import { MediaGroup } from "./ui/Media";
@@ -174,7 +181,10 @@ import { WorkspaceCreate, WorkspaceCreateIcon } from "./create/WorkspaceCreate";
 import { CodePackageCreate } from "./create/CodePackageCreate";
 import { MigrationWorkspace } from "./migrations/MigrationWorkspace";
 import type { AgentDraft } from "./create/types";
-import { configuredMcpEnvKeys } from "./create/mcpAuth";
+import {
+  configuredMcpEnvKeys,
+  hydrateMcpCredentialValues,
+} from "./create/mcpAuth";
 import {
   hydrateRuntimeModelSelection,
   isRuntimeModelSelectionEnv,
@@ -210,7 +220,6 @@ import {
   intelligentDevelopmentErrorMessage,
   intelligentDevelopmentClient,
   sandboxClient,
-  SandboxServiceError,
   type SandboxApproval,
   type SandboxApprovalDecision,
   type SandboxAgentResource,
@@ -869,7 +878,7 @@ function turnHasVisibleContent(turn: Turn): boolean {
     if (b.kind === "text") return b.text.trim().length > 0;
     if (b.kind === "attachment") return b.files.length > 0;
     if (b.kind === "artifact") return b.files.length > 0;
-    if (b.kind === "delivery") return true;
+    if (b.kind === "delivery" || b.kind === "turn-summary") return true;
     if (b.kind === "tool") return !(b.name === A2UI_TOOL_NAME && b.done);
     if (b.kind === "agent-transfer") return false;
     if (b.kind === "a2ui") return buildSurfaces(b.messages).some((s) => s.components[s.rootId]);
@@ -1253,13 +1262,8 @@ export default function App() {
   const sandboxLaunchAbortRef = useRef<AbortController | null>(null);
   const sandboxLaunchCapabilityAbortRef = useRef<AbortController | null>(null);
   const intelligentCreateAbortRef = useRef<AbortController | null>(null);
+  const intelligentCreateFocusRef = useRef<HTMLElement | null>(null);
   const sandboxMessageAbortRef = useRef<AbortController | null>(null);
-  const pendingIntelligentNavigationRef = useRef<(() => void) | null>(null);
-  const [intelligentLeaveOpen, setIntelligentLeaveOpen] = useState(false);
-  const sandboxStopWaitRef = useRef<{
-    controller: AbortController;
-    promise: Promise<boolean>;
-  } | null>(null);
   const sandboxSessionIdRef = useRef(sandboxSession?.id ?? "");
   const sandboxActiveAssistantTurnIdRef = useRef("");
   const sandboxUploadRunRef = useRef(0);
@@ -1395,6 +1399,9 @@ export default function App() {
     useState(true);
   const [intelligentCapabilitiesError, setIntelligentCapabilitiesError] =
     useState("");
+  const [developmentTaskSnapshot, setDevelopmentTaskSnapshot] = useState<DevelopmentTaskSnapshot>();
+  const [developmentTaskRefreshKey, setDevelopmentTaskRefreshKey] = useState(0);
+  const [intelligentPreparationMessage, setIntelligentPreparationMessage] = useState("");
   const [intelligentPreparationStage, setIntelligentPreparationStage] =
     useState<IntelligentPreparationStage | null>(null);
   const [migrationProjectReturn, setMigrationProjectReturn] = useState<{
@@ -1976,7 +1983,7 @@ export default function App() {
   });
   useEffect(() => {
     const activeSession = sandboxSession;
-    if (!activeSession || !sandboxBusy || sandboxMessageAbortRef.current) return;
+    if (!activeSession || activeSession.intelligentDevelopment || !sandboxBusy || sandboxMessageAbortRef.current) return;
     let stopped = false;
     let timer: number | undefined;
     const controller = new AbortController();
@@ -2048,6 +2055,15 @@ export default function App() {
       if (timer !== undefined) window.clearTimeout(timer);
     };
   }, [sandboxBusy, sandboxSession?.id]);
+  const development = useDevelopmentRun({
+    sessionId: sandboxSession?.intelligentDevelopment ? sandboxSession.id : "",
+    ownerId: userId,
+    onTurns: setSandboxTurns,
+    onBusy: (busy) => {
+      setSandboxBusy(busy);
+      setSandboxSession((current) => current?.intelligentDevelopment ? { ...current, busy } : current);
+    },
+  });
   const rootCapabilityNode = agentInfo?.graph;
   const rootAgentNames = [
     agentInfo?.name,
@@ -2757,8 +2773,7 @@ export default function App() {
       }));
     }
     updateDeploymentTask(linkedTask);
-    openDeploymentDetail(linkedTask);
-  }, [editingDraftId, flushPendingWorkspaceDraft, openDeploymentDetail, updateDeploymentTask]);
+  }, [editingDraftId, flushPendingWorkspaceDraft, updateDeploymentTask]);
 
   const finishDeployment = useCallback(
     async (result: DeployResult) => {
@@ -4060,6 +4075,14 @@ export default function App() {
     setSandboxAgentWorkspace(null);
   }
 
+  async function openIntelligentDevelopmentTask(id: string, signal: AbortSignal) {
+    const connected = await intelligentDevelopmentClient.connectSession(id, { signal });
+    if (signal.aborted) return;
+    setError("");
+    setMigrationProjectReturn(undefined);
+    activateIntelligentDevelopmentSession(connected, []);
+  }
+
   async function openSandboxAgent(
     resource: SandboxAgentResource,
     source: AgentConnectSource = "my_agents",
@@ -4263,7 +4286,7 @@ export default function App() {
     sandboxUploadRunRef.current += 1;
     const closingSession = sandboxSession;
     setSandboxSession(null);
-    if (closingSession && closeRemote) {
+    if (closingSession && closeRemote && !closingSession.intelligentDevelopment) {
       const closingClient = closingSession.intelligentDevelopment
         ? intelligentDevelopmentClient
         : sandboxClient;
@@ -4554,32 +4577,11 @@ export default function App() {
   function stopSandboxGeneration() {
     const controller = sandboxMessageAbortRef.current;
     const activeSession = sandboxSession;
-    if (!controller) return;
     if (activeSession?.intelligentDevelopment) {
-      if (sandboxStopWaitRef.current?.controller === controller) return;
-      const promise = intelligentDevelopmentClient
-        .interruptSession(activeSession.id)
-        .then(() => {
-          if (sandboxStopWaitRef.current?.controller === controller) {
-            controller.abort();
-          }
-          return true;
-        })
-        .catch((cause) => {
-          if (sandboxStopWaitRef.current?.controller === controller) {
-            sandboxStopWaitRef.current = null;
-          }
-          if (
-            sandboxSessionIdRef.current === activeSession.id &&
-            sandboxMessageAbortRef.current === controller
-          ) {
-            setError(cause instanceof Error ? cause.message : String(cause));
-          }
-          return false;
-        });
-      sandboxStopWaitRef.current = { controller, promise };
+      void development.stop();
       return;
     }
+    if (!controller) return;
     controller.abort();
     if (activeSession) {
       void sandboxClient.interruptSession(activeSession.id).catch((cause) => {
@@ -4591,35 +4593,7 @@ export default function App() {
   }
 
   function requestIntelligentNavigation(action: () => void) {
-    if (sandboxSession?.intelligentDevelopment && sandboxBusy) {
-      pendingIntelligentNavigationRef.current = action;
-      setIntelligentLeaveOpen(true);
-      return;
-    }
     action();
-  }
-
-  function confirmIntelligentNavigation() {
-    const activeSession = sandboxSession;
-    const action = pendingIntelligentNavigationRef.current;
-    if (!activeSession?.intelligentDevelopment || !action) {
-      setIntelligentLeaveOpen(false);
-      pendingIntelligentNavigationRef.current = null;
-      return;
-    }
-    setError("");
-    const interrupt = intelligentDevelopmentClient.interruptSession(activeSession.id);
-    sandboxMessageAbortRef.current?.abort();
-    pendingIntelligentNavigationRef.current = null;
-    setIntelligentLeaveOpen(false);
-    action();
-    void interrupt.catch(() => {
-      if (!sandboxSessionIdRef.current) {
-        setError(
-          appText("errors.buildStopUnconfirmed"),
-        );
-      }
-    });
   }
 
   async function sendSandboxMessage(
@@ -4629,6 +4603,11 @@ export default function App() {
     activeSessionOverride?: SandboxSessionInfo,
   ) {
     const activeSession = activeSessionOverride ?? sandboxSession;
+    if (activeSession?.intelligentDevelopment) {
+      const accepted = await development.submit(text.trim(), activeSession.id);
+      if (accepted) setInput((current) => current === text ? "" : current);
+      return;
+    }
     const readyAttachments = messageAttachments.filter(
       (attachment) => attachment.status === "ready" && attachment.uri,
     );
@@ -4711,10 +4690,7 @@ export default function App() {
         ? { ...current, busy: true, workspaceLocked: true }
         : current,
     );
-    const activeClient = activeSession.intelligentDevelopment
-      ? intelligentDevelopmentClient
-      : sandboxClient;
-    let remainingBusy = false;
+    const activeClient = sandboxClient;
     try {
       const reply = await activeClient.sendMessage(
         {
@@ -4816,9 +4792,7 @@ export default function App() {
         }
         return next;
       });
-      if (!activeSession.intelligentDevelopment) {
-        void sandboxCommands.refreshThreads();
-      }
+      void sandboxCommands.refreshThreads();
     } catch (messageError) {
       operation.fail({
         sessionId: String(activeSession.id),
@@ -4831,24 +4805,11 @@ export default function App() {
       if (sandboxMessageAbortRef.current !== controller) {
         return;
       }
-      setSandboxTurns((current) =>
-        current.filter(
-          (turn) =>
-            turn.meta?.localId !== userTurnId &&
-            turn.meta?.localId !== assistantTurnId,
-        ),
-      );
       setInput(text);
       setAttachments(messageAttachments);
       sandboxCommands.setSelectedSkills(selectedSkills);
-      const taskStillRunning =
-        activeSession.intelligentDevelopment &&
-        messageError instanceof SandboxServiceError &&
-        messageError.code === "INTELLIGENT_DEVELOPMENT_TASK_IN_PROGRESS";
-      remainingBusy = activeSession.intelligentDevelopment;
       try {
         const status = await activeClient.getStatus(activeSession.id);
-        remainingBusy = status.busy;
         setSandboxSession((current) =>
           current?.id === activeSession.id
             ? { ...current, ...status }
@@ -4857,58 +4818,33 @@ export default function App() {
       } catch {
         // Keep the optimistic lock when the connection itself is unavailable.
       }
-      if (!taskStillRunning) {
-        setError(
-          activeSession.intelligentDevelopment
-            ? intelligentDevelopmentErrorMessage(messageError)
-            : appText("errors.builtinAgentSendFailed", {
-                message: messageError instanceof Error
-                  ? messageError.message
-                  : String(messageError),
-              }),
-        );
-      }
+      setError(appText("errors.builtinAgentSendFailed", {
+        message: messageError instanceof Error
+          ? messageError.message
+          : String(messageError),
+      }));
     } finally {
       if (sandboxMessageAbortRef.current === controller) {
-        const stopWait = sandboxStopWaitRef.current;
-        if (stopWait?.controller === controller) {
-          const cleanupConfirmed = await stopWait.promise;
-          if (sandboxStopWaitRef.current === stopWait) {
-            sandboxStopWaitRef.current = null;
-          }
-          if (cleanupConfirmed) {
-            setSandboxTurns((current) => current.filter(
-              (turn) =>
-                turn.meta?.localId !== assistantTurnId || turn.blocks.length > 0,
-            ));
-            appendSandboxActivity(activeSession.id, appText("sandbox.stoppedReady"));
-          }
-        }
         sandboxMessageAbortRef.current = null;
         if (sandboxActiveAssistantTurnIdRef.current === assistantTurnId) {
           sandboxActiveAssistantTurnIdRef.current = "";
         }
         setSandboxApproval(null);
-        if (activeSession.intelligentDevelopment) {
-          setSandboxBusy(remainingBusy);
-          setSandboxSession((current) =>
-            current?.id === activeSession.id
-              ? { ...current, busy: remainingBusy }
-              : current,
-          );
-        } else {
-          setSandboxBusy(false);
-          setSandboxSession((current) =>
-            current?.id === activeSession.id
-              ? { ...current, busy: false }
-              : current,
-          );
-        }
+        setSandboxBusy(false);
+        setSandboxSession((current) =>
+          current?.id === activeSession.id
+            ? { ...current, busy: false }
+            : current,
+        );
       }
     }
   }
 
   async function submitSandboxInput(value: string) {
+    if (sandboxSession?.intelligentDevelopment) {
+      await sendSandboxMessage(value);
+      return;
+    }
     if (
       !sandboxSession?.intelligentDevelopment &&
       await sandboxCommands.executeSlash(value)
@@ -4994,6 +4930,11 @@ export default function App() {
     intelligentCreateAbortRef.current?.abort();
     intelligentCreateAbortRef.current = null;
     setIntelligentPreparationStage(null);
+    const trigger = intelligentCreateFocusRef.current;
+    intelligentCreateFocusRef.current = null;
+    requestAnimationFrame(() => {
+      if (trigger?.isConnected && trigger.getClientRects().length) trigger.focus();
+    });
   }
 
   async function startIntelligentDevelopment(
@@ -5006,6 +4947,9 @@ export default function App() {
     intelligentCreateAbortRef.current?.abort();
     const controller = new AbortController();
     intelligentCreateAbortRef.current = controller;
+    intelligentCreateFocusRef.current = document.activeElement instanceof HTMLElement
+      ? document.activeElement : null;
+    setIntelligentPreparationMessage(goal);
     setIntelligentPreparationStage("preparing");
     setIntelligentCapabilitiesError("");
     try {
@@ -5034,12 +4978,17 @@ export default function App() {
         intelligentCreateAbortRef.current !== controller
       ) return;
       if (returnTarget) setMigrationProjectReturn(returnTarget);
-      activateIntelligentDevelopmentSession(connected, []);
+      activateIntelligentDevelopmentSession(connected, development.prepare(goal, connected.id));
       intelligentCreateAbortRef.current = null;
+      intelligentCreateFocusRef.current = null;
       setIntelligentPreparationStage(null);
       await sendSandboxMessage(goal, [], [], connected);
     } catch (cause) {
-      if ((cause as Error)?.name !== "AbortError") {
+      if (
+        !controller.signal.aborted
+        && intelligentCreateAbortRef.current === controller
+        && (cause as Error)?.name !== "AbortError"
+      ) {
         setIntelligentCapabilitiesError(
           cause instanceof Error
             ? cause.message
@@ -7027,6 +6976,11 @@ export default function App() {
 
   return (
     <div className="layout">
+      <DevelopmentTaskNotice key={userId} ownerId={userId} sessionId={sandboxSession?.id ?? ""}
+        hideNotices={visibleCreateView === "intelligent"}
+        refreshKey={developmentTaskRefreshKey}
+        onUpdate={setDevelopmentTaskSnapshot}
+        onOpen={openIntelligentDevelopmentTask} />
       <Sidebar
         branding={siteBranding}
         cloudProvider={cloudProvider}
@@ -7213,6 +7167,16 @@ export default function App() {
           <div
             className={`composer-slot${sandboxSession ? " sandbox-composer-wrap" : ""}`}
           >
+            {!sandboxSession && currentRuntime && sessionId && (
+              <div className="runtime-artifact-entry" data-share-image-exclude="true">
+                <RuntimeArtifacts key={`${userId}:${currentRuntime.runtimeId}:${currentRuntime.region}:${currentRuntimeAppName || appName}:${sessionId}`} scope={{
+                  runtimeId: currentRuntime.runtimeId,
+                  region: currentRuntime.region,
+                  appName: currentRuntimeAppName || appName,
+                  sessionId,
+                }} busy={activeConversationBusy} />
+              </div>
+            )}
             {sandboxSession && (
               <SandboxSessionWarning
                 agentName={
@@ -7249,8 +7213,13 @@ export default function App() {
                 value={input}
                 onChange={setInput}
                 onSubmit={(value) => void submitSandboxInput(value)}
-                onStop={sandboxBusy ? stopSandboxGeneration : undefined}
+                onStop={sandboxBusy || development.submitting ? stopSandboxGeneration : undefined}
                 disabled={false}
+                allowSteer={sandboxSession.intelligentDevelopment}
+                sending={sandboxSession.intelligentDevelopment && development.submitting}
+                stopping={sandboxSession.intelligentDevelopment && (development.stopPending || development.run?.state === "stopping")}
+                errorText={sandboxSession.intelligentDevelopment ? development.error : undefined}
+                onResume={sandboxSession.intelligentDevelopment && development.run?.state === "waiting_user" ? () => void development.resume() : undefined}
                 busy={sandboxBusy || sandboxCommands.commandBusy}
                 attachments={attachments}
                 onAddFiles={addSandboxFiles}
@@ -7545,6 +7514,23 @@ export default function App() {
             )}
           </div>
         );
+        const preparation = intelligentPreparationStage ? (
+          <div className="development-preparation">
+            <div className="transcript">
+              <div className="turn turn--user"><div className="bubble"><Markdown text={intelligentPreparationMessage} /></div></div>
+              <div className="turn turn--assistant">
+                <div className="development-preparation__status">
+                  <SandboxSpinnerIcon className="icon spin development-preparation__spinner" />
+                  <div className="development-preparation__message" role="status" aria-live="polite" aria-atomic="true">
+                    <span aria-hidden={intelligentPreparationStage !== "preparing"}>{t("adk:developmentRuns.preparingEnvironment")}</span>
+                    <span aria-hidden={intelligentPreparationStage !== "starting"}>{t("adk:developmentRuns.connectingEnvironment")}</span>
+                  </div>
+                  <button type="button" className="development-preparation__cancel" onClick={cancelIntelligentPreparation}>{t("sandbox:common.cancel")}</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : null;
         return (
           <section className="main-shell">
             <main
@@ -7640,6 +7626,13 @@ export default function App() {
             ) : applicationsView === "website-integration" ? (
               <WebsiteIntegration
                 onBack={() => setApplicationsView("catalog")}
+              />
+            ) : applicationsView === "gitlab-review" ? (
+              <GitLabIntegration
+                onBack={() => setApplicationsView("catalog")}
+                onOpenSandboxSession={(id) => {
+                  void openCodexSandboxSession(id);
+                }}
               />
             ) : applicationsView && applicationsView !== "catalog" ? (
               <GitHubIntegration
@@ -7863,11 +7856,33 @@ export default function App() {
                     hydratedDraft,
                     arkModelIds,
                   );
+                  let editorDraft = classifiedDraft;
+                  if (configuredMcpEnvKeys(classifiedDraft).length > 0) {
+                    try {
+                      const credentials = await getRuntimeMcpCredentials({
+                        runtimeId: capability.runtime.runtimeId,
+                        region: capability.runtime.region,
+                        appName: capability.agent.appName,
+                        etag: capability.etag,
+                      });
+                      editorDraft = hydrateMcpCredentialValues(
+                        classifiedDraft,
+                        credentials,
+                      );
+                    } catch (credentialError) {
+                      setError(
+                        credentialError instanceof Error
+                          ? credentialError.message
+                          : appText("errors.runtimeDeploymentConfigUnavailable"),
+                      );
+                      return;
+                    }
+                  }
                   exitAgentDetailContext();
-                  setImportedDraft(classifiedDraft);
+                  setImportedDraft(editorDraft);
                   setCustomCreateMode("custom");
                   setCustomCreationSurface(
-                    classifiedDraft.dynamicAgentDelegation === true
+                    editorDraft.dynamicAgentDelegation === true
                       ? "vulcan"
                       : "traditional",
                   );
@@ -7892,7 +7907,7 @@ export default function App() {
                         ? "source-preserving"
                         : "regenerate",
                     mpaProfileOnly: false,
-                    configuredMcpEnvKeys: configuredMcpEnvKeys(classifiedDraft),
+                    configuredMcpEnvKeys: configuredMcpEnvKeys(editorDraft),
                     configuredRuntimeEnvKeys:
                       capability.runtime.configuredEnvKeys,
                   });
@@ -7969,6 +7984,7 @@ export default function App() {
                     title: t("addAgent.intelligent.title"),
                     desc: t("addAgent.intelligent.description"),
                     onClick: () => {
+                      setIntelligentDeployment(null);
                       setAddMenu(false);
                       setImportedDraft(null);
                       setRuntimeUpdateTarget(null);
@@ -8112,7 +8128,13 @@ export default function App() {
                 onDeploymentComplete={finishDeployment}
               />
             ) : visibleCreateView === "intelligent" ? (
+              <>
+              <div className="development-preparation-source" hidden={Boolean(intelligentPreparationStage)}>
               <IntelligentCreate
+                ownerId={userId}
+                taskSnapshot={developmentTaskSnapshot}
+                onRefreshTasks={() => setDevelopmentTaskRefreshKey(key => key + 1)}
+                onOpenTask={openIntelligentDevelopmentTask}
                 capabilities={intelligentCapabilities}
                 loading={intelligentCapabilitiesLoading}
                 preparationStage={intelligentPreparationStage}
@@ -8128,6 +8150,9 @@ export default function App() {
                 }}
                 onCreate={startIntelligentDevelopment}
               />
+              </div>
+              {preparation}
+              </>
             ) : visibleCreateView === "deepseek" ? (
               <NativeConfigPage
                 draft={deepseekDraft}
@@ -8217,6 +8242,8 @@ export default function App() {
                 initialDeployRegion={newRuntimeRegion}
               />
             ) : visibleCreateView === "migration" ? (
+              <>
+              <div className="development-preparation-source" hidden={Boolean(intelligentPreparationStage)}>
               <MigrationWorkspace
                 cloudProvider={cloudProvider}
                 onBack={() => {
@@ -8252,6 +8279,9 @@ export default function App() {
                   setIntelligentDeployment(delivery);
                 }}
               />
+              </div>
+              {preparation}
+              </>
             ) : turns.length === 0 && !newChatCapabilitiesReady ? (
               <div className="session-loading">
                 <Loader2 className="icon spin" /> {t("loading.agentCapabilities")}
@@ -8307,9 +8337,9 @@ export default function App() {
               const turnInvocation = turn.blocks.find((b) => b.kind === "invocation");
               return (
                 <motion.div
-                  key={i}
+                  key={turn.meta?.localId ?? i}
                   className="turn turn--user"
-                  initial={{ opacity: 0, y: 8 }}
+                  initial={sandboxSession?.intelligentDevelopment ? false : { opacity: 0, y: 8 }}
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ duration: 0.2, ease: "easeOut" }}
                 >
@@ -8329,6 +8359,7 @@ export default function App() {
                     data-share-image-exclude="true"
                   >
                     {turn.meta?.ts && <span className="meta-text">{fmtTime(turn.meta.ts)}</span>}
+                    {turn.activity && <span className="meta-text" role="status">{turn.activity.title}</span>}
                     <CopyButton text={text} />
                   </div>
                 </motion.div>
@@ -8394,7 +8425,7 @@ export default function App() {
                 aria-label={canAnnotate
                   ? t("conversation.annotationHint")
                   : undefined}
-                initial={{ opacity: 0, y: 8 }}
+                initial={sandboxSession?.intelligentDevelopment ? false : { opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.2, ease: "easeOut" }}
               >
@@ -8413,13 +8444,19 @@ export default function App() {
                   </>
                 )}
                 {pending ? (
-                  turnIsStreaming ? <ThinkingPlaceholder a2aStatus={turn.meta?.a2aStatus} /> : null
+                  turnIsStreaming ? (sandboxSession?.intelligentDevelopment
+                    ? <Blocks blocks={[]} groupProcess streaming liveStatus={development.connection || developmentRunStatus(development.run)} onAction={onAction} />
+                    : <ThinkingPlaceholder a2aStatus={turn.meta?.a2aStatus} />) : null
                 ) : (
                   <>
                     <SandboxFileContext.Provider value={{ appName, sessionId }}>
                       <Blocks
                         appName={appName}
                         blocks={turn.blocks}
+                        groupProcess={Boolean(sandboxSession?.intelligentDevelopment)}
+                        liveStatus={sandboxSession?.intelligentDevelopment && isLast
+                          ? (development.connection || (development.run?.phase !== "coding" || development.run?.state !== "running" ? developmentRunStatus(development.run) : ""))
+                          : undefined}
                         streaming={turnIsStreaming}
                         onStreamFrame={turnIsStreaming ? followConversationStreamFrame : undefined}
                         onStreamComplete={
@@ -8457,7 +8494,7 @@ export default function App() {
                         only once the reply is done. */}
                     {!turnIsStreaming && !turnAwaitingAuth(turn) && (
                       <div className="turn-meta" data-share-image-exclude="true">
-                        {sandboxSession && turn.meta?.sandboxUsage ? (
+                        {sandboxSession && !sandboxSession.intelligentDevelopment && turn.meta?.sandboxUsage ? (
                           <SandboxTokenUsageRow usage={turn.meta.sandboxUsage} />
                         ) : null}
                         <div className="turn-actions">
@@ -8674,20 +8711,6 @@ export default function App() {
         onRefreshAgents={() => setSandboxAgentRefreshKey((current) => current + 1)}
         onOpenSession={openCodexHandoffSession}
       />
-
-      {intelligentLeaveOpen ? (
-        <StudioConfirmDialog
-          title={t("dialogs.buildRunning.title")}
-          description={t("dialogs.buildRunning.description")}
-          confirmLabel={t("dialogs.buildRunning.confirm")}
-          variant="warning"
-          onCancel={() => {
-            pendingIntelligentNavigationRef.current = null;
-            setIntelligentLeaveOpen(false);
-          }}
-          onConfirm={confirmIntelligentNavigation}
-        />
-      ) : null}
 
       {sandboxThreadDeleteTarget ? (
         <StudioConfirmDialog

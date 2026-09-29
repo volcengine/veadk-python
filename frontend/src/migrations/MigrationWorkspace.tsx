@@ -17,7 +17,6 @@ import {
   createMigrationTask,
   downloadMigrationArtifact,
   downloadMigrationEvaluationReport,
-  getMigrationActivity,
   getMigrationArtifact,
   getMigrationArtifactFile,
   getMigrationCapabilities,
@@ -25,12 +24,14 @@ import {
   getMigrationEvaluationReport,
   getMigrationTask,
   listMigrationTasks,
+  observeMigrationTask,
   MigrationApiError,
   putMigrationEvaluationDataset,
   resumeMigrationEvaluation,
   retryMigrationEvaluation,
   stopMigrationTask,
   submitMigrationAnalysisAnswers,
+  submitMigrationAnalysisInput,
   uploadMigrationSource,
   type MigrationAnalysis,
   type MigrationActivity,
@@ -105,8 +106,8 @@ import { i18n } from "../i18n/runtime";
 import "./MigrationWorkspace.css";
 
 const MAX_SOURCE_BYTES = 20 * 1024 * 1024;
-const POLL_INTERVAL_MS = 1_200;
-const ACTIVITY_POLL_INTERVAL_MS = 3_000;
+// Task detail and activity arrive on one Server-Sent Events stream; only the
+// list of recent tasks is still polled.
 const LIST_POLL_INTERVAL_MS = 5_000;
 const MAX_VISIBLE_FILES = 500;
 const ignoreMigrationAction = () => undefined;
@@ -304,6 +305,27 @@ function isTerminalState(state: MigrationTask["state"]): boolean {
   ].includes(state);
 }
 
+/**
+ * What the collapsed process header says while Codex is working, the way the
+ * intelligent build reports its run phase there. Settled migrations still have a
+ * closing turn to describe, so their status is the delivery review.
+ */
+function migrationLiveStatus(task: MigrationTask): string {
+  if (task.state === "analyzing") return migrationText("activity.liveAnalyzing");
+  if (task.state === "migrating") return migrationText("activity.liveMigrating");
+  if (task.state === "validating") return migrationText("activity.liveValidating");
+  if (task.state === "packaging") return migrationText("activity.livePackaging");
+  if (
+    task.state === "succeeded" ||
+    task.state === "succeeded_with_warnings" ||
+    task.state === "partial" ||
+    task.state === "failed"
+  ) {
+    return migrationText("activity.liveDelivery");
+  }
+  return "";
+}
+
 function shouldShowCodexActivity(task: MigrationTask): boolean {
   return (
     task.state === "analyzing" ||
@@ -322,6 +344,7 @@ function isSelectableMigrationModel(
   unsupportedModelIds: ReadonlySet<string>,
 ): boolean {
   return (
+    model.apiKeyAllowed !== false &&
     !unsupportedModelIds.has(model.id) &&
     (model.available || model.lifecycleStatus === "Retiring")
   );
@@ -522,15 +545,21 @@ function MigrationActivityFeed({
   loading,
   error,
   analyzing,
+  status,
 }: {
   activity: MigrationActivity | null;
   loading: boolean;
   error: string;
   analyzing: boolean;
+  status: string;
 }) {
   const { t } = useTranslation("migrations");
   const items = activity?.items ?? [];
   const blocks = migrationActivityBlocks(items);
+  // A closing turn keeps working after the task has settled, so the feed is still
+  // live whenever Codex still has a running item.
+  const streaming =
+    !activity?.complete || items.some((item) => item.status === "running");
 
   return (
     <section
@@ -546,7 +575,14 @@ function MigrationActivityFeed({
       </div>
       {blocks.length > 0 ? (
         <div className="migration-activity__stream">
-          <Blocks blocks={blocks} onAction={ignoreMigrationAction} />
+          {/* The intelligent build's stream: tool calls fold into expandable process rows. */}
+          <Blocks
+            blocks={blocks}
+            groupProcess
+            streaming={streaming}
+            liveStatus={status}
+            onAction={ignoreMigrationAction}
+          />
         </div>
       ) : loading || !activity?.complete ? (
         <TextShimmer>
@@ -731,6 +767,7 @@ export function MigrationWorkspace({
   const evaluationTabRef = useRef<HTMLButtonElement>(null);
   const preparedAnalysisRef = useRef("");
   const evaluationDraftTaskRef = useRef("");
+  const taskEventCursorRef = useRef({ taskId: "", seq: 0 });
   const transferAbortRef = useRef<AbortController | null>(null);
   const evaluationReportAbortRef = useRef<AbortController | null>(null);
   const [capability, setCapability] = useState<MigrationCapabilities | null>(
@@ -751,8 +788,19 @@ export function MigrationWorkspace({
   const [modelsReloadKey, setModelsReloadKey] = useState(0);
   const [dragging, setDragging] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
+  const [capabilityError, setCapabilityError] = useState("");
+  const [loadKey, setLoadKey] = useState(0);
+  const [showAllTasks, setShowAllTasks] = useState(false);
   const [action, setAction] = useState<
-    "create" | "upload" | "answer" | "confirm" | "stop" | "download" | ""
+    | "create"
+    | "upload"
+    | "answer"
+    | "input"
+    | "confirm"
+    | "stop"
+    | "download"
+    | ""
   >("");
   const [error, setError] = useState("");
   const [pollError, setPollError] = useState("");
@@ -763,6 +811,10 @@ export function MigrationWorkspace({
   const [entry, setEntry] = useState("");
   const [appName, setAppName] = useState("");
   const [answers, setAnswers] = useState<Record<string, string>>({});
+  // Answers for questions asked inside the running analysis turn.  They are kept
+  // apart from the needs_input answers: the two cards are mutually exclusive and
+  // carry different payloads.
+  const [inputAnswers, setInputAnswers] = useState<Record<string, string>>({});
   const [artifact, setArtifact] = useState<MigrationArtifact | null>(null);
   const [artifactError, setArtifactError] = useState("");
   const [artifactErrorRetryable, setArtifactErrorRetryable] = useState(false);
@@ -938,26 +990,38 @@ export function MigrationWorkspace({
   useEffect(() => {
     const controller = new AbortController();
     setLoading(true);
-    setError("");
-    void Promise.all([
+    setLoadError("");
+    setCapabilityError("");
+    void Promise.allSettled([
       getMigrationCapabilities(controller.signal),
       listMigrationTasks(controller.signal),
     ])
-      .then(([nextCapability, nextTasks]) => {
+      .then(([capabilityResult, taskResult]) => {
         if (controller.signal.aborted) return;
-        setCapability(nextCapability);
-        setTasks(nextTasks);
-      })
-      .catch((cause: unknown) => {
-        if (!controller.signal.aborted) {
-          setError(cause instanceof Error ? cause.message : String(cause));
+        if (capabilityResult.status === "fulfilled") {
+          setCapability(capabilityResult.value);
+        } else {
+          setCapabilityError(
+            capabilityResult.reason instanceof Error
+              ? capabilityResult.reason.message
+              : String(capabilityResult.reason),
+          );
+        }
+        if (taskResult.status === "fulfilled") {
+          setTasks(taskResult.value);
+        } else {
+          setLoadError(
+            taskResult.reason instanceof Error
+              ? taskResult.reason.message
+              : String(taskResult.reason),
+          );
         }
       })
       .finally(() => {
         if (!controller.signal.aborted) setLoading(false);
       });
     return () => controller.abort();
-  }, []);
+  }, [loadKey]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -1055,55 +1119,74 @@ export function MigrationWorkspace({
   }, [action, hasPollableTasks]);
 
   useEffect(() => {
+    if (action === "confirm" || !task || taskEnvironmentExpired) return;
     if (
-      action === "confirm" ||
-      !task ||
-      taskEnvironmentExpired ||
-      (!isActiveState(task.state) &&
-        task.persistence?.state !== "saving" &&
-        !isEvaluationPollingState(task))
+      !shouldShowCodexActivity(task) &&
+      !isActiveState(task.state) &&
+      task.persistence?.state !== "saving" &&
+      !isEvaluationPollingState(task)
     )
       return;
     const controller = new AbortController();
-    let timer: number | undefined;
-    const poll = async () => {
-      try {
-        const next = await getMigrationTask(task.id, controller.signal);
+    // Task detail and activity are one snapshot stream now, so the page stops polling
+    // both.  The effect restarts whenever the server-side settlement rule can change;
+    // the cursor keeps those restarts cheap by resuming instead of replaying.
+    const resume =
+      taskEventCursorRef.current.taskId === task.id
+        ? taskEventCursorRef.current.seq
+        : 0;
+    setActivityLoading(activity === null && shouldShowCodexActivity(task));
+    void observeMigrationTask({
+      taskId: task.id,
+      signal: controller.signal,
+      after: resume,
+      onEvent: (event) => {
         if (controller.signal.aborted) return;
-        setTasks((current) => upsertTask(current, next));
+        taskEventCursorRef.current = { taskId: task.id, seq: event.seq };
+        if (event.kind === "error") {
+          setActivityLoading(false);
+          // A frame without code or message says the task is readable again.
+          const cleared = !event.code && !event.message;
+          setPollError(cleared ? "" : event.message || t("activity.loadError"));
+          setPollErrorRetryable(cleared ? false : event.retryable);
+          return;
+        }
         setPollError("");
         setPollErrorRetryable(false);
-        if (
-          !isMigrationEnvironmentExpired(next, Date.now()) &&
-          (isActiveState(next.state) ||
-            next.persistence?.state === "saving" ||
-            isEvaluationPollingState(next))
-        ) {
-          timer = window.setTimeout(() => void poll(), POLL_INTERVAL_MS);
+        if (event.kind === "task") {
+          setTasks((current) => upsertTask(current, event.task));
+          return;
         }
-      } catch (cause) {
+        if (event.kind === "activity") {
+          setActivity(event.activity);
+          setActivityError("");
+          setActivityLoading(false);
+          return;
+        }
+        setActivityLoading(false);
+      },
+      onConnection: (message) => {
         if (controller.signal.aborted) return;
-        setPollError(cause instanceof Error ? cause.message : String(cause));
-        setPollErrorRetryable(
-          cause instanceof MigrationApiError && cause.retryable,
-        );
-        if (cause instanceof MigrationApiError && cause.retryable) {
-          timer = window.setTimeout(() => void poll(), POLL_INTERVAL_MS);
-        }
-      }
-    };
-    timer = window.setTimeout(() => void poll(), POLL_INTERVAL_MS);
-    return () => {
-      controller.abort();
-      if (timer !== undefined) window.clearTimeout(timer);
-    };
+        setPollError(message);
+        setPollErrorRetryable(false);
+      },
+    }).catch((cause: unknown) => {
+      if (controller.signal.aborted) return;
+      setActivityLoading(false);
+      setPollError(cause instanceof Error ? cause.message : String(cause));
+      setPollErrorRetryable(cause instanceof MigrationApiError && cause.retryable);
+    });
+    return () => controller.abort();
   }, [
+    action,
     task?.id,
     task?.state,
+    task?.analysisRef?.sha256,
+    task?.confirmation?.framework,
     task?.persistence?.state,
     task?.evaluation?.state,
     taskEnvironmentExpired,
-    action,
+    t,
   ]);
 
   useEffect(() => {
@@ -1123,62 +1206,6 @@ export function MigrationWorkspace({
     setActivityError("");
     setActivityLoading(false);
   }, [task?.id]);
-
-  useEffect(() => {
-    if (!task || taskEnvironmentExpired || !shouldShowCodexActivity(task)) {
-      return;
-    }
-
-    const controller = new AbortController();
-    let timer: number | undefined;
-    const poll = async () => {
-      setActivityLoading(true);
-      try {
-        const next = await getMigrationActivity(task.id, controller.signal);
-        if (controller.signal.aborted) return;
-        setActivity(next);
-        setActivityError("");
-        if (
-          !next.complete &&
-          !taskEnvironmentExpired &&
-          isActiveState(task.state)
-        ) {
-          timer = window.setTimeout(
-            () => void poll(),
-            ACTIVITY_POLL_INTERVAL_MS,
-          );
-        }
-      } catch (cause) {
-        if (controller.signal.aborted) return;
-        setActivityError(t("activity.loadError"));
-        if (
-          !taskEnvironmentExpired &&
-          isActiveState(task.state) &&
-          cause instanceof MigrationApiError &&
-          cause.retryable
-        ) {
-          timer = window.setTimeout(
-            () => void poll(),
-            ACTIVITY_POLL_INTERVAL_MS,
-          );
-        }
-      } finally {
-        if (!controller.signal.aborted) setActivityLoading(false);
-      }
-    };
-    void poll();
-    return () => {
-      controller.abort();
-      if (timer !== undefined) window.clearTimeout(timer);
-    };
-  }, [
-    task?.id,
-    task?.state,
-    task?.analysisRef?.sha256,
-    task?.confirmation?.framework,
-    taskEnvironmentExpired,
-    t,
-  ]);
 
   useEffect(() => {
     if (
@@ -1597,6 +1624,44 @@ export function MigrationWorkspace({
       requiredQuestionsAnswered,
   );
 
+  // The card follows a live question, not the state: a delivery turn asks after the delivery has already settled.
+  const pendingInput = task?.pendingInput;
+  const pendingInputAnswered = (pendingInput?.questions ?? []).every(
+    (question) => (inputAnswers[question.id] || "").trim().length > 0,
+  );
+  const canSubmitInput = Boolean(pendingInput && pendingInputAnswered && !action);
+
+  // Every question set is a new one, so the previous draft must not leak into it.
+  const pendingInputId = pendingInput?.id;
+  useEffect(() => {
+    setInputAnswers({});
+  }, [pendingInputId]);
+
+  async function submitInput() {
+    if (!task || !pendingInput || !canSubmitInput) return;
+    setAction("input");
+    setError("");
+    try {
+      const next = await submitMigrationAnalysisInput({
+        taskId: task.id,
+        requestId: pendingInput.id,
+        answers: Object.fromEntries(
+          pendingInput.questions.map((question) => [
+            question.id,
+            (inputAnswers[question.id] || "").trim(),
+          ]),
+        ),
+      });
+      setTasks((current) => upsertTask(current, next));
+    } catch (cause) {
+      const authoritative = await reconcileTaskState(task.id);
+      if (authoritative && !authoritative.pendingInput) return;
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setAction("");
+    }
+  }
+
   async function submitAnswers() {
     if (!task?.analysisRef || !canSubmitAnswers) return;
     setAction("answer");
@@ -1954,6 +2019,8 @@ export function MigrationWorkspace({
 
   const composerFile = sourceFile;
   const composerBusy = action === "create" || action === "upload";
+  const isHome = page === "new" && !task && action !== "create";
+  const navigationBusy = composerBusy || action === "confirm" || action === "answer" || action === "input" || action === "stop" || Boolean(evaluationAction);
   const showComposer = !task || (task.canUpload && !taskEnvironmentExpired);
   const expiryCopy = task ? migrationExpiryCopy(task, now) : null;
   const hasEvaluationTab = Boolean(task?.evaluation?.enabled);
@@ -1977,103 +2044,152 @@ export function MigrationWorkspace({
       ? evaluationDraftLoadError
       : null;
 
+  const composer = activeTaskTab === "migration" && showComposer && capability?.enabled ? (
+            <div className="migration-composer">
+              <div
+                className={`migration-composer__box${dragging ? " is-dragging" : ""}`}
+                onDragEnter={(event) => {
+                  event.preventDefault();
+                  if (composerBusy) return;
+                  setDragging(true);
+                }}
+                onDragOver={(event) => {
+                  event.preventDefault();
+                  event.dataTransfer.dropEffect = composerBusy ? "none" : "copy";
+                }}
+                onDragLeave={(event: DragEvent<HTMLDivElement>) => {
+                  if (
+                    !event.currentTarget.contains(
+                      event.relatedTarget as Node | null,
+                    )
+                  ) {
+                    setDragging(false);
+                  }
+                }}
+                onDrop={(event) => {
+                  event.preventDefault();
+                  setDragging(false);
+                  if (composerBusy) return;
+                  selectFile(event.dataTransfer.files?.[0]);
+                }}
+              >
+              <div className="migration-composer__content">
+                {composerFile ? (
+                  <div className="migration-composer__file">
+                    <FileIcon />
+                    <span title={composerFile.name}>{composerFile.name}</span>
+                    <small>{formatBytes(composerFile.size)}</small>
+                    <button
+                      type="button"
+                      onClick={() => setSourceFile(null)}
+                      aria-label={t("upload.removeAria")}
+                      disabled={composerBusy}
+                    >
+                      <CloseIcon />
+                    </button>
+                  </div>
+                ) : (
+                  <div className="migration-upload-prompt">
+                    <UploadIcon />
+                    <p>{task ? t("upload.reselectPrompt") : t("upload.selectPrompt")}</p>
+                    <small>{t("upload.sizeHint", { size: maxSourceSizeLabel })}</small>
+                  </div>
+                )}
+              </div>
+              <div className="migration-composer__actions">
+                <div className="migration-composer__tools">
+                  <button
+                    type="button"
+                    className="migration-attach-button"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={composerBusy}
+                  >
+                    <UploadIcon />
+                    <span>{sourceFile ? t("upload.reselect") : t("upload.selectZip")}</span>
+                  </button>
+                  <div className="migration-composer__model-select">
+                    <NewChatCompactSelect
+                      label={t("model.label")}
+                      value={composerModelId}
+                      options={modelSelectOptions}
+                      onChange={setSelectedModelId}
+                      placeholder={t("model.placeholder")}
+                      searchable
+                      loading={modelsLoading}
+                      error={modelsError}
+                      disabled={composerBusy || Boolean(task)}
+                      onRetry={() =>
+                        setModelsReloadKey((current) => current + 1)
+                      }
+                    />
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="migration-confirm-upload-button"
+                  onClick={() =>
+                    void (task ? uploadExistingTask() : createAndUpload())
+                  }
+                  disabled={!sourceFile || composerBusy}
+                >
+                  {composerBusy ? t("upload.uploading") : task ? t("upload.continue") : t("upload.start")}
+                </button>
+              </div>
+              <MigrationEvaluationSetup
+                value={evaluationDraft}
+                onChange={(value) => {
+                  setEvaluationDraft(value);
+                  setEvaluationErrors({});
+                }}
+                capability={capability.evaluation}
+                disabled={composerBusy}
+                configLocked={Boolean(task)}
+                locked={Boolean(task?.evaluation?.dataset)}
+                errors={evaluationErrors}
+              />
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".zip,application/zip"
+                onChange={handleFileChange}
+                aria-label={t("upload.inputAria")}
+                disabled={composerBusy}
+              />
+              </div>
+              <p>
+                {t("upload.retention")}
+              </p>
+            </div>
+          ) : null;
+
   return (
     <>
       <section className="migration-workspace">
-        <aside className="migration-history">
-          <header>
-            <button
-              type="button"
-              className="migration-icon-button"
-              onClick={onBack}
-              aria-label={t("workspace.backToAddAgent")}
-              title={t("common.back")}
-            >
+        <header className="migration-workspace__nav">
+          <div className="migration-workspace__location">
+            <button type="button" className="migration-new-button"
+              onClick={isHome ? onBack : startNewMigration} disabled={navigationBusy}>
               <BackIcon />
+              <span>{isHome ? t("common.back") : t("workspace.backToHome")}</span>
             </button>
-            <h1>{t("workspace.title")}</h1>
-          </header>
-          <button
-            type="button"
-            className="migration-new-button"
-            aria-current={page === "new" && !task ? "page" : undefined}
-            onClick={startNewMigration}
-            disabled={composerBusy}
-          >
-            <PlusIcon />
-            <span>{t("workspace.newMigration")}</span>
-          </button>
-          <button
-            type="button"
-            className={`migration-new-button${page === "projects" ? " is-active" : ""}`}
-            aria-current={page === "projects" ? "page" : undefined}
-            onClick={() => setPage("projects")}
-            disabled={composerBusy}
-          >
-            <FileIcon />
-            <span>{t("projects.title")}</span>
-          </button>
-          <div className="migration-history__label">
-            {t("workspace.recent")}
+            <h1>{page === "projects" ? t("projects.title") : t("workspace.title")}</h1>
           </div>
-          <nav aria-label={t("workspace.sessionsAria")}>
-            {loading ? (
-              <TextShimmer>{t("workspace.loadingSessions")}</TextShimmer>
-            ) : tasks.length === 0 ? (
-              <p className="migration-history__empty">
-                {t("workspace.noSessions")}
-              </p>
-            ) : (
-              tasks.map((item) => {
-                const status = migrationHistoryStatus(item);
-                const environmentExpired = isMigrationEnvironmentExpired(
-                  item,
-                  now,
-                );
-                const statusLabel = migrationText(status.labelKey);
-                return (
-                  <button
-                    type="button"
-                    key={item.id}
-                    className={item.id === selectedTaskId ? "is-active" : ""}
-                    aria-current={
-                      page === "new" && item.id === selectedTaskId
-                        ? "page"
-                        : undefined
-                    }
-                    disabled={composerBusy}
-                    onClick={() => {
-                      setPage("new");
-                      setSelectedTaskId(item.id);
-                      setError("");
-                      setPollError("");
-                      setPollErrorRetryable(false);
-                    }}
-                  >
-                    <span>{sourceStem(item.sourceFileName)}</span>
-                    <small>
-                      <span className="migration-history__status">
-                        <span
-                          className="migration-history__status-label"
-                          data-tone={status.tone}
-                          title={statusLabel}
-                        >
-                          {statusLabel}
-                        </span>
-                        {environmentExpired ? (
-                          <span className="migration-history__expiry-badge">
-                            {t("historyStatus.environmentExpired")}
-                          </span>
-                        ) : null}
-                      </span>
-                      <time>{formatDate(item.createdAt)}</time>
-                    </small>
-                  </button>
-                );
-              })
-            )}
+          <nav aria-label={t("workspace.navigation")}>
+            {!isHome ? (
+              <button type="button" className="migration-new-button"
+                onClick={startNewMigration} disabled={navigationBusy}>
+                <PlusIcon /><span>{t("workspace.newMigration")}</span>
+              </button>
+            ) : null}
+            {page !== "projects" ? (
+              <button type="button" className="migration-new-button"
+                onClick={() => { setFocusedProjectId(""); setPage("projects"); }}
+                disabled={navigationBusy}>
+                <FileIcon /><span>{t("projects.title")}</span>
+              </button>
+            ) : null}
           </nav>
-        </aside>
+        </header>
 
         {page === "projects" ? (
           <MigratedProjectsPage
@@ -2087,6 +2203,94 @@ export function MigrationWorkspace({
             onDownload={onDownloadSavedVersion}
             onDeploy={onDeploySavedVersion}
           />
+        ) : isHome ? (
+          <main className="migration-home">
+            <div className="migration-home__content">
+              <header className="migration-home__heading">
+                <h2>{t("workspace.heading")}</h2>
+                <p>{t("workspace.intro")}</p>
+              </header>
+              {loading ? <TextShimmer>{t("workspace.loadingSessions")}</TextShimmer> : null}
+              {loadError ? (
+                <div className="migration-inline-error" role="alert">
+                  <span>{localeCompatibleBackendText(loadError, locale) || t("errors.loadFailed")}</span>
+                  <button type="button" disabled={loading} onClick={() => setLoadKey((key) => key + 1)}>{t("actions.reload")}</button>
+                </div>
+              ) : null}
+              {capabilityError ? (
+                <div className="migration-inline-error" role="alert">
+                  <span>{localeCompatibleBackendText(capabilityError, locale) || t("errors.loadFailed")}</span>
+                  <button type="button" disabled={loading} onClick={() => setLoadKey((key) => key + 1)}>{t("actions.reload")}</button>
+                </div>
+              ) : null}
+              {capability && !capability.enabled ? (
+                <div className="migration-system-state is-error" role="alert">
+                  <strong>{t("capability.unavailable")}</strong>
+                  <p>{localeCompatibleBackendText(capability.reason, locale) || t("capability.defaultReason")}</p>
+                </div>
+              ) : null}
+              {composer}
+              {error ? (
+                <div className="migration-inline-error" role="alert">
+                  <span>{localeCompatibleBackendText(error, locale) || t("errors.loadFailed")}</span>
+                  <button type="button" onClick={() => setError("")} aria-label={t("errors.closeAria")}><CloseIcon /></button>
+                </div>
+              ) : null}
+              <section className="migration-history" aria-labelledby="migration-recent-heading">
+                <header>
+                  <h2 id="migration-recent-heading">{t("workspace.recent")}</h2>
+                  {tasks.length > 5 ? (
+                    <button type="button" className="migration-new-button"
+                      aria-expanded={showAllTasks} aria-controls="migration-recent-list"
+                      onClick={() => setShowAllTasks((value) => !value)}>
+                      {t(showAllTasks ? "workspace.showLess" : "workspace.showMore")}
+                    </button>
+                  ) : null}
+                </header>
+                {pollError ? (
+                  <div className="migration-inline-error" role="alert">
+                    <span>{localeCompatibleBackendText(pollError, locale) || t("errors.refreshFailed")}</span>
+                    {pollErrorRetryable ? <button type="button" onClick={() => void reconcileTaskList()}>{t("actions.refreshStatus")}</button> : null}
+                  </div>
+                ) : null}
+                {!loading && !loadError && tasks.length === 0 ? <p className="migration-history__empty">{t("workspace.noSessions")}</p> : null}
+                {tasks.length > 0 ? (
+                  <table id="migration-recent-list">
+                    <thead><tr>
+                      <th scope="col">{t("workspace.projectName")}</th>
+                      <th scope="col">{t("workspace.status")}</th>
+                      <th scope="col">{t("workspace.createdAt")}</th>
+                      <th scope="col">{t("workspace.actions")}</th>
+                    </tr></thead>
+                    <tbody>{(showAllTasks ? tasks : tasks.slice(0, 5)).map((item) => {
+                      const status = migrationHistoryStatus(item);
+                      const environmentExpired = isMigrationEnvironmentExpired(item, now);
+                      const statusLabel = migrationText(status.labelKey);
+                      return (
+                        <tr key={item.id}>
+                          <th scope="row"><span title={sourceStem(item.sourceFileName)}>{sourceStem(item.sourceFileName)}</span></th>
+                          <td><span className="migration-history__status">
+                            <span className="migration-history__status-label" data-tone={status.tone} title={statusLabel}>{statusLabel}</span>
+                            {environmentExpired ? <span className="migration-history__expiry-badge">{t("historyStatus.environmentExpired")}</span> : null}
+                          </span></td>
+                          <td><time>{formatDate(item.createdAt)}</time></td>
+                          <td><button type="button" className="migration-new-button"
+                            aria-label={t("workspace.openTask", { name: sourceStem(item.sourceFileName) })}
+                            onClick={() => {
+                              setSelectedTaskId(item.id);
+                              setSourceFile(null);
+                              setError("");
+                            }}>
+                            {t(!environmentExpired && (item.canAnswer || item.canConfirm || item.canUpload) ? "workspace.continueTask" : "workspace.viewTask")}
+                          </button></td>
+                        </tr>
+                      );
+                    })}</tbody>
+                  </table>
+                ) : null}
+              </section>
+            </div>
+          </main>
         ) : (
           <main className="migration-main">
             <div className="migration-main__top">
@@ -2194,6 +2398,7 @@ export function MigrationWorkspace({
               <strong>{t("capability.unavailable")}</strong>
               <p>
                 {localeCompatibleBackendText(capability?.reason, locale)
+                  || localeCompatibleBackendText(capabilityError, locale)
                   || t("capability.defaultReason")}
               </p>
             </div>
@@ -2201,13 +2406,6 @@ export function MigrationWorkspace({
 
           {!task ? (
             <>
-              <article className="migration-turn is-assistant">
-                <div className="migration-assistant-mark">AI</div>
-                <div>
-                  <p>{t("conversation.requestZip")}</p>
-                  <small>{t("conversation.zipHint", { size: maxSourceSizeLabel })}</small>
-                </div>
-              </article>
               {action === "create" && sourceFile ? (
                 <>
                   <article className="migration-turn is-user">
@@ -2339,12 +2537,104 @@ export function MigrationWorkspace({
                       loading={activityLoading}
                       error={activityError}
                       analyzing={task.state === "analyzing"}
+                      status={migrationLiveStatus(task)}
                     />
                   ) : null}
                 </div>
               </article>
             </>
           )}
+
+          {pendingInput ? (
+            <section
+              className="migration-confirmation"
+              aria-label={t("pendingInput.ariaLabel")}
+            >
+              <div className="migration-confirmation__heading">
+                <strong>{t("pendingInput.title")}</strong>
+                <span>{t("pendingInput.description")}</span>
+              </div>
+              {pendingInput.questions.map((question) => {
+                const selected = inputAnswers[question.id] || "";
+                const chosen = question.options.some(
+                  (option) => option.label === selected,
+                );
+                return (
+                  <div className="migration-question" key={question.id}>
+                    <span className="migration-question__header">
+                      {question.header}
+                    </span>
+                    <p className="migration-question__prompt">
+                      {question.question}
+                    </p>
+                    {question.options.length > 0 ? (
+                      <div
+                        className="migration-question__options"
+                        role="radiogroup"
+                        aria-label={question.header}
+                      >
+                        {question.options.map((option) => (
+                          <label
+                            className={
+                              "migration-question__option" +
+                              (selected === option.label ? " is-selected" : "")
+                            }
+                            key={option.label}
+                          >
+                            <input
+                              type="radio"
+                              name={`${pendingInput.id}:${question.id}`}
+                              checked={selected === option.label}
+                              onChange={() => {
+                                setInputAnswers((current) => ({
+                                  ...current,
+                                  [question.id]: option.label,
+                                }));
+                              }}
+                              disabled={Boolean(action)}
+                            />
+                            <span>
+                              <strong>{option.label}</strong>
+                              <em>{option.description}</em>
+                            </span>
+                          </label>
+                        ))}
+                      </div>
+                    ) : null}
+                    <label className="migration-question__other">
+                      <span>{t("pendingInput.other")}</span>
+                      <textarea
+                        value={chosen ? "" : selected}
+                        placeholder={t("pendingInput.otherPlaceholder")}
+                        maxLength={4_000}
+                        aria-label={`${question.header} ${t("pendingInput.other")}`}
+                        onChange={(event) => {
+                          const value = event.currentTarget.value;
+                          setInputAnswers((current) => ({
+                            ...current,
+                            [question.id]: value,
+                          }));
+                        }}
+                        disabled={Boolean(action)}
+                      />
+                    </label>
+                  </div>
+                );
+              })}
+              <div className="migration-confirmation__actions">
+                <button
+                  type="button"
+                  className="migration-primary-button"
+                  onClick={() => void submitInput()}
+                  disabled={!canSubmitInput}
+                >
+                  {action === "input"
+                    ? t("pendingInput.submitting")
+                    : t("pendingInput.submit")}
+                </button>
+              </div>
+            </section>
+          ) : null}
 
           {task?.state === "needs_input" && task.analysis ? (
             <section
@@ -2397,28 +2687,31 @@ export function MigrationWorkspace({
             >
               <div className="migration-confirmation__heading">
                 <strong>{t("confirmation.title")}</strong>
-                <span>{t("confirmation.description")}</span>
               </div>
               <div className="migration-confirmation__grid">
-                <NewChatCompactSelect
-                  label={t("confirmation.framework")}
-                  value={framework}
-                  options={(capability?.frameworks ?? []).map((item) => ({
-                    value: item,
-                    label: frameworkLabel(item),
-                  }))}
-                  onChange={(value) => {
-                    const next = value as MigrationFramework;
-                    setFramework(next);
-                    const candidate = task.analysis?.entries.find(
-                      (item) => item.framework === next,
-                    );
-                    setEntry(candidate?.value || "");
-                  }}
-                  placeholder={t("confirmation.frameworkPlaceholder")}
-                  disabled={Boolean(action)}
-                />
-                <label className="migration-field">
+                <div className="migration-confirmation__row">
+                  <span>{t("confirmation.framework")}</span>
+                  <NewChatCompactSelect
+                    hideLabel
+                    label={t("confirmation.framework")}
+                    value={framework}
+                    options={(capability?.frameworks ?? []).map((item) => ({
+                      value: item,
+                      label: frameworkLabel(item),
+                    }))}
+                    onChange={(value) => {
+                      const next = value as MigrationFramework;
+                      setFramework(next);
+                      const candidate = task.analysis?.entries.find(
+                        (item) => item.framework === next,
+                      );
+                      setEntry(candidate?.value || "");
+                    }}
+                    placeholder={t("confirmation.frameworkPlaceholder")}
+                    disabled={Boolean(action)}
+                  />
+                </div>
+                <label className="migration-field migration-confirmation__row">
                   <span>
                     {t("confirmation.agentName")}<b aria-hidden="true">*</b>
                   </span>
@@ -2437,16 +2730,20 @@ export function MigrationWorkspace({
                 </label>
                 {STRUCTURED_FRAMEWORKS.has(framework) ? (
                   entryOptions.length > 0 ? (
-                    <NewChatCompactSelect
-                      label={t("confirmation.entry")}
-                      value={entry}
-                      options={entryOptions}
-                      onChange={setEntry}
-                      placeholder={t("confirmation.entryPlaceholder")}
-                      disabled={Boolean(action)}
-                    />
+                    <div className="migration-confirmation__row">
+                      <span>{t("confirmation.entry")}</span>
+                      <NewChatCompactSelect
+                        hideLabel
+                        label={t("confirmation.entry")}
+                        value={entry}
+                        options={entryOptions}
+                        onChange={setEntry}
+                        placeholder={t("confirmation.entryPlaceholder")}
+                        disabled={Boolean(action)}
+                      />
+                    </div>
                   ) : (
-                    <label className="migration-field">
+                    <label className="migration-field migration-confirmation__row">
                       <span>
                         {t("confirmation.entry")}<b aria-hidden="true">*</b>
                       </span>
@@ -2463,18 +2760,20 @@ export function MigrationWorkspace({
                   )
                 ) : null}
               </div>
-              <p className="migration-running-note">
-                {t("confirmation.consent")}
-              </p>
-              <div className="migration-confirmation__actions">
-                <button
-                  type="button"
-                  className="migration-primary-button"
-                  onClick={() => void confirmMigration()}
-                  disabled={!canConfirm}
-                >
-                  {action === "confirm" ? t("confirmation.starting") : t("confirmation.start")}
-                </button>
+              <div className="migration-confirmation__footer">
+                <p className="migration-confirmation__consent">
+                  {t("confirmation.consent")}
+                </p>
+                <div className="migration-confirmation__actions">
+                  <button
+                    type="button"
+                    className="migration-primary-button"
+                    onClick={() => void confirmMigration()}
+                    disabled={!canConfirm}
+                  >
+                    {action === "confirm" ? t("confirmation.starting") : t("confirmation.start")}
+                  </button>
+                </div>
               </div>
             </section>
           ) : null}
@@ -2707,120 +3006,7 @@ export function MigrationWorkspace({
           ) : null}
           </div>
 
-          {activeTaskTab === "migration" && showComposer && capability?.enabled ? (
-            <div className="migration-composer">
-              <div
-                className={`migration-composer__box${dragging ? " is-dragging" : ""}`}
-                onDragEnter={(event) => {
-                  event.preventDefault();
-                  if (composerBusy) return;
-                  setDragging(true);
-                }}
-                onDragOver={(event) => {
-                  event.preventDefault();
-                  event.dataTransfer.dropEffect = composerBusy ? "none" : "copy";
-                }}
-                onDragLeave={(event: DragEvent<HTMLDivElement>) => {
-                  if (
-                    !event.currentTarget.contains(
-                      event.relatedTarget as Node | null,
-                    )
-                  ) {
-                    setDragging(false);
-                  }
-                }}
-                onDrop={(event) => {
-                  event.preventDefault();
-                  setDragging(false);
-                  if (composerBusy) return;
-                  selectFile(event.dataTransfer.files?.[0]);
-                }}
-              >
-              <div className="migration-composer__content">
-                {composerFile ? (
-                  <div className="migration-composer__file">
-                    <FileIcon />
-                    <span>{composerFile.name}</span>
-                    <small>{formatBytes(composerFile.size)}</small>
-                    <button
-                      type="button"
-                      onClick={() => setSourceFile(null)}
-                      aria-label={t("upload.removeAria")}
-                      disabled={composerBusy}
-                    >
-                      <CloseIcon />
-                    </button>
-                  </div>
-                ) : (
-                  <p>{task ? t("upload.reselectPrompt") : t("upload.selectPrompt")}</p>
-                )}
-              </div>
-              <div className="migration-composer__actions">
-                <div className="migration-composer__tools">
-                  <button
-                    type="button"
-                    className="migration-attach-button"
-                    onClick={() => fileInputRef.current?.click()}
-                    disabled={composerBusy}
-                  >
-                    <UploadIcon />
-                    <span>{sourceFile ? t("upload.reselect") : t("upload.selectZip")}</span>
-                  </button>
-                  <div className="migration-composer__model-select">
-                    <NewChatCompactSelect
-                      label={t("model.label")}
-                      hideLabel
-                      value={composerModelId}
-                      options={modelSelectOptions}
-                      onChange={setSelectedModelId}
-                      placeholder={t("model.placeholder")}
-                      searchable
-                      loading={modelsLoading}
-                      error={modelsError}
-                      disabled={composerBusy || Boolean(task)}
-                      onRetry={() =>
-                        setModelsReloadKey((current) => current + 1)
-                      }
-                    />
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  className="migration-confirm-upload-button"
-                  onClick={() =>
-                    void (task ? uploadExistingTask() : createAndUpload())
-                  }
-                  disabled={!sourceFile || composerBusy}
-                >
-                  {task ? t("upload.continue") : t("upload.start")}
-                </button>
-              </div>
-              <MigrationEvaluationSetup
-                value={evaluationDraft}
-                onChange={(value) => {
-                  setEvaluationDraft(value);
-                  setEvaluationErrors({});
-                }}
-                capability={capability.evaluation}
-                disabled={composerBusy}
-                configLocked={Boolean(task)}
-                locked={Boolean(task?.evaluation?.dataset)}
-                errors={evaluationErrors}
-              />
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".zip,application/zip"
-                onChange={handleFileChange}
-                aria-label={t("upload.inputAria")}
-                disabled={composerBusy}
-              />
-              </div>
-              <p>
-                {t("upload.retention")}
-              </p>
-            </div>
-          ) : null}
+          {composer}
           </main>
         )}
       </section>

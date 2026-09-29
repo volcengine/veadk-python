@@ -16,10 +16,18 @@
 
 from __future__ import annotations
 
+import base64
+import compileall
+import csv
+import io
 import os
+import py_compile
+import re
 import shutil
 import subprocess
+import sys
 import tempfile
+import zipfile
 from collections.abc import Mapping, Sequence
 from hashlib import sha256
 from pathlib import Path
@@ -53,6 +61,32 @@ _INDEX_ENVIRONMENT_KEYS = (
     "PIP_INDEX_URL",
     "PIP_EXTRA_INDEX_URL",
 )
+_COLD_START_WHEEL_ROOTS = {
+    "veadk-python": ("veadk", "frontend"),
+    "google-adk": ("google/adk",),
+    "agentkit-sdk-python": ("agentkit",),
+    "google-genai": ("google/genai",),
+    "mcp": ("mcp",),
+    "dateparser": ("dateparser",),
+    "fastapi": ("fastapi",),
+    "sqlalchemy": ("sqlalchemy",),
+    "aiohttp": ("aiohttp",),
+    "tos": ("tos",),
+    "trafilatura": ("trafilatura",),
+    "htmldate": ("htmldate",),
+    "authlib": ("authlib",),
+    "volcengine-python-sdk": (
+        "volcenginesdkid",
+        "volcenginesdkvpc",
+        "volcenginesdkarkruntime",
+        "volcenginesdkvefaas",
+        "volcenginesdkark",
+        "volcenginesdkcore",
+    ),
+}
+_COLD_START_SOURCE_EXCLUSIONS = re.compile(
+    r"(?:template[/\\]\{\{|resources[/\\]samples)"
+)
 
 
 def _lock_check_environment(environment: Mapping[str, str]) -> dict[str, str]:
@@ -71,6 +105,7 @@ def build_studio_offline_runtime(
     veadk_wheel: Path,
     dependency_sources: Sequence[Path],
     environment: Mapping[str, str] | None = None,
+    optimize_cold_start: bool = False,
 ) -> str:
     """Bundle every locked Linux dependency and return offline requirements."""
     lock_source = source_root / "uv.lock"
@@ -192,6 +227,10 @@ def build_studio_offline_runtime(
     shutil.move(str(veadk_wheel), staged_veadk)
     if not staged_veadk.is_file():
         raise ValueError("Studio offline wheelhouse is incomplete.")
+    if optimize_cold_start:
+        if sys.implementation.name != "cpython" or sys.version_info[:2] != (3, 12):
+            raise ValueError("Studio cold-start optimization requires CPython 3.12.")
+        _enhance_studio_cold_start_wheels(wheelhouse)
     _pin_runtime_lock_to_wheelhouse(runtime_lock, wheelhouse, staged_veadk)
     for wheel in sorted(wheelhouse.glob("*.whl")):
         destination = package_dir / wheel.name
@@ -215,6 +254,135 @@ def build_studio_offline_runtime(
         environment=build_environment,
     )
     return requirements
+
+
+def _enhance_studio_cold_start_wheels(wheelhouse: Path) -> dict[str, int]:
+    """Add deterministic checked-hash CPython 3.12 bytecode to hot wheels."""
+    if sys.implementation.name != "cpython" or sys.version_info[:2] != (3, 12):
+        raise ValueError("Studio cold-start optimization requires CPython 3.12.")
+    selected: dict[str, tuple[Path, tuple[str, ...]]] = {}
+    for wheel in sorted(wheelhouse.glob("*.whl")):
+        try:
+            name, _version, _build, _tags = parse_wheel_filename(wheel.name)
+        except InvalidWheelFilename as error:
+            raise ValueError("Studio wheelhouse contains an invalid wheel.") from error
+        distribution = canonicalize_name(name)
+        roots = _COLD_START_WHEEL_ROOTS.get(distribution)
+        if roots is None:
+            continue
+        if distribution in selected:
+            raise ValueError(
+                "Studio cold-start wheelhouse contains duplicate distributions."
+            )
+        selected[distribution] = (wheel, roots)
+    if set(selected) != set(_COLD_START_WHEEL_ROOTS):
+        raise ValueError("Studio cold-start wheelhouse is incomplete.")
+
+    enhanced: dict[str, int] = {}
+    for distribution in _COLD_START_WHEEL_ROOTS:
+        wheel, roots = selected[distribution]
+        enhanced[wheel.name] = _augment_checked_hash_wheel(wheel, roots)
+    return enhanced
+
+
+def _augment_checked_hash_wheel(wheel: Path, roots: tuple[str, ...]) -> int:
+    """Repack one wheel with checked-hash pyc files and a valid RECORD."""
+    with tempfile.TemporaryDirectory(prefix="veadk_studio_pyc_") as tmp:
+        extracted = Path(tmp) / "wheel"
+        extracted.mkdir()
+        try:
+            with zipfile.ZipFile(wheel) as source:
+                original = [(info, source.read(info)) for info in source.infolist()]
+                source.extractall(extracted)
+        except (OSError, zipfile.BadZipFile) as error:
+            raise ValueError("Studio cold-start wheel is invalid.") from error
+
+        pycs: list[Path] = []
+        for relative in roots:
+            source_root = extracted / relative
+            if not source_root.is_dir():
+                raise ValueError("Studio cold-start wheel is missing a hot path.")
+            if not compileall.compile_dir(
+                source_root,
+                quiet=1,
+                force=True,
+                rx=_COLD_START_SOURCE_EXCLUSIONS,
+                stripdir=str(extracted),
+                prependdir="/opt/application/site-packages",
+                invalidation_mode=py_compile.PycInvalidationMode.CHECKED_HASH,
+            ):
+                raise ValueError("Studio cold-start bytecode compilation failed.")
+            pycs.extend(source_root.rglob("*.pyc"))
+        pycs = sorted(set(pycs))
+        if not pycs:
+            raise ValueError("Studio cold-start wheel produced no bytecode.")
+        for pyc in pycs:
+            header = pyc.read_bytes()[:8]
+            if len(header) != 8 or int.from_bytes(header[4:8], "little") != 3:
+                raise ValueError("Studio cold-start bytecode is not checked-hash.")
+
+        record_entries = [
+            (info, content)
+            for info, content in original
+            if info.filename.endswith(".dist-info/RECORD")
+        ]
+        if len(record_entries) != 1:
+            raise ValueError("Studio cold-start wheel RECORD is invalid.")
+        record_info, record_content = record_entries[0]
+        rows = [
+            row
+            for row in csv.reader(io.StringIO(record_content.decode("utf-8")))
+            if row
+        ]
+        pyc_names = {path.relative_to(extracted).as_posix() for path in pycs}
+        rows = [
+            row
+            for row in rows
+            if row[0] != record_info.filename and row[0] not in pyc_names
+        ]
+        for pyc in pycs:
+            content = pyc.read_bytes()
+            digest = base64.urlsafe_b64encode(sha256(content).digest())
+            rows.append(
+                [
+                    pyc.relative_to(extracted).as_posix(),
+                    "sha256=" + digest.rstrip(b"=").decode("ascii"),
+                    str(len(content)),
+                ]
+            )
+        rows.append([record_info.filename, "", ""])
+        record_output = io.StringIO(newline="")
+        csv.writer(record_output, lineterminator="\n").writerows(rows)
+
+        rebuilt = Path(tmp) / wheel.name
+        with zipfile.ZipFile(
+            rebuilt,
+            "w",
+            compression=zipfile.ZIP_DEFLATED,
+            compresslevel=9,
+        ) as destination:
+            for info, content in original:
+                if info.filename in pyc_names:
+                    continue
+                destination.writestr(
+                    info,
+                    (
+                        record_output.getvalue().encode("utf-8")
+                        if info.filename == record_info.filename
+                        else content
+                    ),
+                )
+            for pyc in pycs:
+                info = zipfile.ZipInfo(
+                    pyc.relative_to(extracted).as_posix(),
+                    date_time=(1980, 1, 1, 0, 0, 0),
+                )
+                info.compress_type = zipfile.ZIP_DEFLATED
+                info.create_system = 3
+                info.external_attr = 0o100644 << 16
+                destination.writestr(info, pyc.read_bytes())
+        os.replace(rebuilt, wheel)
+        return len(pycs)
 
 
 def _write_linux_runtime_lock(exported_lock: Path, destination: Path) -> None:

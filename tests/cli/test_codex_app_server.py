@@ -25,9 +25,10 @@ from pathlib import Path
 import pytest
 from websockets.asyncio.server import ServerConnection, serve
 
-import veadk.cli.codex_app_server as codex_app_server
+from veadk.cli import codex_app_server
 from veadk.cli.codex_app_server import (
     CodexAppServerError,
+    CodexAppServerOverloadError,
     CodexAppServerSession,
     CodexAppServerTransportError,
     CodexAppServerTurnTimeoutError,
@@ -933,7 +934,8 @@ async def test_reasoning_deltas_stream_as_accumulated_thinking() -> None:
     events = [event async for event in session.stream_turn("reasoning-delta")]
     thinking = [event for event in events if event.kind == "thinking"]
 
-    assert [event.text for event in thinking] == ["分", "分析", "分析"]
+    # Raw reasoning content must not be appended to the public summary.
+    assert [event.text for event in thinking] == ["分", "分", "分析"]
     assert [event.status for event in thinking] == ["running", "running", "done"]
     await session.close()
 
@@ -1304,6 +1306,32 @@ async def test_workspace_directory_browsing_and_user_approval() -> None:
     )
     assert response["result"] == {"decision": "acceptForSession"}
     await session.close()
+
+
+@pytest.mark.parametrize(
+    "method", ["mcpServer/elicitation/request", "item/tool/requestUserInput"]
+)
+@pytest.mark.asyncio
+async def test_unimplemented_input_protocols_fail_closed(method: str) -> None:
+    """Characterize the current integration gap before implementing the feature."""
+    websocket = _FakeWebSocket()
+    session = CodexAppServerSession(
+        "https://sandbox.example",
+        websocket_factory=lambda _url: _ready(websocket),
+    )
+    await session.connect()
+    try:
+        await session._handle_server_request(
+            "input-probe", method, {"threadId": "thread-1"}
+        )
+        response = next(m for m in websocket.messages if m.get("id") == "input-probe")
+        assert response["error"] == {
+            "code": -32601,
+            "message": f"unsupported server request: {method}",
+        }
+        assert "result" not in response
+    finally:
+        await session.close()
 
 
 @pytest.mark.asyncio
@@ -1763,7 +1791,7 @@ async def test_reading_unchanged_turn_state_does_not_extend_inactivity(
             )
             elapsed += 2
             terminal_callback = loop.call_later(
-                0.01,
+                0.5,
                 self.queue.put_nowait,
                 json.dumps(
                     {
@@ -1915,7 +1943,7 @@ async def test_turn_completion_without_events_cancels_the_pending_queue_read() -
                     }
                 ],
             },
-            True,
+            False,
         ),
         ({"status": "inProgress", "items": []}, False),
     ],
@@ -2476,3 +2504,606 @@ def test_app_server_client_stays_compatible_with_python_310() -> None:
     )
 
     assert "asyncio.timeout(" not in source
+
+
+class _TaskProtocolSocket(_FakeWebSocket):
+    async def send(self, raw: str) -> None:
+        message = json.loads(raw)
+        method = message.get("method")
+        if method in {"turn/steer", "thread/turns/list", "thread/items/list"}:
+            self.messages.append(message)
+            if method == "turn/steer":
+                result = {"turnId": message["params"]["expectedTurnId"]}
+            elif method == "thread/turns/list":
+                result = {
+                    "data": [
+                        {
+                            "id": "turn-existing",
+                            "status": "completed",
+                            "itemsView": "notLoaded",
+                            "items": [],
+                        }
+                    ],
+                    "nextCursor": None,
+                }
+            else:
+                result = {
+                    "data": [
+                        {
+                            "turnId": "turn-existing",
+                            "item": {
+                                "id": "message-final",
+                                "type": "agentMessage",
+                                "phase": "final_answer",
+                                "text": "preserved answer",
+                            },
+                        }
+                    ],
+                    "nextCursor": None,
+                }
+            await self.queue.put(json.dumps({"id": message["id"], "result": result}))
+            return
+        await super().send(raw)
+
+
+@pytest.mark.asyncio
+async def test_task_steer_uses_expected_turn_and_client_message_id() -> None:
+    socket = _TaskProtocolSocket()
+
+    async def factory(_url):
+        return socket
+
+    session = CodexAppServerSession(
+        "https://sandbox.example", websocket_factory=factory
+    )
+    try:
+        await session.connect()
+        assert (
+            await session.steer_turn("add tests", "turn-existing", "message-2")
+            == "turn-existing"
+        )
+        request = next(
+            item for item in socket.messages if item.get("method") == "turn/steer"
+        )
+        assert request["params"] == {
+            "threadId": "thread-1",
+            "expectedTurnId": "turn-existing",
+            "clientUserMessageId": "message-2",
+            "input": [{"type": "text", "text": "add tests"}],
+        }
+    finally:
+        await session.close()
+
+
+@pytest.mark.asyncio
+async def test_task_observer_hydrates_completed_turn_without_starting_work() -> None:
+    socket = _TaskProtocolSocket()
+
+    async def factory(_url):
+        return socket
+
+    session = CodexAppServerSession(
+        "https://sandbox.example", websocket_factory=factory
+    )
+    try:
+        await session.connect()
+        events = [
+            event
+            async for event in session.stream_turn(
+                "",
+                resume_turn_id="turn-existing",
+                interrupt_on_cancel=False,
+            )
+        ]
+        assert any(event.text == "preserved answer" for event in events)
+        assert not any(item.get("method") == "turn/start" for item in socket.messages)
+        assert any(
+            item.get("method") == "thread/items/list" for item in socket.messages
+        )
+    finally:
+        await session.close()
+
+
+@pytest.mark.asyncio
+async def test_native_retry_notification_is_visible_without_failing_turn() -> None:
+    session = CodexAppServerSession("https://sandbox.example")
+    session.thread_id = "thread-1"
+    session._active_turn_id = "turn-1"
+    session._turn_events = asyncio.Queue()
+    session._turn_completion = asyncio.get_running_loop().create_future()
+    session._handle_notification(
+        "error",
+        {
+            "threadId": "thread-1",
+            "turnId": "turn-1",
+            "error": {"message": "upstream disconnected"},
+            "willRetry": True,
+        },
+    )
+    assert not session._turn_completion.done()
+    event = session._turn_events.get_nowait()
+    assert event.kind == "recovery"
+    assert event.status == "retrying"
+
+
+@pytest.mark.asyncio
+async def test_native_notification_does_not_cross_thread_boundary() -> None:
+    session = CodexAppServerSession("https://sandbox.example")
+    session.thread_id = "thread-1"
+    session._active_turn_id = "turn-1"
+    session._turn_events = asyncio.Queue()
+    session._handle_notification(
+        "item/agentMessage/delta",
+        {
+            "threadId": "another-thread",
+            "turnId": "turn-1",
+            "itemId": "foreign",
+            "delta": "private",
+        },
+    )
+    assert session._turn_events.empty()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("unused", [False, True])
+async def test_only_proven_unused_thread_can_replace_missing_rollout(unused):
+    socket = _MissingRolloutWebSocket()
+    session = CodexAppServerSession(
+        "https://sandbox.example", websocket_factory=lambda _: _ready(socket)
+    )
+    try:
+        if unused:
+            await session.attach_thread("thread-empty", allow_empty_restart=True)
+            assert session.thread_id == "thread-1"
+        else:
+            with pytest.raises(CodexAppServerError, match="no rollout found"):
+                await session.attach_thread("thread-empty")
+        assert (
+            any(item.get("method") == "thread/start" for item in socket.messages)
+            == unused
+        )
+    finally:
+        await session.close()
+
+
+def test_running_turn_with_completed_commentary_is_not_terminal():
+    from veadk.cli.codex_app_server import _turn_is_terminal
+
+    assert not _turn_is_terminal(
+        {
+            "id": "turn",
+            "status": "inProgress",
+            "items": [
+                {
+                    "type": "agentMessage",
+                    "id": "plan",
+                    "phase": "commentary",
+                    "text": "I will implement this now.",
+                },
+            ],
+        }
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["completed", "failed", "interrupted"])
+async def test_task_observer_emits_terminal_metrics_even_before_raising(status):
+    socket = _TerminalTurnWebSocket(status, has_final=True)
+    session = CodexAppServerSession(
+        "https://sandbox.example", websocket_factory=lambda _: _ready(socket)
+    )
+    events = []
+    try:
+        try:
+            async for event in session.stream_turn(
+                "long-running", client_user_message_id="metrics-test"
+            ):
+                events.append(event)
+        except CodexAppServerError:
+            assert status != "completed"
+        ended = [event for event in events if event.kind == "turn_completed"]
+        assert len(ended) == 1
+        assert ended[0].status == status
+        assert ended[0].turn_id
+    finally:
+        await session.close()
+
+
+@pytest.mark.asyncio
+async def test_dynamic_result_call_returns_validation_feedback_in_same_turn():
+    from unittest.mock import AsyncMock
+
+    session = CodexAppServerSession("https://sandbox")
+    session.thread_id = "thread-1"
+    session.dynamic_tools = (
+        {
+            "type": "function",
+            "name": "submit_build_result",
+            "description": "Submit",
+            "inputSchema": {"type": "object"},
+        },
+    )
+    session.dynamic_tool_handler = AsyncMock(
+        return_value={
+            "success": False,
+            "contentItems": [
+                {"type": "inputText", "text": "Missing acceptanceCriteria"}
+            ],
+        }
+    )
+    session._send = AsyncMock()
+    params = {
+        "threadId": "thread-1",
+        "turnId": "turn-1",
+        "callId": "call-1",
+        "namespace": None,
+        "tool": "submit_build_result",
+        "arguments": {},
+    }
+    await session._handle_server_request("request-1", "item/tool/call", params)
+    session.dynamic_tool_handler.assert_awaited_once_with(params)
+    assert session._send.call_args.args[0]["result"]["success"] is False
+    assert (
+        "Missing acceptanceCriteria"
+        in session._send.call_args.args[0]["result"]["contentItems"][0]["text"]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        {"threadId": "another-thread"},
+        {"namespace": "another-namespace"},
+        {"tool": "unknown"},
+        {"callId": ""},
+    ],
+)
+async def test_dynamic_tool_requests_cannot_escape_registered_thread(invalid):
+    from unittest.mock import AsyncMock
+
+    session = CodexAppServerSession("https://sandbox")
+    session.thread_id = "thread-1"
+    session.dynamic_tools = ({"name": "submit_build_result"},)
+    session.dynamic_tool_handler = AsyncMock()
+    session._send = AsyncMock()
+    params = {
+        "threadId": "thread-1",
+        "turnId": "turn-1",
+        "callId": "call-1",
+        "namespace": None,
+        "tool": "submit_build_result",
+        "arguments": {},
+        **invalid,
+    }
+    await session._handle_server_request("request-1", "item/tool/call", params)
+    session.dynamic_tool_handler.assert_not_called()
+    assert session._send.call_args.args[0]["result"]["success"] is False
+
+
+@pytest.mark.asyncio
+async def test_dynamic_tools_register_only_on_start_and_survive_resume():
+    from unittest.mock import AsyncMock
+
+    socket = _FakeWebSocket()
+    session = CodexAppServerSession(
+        "https://sandbox", websocket_factory=AsyncMock(return_value=socket)
+    )
+    tool = {
+        "type": "function",
+        "name": "submit_build_result",
+        "description": "Submit",
+        "inputSchema": {"type": "object"},
+    }
+    session.dynamic_tools = (tool,)
+    await session.connect()
+    try:
+        start = next(m for m in socket.messages if m.get("method") == "thread/start")
+        assert start["params"]["dynamicTools"] == [tool]
+        assert "sandbox" in start["params"] and "sandboxPolicy" not in start["params"]
+        await session._resume_or_start_thread(
+            session.thread_id, previous_workspace_locked=True
+        )
+        resume = next(m for m in socket.messages if m.get("method") == "thread/resume")
+        assert "dynamicTools" not in resume["params"]
+        assert session.dynamic_tools == (tool,)
+    finally:
+        await session.close()
+
+
+class _DynamicToolWebSocket(_FakeWebSocket):
+    """Issue one ``item/tool/call`` server request while a turn is running."""
+
+    def __init__(self, *, tool: str = "reportRoute") -> None:
+        super().__init__()
+        self.tool = tool
+        self.tool_result: dict[str, object] | None = None
+        self.tool_error: dict[str, object] | None = None
+
+    async def send(self, raw: str) -> None:
+        message = json.loads(raw)
+        if message.get("id") == "server-tool-call":
+            if "result" in message:
+                self.tool_result = message["result"]
+            else:
+                self.tool_error = message["error"]
+            await self._notification(
+                "turn/completed",
+                {"turn": {"id": "turn-1", "status": "completed"}},
+            )
+            return
+        await super().send(raw)
+        if message.get("method") == "turn/start":
+            await self.queue.put(
+                json.dumps(
+                    {
+                        "id": "server-tool-call",
+                        "method": "item/tool/call",
+                        "params": {
+                            "threadId": "thread-1",
+                            "turnId": "turn-1",
+                            "callId": "call-1",
+                            "tool": self.tool,
+                            "arguments": {"status": "recommendation_ready"},
+                        },
+                    }
+                )
+            )
+
+
+class _OverloadedWebSocket(_FakeWebSocket):
+    """Reject the first ``failures`` requests with the queue-overload code."""
+
+    def __init__(self, *, failures: int) -> None:
+        super().__init__()
+        self.remaining_failures = failures
+        self.overload_count = 0
+
+    async def send(self, raw: str) -> None:
+        message = json.loads(raw)
+        request_id = message.get("id")
+        if (
+            isinstance(request_id, int)
+            and message.get("method") not in {None, "initialize"}
+            and self.remaining_failures > 0
+        ):
+            self.remaining_failures -= 1
+            self.overload_count += 1
+            self.messages.append(message)
+            await self.queue.put(
+                json.dumps(
+                    {
+                        "id": request_id,
+                        "error": {
+                            "code": -32001,
+                            "message": "Server overloaded; retry later.",
+                        },
+                    }
+                )
+            )
+            return
+        await super().send(raw)
+
+
+def test_dynamic_tools_are_announced_only_when_a_thread_starts() -> None:
+    session = CodexAppServerSession("https://sandbox.example?Authorization=secret")
+
+    session.register_dynamic_tool(
+        "reportRoute",
+        "提交项目分析结果",
+        {"type": "object"},
+        lambda _arguments: codex_app_server.CodexDynamicToolResult(True, "已接收"),
+    )
+
+    assert session.dynamic_tool_names == ("reportRoute",)
+    assert session._thread_start_options()["dynamicTools"] == [
+        {
+            "type": "function",
+            "name": "reportRoute",
+            "description": "提交项目分析结果",
+            "inputSchema": {"type": "object"},
+        }
+    ]
+    # thread/resume 不接受 dynamicTools，只有 thread/start 携带。
+    assert "dynamicTools" not in session._thread_options()
+
+
+def test_dynamic_tool_registration_rejects_duplicates_and_missing_fields() -> None:
+    session = CodexAppServerSession("https://sandbox.example?Authorization=secret")
+
+    def handler(
+        _arguments: dict[str, object],
+    ) -> codex_app_server.CodexDynamicToolResult:
+        return codex_app_server.CodexDynamicToolResult(True, "ok")
+
+    with pytest.raises(CodexAppServerError, match="必须提供名称与说明"):
+        session.register_dynamic_tool("", "说明", {}, handler)
+    with pytest.raises(CodexAppServerError, match="JSON Schema"):
+        session.register_dynamic_tool("a", "说明", "not-a-schema", handler)  # type: ignore[arg-type]
+
+    session.register_dynamic_tool("reportRoute", "说明", {"type": "object"}, handler)
+    with pytest.raises(CodexAppServerError, match="已注册"):
+        session.register_dynamic_tool(
+            "reportRoute", "说明", {"type": "object"}, handler
+        )
+
+
+@pytest.mark.asyncio
+async def test_dynamic_tool_call_returns_a_typed_result() -> None:
+    websocket = _DynamicToolWebSocket()
+    seen: list[dict[str, object]] = []
+    session = CodexAppServerSession(
+        "https://sandbox.example?Authorization=secret",
+        websocket_factory=lambda _url: _ready(websocket),
+    )
+    session.register_dynamic_tool(
+        "reportRoute",
+        "提交项目分析结果",
+        {"type": "object"},
+        lambda arguments: (
+            seen.append(arguments)
+            or codex_app_server.CodexDynamicToolResult(True, "分析结果已接收")
+        ),
+    )
+    await session.connect()
+
+    events = [event async for event in session.stream_turn("analyze")]
+
+    assert seen == [{"status": "recommendation_ready"}]
+    assert websocket.tool_result == {
+        "contentItems": [{"type": "inputText", "text": "分析结果已接收"}],
+        "success": True,
+    }
+    assert [event.text for event in events if event.text] == ["完成"]
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_dynamic_tool_failure_is_reported_to_codex_without_aborting_the_turn() -> (
+    None
+):
+    websocket = _DynamicToolWebSocket()
+    session = CodexAppServerSession(
+        "https://sandbox.example?Authorization=secret",
+        websocket_factory=lambda _url: _ready(websocket),
+    )
+    session.register_dynamic_tool(
+        "reportRoute",
+        "提交项目分析结果",
+        {"type": "object"},
+        lambda _arguments: codex_app_server.CodexDynamicToolResult(
+            False, "frameworks[0].evidence[2].line 必须为大于 0 的整数"
+        ),
+    )
+    await session.connect()
+
+    async for _event in session.stream_turn("analyze"):
+        pass
+
+    assert websocket.tool_result is not None
+    assert websocket.tool_result["success"] is False
+    assert "evidence" in websocket.tool_result["contentItems"][0]["text"]
+    assert websocket.tool_result["contentItems"][0]["text"].startswith("frameworks")
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_an_unregistered_dynamic_tool_is_refused() -> None:
+    websocket = _DynamicToolWebSocket(tool="unknownTool")
+    session = CodexAppServerSession(
+        "https://sandbox.example?Authorization=secret",
+        websocket_factory=lambda _url: _ready(websocket),
+    )
+    await session.connect()
+
+    async for _event in session.stream_turn("analyze"):
+        pass
+
+    assert websocket.tool_error is None
+    assert websocket.tool_result == {
+        "success": False,
+        "contentItems": [
+            {"type": "inputText", "text": "Tool is unavailable for this thread."}
+        ],
+    }
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_a_handler_exception_becomes_a_failed_tool_result() -> None:
+    websocket = _DynamicToolWebSocket()
+    session = CodexAppServerSession(
+        "https://sandbox.example?Authorization=secret",
+        websocket_factory=lambda _url: _ready(websocket),
+    )
+
+    def _explode(_arguments: dict[str, object]) -> object:
+        raise RuntimeError("handler blew up")
+
+    session.register_dynamic_tool(
+        "reportRoute", "提交项目分析结果", {"type": "object"}, _explode
+    )
+    await session.connect()
+
+    async for _event in session.stream_turn("analyze"):
+        pass
+
+    assert websocket.tool_result is not None
+    assert websocket.tool_result["success"] is False
+    text = websocket.tool_result["contentItems"][0]["text"]
+    assert "RuntimeError" not in text
+    assert "handler blew up" not in text
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_queue_overload_is_retried_with_backoff(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(codex_app_server, "_OVERLOAD_RETRY_BASE_SECONDS", 0.0)
+    websocket = _OverloadedWebSocket(failures=2)
+    session = CodexAppServerSession(
+        "https://sandbox.example?Authorization=secret",
+        websocket_factory=lambda _url: _ready(websocket),
+    )
+    await session.connect()
+
+    result = await session.request("thread/read", {"threadId": "thread-1"})
+
+    assert websocket.overload_count == 2
+    assert "thread" in result
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_queue_overload_gives_up_after_the_retry_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(codex_app_server, "_OVERLOAD_RETRY_BASE_SECONDS", 0.0)
+    websocket = _OverloadedWebSocket(failures=0)
+    session = CodexAppServerSession(
+        "https://sandbox.example?Authorization=secret",
+        websocket_factory=lambda _url: _ready(websocket),
+    )
+    await session.connect()
+    websocket.remaining_failures = 99
+
+    with pytest.raises(CodexAppServerOverloadError):
+        await session.request("thread/read", {"threadId": "thread-1"})
+
+    assert websocket.overload_count == codex_app_server._OVERLOAD_RETRY_ATTEMPTS + 1
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_a_caller_without_a_task_can_ask_for_the_turn_lifecycle() -> None:
+    """Migration turns are not Studio tasks but still report their own cost."""
+
+    async def run(*, emit_turn_lifecycle: bool) -> list[object]:
+        terminal = _TerminalTurnWebSocket("completed", has_final=True)
+        session = CodexAppServerSession(
+            "https://sandbox.example?Authorization=secret",
+            websocket_factory=lambda _url: _ready(terminal),
+        )
+        try:
+            return [
+                event
+                async for event in session.stream_turn(
+                    "hello", emit_turn_lifecycle=emit_turn_lifecycle
+                )
+            ]
+        finally:
+            await session.close()
+
+    asked = await run(emit_turn_lifecycle=True)
+    kinds = [event.kind for event in asked]
+    assert kinds[0] == "turn_started"
+    assert kinds[-1] == "turn_completed"
+    # 生命周期事件带回合的权威计时，页面才有本轮耗时可报。
+    assert "model" in asked[-1].response
+
+    # 没要的时候行为不变：任务流之外的多余事件不会冒出来。
+    default = await run(emit_turn_lifecycle=False)
+    assert [event.kind for event in default] == [
+        kind for kind in kinds if kind not in {"turn_started", "turn_completed"}
+    ]

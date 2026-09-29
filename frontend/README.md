@@ -29,6 +29,20 @@ snapshots. Empty-response notices are evaluated across the whole user request,
 so an intermediate reasoning fragment does not report an empty reply when tools
 or an answer follow. General agents retain their existing per-turn behavior.
 
+- **Ark API Keys**: Each page load reads the current API Key list directly from
+  the cloud provider. Enabled, disabled, all-permission and custom-permission
+  keys are listed with their status and permission scope beneath the name.
+  Disabled keys remain visible but cannot be selected. Search matches names,
+  statuses and permission scopes; pagination preserves distinct keys with the
+  same name. Model options combine account activation with the selected key's
+  model permissions. Models outside that scope remain visible but disabled,
+  and changing keys clears model selections that are no longer permitted.
+  Explicitly granted video and shut-down models appear in the searchable model
+  dropdown with their status and remain disabled, without expanding the form.
+  Current permissions are re-applied even when model metadata is cached.
+  Overlapping identical requests share one in-flight cloud query, including
+  failures; later API Key list reads still fetch the latest cloud data.
+  This behavior applies to both Volcengine and BytePlus
 - **Agent publication review**: Developers deploy privately and apply from an
   Agent card. The review center's Agent tab lets administrators inspect the
   submitted Runtime metadata, approve with an optional comment, or return with
@@ -281,26 +295,28 @@ or an answer follow. General agents retain their existing per-turn behavior.
   AgentKit. Connected Harness agents expose supported image, video, and
   presentation task types; Studio mounts only missing task tools for the
   current session and preserves tools already supplied by the Agent.
-- **Intelligent Agent development**: describe the intended VeADK Agent once and
-  receive immediate, cancellable preparation feedback before the development
-  conversation opens. Studio then automatically runs intent gating,
-  implementation, local checks, a temporary cloud deployment, acceptance calls,
-  log inspection, and cleanup.
-  Public Codex reasoning updates and Assistant replies use the normal
-  conversation renderer; credentials, raw Sandbox paths, and internal commands
-  stay hidden. Each build appears in the shared conversation history for the
-  lifetime of its remote development environment (up to eight hours); reopening
-  it restores the latest conversation and current source-delivery card.
-  Navigating away from an active build requires confirmation and stops that
-  build before leaving, while the conversation remains available until expiry.
-  Stopping preserves received output and blocks the next submission until
-  cleanup finishes. An interrupted Codex turn is reported explicitly, including
-  when Studio discovers it after reconnecting; it does not publish a new version
-  or wait for the inactivity timeout. Users can inspect generated text files and
-  download the complete ZIP (including binary assets) as soon as the source is ready.
-  Active turns resume on the same thread after a connection drops. New task
-  progress resets the recovery allowance; reconnecting and reading unchanged
-  state do not extend the inactivity deadline or restart the task.
+- **Intelligent Agent development**: describe a VeADK Agent and receive
+  immediate, cancellable preparation feedback. Studio owns each build as a
+  background task, including implementation, local checks, temporary cloud
+  validation, source delivery, version persistence when configured, and cleanup.
+  Codex App Server **0.154.0** provides native thread/turn recovery, history,
+  `turn/interrupt`, and `turn/steer`. The running composer keeps separate Stop
+  and Add instructions controls. Additions show whether they are pending,
+  sending, delivered, or withdrawn; additions during recovery or delivery wait
+  until they can safely be applied.
+  Navigating away or disconnecting SSE leaves the task running. Studio's task
+  notification returns to it, and replay restores existing output without
+  duplicating messages. Only an explicit Stop requests remote interruption.
+  Stop is accepted immediately, remains “stopping” until confirmed by Codex and
+  any delivery command, and preserves all received output and workspace changes.
+  Temporary transport failures reconnect automatically; interrupted native turns
+  may continue in the same thread after checking their status. Ambiguous
+  submissions are reconciled by their native message identifiers instead of
+  being sent again. Unresolved failures retain output and expose a Continue
+  action; unusable environments or invalid source integrity require a new build.
+  Public reasoning and Assistant replies reuse the existing conversation
+  renderer. Credentials are redacted before events reach local storage.
+  Source downloads remain available once the delivery artifact is ready.
   Each completed build or optimization is also saved as an immutable project
   version in the private Studio TOS bucket. Users can reopen any saved version,
   view, download, deploy, delete, or restore it into a new Sandbox for another
@@ -312,6 +328,30 @@ or an answer follow. General agents retain their existing per-turn behavior.
   Deployable source can be sent to Runtime manually; an incomplete verification
   report requires an explicit confirmation. No separate “start verification”
   action is required.
+  Task execution metadata and replay events use local SQLite, with no TOS task
+  writes. `VEADK_STUDIO_TASK_DB` defaults to
+  `~/.veadk/studio/development-runs.sqlite3`; retain this directory on a local
+  persistent volume when restarting a container. `VEADK_STUDIO_TASK_RETENTION_SECONDS`
+  defaults to 21600 (six hours after a terminal state).
+  Active tasks are not removed by retention. `VEADK_STUDIO_TASK_MAX_ACTIVE_SECONDS`
+  defaults to 28800 (eight hours), after which Studio requests a durable stop.
+  Admission allows three unfinished tasks per user, 100 globally, and 16 local
+  workers. Task output is limited to 64 MiB per run; reaching the limit keeps
+  existing content. All task reads, event replay, controls, and deletion use the
+  authenticated owner and an owner-qualified database key.
+  This SQLite deployment supports one Studio instance with multiple users.
+  Replicas with separate local disks do not share task state; moving to multiple
+  instances requires a shared transactional task store. Losing the local volume
+  loses its short-term task history. Existing immutable project/version storage
+  continues to use the configured TOS repository independently.
+  The task API accepts idempotent submissions under
+  `/web/intelligent-development/sessions/{sessionId}/runs`, exposes ordered replay
+  at `/runs/{runId}/events?after={seq}`, and accepts `/stop`, `/resume`, and `/inputs`.
+  `/runs` lists only the current user's unfinished tasks. The legacy `/messages`
+  stream is an adapter over the same task service and includes `run.status`
+  events; stream detachment does not stop work.
+  See the [verification report](recoverable-build-verification.md) for executed
+  recovery, isolation, Stop/Steer, and retained-output checks and their limits.
 - **Existing Agent migration**: upload a local project ZIP for read-only
   analysis, confirm the detected framework and entry point, then migrate and
   validate it in a temporary Sandbox. Successful migration source is saved as
@@ -320,6 +360,13 @@ or an answer follow. General agents retain their existing per-turn behavior.
   versions; any version can be restored into the intelligent-development flow
   for another intent-driven iteration after the temporary migration environment
   has ended.
+  The workspace is a single-column page without a side navigation: the home is
+  the upload entry followed by recent migrations (five by default, expandable
+  in place, with expired environments offered as view-only), “已迁移项目” is a
+  top-bar entry that opens the saved-project library, and returning home or
+  opening the project library never stops a running migration. Capability and
+  session-list failures are reported separately so the upload entry stays
+  usable and each failure offers its own retry.
   Pencil icons beside project and version names open the existing-style name
   dialog; the check icon saves and the close icon cancels. Names are normalized
   and trimmed, allow 1–128 Unicode characters, and reject control/invisible
@@ -403,6 +450,40 @@ or an answer follow. General agents retain their existing per-turn behavior.
   deployment and never enters generated source, workflow, documentation, or
   logs; cloud credentials remain GitHub Secrets or Runtime environment variables.
 - **Tracing viewer**: a span tree + detail panel from the ADK debug trace.
+- **Runtime session artifacts**: in a chat that supports Studio Tools, select
+  `studio_write_artifact` for the current session and ask the Agent to save a
+  report, chart, or document. This tool runs in the Studio BFF through the
+  existing tool channel. It uses Studio's configured TOS bucket and server-side
+  credentials, including the cloud Studio IAM role's STS credentials, to write
+  `artifacts/{user_id}/{session_id}/{relative_file_path}`. User and session IDs
+  come from the authenticated tool context; model arguments do not select the
+  owner, session, bucket, or credentials. Creating and updating Agents is
+  unchanged: the tool is selected per session, with no changes to the generator,
+  default system prompt, or Runtime mount configuration.
+  The tool accepts UTF-8 text up to 1 MiB per file; saving the same relative path
+  replaces that file in the current session.
+  A persistent `会话产物` button above the chat composer opens the shared Drawer
+  and FileExplorer. Runtime access is checked before reading the signed-in
+  user's session directory. Changing sessions closes the previous preview;
+  the directory supports refresh and pagination, and refreshes when a reply
+  completes. Empty sessions and access or network failures have separate states.
+  Configure `VEADK_STUDIO_TOS_BUCKET` and `VEADK_STUDIO_TOS_REGION` in Studio;
+  the Studio execution identity needs read, write, and list access to this
+  storage. Reads and writes use the Studio bucket's region on both Volcengine
+  and BytePlus. When Studio storage is configured, previews use that bucket even
+  if the Runtime has an unrelated TOS mount. Without Studio storage, the reader
+  retains support for an existing artifact mount; configuration, authorization,
+  and TOS failures do not silently switch storage.
+  HTML, Markdown, images, JSON, and text can be previewed; other formats remain
+  downloadable. HTML uses a scriptless sandbox with inline styles and up to
+  32 authenticated, same-session relative images. External resources and scripts
+  are disabled. Preview limits are 5 MB per file and 20 MB for embedded images;
+  larger files can be downloaded. Small files are prefetched after replies;
+  bounded per-session caches survive closing the panel, and HTML appears before
+  its relative images finish loading.
+  The BFF tool requires no Runtime TOS mount or separate mount credentials.
+  The tool saves files to the session directory; arbitrary files in `/tmp`
+  or an independent Sandbox are not collected.
 - **Message feedback**: rate persisted Runtime replies with accessible,
   repository-drawn like/dislike controls. Studio identifies the final ADK Event,
   stores the latest rating through the existing Session state-delta API, and
@@ -535,9 +616,22 @@ or an answer follow. General agents retain their existing per-turn behavior.
   the framework, entry point, and open questions. Structured frameworks run the
   preinstalled `ak migrate`; Dify and Any projects run
   `ak migrate --execution in-place` with Codex in the same Session. Evaluation
-  deploys a temporary Runtime, checkpoints per-case execution as JSONL, judges
-  batches in one fresh resumable Codex thread, and always reconciles Runtime
-  cleanup before completing or cancelling. Reports show 0–100 display scores,
+  deploys a temporary Runtime, checkpoints per-case execution as JSONL, and
+  judges batches in one fresh resumable Codex thread. Analysis and judging both
+  deliver their contract through an app-server dynamic tool instead of parsing
+  free text, and the analysis turn runs on a Studio background worker so a long
+  analysis never waits inside the upload request. Each judged batch is a durable
+  request the runner writes into the Session: Studio answers it with one
+  app-server turn carrying the verdict, and the runner validates and caches that
+  verdict before the next batch. A request stays on disk until it is answered, so
+  a Studio restart replays the same batch; a request that cannot be answered
+  falls back to `codex exec` inside the same batch budget. The request declares
+  how long the runner will listen, and the turn is sized to answer inside that
+  window, so even a judge batch that is too slow comes back as an answered
+  failure rather than a timeout. Setting
+  `AGENTKIT_MIGRATION_JUDGE_APP_SERVER=0` pins that scripted judge for the
+  whole run instead of writing judge requests at all. Cleanup is always
+  reconciled before completing or cancelling. Reports show 0–100 display scores,
   execution success, evidence coverage, N/A counts, low-scoring and failed
   cases, versions, evidence severity, and cleanup status without a pass/fail
   verdict. Each raw judge score is rounded half up to a 0–100 integer before
@@ -765,6 +859,13 @@ run `npm ci` from `frontend/` to synchronize dependencies with the lockfile
 before rebuilding. Reusing another checkout's `node_modules` can retain older
 dependencies even when the current `package.json` already declares them
 
+### Studio deployment resources
+
+`veadk studio deploy` configures the Studio function with 8 vCPU, 16 GB memory,
+and both minimum and maximum instance counts set to 1 on Volcengine and BytePlus
+These settings apply to new deployments and redeployments of an existing Studio
+Ordinary Agent deployments retain their existing resource defaults
+
 ### Identity-backed user management
 
 Deploy with `--super-admin <existing-user-email-or-uid>` to select the first
@@ -867,7 +968,8 @@ avoid linking another checkout's older `node_modules` directory. If TypeScript
 reports missing `i18next` or `react-i18next` despite their entries in
 `package.json`, install from the current lockfile with `npm ci`, then rerun the
 check. Do not remove imports or change source types to work around missing
-dependencies
+dependencies. This also applies to component tests: reinstall dependencies in
+the worktree itself instead of borrowing the main checkout’s `node_modules`
 
 ## Branding
 
@@ -906,6 +1008,11 @@ Each image version exposes a read-only Manifest at
 `/web/environments/{environmentId}/builds/{versionId}/manifest`; the Studio
 environment card opens the same version-bound contract as YAML for inspection
 and copying.
+
+Build logs and the initial provisioning state are saved before the Sandbox Tool
+task starts. Delayed status polls recheck the saved state before provisioning,
+so a completed task is not repeated when an earlier poll returns late. This
+applies to both Volcengine and BytePlus
 
 When an environment is mounted to an Agent conversation, Studio assigns a new
 `mount_instance_id`. Sandbox Tool Sessions are reused only while the Agent
@@ -1280,6 +1387,17 @@ schedule without waiting for Runtime execution. A separate asynchronous worker
 drains ready entries, invokes Runtime, and writes terminal results. The scanner,
 worker, and Studio BFF can therefore restart independently without losing work.
 
+Deployment output identifies the scanner and worker separately, including each
+Function name, ID, console link, dependency installation status, cloud build log,
+release status, revision, and minute timer ID. Build logs are printed as they
+become available, with repeated lines suppressed. Release failures include the
+status message and failed-instance logs returned by VeFaaS. During quiet periods,
+a progress message reports the current stage and elapsed time about every 15
+seconds, including while an SDK request is pending. Optional log retrieval uses
+short timeouts and does not interrupt deployment; credentials and signed URL
+queries are redacted. Volcengine uses Chinese progress messages and BytePlus uses
+English messages
+
 Duplicate timer deliveries are deduplicated with immutable run IDs and TOS
 conditional writes; an ETag lock prevents concurrent executions of the same
 task across Studio replicas or worker instances. Ready entries are deleted only
@@ -1419,20 +1537,27 @@ AI APP 新增 [ConversationFlow](src/components/ai-app/ConversationFlow/README.m
 共享组件目录见 [组件库说明](src/components/README.md)，预览目录见
 [Components Preview](src/components-preview/README.md)
 
-运行 `npm run dev:components` 打开独立组件预览页，按基础组件、复合组件、布局、节点组件和 AI APP 分组浏览 Figma 组件
+运行 `npm run dev:components` 打开独立组件预览页，按 Foundation、Base、Block、AI App、Node、Layout 分组，组内按组件名称排序
+Foundation 下的 Specification 展示用户确认的前端开发规则，支持复制规范；内容与 AI 可读取的 [Specification.md](src/components-preview/foundation/Specification.md) 保持同一来源
+组件名称使用一级标题，变种使用二级标题；Input 的前后图标变种合并展示，参数表统一在底部，可通过页内目录直接跳转
+Form Label Row 和 Glass Icon Button Group 独立归入 Block，Card Layout 归入 Layout，原有页面与小节链接继续可用
+Progress 对应 LongRunningState，Text 和 Code 两种详情形式分别在二级标题下展示，支持 `#progress` 与原有 `#long-running-state` 链接
+窄屏提供可展开的组件目录和本页目录，原有组件链接继续可用
 预览包含可复用控件、完整 Radio 卡片、表格、页面布局和 Prompt Input，提供持久化明暗主题、语义 Token 展示及从 TypeScript 接口生成的参数表
 主次按钮默认等高，Select 支持选项副标题，Prompt Input 支持提示词列表轮播；组件交互与使用约定见预览说明
 Menu 提供文字与箭头触发的面板菜单，支持分组、多级子菜单及可选图标，预览中可查看交互示例与参数表
 Toast 提供四种状态和自定义操作，通过 ToastProvider 与 useToast 管理堆叠、自动关闭及悬停暂停，继承明暗主题
-Loading 提供无限路径与圆环两种加载图形，ScrollArea 和卡片触底加载复用无限路径，支持明暗主题与减少动态效果偏好
+Loading 提供无限路径（默认 32 × 16px）与圆环（默认 20 × 20px）两种加载图形，ScrollArea 和卡片触底加载复用无限路径，支持明暗主题与减少动态效果偏好
 EmptyState 支持圆形背景内的 24px 图标、标题与详细说明，以及复用 Button 的横排操作组；ErrorState 使用相同尺寸的红色断链图标且无按钮，两者均可在基础组件预览中查看
+Button 各样式并排展示 Compact、Default、Large，按钮底端对齐，尺寸说明在下方；文字按钮高度为 28 / 32 / 36px、字号为 12 / 14 / 16px，图标随字号缩放，Pill 使用同一套尺寸
 Button 支持 loading，加载时自动禁用且只显示 Ring 图标，保留按钮尺寸与无障碍名称
-LongRunningState 使用居中的双栏工作区，左侧展示任务进度与可回看的已完成步骤，右侧复用 Drawer 的明暗主题玻璃材质与 ScrollArea 展示详情；查看历史不会改变执行进度，可返回当前步骤继续跟随，详情即时替换并短暂淡入，代码日志复用 CodeBlock 高亮并支持隐藏行号
+LongRunningState 整体左对齐，依次展示正常字号的当前进度名称、快速循环滑动的加载条和无背景 ScrollArea；名称切换时向上渐隐再滑入下一名称，完成后停止动画并保留结果，支持减少动态效果偏好
+ConversationFlow 新增步骤先展开空间再渐显内容，状态更新不重复进场，减少动态效果时直接显示
 资源页首次加载统一复用 Infinity Path，详情布局不包含 Sidebar
 ModalButton 复用 ModalLayout 并提供遮罩和进出动效；Drawer 以留有屏幕边距的浮动卡片打开；FileExplorer 组合文件树、CodeBlock 与 ScrollArea 展示文件内容
 FileExplorer 按文件名显示常用文件图标并选择高亮语言，file.language 可覆盖，支持自动格式化、折行及可选编辑保存；CodeBlock 支持自动语法高亮、手动颜色 token 和纯文本，复制保留传入文本
 Drawer 默认提供毛玻璃背景；FileUpload 复用 DashedZone 并提供文件选择与校验，Slider 支持原生拖动和键盘调整
-DatePicker 在基础组件中展示日期与日期时间选择；IndexLayout 在布局分组中展示首页；侧边栏会话示例位于复合组件的 Sidebar / 会话
+DatePicker 在基础组件中展示日期与日期时间选择；IndexLayout 在布局分组中展示首页；侧边栏会话示例位于 Block 分组的 Sidebar
 
 
 ### 组件库侧栏预览
@@ -1440,7 +1565,6 @@ DatePicker 在基础组件中展示日期与日期时间选择；IndexLayout 在
 `npm run dev:components` 启动独立组件库，在布局分组打开 App layout 可查看完整侧栏
 支持 240px / 56px 展开折叠、会话菜单、账号区域与默认深色的主题切换
 全屏入口为 `/components-preview/?fullscreen=app-layout#app-layout`，详见 [组件预览说明](src/components-preview/README.md)
-
 ### MPA 消息渠道
 
 在“自动化 → 消息渠道”打开“MPA智能体消息渠道”，与飞书机器人创建、网站集成并列。选择已有 MPA 智能体后配置飞书、企业微信、钉钉；原智能体详情不再显示消息渠道栏目。列表按当前账号授权范围加载，选项展示名称、描述、“创建者 | 相对创建时间”，以及地域和 Runtime ID，支持按名称、Runtime ID、地域搜索已加载结果，并可加载更多；切换智能体会清理临时二维码和凭据，已有绑定继续保留。三个渠道均提供“极速配置”和“手动配置”，默认极速配置，切换方式后仅显示对应内容。极速配置沿用飞书、钉钉扫码绑定和企业微信官方 SDK 弹窗授权；手动配置分别填写飞书 App ID / App Secret、钉钉 Client ID / Client Secret、企业微信 Bot ID / Secret；仅飞书提供允许群列表，并独立展示消息网关、入站路由和回复投递状态。钉钉与企业微信无需配置本地群白名单。所有渠道均可解绑，旧 Runtime 必须升级后才能使用新增绑定接口。需要 Studio 管理员身份、Runtime 的 `CHANNEL_ADMIN_AUTH_MODE=runtime_key`，以及通过部署配置注入并在更新时保留的 `CHANNEL_STATE_ENCRYPTION_KEY`（Fernet key）。渠道数据库必须独立于其他 MPA 实例。飞书和钉钉的扫码凭据由服务端获取；企微 SDK 授权结果仅在浏览器内存中短暂存在，立即提交 Runtime 保存并完成注册，取消、切页和五分钟超时会清理弹窗。配置完成不等于收发验证通过；部署后请单独验收私聊和授权群 @ 对话。详见 [接口契约](../specs/mpa-channels/README.zh.md)。
@@ -1513,3 +1637,84 @@ MPA grouped replies hide exact answer mirrors only in their derived view: an ext
 ### MPA A2A shared gateway compatibility
 
 MPA creation defaults to A2A discovery (`ENABLE_A2A=true`, `DISABLE_JWT_AUTH=false`). When a tagged MPA Runtime's agent card omits the shared gateway `/runtime/<ID>` prefix from its same-origin `/a2a/jsonrpc` URL, the Studio backend restores the prefix from the control-plane endpoint for chat and history requests. General-agent URLs are unchanged. Existing Runtimes need an explicit configuration release; reconnect to refresh discovery. Restart Studio after this backend update; no frontend rebuild is required.
+
+### 智能构建首页与任务找回
+
+从创建入口重新进入智能构建时，返回首页并清除上次部署页的导航状态；仍可从已保存项目
+选择版本再次部署。
+
+首页将新建构建与进行中的任务并列展示，已保存项目位于下方。窄窗口优先展示进行中的
+任务。列表通过已有后台任务监控读取当前登录用户的任务，显示需求摘要、状态和开始
+时间；刷新或重新打开网页后仍可找到尚在运行、重连中或等待回复的任务。
+
+点击「查看任务」会连接原开发环境，恢复已保存输出及停止、追加要求等操作，不会
+重新创建构建。任务列表与后台通知共用一套查询；首页内不重复弹出后台任务提示。
+网络异常保留已显示的列表和正在编辑的需求，可手动重试；切换账号后隔离旧数据。
+已结束任务的构建产物仍在「已保存项目」中，短期记录受现有保留时间和实例生命周期限制。
+
+浏览器回归脚本 `scripts/checkDevelopmentTurnUi.mjs` 支持 `CHECK_HOME=1`，覆盖服务端
+发现、重新加载、打开失败重试、过期导航响应和原输出恢复；`CHECK_LOCALE=en-US`
+可验证英文页面。测试使用受控 Sandbox HTTP，不会调用真实模型。
+
+### 智能构建的过程与每轮统计
+
+开发环境准备、连接期间，在当前状态旁显示「取消」。取消后保留需求、模型和所选
+项目版本，返回原输入位置；已经取消的请求即使稍后返回，也不会进入执行页或显示旧错误。
+此阶段不显示执行输入框；真正开始构建后，输入框提供停止任务和追加要求操作。
+
+智能构建按 Codex 原生 turn 统计；同一轮中的 steer 补充消息不重新计时。
+思考、工具、计划和文件变更使用带图标的可展开过程行，命令行标题显示短英文摘要，
+完整命令与输出保留在详情中。失败命令保留原位，单个工具不显示执行耗时。
+分组和整轮统计保留汇总耗时，自动使用毫秒、秒、分和小时；
+例如 `1,542,277 ms` 显示为 `25 分 42.3 秒`，显示精度下为零时显示为 `<1 毫秒`。
+耗时单位跟随界面语言：中文使用毫秒、秒、分、小时，英文使用 ms、s、min、h。
+该展示规则不修改原始耗时数据或累计计算，缺少耗时数据时仍显示“未上报”。
+
+每轮成功、失败或中断后显示工具调用次数、本轮耗时、工具累计耗时和 Tokens 按钮。
+次数按原生工具 item 去重，包含失败和中断调用；工具累计耗时是各调用耗时之和，
+并行调用可能使其超过本轮耗时。缺少部分工具耗时时，显示“已记录工具耗时”。
+Tokens 使用带展开提示的轻量文字按钮，可通过悬浮、键盘聚焦或点击查看本轮模型、输入、输出、缓存命中与未命中、
+缓存写入及推理输出。缓存命中是输入的子集，推理输出是输出的子集，不重复累加；
+未命中输入为输入减缓存命中。缺失指标显示“未上报”，中断或统计断点显示记录可能不完整。
+
+产物卡片以 Agent 名称为标题，入口独占一行并支持长路径换行，文件数和大小并排，
+时间与验证结果单独展示。查看源码、比较和下载位于辅助操作区，部署单独突出；
+窄窗口将操作区上下排列，保留加载、错误和重试反馈。
+
+统计沿用按用户隔离的 SQLite 短期保存和事件回放。`run.turn` 是新增事件，原有
+`usage` 事件仍保留兼容；已有数据库只增加 `run_turns.metrics` 列。回滚到旧代码时应
+使用新的短期数据库路径，因为旧版本按固定列数写入 `run_turns`。当前单实例云部署
+在实例替换后丢失短期记录的约定不变。
+
+### Runtime evaluation storage
+
+Studio stores evaluation sets and samples in the configured private TOS bucket
+(`VEADK_STUDIO_TOS_BUCKET` and `VEADK_STUDIO_TOS_REGION`). Volcengine and BytePlus
+use their respective server credentials. No AgentKit evaluation APIs are used.
+
+Objects live under `veadk-studio/v1/evaluation/<runtime-id>/`:
+
+- `sets/good.json` and `sets/bad.json` are the two default sets
+- `sets/<id>.json` stores a user-created set and its editable name and description
+- `samples/<id>.json` stores an individual sample, its set ID and `user` or `auto` source
+
+App names, projects and cloud regions are not part of the storage identity.
+Use separate buckets for local and production installations. Existing AgentKit
+sets are not imported.
+
+New Runtime deployments apply the requested instance limits at creation and
+wait for the configured instances to become ready before reporting success.
+This avoids starting the first conversation on a temporary startup instance.
+Runtime sessions still use the Agent's configured short-term memory backend;
+use database-backed memory when sessions must survive instance replacement.
+
+The existing evaluation page and conversation feedback controls use the same
+TOS records. Runtime-scoped APIs support custom set CRUD, sample editing and
+moving, source filtering, search and pagination. Updates use TOS ETag conditions;
+a stale edit returns a conflict. Deletion removes
+sample content and retains a small marker so automatic retries cannot recreate
+it. Deleting a default set stops feedback writes to that set and prevents background recreation; renaming it keeps feedback routing intact.
+
+List filtering and counts currently scan only the selected Runtime's objects,
+with bounded parallel reads. This is intended for the initial dataset sizes;
+large collections will need a separate rebuildable query index.

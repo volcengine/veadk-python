@@ -20,22 +20,14 @@ import os
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
-from typing import Annotated, Literal
+from threading import Lock
+from typing import TYPE_CHECKING, Annotated, Any, Literal
 
 import httpx
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from starlette.background import BackgroundTask
 
-from .client import (
-    ArkHttpClient,
-    ArkPromptClient,
-    ArkServiceError,
-    ArkTokenCache,
-    ArkTokenProvider,
-    ArkVideoClient,
-    CredentialResolver,
-)
 from .models import (
     PromptEnhanceRequest,
     PromptEnhanceResponse,
@@ -46,18 +38,11 @@ from .models import (
     VideoTaskCreateRequest,
     VideoTaskResponse,
 )
-from .service import (
-    VideoInputError,
-    VideoService,
-    VideoTaskAccessDenied,
-    VideoTaskNotFound,
-)
-from .storage import (
-    LazyVideoAssetRepository,
-    VideoAssetNotFound,
-    VideoAssetStorageUnavailable,
-    video_asset_repository_factory,
-)
+
+if TYPE_CHECKING:
+    from .service import VideoService
+
+CredentialResolver = Callable[[], tuple[str, str, str | None]]
 
 IdentityResolver = Callable[[Request], str]
 
@@ -84,9 +69,72 @@ def build_video_service(
     http_client: httpx.AsyncClient | None = None,
     token_loader: Callable[..., str] | None = None,
 ) -> VideoService:
-    """Compose production dependencies while keeping each layer testable."""
+    """Compose production dependencies on the first video request."""
     if provider not in _PROVIDER_DEFAULTS:
         raise ValueError(f"Unsupported video provider: {provider}")
+    return _LazyVideoService(
+        provider=provider,
+        resolve_credentials=resolve_credentials,
+        http_client=http_client,
+        token_loader=token_loader,
+    )  # type: ignore[return-value]
+
+
+class _LazyVideoService:
+    """Keep ModelArk, media storage, and provider SDKs off Studio startup."""
+
+    def __init__(
+        self,
+        *,
+        provider: Literal["volcengine", "byteplus"],
+        resolve_credentials: CredentialResolver,
+        http_client: httpx.AsyncClient | None,
+        token_loader: Callable[..., str] | None,
+    ) -> None:
+        self._provider: Literal["volcengine", "byteplus"] = provider
+        self._resolve_credentials = resolve_credentials
+        self._http_client = http_client
+        self._token_loader = token_loader
+        self._service: Any | None = None
+        self._lock = Lock()
+
+    def _resolve(self) -> VideoService:
+        if self._service is not None:
+            return self._service
+        with self._lock:
+            if self._service is None:
+                self._service = _build_video_service(
+                    provider=self._provider,
+                    resolve_credentials=self._resolve_credentials,
+                    http_client=self._http_client,
+                    token_loader=self._token_loader,
+                )
+        return self._service
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._resolve(), name)
+
+
+def _build_video_service(
+    *,
+    provider: Literal["volcengine", "byteplus"],
+    resolve_credentials: CredentialResolver,
+    http_client: httpx.AsyncClient | None,
+    token_loader: Callable[..., str] | None,
+) -> VideoService:
+    from .client import (
+        ArkHttpClient,
+        ArkPromptClient,
+        ArkTokenCache,
+        ArkTokenProvider,
+        ArkVideoClient,
+    )
+    from .service import VideoService
+    from .storage import (
+        LazyVideoAssetRepository,
+        video_asset_repository_factory,
+    )
+
     defaults = _PROVIDER_DEFAULTS[provider]
     config = VideoProviderConfig(
         provider=provider,
@@ -190,10 +238,9 @@ def mount_video_routes(
                 declared_mime_type=file.content_type or "",
                 source=temp_path,
             )
-        except VideoAssetStorageUnavailable as error:
-            raise HTTPException(status_code=503, detail=str(error)) from error
-        except ValueError as error:
-            raise HTTPException(status_code=400, detail=str(error)) from error
+        except Exception as error:
+            _raise_api_error(error)
+            raise
         finally:
             await file.close()
             if temp_path is not None:
@@ -267,6 +314,13 @@ def mount_video_routes(
 
 
 def _raise_api_error(error: Exception) -> None:
+    from .client import ArkServiceError
+    from .service import VideoInputError, VideoTaskAccessDenied, VideoTaskNotFound
+    from .storage import (
+        VideoAssetNotFound,
+        VideoAssetStorageUnavailable,
+    )
+
     if isinstance(error, (VideoTaskNotFound, VideoAssetNotFound)):
         raise HTTPException(status_code=404, detail=str(error)) from error
     if isinstance(error, VideoTaskAccessDenied):

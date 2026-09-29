@@ -317,6 +317,28 @@
   grid-column: 2;
 }
 
+.sandbox-run-actions {
+  grid-row: 2;
+  grid-column: 2;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sandbox-run-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 12px 8px;
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.sandbox-run-status [role="alert"] { color: hsl(var(--destructive)); }
+
 .main.is-sandbox-session {
   position: relative;
   isolation: isolate;

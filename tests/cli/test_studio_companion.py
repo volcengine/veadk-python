@@ -137,7 +137,7 @@ def test_platform_mapping_rejects_unsupported_platform() -> None:
 
 
 def test_required_version_is_owned_by_veadk_not_distribution_metadata() -> None:
-    assert required_agentkit_cli_version() == "0.52.18"
+    assert required_agentkit_cli_version() == "0.52.19"
 
 
 def test_companion_materializes_manifest_cli_for_provider(

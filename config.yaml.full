@@ -168,8 +168,14 @@ database:
     # output_fields: text,metadata
   # [optional] for knowledgebase (https://console.volcengine.com/vikingdb)
   viking:
+    # api_key: ${DATABASE_VIKING_API_KEY}  # optional; for searching existing VikingDB knowledgebase collections
     project: default    # user project in Volcengine Viking DB
     region: cn-beijing
+  # [optional] for LongTermMemory(backend="viking")
+  vikingmem:
+    # api_key: ${DATABASE_VIKINGMEM_API_KEY}  # optional; for memory operations on existing VikingDB memory collections
+    project: default
+    memory_type: sys_event_v1,sys_profile_v1
   # [optional] for knowledgebase with viking database
   tos:
     endpoint: tos-cn-beijing.volces.com # default Volcengine TOS endpoint

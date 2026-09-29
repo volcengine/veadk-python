@@ -1,3 +1,17 @@
+# Copyright (c) 2025 Beijing Volcano Engine Technology Co., Ltd. and/or its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Ordered prerequisite preparation shared by the CLI and Studio jobs."""
 
 from __future__ import annotations
@@ -6,6 +20,11 @@ import copy
 import re
 
 from sqlalchemy.engine import make_url
+
+from veadk.integrations.mpa.tags import (
+    merge_runtime_tag_items,
+    studio_mpa_runtime_tags,
+)
 
 from .config import ConfigurationError, Profile, Runtime, validate_postgres_layout
 from .database import AgentDatabaseProvisioner, AgentDeploymentRegistry, DeploymentError
@@ -135,11 +154,20 @@ async def provision(
     *,
     agent_id: str,
     owner: str,
+    studio_runtime_owner: str | None = None,
     description: str = "",
     progress=lambda stage: None,
 ):
     if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", agent_id) or not owner:
         raise DeploymentError("Invalid agent identity or owner")
+    studio_runtime_tags = (
+        studio_mpa_runtime_tags(
+            owner=studio_runtime_owner,
+            mpa_instance_id=agent_id,
+        )
+        if studio_runtime_owner is not None
+        else None
+    )
     validate_postgres_layout(profile)
     cloud = RuntimeCloud(
         region=profile.region, credential_file=profile.managed.credential_file
@@ -169,6 +197,12 @@ async def provision(
         template = fresh_template(profile, agent_id, account)
     apply_runtime_settings(template, profile.managed.runtime)
     apply_identity_settings(template, profile.values)
+    legacy_tag_items = copy.deepcopy(template.get("Tags", []))
+    if studio_runtime_tags is not None:
+        template["Tags"] = merge_runtime_tag_items(
+            template.get("Tags"),
+            studio_runtime_tags,
+        )
     env = env_map(template)
     if profile.openviking_enabled is not None:
         selected_openviking = (
@@ -286,7 +320,12 @@ async def provision(
             progress=lambda message: progress("verifying")
             if message.startswith("Runtime ")
             else None,
-        ).deploy(template)
+        ).deploy(
+            template,
+            legacy_tag_items=legacy_tag_items
+            if studio_runtime_tags is not None
+            else None,
+        )
         return {**result, "gateway_id": gateway["gateway_id"]}
     finally:
         await databases.close()

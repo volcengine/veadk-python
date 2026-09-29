@@ -60,6 +60,7 @@ class VikingDBMemoryClient(Service):
         ak="",
         sk="",
         sts_token="",
+        api_key="",
         scheme="https",
         connection_timeout=30,
         socket_timeout=30,
@@ -89,6 +90,12 @@ class VikingDBMemoryClient(Service):
                 raise ValueError(
                     "DATABASE_VIKINGMEM_BASE_URL must start with http:// or https://"
                 )
+        if (api_key or "").strip():
+            raise ValueError(
+                "VikingDB memory collection management requires AK/SK or IAM "
+                "credentials. API key auth is only supported by the VikingMem SDK "
+                "for memory operations on existing collections."
+            )
 
         self.service_info = VikingDBMemoryClient.get_service_info(
             host, region, scheme, connection_timeout, socket_timeout

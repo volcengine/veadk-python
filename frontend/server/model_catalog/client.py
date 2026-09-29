@@ -1,4 +1,4 @@
-# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd. and/or its affiliates.
+# Copyright (c) 2025 Beijing Volcano Engine Technology Co., Ltd. and/or its affiliates.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,19 +17,25 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any
 
 from frontend.server.video.client import ArkHttpClient, ArkServiceError
 from veadk.utils.volcengine_sign import volcengine_signed_request
+from veadk.utils.logger import get_logger
 
-CloudCredentials = tuple[str, str, str | None]
-CredentialResolver = Callable[[], CloudCredentials]
-Provider = Literal["volcengine", "byteplus"]
+from .errors import cloud_payload, cloud_request_error, cloud_response_error
+from .protocol import (
+    CloudCredentials,
+    CredentialResolver,
+    ModelCatalogError,
+    Provider,
+    SignedRequest,
+)
 
 _PAGE_SIZE = 100
 _MAX_PAGES = 100
+logger = get_logger(__name__)
 
 
 @dataclass(frozen=True)
@@ -54,17 +60,6 @@ PROVIDER_CONFIGS: dict[Provider, ModelCatalogProviderConfig] = {
         api_base="https://ark.ap-southeast.bytepluses.com/api/v3",
     ),
 }
-
-
-class ModelCatalogError(RuntimeError):
-    """A sanitized, retryable failure safe to return to a Studio client."""
-
-    def __init__(self, message: str, *, status_code: int = 502) -> None:
-        super().__init__(message)
-        self.status_code = status_code
-
-
-SignedRequest = Callable[..., Any]
 
 
 class ModelCatalogClient:
@@ -126,28 +121,20 @@ class ModelCatalogClient:
                     },
                 )
                 if response.status_code >= 400:
-                    raise ModelCatalogError(
-                        "模型服务鉴权失败，请检查所选 API Key 后重试。",
-                        status_code=502,
+                    raise cloud_response_error(
+                        response, action="ListModels", secrets=(api_key,)
                     )
         except ModelCatalogError:
             raise
         except ArkServiceError as error:
-            raise ModelCatalogError(
-                str(error),
-                status_code=error.status_code,
+            raise cloud_request_error(
+                error, action="ListModels", secrets=(api_key,)
             ) from error
         except Exception as error:
-            raise ModelCatalogError(
-                "模型服务凭据不可用，请检查 Studio 的模型凭据后重试。",
-                status_code=503,
+            raise cloud_request_error(
+                error, action="ListModels", secrets=(api_key,)
             ) from error
-        try:
-            payload = response.json()
-        except ValueError as error:
-            raise ModelCatalogError(
-                "模型服务返回了无法解析的结果，请稍后重试。"
-            ) from error
+        payload = cloud_payload(response, action="ListModels", secrets=(api_key,))
         data = payload.get("data") if isinstance(payload, dict) else None
         if not isinstance(data, list) or not all(
             isinstance(item, dict) for item in data
@@ -161,6 +148,9 @@ class ModelCatalogClient:
         credentials: CloudCredentials,
         page_number: int,
     ) -> dict[str, Any]:
+        logger.info(
+            f"Studio cloud request action=ListModelActivations provider={self._config.provider} page={page_number}"
+        )
         access_key, secret_key, session_token = credentials
         try:
             payload = await asyncio.to_thread(
@@ -183,19 +173,17 @@ class ModelCatalogClient:
                     "Action": "ListModelActivations",
                     "Version": "2024-01-01",
                 },
+                response_type="response",
             )
         except Exception as error:
-            raise ModelCatalogError(
-                "无法获取模型开通状态，请检查云账号权限后重试。"
+            raise cloud_request_error(
+                error, action="ListModelActivations", secrets=credentials
             ) from error
+        payload = cloud_payload(
+            payload, action="ListModelActivations", secrets=credentials
+        )
         if not isinstance(payload, dict):
             raise ModelCatalogError("模型开通状态服务返回了无法解析的结果。")
-        metadata = payload.get("ResponseMetadata")
-        upstream_error = metadata.get("Error") if isinstance(metadata, dict) else None
-        if upstream_error:
-            raise ModelCatalogError(
-                "获取模型开通状态失败，请检查 ark:ListModelActivations 权限后重试。"
-            )
         return payload
 
 
@@ -213,18 +201,16 @@ class ModelApiKeyClient:
         self._resolve_credentials = resolve_credentials
         self._signed_request = signed_request
 
-    async def list_keys(self) -> list[dict[str, str]]:
+    async def list_keys(self) -> list[dict[str, Any]]:
         credentials = self._credentials()
-        keys: list[dict[str, str]] = []
+        keys: list[dict[str, Any]] = []
         seen_ids: set[str] = set()
-        scanned = 0
         for page_number in range(1, _MAX_PAGES + 1):
             payload = await self._request(
                 credentials=credentials,
                 action="ListApiKeys",
                 request_body={
                     "ProjectName": "default",
-                    "Filter": {"AllowAll": True},
                     "PageNumber": page_number,
                     "PageSize": _PAGE_SIZE,
                 },
@@ -241,14 +227,56 @@ class ModelApiKeyClient:
             for item in items:
                 key_id = str(item.get("Id") or "").strip()
                 name = str(item.get("Name") or "").strip()
-                if key_id and name and key_id not in seen_ids:
+                if key_id and key_id not in seen_ids:
                     seen_ids.add(key_id)
-                    keys.append({"id": key_id, "name": name})
+                    access_control = item.get("AccessControlInfo")
+                    allow_all = (
+                        access_control.get("AllowAll")
+                        if isinstance(access_control, dict)
+                        else None
+                    )
+                    access_rules = (
+                        access_control.get("AccessRules")
+                        if isinstance(access_control, dict)
+                        else None
+                    )
+                    model_rule = (
+                        access_rules.get("model")
+                        if isinstance(access_rules, dict)
+                        else None
+                    )
+                    model_access = None
+                    if (
+                        isinstance(model_rule, dict)
+                        and model_rule.get("Effect") in {"allow", "deny"}
+                        and isinstance(model_rule.get("EffectToAll"), bool)
+                    ):
+                        model_access = {
+                            "effect": model_rule["Effect"],
+                            "all_models": model_rule["EffectToAll"],
+                            "model_ids": [
+                                value
+                                for value in (model_rule.get("Ids") or [])
+                                if isinstance(value, str)
+                            ],
+                        }
+                    keys.append(
+                        {
+                            "id": key_id,
+                            "name": name,
+                            "status": str(item.get("Status") or "").strip() or None,
+                            "allow_all": allow_all
+                            if isinstance(allow_all, bool)
+                            else None,
+                            "model_access": model_access,
+                        }
+                    )
                     new_count += 1
-            scanned += len(items)
-            total_count = _safe_int(result.get("TotalCount"), len(keys))
-            if not items or scanned >= total_count:
-                return keys
+            total_count = _safe_int(result.get("TotalCount"), -1)
+            if (total_count >= 0 and len(keys) >= total_count) or (
+                not items and total_count < 0
+            ):
+                return sorted(keys, key=lambda key: (key["name"].casefold(), key["id"]))
             if new_count == 0:
                 raise ModelCatalogError("API Key 列表分页异常，请稍后重试。")
         raise ModelCatalogError("API Key 列表分页异常，请稍后重试。")
@@ -305,22 +333,15 @@ class ModelApiKeyClient:
                     "Version": "2024-01-01",
                     **(query or {}),
                 },
+                response_type="response",
             )
         except Exception as error:
-            raise ModelCatalogError(
-                "无法访问 API Key 服务，请检查云账号权限后重试。"
+            raise cloud_request_error(
+                error, action=action, secrets=credentials
             ) from error
+        payload = cloud_payload(payload, action=action, secrets=credentials)
         if not isinstance(payload, dict):
             raise ModelCatalogError("API Key 服务返回了无法解析的结果。")
-        metadata = payload.get("ResponseMetadata")
-        upstream_error = metadata.get("Error") if isinstance(metadata, dict) else None
-        if upstream_error:
-            permission = (
-                "ark:ListApiKeys" if action == "ListApiKeys" else "ark:GetRawApiKey"
-            )
-            raise ModelCatalogError(
-                f"访问 API Key 服务失败，请检查 {permission} 权限后重试。"
-            )
         return payload
 
 

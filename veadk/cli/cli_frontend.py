@@ -30,6 +30,7 @@ import json
 import os
 import queue
 import re
+import shlex
 import shutil
 import sys
 import tempfile
@@ -52,6 +53,10 @@ from pydantic import BaseModel, Field
 from frontend.server.agentkit_clients import create_agentkit_client
 from veadk.cli.agentkit_sandbox_region import is_agentkit_resource_not_found
 from veadk.cli.frontend_branding import normalize_site_title, resolve_site_logo
+from veadk.cli.generated_agent_sidecar_runtime import (
+    GeneratedAgentSidecarRuntimeUnavailable,
+    installed_harness_sidecar_runtime_command,
+)
 from veadk.cli.managed_sidecar_source import (
     ManagedSidecarSourceError,
     stage_managed_sidecar_veadk_source,
@@ -86,6 +91,14 @@ from veadk.cli.studio_vpc_network import (
     studio_function_id,
 )
 from veadk.integrations.mpa.mpa_provision import generate_mpa_agent_id
+from veadk.integrations.mpa.tags import (
+    MPA_AGENT_TYPE_TAG,
+    MPA_AGENT_TYPE_VALUE,
+    MPA_INSTANCE_ID_TAG,
+    MPA_MANAGED_TAG,
+    MPA_MANAGED_VALUE,
+    studio_mpa_runtime_tags,
+)
 from veadk.utils.cloud_provider import (
     DEFAULT_BYTEPLUS_REGION,
     DEFAULT_BYTEPLUS_VIKING_MEMORY_HOST,
@@ -162,6 +175,8 @@ def _mcp_deployment_error_detail(code: str) -> str:
         return "无法沿用原 MCP 凭证，请重新打开详情后重新确认或填写 Key。"
     if code == "legacy_platform_mcp_read_only":
         return "运行版本中的 Skill 或 MCP 配置已变化，请重新打开详情并确认最新配置后再更新。"
+    if code == "legacy_overlay_sidecar_intent_changed":
+        return "Harness Sidecar 组件选择已变化，请重新打开详情并确认后再更新。"
     return "Harness Sidecar MCP 配置无效，请检查名称、地址与认证后重试。"
 
 
@@ -228,6 +243,7 @@ _RUNTIME_A2A_SESSION_PATH_RE = re.compile(
 _CP_BUILD_LOG_ERROR_TAIL_CHECK_CHARS = 1024
 _DEPLOY_STREAM_HEARTBEAT_SECONDS = 15.0
 _DEPLOY_STREAM_POLL_SECONDS = 0.1
+_RUNTIME_DEPLOYMENT_TASK_TAG = "veadk:deployment-task-sha256"
 _AGENTKIT_RUNTIME_READY_TIMEOUT_MS = "900000"
 _DEPLOY_PHASE_ORDER = {"build": 0, "deploy": 1, "publish": 2, "update": 3}
 _DEPLOY_PHASE_MARKERS = (
@@ -273,7 +289,7 @@ _RUNTIME_NAME_MIN_LENGTH = 4
 _RUNTIME_NAME_MAX_LENGTH = 64
 _RUNTIME_ENVIRONMENT_ID_TAG = "veadk:environment-id"
 _RUNTIME_ENVIRONMENT_VERSION_TAG = "veadk:environment-version"
-_MPA_INSTANCE_ID_TAG = "veadk:mpa-instance-id"
+_MPA_INSTANCE_ID_TAG = MPA_INSTANCE_ID_TAG
 _RUNTIME_ENVIRONMENT_ID_ENV = "VEADK_STUDIO_ENVIRONMENT_ID"
 _RUNTIME_ENVIRONMENT_VERSION_ENV = "VEADK_STUDIO_ENVIRONMENT_VERSION_ID"
 _DEFAULT_RUNTIME_ENVIRONMENT = "default"
@@ -379,6 +395,45 @@ def _runtime_environment_from_runtime(runtime: Any) -> dict[str, str]:
     return _runtime_environment_from_tags(tags)
 
 
+def _filter_harness_runtime_environment(
+    runtime_envs: Mapping[str, str],
+    *,
+    preserve_disabled_contract: bool,
+) -> dict[str, str]:
+    """Clear platform-owned Harness state, retaining only a proven disable contract."""
+
+    filtered = {
+        key: value
+        for key, value in runtime_envs.items()
+        if not key.startswith("HARNESS_")
+    }
+    if not preserve_disabled_contract:
+        return filtered
+
+    disabled_flag = re.compile(r"^HARNESS_[A-Z0-9_]+_ENABLED$")
+    filtered.update(
+        {
+            key: value
+            for key, value in runtime_envs.items()
+            if disabled_flag.fullmatch(key) and value == "false"
+        }
+    )
+
+    raw_overrides = runtime_envs.get("HARNESS_SIDECAR_COMPONENT_OVERRIDES", "")
+    try:
+        overrides = json.loads(raw_overrides)
+    except (TypeError, json.JSONDecodeError):
+        overrides = None
+    if isinstance(overrides, dict):
+        from veadk.extensions.harness.sidecar import STUDIO_HARNESS_COMPONENT_IDS
+
+        if set(overrides) == set(STUDIO_HARNESS_COMPONENT_IDS) and all(
+            value is False for value in overrides.values()
+        ):
+            filtered["HARNESS_SIDECAR_COMPONENT_OVERRIDES"] = raw_overrides
+    return filtered
+
+
 def _sync_volcengine_runtime_tags(
     *,
     access_key: str,
@@ -462,6 +517,34 @@ def _anchor_environment_registry(
             "veadk:build-resource:cr-repository": repository,
         }
     )
+
+
+def _source_preserving_output_repository(
+    *,
+    runtime_id: str,
+    registry: str,
+    namespace: str,
+    source_repository: str,
+    has_build_resource_tags: bool,
+) -> str:
+    """Avoid rebuilding into legacy CR state while preserving the source image.
+
+    Runtimes created before Studio persisted build-resource tags can still use
+    their immutable image as a build input, but their original repository may
+    not be visible to the VeFaaS caller used by AgentKit Platform's BuildKit
+    component. Only that legacy path gets a deterministic Studio-owned output
+    repository in the same Registry/Namespace. Modern tagged Runtimes keep the
+    configured repository unchanged.
+    """
+    normalized = tuple(
+        value.strip() for value in (runtime_id, registry, namespace, source_repository)
+    )
+    if not all(normalized):
+        raise ValueError("Source-preserving repository identity is incomplete")
+    if has_build_resource_tags:
+        return normalized[3]
+    digest = hashlib.sha256("\0".join(normalized).encode("utf-8")).hexdigest()
+    return f"veadk-sp-{digest[:20]}"
 
 
 def _studio_environment_resource_environment(
@@ -555,29 +638,27 @@ def _prepare_managed_sidecar_runtime_envs(
             "请返回模型配置后重新发布。"
         )
     runtime_envs.setdefault("MODEL_NAME", runtime_envs["MODEL_AGENT_NAME"])
-    effective_components = set(
-        sidecar_plan.get("effectiveComponents") or []
-        if isinstance(sidecar_plan, Mapping)
-        else []
-    )
     raw_structured_mcp = runtime_envs.get("MCP_SERVERS_JSON", "").strip()
-    try:
-        structured_mcp = json.loads(raw_structured_mcp) if raw_structured_mcp else []
-    except (TypeError, ValueError):
-        structured_mcp = []
-    has_structured_mcp = isinstance(structured_mcp, list) and bool(structured_mcp)
-    has_legacy_mcp = all(
-        runtime_envs.get(key, "").strip() for key in ("MCP_URLS", "MCP_API_KEY")
-    )
-    if (
-        effective_components & {"mcp_resilience", "sql_readonly"}
-        and not has_structured_mcp
-        and not has_legacy_mcp
-    ):
-        return (
-            "已选择 MCP 稳定性治理，请在“添加 MCP 工具”中配置至少一个 HTTP MCP "
-            "服务地址后重新发布；Bearer Token 仅在该服务需要认证时配置。"
+    if raw_structured_mcp:
+        from veadk.cli.legacy_runtime_recovery import (
+            LegacyRecoveryError,
+            recover_mcp_from_runtime_environment,
         )
+
+        try:
+            recovered_mcp = recover_mcp_from_runtime_environment(
+                {"MCP_SERVERS_JSON": raw_structured_mcp}
+            )
+        except LegacyRecoveryError as error:
+            return _mcp_deployment_error_detail(error.code)
+        if not recovered_mcp.tools:
+            # Historical managed Runtimes persist an explicit empty list when
+            # no user MCP exists.  The list is a valid source state, but the
+            # Sidecar process does not need an upstream configuration for it.
+            # Treat it as authoritative and remove any stale legacy fallback
+            # values so an update cannot accidentally reactivate an old MCP.
+            for key in ("MCP_SERVERS_JSON", "MCP_URLS", "MCP_API_KEY"):
+                runtime_envs.pop(key, None)
     from veadk.extensions.harness.sidecar import (
         MANAGED_HARNESS_SIDECAR_RUNTIME_COMMAND,
     )
@@ -659,6 +740,38 @@ def _github_app_review_environment(
         private_key_bytes
     ).decode("ascii")
     return environment
+
+
+def _gitlab_app_review_environment(
+    source: Mapping[str, str | None],
+) -> dict[str, str]:
+    """Return GitLab MR review settings safe to ship to the Studio runtime."""
+    from veadk.cli.gitlab_app_mr_review import (
+        GITLAB_BASE_URL_ENV,
+        GITLAB_GROUP_ID_OR_PATH_ENV,
+        GITLAB_OAUTH_CLIENT_ID_ENV,
+        GITLAB_OAUTH_CLIENT_SECRET_ENV,
+        GITLAB_OAUTH_REDIRECT_URI_ENV,
+        GITLAB_WEBHOOK_SECRET_ENV,
+        STUDIO_PUBLIC_BASE_URL_ENV,
+    )
+
+    def _value(key: str) -> str:
+        return str(os.getenv(key) or source.get(key) or "").strip()
+
+    return {
+        key: value
+        for key in (
+            GITLAB_BASE_URL_ENV,
+            GITLAB_WEBHOOK_SECRET_ENV,
+            GITLAB_OAUTH_CLIENT_ID_ENV,
+            GITLAB_OAUTH_CLIENT_SECRET_ENV,
+            GITLAB_OAUTH_REDIRECT_URI_ENV,
+            GITLAB_GROUP_ID_OR_PATH_ENV,
+            STUDIO_PUBLIC_BASE_URL_ENV,
+        )
+        if (value := _value(key))
+    }
 
 
 def _byteplus_vefaas_application_name_suggestion(name: str) -> str:
@@ -958,6 +1071,12 @@ def _deployment_target_key(
         runtime_name.strip(),
         region.strip(),
     )
+
+
+def _deployment_task_fingerprint(task_id: str) -> str:
+    """Return the non-secret Runtime marker used for cross-instance recovery."""
+
+    return hashlib.sha256(task_id.encode("utf-8")).hexdigest()
 
 
 def _has_active_deployment_target(
@@ -1279,6 +1398,15 @@ class _DeleteFeedbackCasesRequest(BaseModel):
     region: str = Field(default="", min_length=0)
     app_name: str = Field(alias="appName", min_length=1)
     item_ids: list[str] = Field(alias="itemIds", min_length=1, max_length=100)
+
+
+class _RuntimeMcpCredentialsRequest(BaseModel):
+    """Exact update snapshot whose MCP credentials should enter the editor."""
+
+    runtime_id: str = Field(alias="runtimeId", min_length=1, max_length=128)
+    region: str = Field(default="", min_length=0, max_length=64)
+    app_name: str = Field(alias="appName", min_length=1, max_length=128)
+    etag: str = Field(min_length=1, max_length=256)
 
 
 def _mount_session_trace_route(app: Any, memory_exporter: Any) -> None:
@@ -1938,7 +2066,12 @@ def _run_frontend_server(
             sandbox_chat_hermes_snapshot_tool_id
         )
 
-    from google.adk.cli.fast_api import get_fast_api_app
+    if os.environ.get("_VEADK_STUDIO_LAZY_ADK_PACKAGES") == "1":
+        from veadk.cli.studio_start import studio_fast_api_factory
+
+        get_fast_api_app = studio_fast_api_factory()
+    else:
+        from google.adk.cli.fast_api import get_fast_api_app
 
     agents_dir = os.path.abspath(agents_dir)
     allow_origins = _frontend_allow_origins(vite)
@@ -1973,10 +2106,7 @@ def _run_frontend_server(
         runtime_request_context,
         studio_runtime_context_headers,
     )
-    from frontend.server.studio_routes import (
-        StudioRouteChannelManager,
-        build_studio_route_registry,
-    )
+    from frontend.server.studio_routes.registry import build_studio_route_registry
     from frontend.server.studio_tools import build_studio_tool_registry
     from veadk.multimodal.service import MediaService
     from veadk.multimodal.storage import create_media_storage
@@ -1992,7 +2122,23 @@ def _run_frontend_server(
         )
 
     studio_route_registry = build_studio_route_registry(provider=provider_id)
-    studio_route_channels = StudioRouteChannelManager(studio_route_registry)
+    if studio_route_registry.enabled:
+        from frontend.server.studio_routes import StudioRouteChannelManager
+
+        studio_route_channels = StudioRouteChannelManager(studio_route_registry)
+    else:
+
+        class _DisabledStudioRouteChannelManager:
+            async def close(self) -> None:
+                return None
+
+            async def ensure_connected(self, *_args: Any, **_kwargs: Any) -> bool:
+                return False
+
+            def connected(self, *_args: Any, **_kwargs: Any) -> bool:
+                return False
+
+        studio_route_channels = _DisabledStudioRouteChannelManager()
     app.state.studio_route_registry = studio_route_registry
     app.state.studio_route_channels = studio_route_channels
     if studio_route_registry.enabled:
@@ -2899,8 +3045,17 @@ def _run_frontend_server(
 
     from frontend.server.mpa_creation import mount_mpa_creation_routes
 
+    def _mpa_creation_owner(request: Request) -> str:
+        principal = _require_agent_management(request)
+        if principal is None:
+            raise HTTPException(
+                status_code=401,
+                detail="Studio identity is required for MPA creation",
+            )
+        return principal.owner_id
+
     mount_mpa_creation_routes(
-        app, owner=_feishu_setup_owner, supported=provider == "volcengine"
+        app, owner=_mpa_creation_owner, supported=provider == "volcengine"
     )
 
     mount_feishu_bot_setup_routes(
@@ -2916,17 +3071,16 @@ def _run_frontend_server(
                 detail="Only Studio administrators can update Studio",
             )
 
-    from veadk.cli.studio_self_update import (
-        StudioSelfUpdater,
-        StudioUpdateSettings,
+    from veadk.cli.studio_self_update_bootstrap import (
+        LazyStudioSelfUpdater,
         current_studio_display_version,
-        mount_studio_update_routes,
+        mount_lazy_studio_update_routes,
     )
 
-    mount_studio_update_routes(
+    mount_lazy_studio_update_routes(
         app,
-        StudioSelfUpdater(
-            settings=StudioUpdateSettings.from_env(provider=provider),
+        LazyStudioSelfUpdater(
+            provider=provider,
             credential_resolver=_resolve_ve_credentials,
             branding_logo=branding_logo,
         ),
@@ -3520,10 +3674,14 @@ def _run_frontend_server(
         return _request_role(request).is_admin
 
     from frontend.server.migration.gateway import MigrationSandboxGateway
+    from frontend.server.migration.evaluation.judge_driver import (
+        SandboxJudgeDriver,
+    )
     from frontend.server.migration.evaluation.repository import (
         TosMigrationEvaluationRepository,
     )
     from frontend.server.migration.evaluation.runner import (
+        EVALUATION_PROJECT_PATH,
         SandboxMigrationEvaluationRunner,
     )
     from frontend.server.migration.evaluation.service import (
@@ -3583,6 +3741,10 @@ def _run_frontend_server(
             migration_gateway,
             resolve_credentials=_resolve_ve_credentials,
             provider=provider,
+        ),
+        judge_driver=SandboxJudgeDriver(
+            migration_gateway,
+            cwd=EVALUATION_PROJECT_PATH,
         ),
     )
     if not is_vestack_deployment:
@@ -3807,6 +3969,10 @@ def _run_frontend_server(
         _sandbox_creator,
         github_app_review_storage_bucket=github_app_review_storage.bucket,
         github_app_review_storage_client_factory=(
+            github_app_review_storage_client_factory
+        ),
+        gitlab_app_review_storage_bucket=github_app_review_storage.bucket,
+        gitlab_app_review_storage_client_factory=(
             github_app_review_storage_client_factory
         ),
     )
@@ -4872,6 +5038,7 @@ def _run_frontend_server(
         ImageReference,
         LegacyRecoveryError,
         merge_mcp_recoveries,
+        mcp_editor_credential_values,
         mcp_editor_draft_without_credentials,
         mcp_reuse_supplied_credentials,
         mcp_secret_values_for_draft_references,
@@ -4897,6 +5064,7 @@ def _run_frontend_server(
         resolve_studio_harness_sidecar_selection,
         studio_harness_deployment_config,
         studio_harness_runtime_env,
+        studio_harness_selectable_intent_signature,
     )
     from veadk.cli.studio_sidecar_prerequisites import (
         SIDECAR_BASE_IMAGE_ENV,
@@ -4953,7 +5121,18 @@ def _run_frontend_server(
                     "当前 Studio Runtime 尚未完成 Harness Sidecar APIG 自调用绑定。"
                 ),
             }
-        return {"available": True, "reason": ""}
+        try:
+            runtime_command = installed_harness_sidecar_runtime_command()
+        except GeneratedAgentSidecarRuntimeUnavailable:
+            return {
+                "available": False,
+                "reason": "当前 Studio 环境未安装 Harness Sidecar 调试运行时。",
+            }
+        return {
+            "available": True,
+            "reason": "",
+            "runtimeCommand": runtime_command,
+        }
 
     def _harness_sidecar_deployment_capability() -> dict[str, Any]:
         from veadk.cli.agentkit_cli import AgentKitCliError, agentkit_cli_artifact
@@ -5491,18 +5670,29 @@ def _run_frontend_server(
                         else _cloud_studio_private_networks
                     ),
                 )
-                if debug_mcp_env_values:
-                    draft = prepare_mcp_auth(draft)
-                    mcp_env_values = dict(draft.deployment.envValues)
-                    for key, value in debug_mcp_env_values.items():
-                        if value and not mcp_env_values.get(key):
-                            mcp_env_values[key] = value
-                    draft = await resolve_debug_mcp_endpoints(
-                        draft,
-                        mcp_env_values,
-                    )
-                else:
-                    draft = await resolve_debug_mcp_endpoints(draft)
+                draft = prepare_mcp_auth(draft)
+                prepared_payload = draft.model_dump(
+                    mode="json",
+                    by_alias=True,
+                    exclude_none=True,
+                )
+                prepared_references = mcp_auth_environment_keys(prepared_payload)
+                mcp_env_values = {
+                    reference: draft.deployment.envValues[reference]
+                    for reference in prepared_references
+                    if draft.deployment.envValues.get(reference)
+                }
+                for key, value in (debug_mcp_env_values or {}).items():
+                    if (
+                        key in prepared_references
+                        and value
+                        and not mcp_env_values.get(key)
+                    ):
+                        mcp_env_values[key] = value
+                draft = await resolve_debug_mcp_endpoints(
+                    draft,
+                    mcp_env_values,
+                )
             else:
                 validate_project_policy(draft)
             project = generate_project_from_draft(draft)
@@ -6082,7 +6272,19 @@ def _run_frontend_server(
                 raise HTTPException(status_code=422, detail=error.errors()) from error
 
             runtime_envs: dict[str, str] = {}
-            debug_mcp_env_values: dict[str, str] = {}
+            edited_draft = test_request.draft.model_dump(
+                mode="json",
+                by_alias=True,
+                exclude_none=True,
+            )
+            requested_references = mcp_auth_environment_keys(edited_draft)
+            requested_env_values = test_request.draft.deployment.envValues
+            submitted_mcp_env_values = {
+                reference: requested_env_values[reference]
+                for reference in requested_references
+                if requested_env_values.get(reference)
+            }
+            debug_mcp_env_values = dict(submitted_mcp_env_values)
             runtime_id = test_request.runtimeId.strip()
             runtime_region = _coerce_cloud_region(test_request.runtimeRegion)
             reuse_requests = tuple(
@@ -6095,13 +6297,6 @@ def _run_frontend_server(
                     detail="MCP credential reuse requires a Runtime update target",
                 )
             if runtime_id:
-                edited_draft = test_request.draft.model_dump(
-                    mode="json",
-                    by_alias=True,
-                    exclude_none=True,
-                )
-                requested_references = mcp_auth_environment_keys(edited_draft)
-                requested_env_values = test_request.draft.deployment.envValues
                 stored_references = tuple(
                     reference
                     for reference in requested_references
@@ -6178,7 +6373,7 @@ def _run_frontend_server(
                                 error.code,
                             )
                     try:
-                        debug_mcp_env_values = retained_mcp_secret_values(
+                        recovered_mcp_env_values = retained_mcp_secret_values(
                             published_draft=published_draft,
                             edited_draft=edited_draft,
                             published_reference_values=(published_reference_values),
@@ -6190,12 +6385,14 @@ def _run_frontend_server(
                                 published_reference_values=(published_reference_values),
                                 reuse_requests=reuse_requests,
                             )
-                            debug_mcp_env_values.update(
+                            recovered_mcp_env_values.update(
                                 mcp_supplied_secret_values_by_reference(
                                     edited_draft=edited_draft,
                                     supplied_credentials=supplied_credentials,
                                 )
                             )
+                        recovered_mcp_env_values.update(submitted_mcp_env_values)
+                        debug_mcp_env_values = recovered_mcp_env_values
                     except LegacyRecoveryError as error:
                         raise HTTPException(
                             status_code=409,
@@ -6219,8 +6416,10 @@ def _run_frontend_server(
                 validated_test_request=test_request,
                 debug_mcp_env_values=debug_mcp_env_values,
             )
+            debug_runtime_env = debug_runtime_env_from_draft(draft)
             sidecar_env: dict[str, str] = {}
             sidecar_plan: dict[str, Any] | None = None
+            sidecar_mcp_references: tuple[str, ...] = ()
             if draft.harnessSidecar and draft.harnessSidecar.enabled:
                 capability = _harness_sidecar_debug_capability()
                 if not capability["available"]:
@@ -6245,6 +6444,15 @@ def _run_frontend_server(
                         ],
                     }
                 )
+                runtime_command = capability.get("runtimeCommand")
+                if not isinstance(runtime_command, tuple) or not runtime_command:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="当前 Studio 环境未安装 Harness Sidecar 调试运行时。",
+                    )
+                sidecar_env["AGENTKIT_HARNESS_RUNTIME_COMMAND"] = shlex.join(
+                    str(item) for item in runtime_command
+                )
                 requested_plan_hash = draft.harnessSidecar.planHash or ""
                 if (
                     requested_plan_hash
@@ -6253,6 +6461,40 @@ def _run_frontend_server(
                     raise HTTPException(
                         status_code=409,
                         detail="Harness Sidecar 配置已更新，请重新解析后再启动调试。",
+                    )
+                effective_components = {
+                    str(item) for item in sidecar_plan.get("effectiveComponents") or []
+                }
+                if "mcp_resilience" in effective_components:
+                    sidecar_mcp_draft = draft.model_dump(
+                        mode="json",
+                        by_alias=True,
+                        exclude_none=True,
+                    )
+                    try:
+                        structured_mcp = build_sidecar_mcp_servers_json(
+                            draft=sidecar_mcp_draft,
+                            secret_values={
+                                **debug_runtime_env,
+                                **debug_mcp_env_values,
+                            },
+                        )
+                    except LegacyRecoveryError as error:
+                        raise HTTPException(
+                            status_code=409,
+                            detail=_mcp_deployment_error_detail(error.code),
+                        ) from error
+                    if not json.loads(structured_mcp):
+                        raise HTTPException(
+                            status_code=409,
+                            detail=(
+                                "已选择 MCP 稳定性治理，请配置至少一个 HTTP MCP "
+                                "服务地址后重新启动调试。"
+                            ),
+                        )
+                    sidecar_env["MCP_SERVERS_JSON"] = structured_mcp
+                    sidecar_mcp_references = mcp_auth_environment_keys(
+                        sidecar_mcp_draft
                     )
             temp_dir = tempfile.mkdtemp(prefix="veadk_generated_agent_test_")
             app_name = _write_generated_project(project, temp_dir)
@@ -6288,7 +6530,9 @@ def _run_frontend_server(
                 if key.startswith("HARNESS_"):
                     runner_env.pop(key)
             runner_env.update(sidecar_env)
-            runner_env.update(debug_runtime_env_from_draft(draft))
+            runner_env.update(debug_runtime_env)
+            for reference in sidecar_mcp_references:
+                runner_env.pop(reference, None)
             selected_api_key_id = draft.deployment.modelApiKeyId.strip()
             selected_api_key_name = draft.deployment.modelApiKeyName.strip()
 
@@ -6559,32 +6803,6 @@ def _run_frontend_server(
             region=region,
         )
         client.delete_runtime(_rt.DeleteRuntimeRequest(RuntimeId=runtime_id))
-
-    def _set_agentkit_runtime_instance_range(
-        runtime_id: str,
-        region: str,
-        min_instance: int,
-        max_instance: int,
-    ) -> None:
-        """Set a Runtime instance range and publish the configuration update."""
-        from agentkit.sdk.runtime import types as _rt
-        from agentkit.sdk.runtime.client import AgentkitRuntimeClient
-
-        ak, sk, token = _resolve_ve_credentials()
-        client = AgentkitRuntimeClient(
-            access_key=ak,
-            secret_key=sk,
-            session_token=token or "",
-            region=region,
-        )
-        client.update_runtime(
-            _rt.UpdateRuntimeRequest(
-                RuntimeId=runtime_id,
-                MinInstance=min_instance,
-                MaxInstance=max_instance,
-                ReleaseEnable=True,
-            )
-        )
 
     def _destroy_deploy_task_runtime(task: dict[str, Any]) -> bool:
         """Destroy a task's Runtime once, if creation has reached that stage."""
@@ -6861,6 +7079,12 @@ def _run_frontend_server(
 
         principal = _require_agent_management(request)
         data = await request.json()
+        agent_category = str(data.get("agentCategory") or "").strip().lower()
+        if agent_category == "mpa" and principal is None:
+            raise HTTPException(
+                status_code=401,
+                detail="Studio identity is required for MPA deployment",
+            )
         agent_name = (data.get("name") or "").strip()
         runtime_id = (data.get("runtimeId") or "").strip()
         mpa_compatibility_report: dict[str, Any] | None = None
@@ -7100,8 +7324,6 @@ def _run_frontend_server(
                 status_code=400,
                 detail="createEvaluationSets must be a boolean",
             )
-        if provider == "byteplus":
-            create_evaluation_sets = False
 
         min_instance = data.get("minInstance", 1)
         max_instance = data.get("maxInstance", 5)
@@ -7213,11 +7435,6 @@ def _run_frontend_server(
             _validate_harness_sidecar_project_files(files, enabled=sidecar_enabled)
         use_managed_sidecar_release = (
             sidecar_enabled and not source_preserving_requested
-        )
-        needs_instance_update = (
-            not sidecar_enabled
-            and not runtime_id
-            and (min_instance != 1 or max_instance != 5)
         )
 
         region = config.get("region") or _default_cloud_region()
@@ -7481,7 +7698,9 @@ def _run_frontend_server(
                         published_sidecar_intent = normalize_studio_harness_intent(
                             published_draft.get("harnessSidecar")
                         )
-                        if published_sidecar_intent != sidecar_intent:
+                        if studio_harness_selectable_intent_signature(
+                            published_sidecar_intent
+                        ) != studio_harness_selectable_intent_signature(sidecar_intent):
                             raise LegacyRecoveryError(
                                 "legacy_overlay_sidecar_intent_changed"
                             )
@@ -7616,12 +7835,19 @@ def _run_frontend_server(
                                 "暂时无法执行保留源码更新。"
                             ),
                         )
+                    output_repository = _source_preserving_output_repository(
+                        runtime_id=runtime_id,
+                        registry=source_reference.registry_name,
+                        namespace=namespace,
+                        source_repository=repository,
+                        has_build_resource_tags=tagged_resources is not None,
+                    )
                     _anchor_environment_registry(
                         deployment_resource_config,
                         deployment_resource_tag_values,
                         registry=source_reference.registry_name,
                         namespace=namespace,
-                        repository=repository,
+                        repository=output_repository,
                     )
                 elif canonical_requested_draft is not None:
                     try:
@@ -7747,13 +7973,14 @@ def _run_frontend_server(
         runtime_tag_values.update(
             {
                 "veadk:managed": "true",
+                _RUNTIME_DEPLOYMENT_TASK_TAG: _deployment_task_fingerprint(task_id),
                 **({"veadk:author": author} if author else {}),
                 **({"veadk:owner": owner_id} if owner_id else {}),
                 **deployment_resource_tag_values,
             }
         )
         mpa_instance_id_for_deploy = ""
-        if str(data.get("agentCategory") or "").strip().lower() == "mpa":
+        if agent_category == "mpa":
             mpa_instance_id_for_deploy = _resolve_mpa_instance_id(
                 existing_runtime=existing_runtime,
                 runtime_id=runtime_id,
@@ -7761,8 +7988,12 @@ def _run_frontend_server(
                 agent_name=agent_name,
                 tags=runtime_tag_values,
             )
-            runtime_tag_values["veadk:agent-type"] = "mpa"
-            runtime_tag_values[_MPA_INSTANCE_ID_TAG] = mpa_instance_id_for_deploy
+            runtime_tag_values.update(
+                studio_mpa_runtime_tags(
+                    owner=owner_id,
+                    mpa_instance_id=mpa_instance_id_for_deploy,
+                )
+            )
         runtime_tag_values.update(
             _runtime_environment_tags(
                 environment_id,
@@ -8177,10 +8408,13 @@ def _run_frontend_server(
             )
         else:
             runtime_envs.pop(_RUNTIME_ENVIRONMENT_VERSION_ENV, None)
-        # Harness settings are platform-owned. Always remove a previous
-        # Sidecar deployment's values before either deployment path materializes
-        # the next Runtime environment. The CLI adds the authoritative resolved
-        # plan back only for Sidecar deployments.
+        # Harness settings are platform-owned. Clear the previous plan before
+        # either deployment path materializes the next Runtime environment. A
+        # source-preserving update that keeps Sidecar disabled retains only the
+        # published Runtime's strict disable contract; this avoids reactivating
+        # legacy application defaults while still dropping every binding, plan,
+        # catalog, hash, and enabled value. Sidecar deployments add their newly
+        # resolved authoritative plan below.
         existing_sidecar_binding = {
             key: runtime_envs[key]
             for key in (
@@ -8189,11 +8423,14 @@ def _run_frontend_server(
             )
             if runtime_envs.get(key)
         }
-        runtime_envs = {
-            key: value
-            for key, value in runtime_envs.items()
-            if not key.startswith("HARNESS_")
-        }
+        runtime_envs = _filter_harness_runtime_environment(
+            runtime_envs,
+            preserve_disabled_contract=(
+                existing_runtime is not None
+                and source_preserving_requested
+                and not sidecar_enabled
+            ),
+        )
         if sidecar_enabled and source_preserving_requested:
             if not isinstance(sidecar_plan, Mapping):
                 shutil.rmtree(temp_dir, ignore_errors=True)
@@ -8203,6 +8440,22 @@ def _run_frontend_server(
                 )
             runtime_envs.update(source_preserving_sidecar_env)
             runtime_envs.update(existing_sidecar_binding)
+        if existing_runtime is not None:
+            selected_runtime_role_name = str(
+                getattr(existing_runtime, "role_name", "") or ""
+            ).strip()
+            if not selected_runtime_role_name:
+                shutil.rmtree(temp_dir, ignore_errors=True)
+                raise HTTPException(
+                    status_code=409,
+                    detail="当前 Runtime 缺少可沿用的 IAM 角色，请刷新详情后重试。",
+                )
+        else:
+            # Resolve the new Runtime role inside the deployment lock. This
+            # keeps concurrent Studio deployments from racing to create roles;
+            # both SDK and Sidecar CLI paths inject the resolved value before
+            # their first cloud mutation.
+            selected_runtime_role_name = ""
         # TOS build-artifact buckets are region-scoped. The SDK default template
         # ("agentkit-platform-<account_id>") produces a single global name, which
         # collides once a bucket exists in cn-beijing and the user targets
@@ -8221,6 +8474,8 @@ def _run_frontend_server(
             "runtime_envs": runtime_envs,
             "python_version": "3.12",
         }
+        if selected_runtime_role_name:
+            cloud_config["runtime_role_name"] = selected_runtime_role_name
         cloud_config.update(runtime_authentication)
         if existing_runtime is not None:
             cloud_config.update(
@@ -8313,6 +8568,7 @@ def _run_frontend_server(
                 }
             sidecar_agentkit_config = {
                 "name": deployment_runtime_name,
+                "role_name": selected_runtime_role_name,
                 "description": _normalize_runtime_description(data.get("description")),
                 "cloud_provider": "volcengine",
                 "region": region,
@@ -8890,6 +9146,24 @@ def _run_frontend_server(
                 try:
                     cli_env = os.environ.copy()
                     access_key, secret_key, session_token = _resolve_ve_credentials()
+                    if not runtime_id:
+                        from frontend.server.runtime_iam import ensure_runtime_role
+
+                        selected_role = ensure_runtime_role(
+                            access_key=access_key,
+                            secret_key=secret_key,
+                            session_token=session_token,
+                            provider=provider,
+                        )
+                        sidecar_agentkit_config["role_name"] = selected_role
+                        (base / ".agentkit" / "agentkit.yaml").write_text(
+                            _yaml.safe_dump(
+                                sidecar_agentkit_config,
+                                allow_unicode=True,
+                                sort_keys=False,
+                            ),
+                            encoding="utf-8",
+                        )
                     cli_env["VOLCENGINE_ACCESS_KEY"] = access_key
                     cli_env["VOLCENGINE_SECRET_KEY"] = secret_key
                     cli_env["VOLCENGINE_REGION"] = region
@@ -9161,6 +9435,10 @@ def _run_frontend_server(
                             for key, value in _merged_runtime_tags(req.tags).items()
                         ]
                         req.apmplus_enable = True
+                        # Set limits before the first release so a later deployment
+                        # cannot replace the instance holding the first session.
+                        req.min_instance = min_instance
+                        req.max_instance = max_instance
                         created = _create_runtime_with_description_fallback(
                             _orig, self, req
                         )
@@ -9366,33 +9644,42 @@ def _run_frontend_server(
                             result = _launch_config(final_config)
                     else:
                         result = _launch_config(sdk_agentkit_config)
-                    if (
-                        result is not None
-                        and getattr(result, "success", False)
-                        and needs_instance_update
-                    ):
-                        created_runtime_id = str(task_state.get("runtime_id") or "")
-                        if not created_runtime_id:
-                            raise RuntimeError("Runtime 创建成功，但未返回 Runtime ID")
-                        state["phase"] = "update"
-                        _emit(
-                            "info",
-                            f"正在将 Runtime 实例数调整为 {min_instance}～{max_instance}",
-                            0,
-                        )
-                        _set_agentkit_runtime_instance_range(
-                            created_runtime_id,
-                            region,
-                            min_instance,
-                            max_instance,
-                        )
-                        _emit(
-                            "success",
-                            f"Runtime 实例数已调整为 {min_instance}～{max_instance}",
-                            100,
-                        )
                     if result is not None and getattr(result, "success", False):
                         _verify_sdk_sidecar_release(result)
+                        if existing_runtime is None and not sidecar_enabled:
+                            from agentkit.sdk.runtime.client import (
+                                AgentkitRuntimeClient,
+                            )
+                            from frontend.server.runtime_readiness import (
+                                wait_for_runtime_instances,
+                            )
+
+                            deployed = getattr(result, "deploy_result", None)
+                            metadata = getattr(deployed, "metadata", None) or {}
+                            created_id = str(
+                                task_state.get("runtime_id")
+                                or metadata.get("runtime_id")
+                                or ""
+                            )
+                            if not created_id:
+                                raise RuntimeError(
+                                    "Runtime 创建成功，但未返回 Runtime ID"
+                                )
+                            access_key, secret_key, session_token = (
+                                _resolve_ve_credentials()
+                            )
+                            _emit("info", "正在等待 Runtime 实例就绪", 95)
+                            wait_for_runtime_instances(
+                                AgentkitRuntimeClient(
+                                    access_key=access_key,
+                                    secret_key=secret_key,
+                                    session_token=session_token or "",
+                                    region=region,
+                                ),
+                                created_id,
+                                min_instance,
+                                cancelled=task_state["cancel_event"],
+                            )
                         if existing_runtime is not None and provider != "byteplus":
                             try:
                                 access_key, secret_key, session_token = (
@@ -9627,16 +9914,9 @@ def _run_frontend_server(
                                 "\n\n"
                             )
                             try:
-                                from frontend.server.evaluation_automation.datasets import (
-                                    ensure_feedback_sets,
-                                )
-
-                                await ensure_feedback_sets(
-                                    openapi_post=_agentkit_openapi_post,
-                                    region=region,
-                                    project_name=project_name,
-                                    agent_name=agent_name,
-                                )
+                                await evaluation_storage.for_runtime(
+                                    deployed_runtime_id,
+                                ).ensure_defaults()
                                 evaluation_complete = {
                                     "level": "success",
                                     "phase": "evaluation",
@@ -9844,6 +10124,15 @@ def _run_frontend_server(
 
         result: dict[str, dict[str, str]] = {}
         for item in getattr(response, "resource_tag_mapping_list", None) or []:
+            resource_trn = str(getattr(item, "resource_trn", "") or "")
+            trn_parts = resource_trn.split(":", 4)
+            if (
+                len(trn_parts) >= 3
+                and trn_parts[:2] == ["trn", "agentkit"]
+                and trn_parts[2]
+                and trn_parts[2] != region
+            ):
+                continue
             runtime_id = _runtime_id_from_resource_tag_mapping(item)
             if not runtime_id:
                 continue
@@ -9856,8 +10145,8 @@ def _run_frontend_server(
 
     def _runtime_agent_category(runtime: Any, tags: Mapping[str, str]) -> str:
         """Classify Runtime products from explicit, persisted Runtime tags."""
-        tagged = str(tags.get("veadk:agent-type") or "").strip().lower()
-        if tagged == "mpa":
+        tagged = str(tags.get(MPA_AGENT_TYPE_TAG) or "").strip().lower()
+        if tagged == MPA_AGENT_TYPE_VALUE:
             return "mpa"
         return "general"
 
@@ -10075,6 +10364,116 @@ def _run_frontend_server(
         )
         return runtime
 
+    @app.post("/web/deploy-agentkit/status")
+    async def _deployment_status(request: Request):
+        """Recover an accepted Runtime update through cloud-authoritative state."""
+
+        principal = _require_agent_management(request)
+        data = await request.json()
+        task_id = str(data.get("taskId") or "").strip()
+        runtime_id = str(data.get("runtimeId") or "").strip()
+        runtime_name = str(data.get("runtimeName") or "").strip()
+        app_name = str(data.get("appName") or "").strip()
+        region = _coerce_cloud_region(str(data.get("region") or ""))
+        project_name = str(data.get("projectName") or "default").strip() or "default"
+        base_version = data.get("baseRuntimeVersion")
+        if not task_id:
+            raise HTTPException(status_code=400, detail="taskId is required")
+
+        with _deploy_tasks_lock:
+            local_task = _deploy_tasks.get(task_id)
+            if local_task is not None:
+                local_owner_id = str(local_task.get("owner_id") or "")
+                if _request_role(request) != StudioRole.ADMIN and (
+                    principal is None or local_owner_id != principal.owner_id
+                ):
+                    raise HTTPException(
+                        status_code=404,
+                        detail="Deployment task not found",
+                    )
+                return {
+                    "done": False,
+                    "status": "running",
+                    "runtimeId": str(local_task.get("runtime_id") or runtime_id),
+                    "runtimeName": str(local_task.get("runtime_name") or runtime_name),
+                    "region": str(local_task.get("region") or region),
+                }
+
+        if (
+            not runtime_id
+            or not app_name
+            or isinstance(base_version, bool)
+            or not isinstance(base_version, int)
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="Runtime update recovery metadata is incomplete",
+            )
+
+        runtime = _authorized_runtime(
+            request,
+            runtime_id,
+            region,
+            coded_access_error=True,
+        )
+        tags = _runtime_tags(runtime)
+        current_version = getattr(runtime, "current_version_number", None)
+        current_status = str(getattr(runtime, "status", "") or "")
+        expected_fingerprint = _deployment_task_fingerprint(task_id)
+        actual_fingerprint = tags.get(_RUNTIME_DEPLOYMENT_TASK_TAG, "")
+        if (
+            isinstance(current_version, bool)
+            or not isinstance(current_version, int)
+            or current_version <= base_version
+        ):
+            return {
+                "done": False,
+                "status": "running",
+                "runtimeId": runtime_id,
+                "runtimeName": runtime_name,
+                "region": region,
+            }
+        if not secrets.compare_digest(actual_fingerprint, expected_fingerprint):
+            return {
+                "done": True,
+                "success": False,
+                "error": (
+                    "Runtime 已被其他部署更新，无法确认本次部署结果，"
+                    "请刷新详情核对线上版本。"
+                ),
+                "phase": "publish",
+            }
+        if current_status != "Ready":
+            return {
+                "done": False,
+                "status": "running",
+                "runtimeId": runtime_id,
+                "runtimeName": runtime_name,
+                "region": region,
+            }
+
+        _rt_conn_cache.pop((region, runtime_id), None)
+        endpoint, runtime_api_key, _auth_type, _network_type = _resolve_runtime_conn(
+            runtime_id,
+            region,
+            runtime,
+        )
+        return {
+            "done": True,
+            "success": True,
+            "agentName": app_name,
+            "runtimeName": str(getattr(runtime, "name", "") or runtime_name),
+            "url": endpoint,
+            "apikey": runtime_api_key,
+            "runtimeId": runtime_id,
+            "consoleUrl": (
+                "https://console.volcengine.com/agentkit/"
+                f"region:agentkit+{region}/runtime?projectName={project_name}"
+            ),
+            "region": region,
+            "version": current_version,
+        }
+
     runtime_log_service = RuntimeLogService(
         provider=provider,
         resolve_credentials=_resolve_ve_credentials,
@@ -10095,6 +10494,113 @@ def _run_frontend_server(
             error,
             secrets=_resolve_ve_credentials(),
         ),
+    )
+
+    from frontend.server.runtime_artifacts import (
+        RuntimeArtifactAccess,
+        RuntimeArtifactService,
+        mount_routes as mount_runtime_artifact_routes,
+    )
+    from frontend.server.runtime_artifacts.runtime_detail import (
+        read_runtime_artifact_detail,
+    )
+
+    from functools import lru_cache
+
+    @lru_cache(maxsize=16)
+    def _runtime_artifact_clients(
+        artifact_provider: str, region: str, ak: str, sk: str, token: str
+    ) -> tuple[Any, Any]:
+        import tos
+        from agentkit.sdk.runtime.client import AgentkitRuntimeClient
+
+        if artifact_provider != provider:
+            raise ValueError("Runtime artifact provider does not match Studio")
+        if not re.fullmatch(r"[a-z]{2}(?:-[a-z0-9]+){1,3}", region):
+            raise ValueError("Runtime artifact region is invalid")
+        domain = "bytepluses.com" if provider == "byteplus" else "volces.com"
+        storage_client = tos.TosClientV2(
+            ak,
+            sk,
+            endpoint=f"https://tos-{region}.{domain}",
+            region=region,
+            security_token=token or None,
+        )
+        runtime_client = create_agentkit_client(
+            AgentkitRuntimeClient,
+            provider=provider,
+            access_key=ak,
+            secret_key=sk,
+            session_token=token,
+            region=region,
+        )
+        return storage_client, runtime_client
+
+    def _runtime_artifact_client(artifact_provider: str, region: str) -> Any:
+        ak, sk, token = _resolve_ve_credentials()
+        return _runtime_artifact_clients(
+            artifact_provider, region, ak, sk, token or ""
+        )[0]
+
+    async def _runtime_artifact_access(
+        request: Request,
+        runtime_id: str,
+        region: str,
+        app_name: str,
+        session_id: str,
+    ) -> RuntimeArtifactAccess:
+        principal = _current_principal(request)
+        if principal is None:
+            raise HTTPException(status_code=401, detail="Studio identity is required")
+        region = _coerce_cloud_region(region)
+        role = _request_role(request)
+
+        def _authorize_artifact_tags(tags: dict[str, str]) -> None:
+            if (
+                not role.is_admin
+                and not runtime_belongs_to(tags, principal)
+                and not enterprise_visible(tags)
+            ):
+                raise HTTPException(status_code=404, detail="Runtime not found")
+
+        def _resolve_artifacts() -> dict[str, Any]:
+            # One fresh response provides both ownership and mount metadata
+            ak, sk, token = _resolve_ve_credentials()
+            client = _runtime_artifact_clients(provider, region, ak, sk, token or "")[1]
+            return read_runtime_artifact_detail(
+                client, runtime_id, authorize_tags=_authorize_artifact_tags
+            )
+
+        try:
+            detail = await asyncio.to_thread(_resolve_artifacts)
+        except HTTPException:
+            raise
+        except Exception as error:
+            if is_agentkit_resource_not_found(error):
+                raise HTTPException(404, detail="Runtime not found") from error
+            raise HTTPException(
+                502,
+                detail=_safe_exception_detail(error, secrets=_resolve_ve_credentials()),
+            ) from error
+        return RuntimeArtifactAccess(principal.owner_id, provider, region, detail)
+
+    from frontend.server.storage.tos import create_cached_tos_client_factory
+
+    artifact_studio_storage = StudioStorageConfig.from_env(provider)
+    mount_runtime_artifact_routes(
+        app,
+        service=RuntimeArtifactService(
+            _runtime_artifact_client,
+            studio_storage=artifact_studio_storage,
+            studio_client_factory=(
+                create_cached_tos_client_factory(
+                    artifact_studio_storage, _resolve_ve_credentials
+                )
+                if artifact_studio_storage.configured
+                else None
+            ),
+        ),
+        access_resolver=_runtime_artifact_access,
     )
 
     from frontend.server.cronjobs import (
@@ -10569,7 +11075,10 @@ def _run_frontend_server(
         list_lock = _runtime_list_locks.setdefault(cache_key, asyncio.Lock())
 
         # next_token format for cross-region mode: "all:<offset>".
-        mpa_tag_filter = ("veadk:agent-type", "mpa")
+        mpa_tag_filters = (
+            (MPA_AGENT_TYPE_TAG, MPA_AGENT_TYPE_VALUE),
+            (MPA_MANAGED_TAG, MPA_MANAGED_VALUE),
+        )
 
         async def _list_region(
             reg: str,
@@ -10733,7 +11242,7 @@ def _run_frontend_server(
             max_results: int = page_size,
             extra_tag_filters: Sequence[tuple[str, str]] = (),
         ) -> tuple[list[dict], str]:
-            tag_filters = [mpa_tag_filter, *extra_tag_filters]
+            tag_filters = [*mpa_tag_filters, *extra_tag_filters]
 
             async def _tagged_runtime_item(
                 runtime_id: str,
@@ -10742,16 +11251,17 @@ def _run_frontend_server(
                 try:
                     runtime = await asyncio.to_thread(_get_runtime, runtime_id, reg)
                 except Exception as error:
+                    if not is_agentkit_resource_not_found(error):
+                        raise
                     logger.warning(
-                        "tagged MPA runtime detail lookup failed runtime_id=%s "
-                        "region=%s error=%s",
+                        "stale tagged MPA runtime ignored runtime_id=%s region=%s",
                         runtime_id,
                         reg,
-                        _safe_exception_detail(error, secrets=(ak, sk, svc_token)),
                     )
                     return None
                 merged_tags = {**_runtime_tags(runtime), **tags}
-                merged_tags.setdefault(mpa_tag_filter[0], mpa_tag_filter[1])
+                for key, value in mpa_tag_filters:
+                    merged_tags.setdefault(key, value)
                 return _runtime_to_visible_item(runtime, merged_tags, reg)
 
             out: list[dict] = []
@@ -12003,6 +12513,10 @@ def _run_frontend_server(
             ),
         }
 
+    from frontend.server.evaluation import EvaluationStorage
+    from frontend.server.evaluation.sessions import enrich_session, session_identity
+
+    evaluation_storage = EvaluationStorage(provider, _resolve_ve_credentials)
     evaluation_automation: EvaluationAutomationService | None = None
     agent_usage_service: Any | None = None
     if studio:
@@ -12014,24 +12528,10 @@ def _run_frontend_server(
             mount_routes as mount_agent_usage_routes,
         )
 
-        async def _evaluation_automation_openapi_post(
-            *,
-            region: str,
-            action: str,
-            payload: dict[str, Any],
-            query: dict[str, str] | None = None,
-        ) -> dict[str, Any]:
-            return await _agentkit_openapi_post(
-                region=region,
-                action=action,
-                payload=payload,
-                query=query,
-            )
-
         evaluation_automation = create_evaluation_automation_service(
-            openapi_post=_evaluation_automation_openapi_post,
             provider=provider,
             resolve_credentials=_resolve_ve_credentials,
+            evaluation_storage=evaluation_storage,
         )
         agent_usage_service = create_agent_usage_service(
             provider=provider,
@@ -13088,6 +13588,22 @@ def _run_frontend_server(
                 ),
             )
 
+        identity = session_identity(path) if upstream_method == "GET" else None
+        if identity is not None and upstream.status_code == 200:
+            try:
+                session = json.loads(await upstream.aread())
+                return JSONResponse(
+                    await enrich_session(
+                        evaluation_storage, runtime_id, identity, session
+                    ),
+                    headers=studio_runtime_context_headers(
+                        runtime_request_context(upstream.headers)
+                    ),
+                )
+            finally:
+                await upstream.aclose()
+                await client.aclose()
+
         async def _body():
             try:
                 if observation is None:
@@ -13114,6 +13630,30 @@ def _run_frontend_server(
             ),
         )
 
+    redirect_uri = oauth2_redirect_uri or f"http://{host}:{port}/oauth2/callback"
+    pool_ok = oauth2_user_pool or oauth2_user_pool_uid
+    client_ok = oauth2_user_pool_client or oauth2_user_pool_client_uid
+    oauth_provider_id = oauth2_provider or ""
+    oauth2_config = None
+    runtime_identity_read_only = identity_roles_initialized or is_vefaas_runtime()
+
+    def _initialize_runtime_veidentity_oauth():
+        from veadk.auth.middleware.oauth2_auth import OAuth2Config
+
+        return OAuth2Config.from_veidentity(
+            user_pool_name=oauth2_user_pool,
+            user_pool_uid=oauth2_user_pool_uid,
+            client_name=oauth2_user_pool_client,
+            client_uid=oauth2_user_pool_client_uid,
+            client_secret=os.getenv("OAUTH2_CLIENT_SECRET") or None,
+            redirect_uri=redirect_uri,
+            auto_create=not runtime_identity_read_only,
+            auto_register_callback=not runtime_identity_read_only,
+            identity_client=_identity_client(),
+        )
+
+    runtime_veidentity_oauth = auth_mode != "gateway" and bool(pool_ok and client_ok)
+
     if identity_roles:
         from frontend.server.user_management.deployment import initialize_runtime_roles
         from frontend.server.user_management.routes import mount_user_management
@@ -13125,17 +13665,24 @@ def _run_frontend_server(
             raise click.ClickException(
                 "Identity role management requires a user pool and client"
             )
-        user_management = initialize_runtime_roles(
-            pool_uid=pool_uid,
-            client_uid=client_uid,
-            provider=provider,
-            identity_region=_identity_region(),
-            credentials=_resolve_ve_credentials,
-            environment=os.environ,
-            super_admin=studio_super_admin or "",
-            admins=studio_admins or "",
-            developers=studio_developers or "",
-        )
+        role_arguments = {
+            "pool_uid": pool_uid,
+            "client_uid": client_uid,
+            "provider": provider,
+            "identity_region": _identity_region(),
+            "credentials": _resolve_ve_credentials,
+            "environment": os.environ,
+        }
+        if runtime_identity_read_only and runtime_veidentity_oauth:
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                role_future = executor.submit(
+                    initialize_runtime_roles, **role_arguments
+                )
+                oauth_future = executor.submit(_initialize_runtime_veidentity_oauth)
+                user_management = role_future.result()
+                oauth2_config = oauth_future.result()
+        else:
+            user_management = initialize_runtime_roles(**role_arguments)
         os.environ["VEADK_STUDIO_IDENTITY_ROLES"] = "1"
         for legacy_key in (
             "VEADK_STUDIO_SUPER_ADMIN",
@@ -13220,28 +13767,16 @@ def _run_frontend_server(
         logger.info("Auth mode: gateway (trusting upstream-forwarded JWT identity)")
     else:
         # ---- SSO (optional): VeIdentity user pool, or a generic provider via env ----
-        redirect_uri = oauth2_redirect_uri or f"http://{host}:{port}/oauth2/callback"
-        pool_ok = oauth2_user_pool or oauth2_user_pool_uid
-        client_ok = oauth2_user_pool_client or oauth2_user_pool_client_uid
-        provider_id = oauth2_provider or ""
-
-        oauth2_config = None
         if pool_ok and client_ok:
-            from veadk.auth.middleware.oauth2_auth import OAuth2Config
-
-            oauth2_config = OAuth2Config.from_veidentity(
-                user_pool_name=oauth2_user_pool,
-                user_pool_uid=oauth2_user_pool_uid,
-                client_name=oauth2_user_pool_client,
-                client_uid=oauth2_user_pool_client_uid,
-                redirect_uri=redirect_uri,
-                identity_client=_identity_client(),
-            )
-            provider_id = provider_id or "veidentity"
+            if oauth2_config is None:
+                oauth2_config = _initialize_runtime_veidentity_oauth()
+            oauth_provider_id = oauth_provider_id or "veidentity"
         else:
             # Generic provider (github / google / any OIDC / custom) from env vars.
-            oauth2_config = _build_generic_oauth2(provider_id or "custom", redirect_uri)
-            provider_id = provider_id or "custom"
+            oauth2_config = _build_generic_oauth2(
+                oauth_provider_id or "custom", redirect_uri
+            )
+            oauth_provider_id = oauth_provider_id or "custom"
 
         # The SPA fetches /web/auth-config and /oauth2/userinfo on every startup, so
         # both must always return JSON. With SSO off we answer with an empty provider
@@ -13269,13 +13804,17 @@ def _run_frontend_server(
                 oauth2_provider_label
                 or (
                     "BytePlus Identity"
-                    if provider == "byteplus" and provider_id == "veidentity"
-                    else _PROVIDER_LABELS.get(provider_id)
+                    if provider == "byteplus" and oauth_provider_id == "veidentity"
+                    else _PROVIDER_LABELS.get(oauth_provider_id)
                 )
-                or provider_id.replace("_", " ").title()
+                or oauth_provider_id.replace("_", " ").title()
             )
             providers = [
-                {"id": provider_id, "label": label, "loginUrl": "/oauth2/login"}
+                {
+                    "id": oauth_provider_id,
+                    "label": label,
+                    "loginUrl": "/oauth2/login",
+                }
             ]
 
             # Protect the API but exempt the SPA shell + this config endpoint so the
@@ -13292,6 +13831,7 @@ def _run_frontend_server(
                     "/embed/run_sse",
                     "/web/auth-config",
                     "/web/github/app/webhook",
+                    "/web/gitlab/app/webhook",
                     "/web/site-logo",
                     "/web/sandbox/codex-project-handoff/sessions",
                     "/web/sandbox/codex-project-upload/sessions",
@@ -13344,7 +13884,8 @@ def _run_frontend_server(
                 runtime_credentials_resolver=_resolve_mpa_runtime,
             )
             logger.info(
-                f"OAuth2 SSO enabled (provider={provider_id}, redirect_uri={redirect_uri})"
+                "OAuth2 SSO enabled "
+                f"(provider={oauth_provider_id}, redirect_uri={redirect_uri})"
             )
         else:
             from fastapi.responses import JSONResponse
@@ -14693,559 +15234,99 @@ def _run_frontend_server(
             headers=no_store_headers,
         )
 
-    @app.post("/web/evaluation/feedback")
-    async def _web_message_feedback(
-        feedback: _MessageFeedbackRequest,
+    from frontend.server.evaluation.routes import (
+        mount_routes as mount_evaluation_routes,
+    )
+
+    @app.post("/web/runtime-mcp-credentials")
+    async def _web_runtime_mcp_credentials(
+        credential_request: _RuntimeMcpCredentialsRequest,
         request: Request,
-    ) -> dict[str, Any]:
-        """Persist one message rating in ADK state and AgentKit evaluation sets."""
-        feedback.region = _coerce_cloud_region(feedback.region)
-        principal = _current_principal(request)
-        if (
-            principal is None
-            or feedback.user_id.casefold() not in principal.identifiers
-        ):
-            raise HTTPException(
-                status_code=403,
-                detail="Feedback can only be submitted for the current user",
-            )
-        runtime = _authorized_runtime(
-            request,
-            feedback.runtime_id,
-            feedback.region,
-            coded_access_error=True,
-            allow_shared=True,
-        )
-        if provider == "byteplus":
-            return {
-                "rating": None,
-                "evaluationSetId": None,
-                "evaluationSetName": None,
-                "workspaceId": None,
-                "evaluationItemId": None,
-                "syncStatus": "synced",
-                "statePersistence": "browser",
-                "updatedAt": time.time(),
-            }
-        session_path = (
-            f"apps/{quote(feedback.app_name, safe='')}/users/"
-            f"{quote(feedback.user_id, safe='')}/sessions/"
-            f"{quote(feedback.session_id, safe='')}"
-        )
-        agent_info_path = f"web/agent-info/{quote(feedback.app_name, safe='')}"
+    ) -> Response:
+        """Restore MCP values only for one authorized, immutable edit snapshot."""
 
-        async def _feedback_agent_info() -> dict[str, Any]:
-            try:
-                return await _runtime_json_request(
-                    request,
-                    runtime=runtime,
-                    runtime_id=feedback.runtime_id,
-                    region=feedback.region,
-                    method="GET",
-                    path=agent_info_path,
-                )
-            except HTTPException as error:
-                if error.status_code != 404:
-                    raise
-                logger.info(
-                    "Runtime %s does not expose Agent info; using app name %s "
-                    "for evaluation feedback",
-                    feedback.runtime_id,
-                    feedback.app_name,
-                )
-                return {}
-
+        _require_agent_management(request)
+        region = _coerce_cloud_region(credential_request.region)
         try:
-            session, agent_info = await asyncio.gather(
-                _runtime_json_request(
-                    request,
-                    runtime=runtime,
-                    runtime_id=feedback.runtime_id,
-                    region=feedback.region,
-                    method="GET",
-                    path=session_path,
-                ),
-                _feedback_agent_info(),
+            payload, runtime = await _runtime_update_capability_details(
+                request,
+                runtime_id=credential_request.runtime_id,
+                region=region,
+                app_name=credential_request.app_name,
             )
-            from veadk.integrations.agentkit.evaluation import (
-                AgentKitEvaluationDatasetsClient,
-            )
-            from veadk.integrations.agentkit.evaluation.feedback import (
-                extract_feedback_sample,
-                feedback_item_key,
-                feedback_state_key,
-            )
-
-            agent_name = str(agent_info.get("name") or feedback.app_name)
-            project_name = str(getattr(runtime, "project_name", "") or "default")
-            sample = extract_feedback_sample(
-                session,
-                target_event_id=feedback.event_id,
-                runtime_id=feedback.runtime_id,
-                agent_name=agent_name,
-                user_id=feedback.user_id,
-            )
-            state_key = feedback_state_key(feedback.event_id)
-            session_state = session.get("state")
-            previous_value = (
-                session_state.get(state_key)
-                if isinstance(session_state, dict)
-                else None
-            )
-            previous: dict[str, Any] = (
-                previous_value if isinstance(previous_value, dict) else {}
-            )
-
-            async def _evaluation_post(
-                *,
-                action: str,
-                payload: dict[str, Any],
-                query: dict[str, str] | None = None,
-            ) -> dict[str, Any]:
-                return await _agentkit_openapi_post(
-                    region=feedback.region,
-                    action=action,
-                    payload=payload,
-                    query=query,
+            if (
+                not payload.get("canUpdate")
+                or payload.get("recoveryStatus") not in {"complete", "draft-only"}
+                or payload.get("etag") != credential_request.etag
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Runtime 更新快照已变化，请重新打开智能体详情。",
+                )
+            agent = payload.get("agent")
+            draft = agent.get("draft") if isinstance(agent, Mapping) else None
+            if not isinstance(draft, Mapping):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Runtime 的 MCP 配置无法恢复，请重新打开智能体详情。",
                 )
 
-            evaluation = AgentKitEvaluationDatasetsClient(
-                _evaluation_post,
-                project_name=project_name,
-            )
-            item_key = feedback_item_key(
-                project_name=project_name,
-                runtime_id=feedback.runtime_id,
-                session_id=feedback.session_id,
-                message_id=feedback.event_id,
-            )
-            deleted_previous_item_ids: set[str] = set()
-            evaluation_set = None
-            evaluation_item = None
-            if feedback.rating is not None:
-                evaluation_set = await evaluation.ensure_feedback_set(
-                    agent_name,
-                    feedback.rating,
-                )
-                evaluation_item = await evaluation.upsert_item(
-                    evaluation_set_id=evaluation_set.id,
-                    workspace_id=evaluation_set.workspace_id,
-                    item_key=item_key,
-                    fields=sample.fields(
-                        rating=feedback.rating,
-                        comment=feedback.comment,
-                    ),
-                )
-
-            previous_rating = str(previous.get("rating") or "")
-            previous_item_id = str(previous.get("evaluationItemId") or "")
-            previous_set_id = str(previous.get("evaluationSetId") or "")
-            previous_workspace_id = str(previous.get("workspaceId") or "")
-            replacing_previous = previous_item_id and (
-                feedback.rating is None or previous_rating != feedback.rating
-            )
-            if replacing_previous and previous_set_id and previous_workspace_id:
-                await evaluation.delete_item(
-                    evaluation_set_id=previous_set_id,
-                    workspace_id=previous_workspace_id,
-                    item_id=previous_item_id,
-                )
-                deleted_previous_item_ids.add(previous_item_id)
-
-            fallback_delete_ratings: tuple[str, ...] = ()
-            if feedback.rating is None:
-                fallback_delete_ratings = ("good", "bad")
-            elif feedback.rating == "good":
-                fallback_delete_ratings = ("bad",)
-            elif feedback.rating == "bad":
-                fallback_delete_ratings = ("good",)
-            for stale_rating in fallback_delete_ratings:
-                stale_set, stale_items = await evaluation.list_feedback_items(
-                    agent_name=agent_name,
-                    rating=stale_rating,
-                    page_size=200,
-                )
-                if stale_set is None:
-                    continue
-                for stale_item in stale_items:
-                    if (
-                        stale_item.item_key != item_key
-                        or stale_item.id in deleted_previous_item_ids
-                    ):
-                        continue
-                    await evaluation.delete_item(
-                        evaluation_set_id=stale_set.id,
-                        workspace_id=stale_set.workspace_id,
-                        item_id=stale_item.id,
-                    )
-                    deleted_previous_item_ids.add(stale_item.id)
-
-            feedback_state = {
-                "rating": feedback.rating,
-                "comment": feedback.comment if feedback.rating is not None else "",
-                "evaluationSetId": evaluation_set.id if evaluation_set else None,
-                "evaluationSetName": evaluation_set.name if evaluation_set else None,
-                "workspaceId": (
-                    evaluation_set.workspace_id if evaluation_set else None
-                ),
-                "evaluationItemId": evaluation_item.id if evaluation_item else None,
-                "syncStatus": "synced",
-                "statePersistence": "runtime",
-                "updatedAt": time.time(),
+            references = mcp_auth_environment_keys(draft)
+            environment = _legacy_runtime_environment(runtime)
+            recovered_values = {
+                reference: environment[reference]
+                for reference in references
+                if environment.get(reference)
             }
-            try:
-                await _runtime_json_request(
-                    request,
-                    runtime=runtime,
-                    runtime_id=feedback.runtime_id,
-                    region=feedback.region,
-                    method="PATCH",
-                    path=session_path,
-                    payload={"state_delta": {state_key: feedback_state}},
+            if set(references).difference(recovered_values):
+                recovery, legacy_values = _legacy_mcp_state(runtime, region)
+                recovered_values.update(
+                    mcp_secret_values_for_draft_references(
+                        draft=draft,
+                        recovery=recovery,
+                        recovered_values=legacy_values,
+                    )
                 )
-            except HTTPException as error:
-                if error.status_code != 404:
-                    raise
-                feedback_state["statePersistence"] = "browser"
-                logger.warning(
-                    "Runtime %s does not expose Session PATCH through its gateway; "
-                    "feedback state will use the browser compatibility cache",
-                    feedback.runtime_id,
-                )
-            return feedback_state
+            if set(references).difference(recovered_values):
+                raise LegacyRecoveryError("legacy_mcp_credential_missing")
+            credentials = mcp_editor_credential_values(
+                draft=draft,
+                recovered_values=recovered_values,
+            )
         except HTTPException:
             raise
-        except ValueError as error:
-            raise HTTPException(status_code=400, detail=str(error)) from error
-        except RuntimeError as error:
+        except LegacyRecoveryError as error:
+            logger.info(
+                "MCP editor credential recovery unavailable runtime_id=%s "
+                "region=%s code=%s",
+                credential_request.runtime_id,
+                region,
+                error.code,
+            )
             raise HTTPException(
-                status_code=502,
-                detail=(
-                    "同步反馈到 AgentKit 评测集失败：" + _safe_exception_detail(error)
-                ),
+                status_code=409,
+                detail="Runtime 的 MCP 认证信息无法恢复，请重新配置 Key 后重试。",
             ) from error
 
-    @app.get("/web/evaluation/feedback-cases")
-    async def _web_feedback_cases(
-        request: Request,
-        runtimeId: str = Query(..., min_length=1),
-        appName: str = Query(..., min_length=1),
-        region: str = Query(default="", min_length=0),
-        page_size: int = Query(default=100, ge=1, le=200),
-    ) -> dict[str, Any]:
-        """List AgentKit evaluation-set items created from message feedback."""
-        region = _coerce_cloud_region(region)
-        runtime = _authorized_runtime(
+        return JSONResponse(
+            {"credentials": credentials},
+            headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
+        )
+
+    mount_evaluation_routes(
+        app,
+        storage=evaluation_storage,
+        authorize=lambda request, runtime_id, region, shared=False: _authorized_runtime(
             request,
-            runtimeId,
+            runtime_id,
             region,
             coded_access_error=True,
-        )
-        agent_info_path = f"web/agent-info/{quote(appName, safe='')}"
-        try:
-            try:
-                agent_info = await _runtime_json_request(
-                    request,
-                    runtime=runtime,
-                    runtime_id=runtimeId,
-                    region=region,
-                    method="GET",
-                    path=agent_info_path,
-                )
-            except HTTPException as error:
-                if error.status_code != 404:
-                    raise
-                agent_info = {"name": appName}
-            from frontend.server.evaluation_automation.repository import (
-                AgentKitAutoEvaluationRepository,
-            )
-            from veadk.integrations.agentkit.evaluation import (
-                AgentKitEvaluationDatasetsClient,
-            )
-
-            agent_name = str(agent_info.get("name") or appName)
-            project_name = str(getattr(runtime, "project_name", "") or "default")
-
-            async def _evaluation_post(
-                *,
-                action: str,
-                payload: dict[str, Any],
-                query: dict[str, str] | None = None,
-            ) -> dict[str, Any]:
-                return await _agentkit_openapi_post(
-                    region=region,
-                    action=action,
-                    payload=payload,
-                    query=query,
-                )
-
-            evaluation = AgentKitEvaluationDatasetsClient(
-                _evaluation_post,
-                project_name=project_name,
-            )
-            response_sets: list[dict[str, Any]] = []
-            response_items: list[dict[str, Any]] = []
-            for rating in ("good", "bad"):
-                evaluation_set, items = await evaluation.list_feedback_items(
-                    agent_name=agent_name,
-                    rating=rating,
-                    page_size=page_size,
-                )
-                if evaluation_set is None:
-                    response_sets.append(
-                        {
-                            "kind": rating,
-                            "evaluationSetId": None,
-                            "evaluationSetName": None,
-                            "workspaceId": None,
-                            "itemCount": 0,
-                        }
-                    )
-                    continue
-                response_sets.append(
-                    {
-                        "kind": rating,
-                        "evaluationSetId": evaluation_set.id,
-                        "evaluationSetName": evaluation_set.name,
-                        "workspaceId": evaluation_set.workspace_id,
-                        "itemCount": len(items),
-                    }
-                )
-                for item in items:
-                    fields = item.fields
-                    comment = fields.get("feedback_comment", "")
-                    is_annotated_bad_case = rating == "bad" and bool(comment.strip())
-                    response_items.append(
-                        {
-                            "id": item.id or item.item_key,
-                            "itemKey": item.item_key,
-                            "kind": rating,
-                            "input": fields.get("input", ""),
-                            "output": fields.get("output", ""),
-                            "referenceOutput": fields.get("reference_output", ""),
-                            "comment": comment,
-                            "agentName": fields.get("agent_name", agent_name),
-                            "sessionId": fields.get("session_id", ""),
-                            "messageId": fields.get("message_id", ""),
-                            "runtimeId": fields.get("runtime_id", runtimeId),
-                            "invocationId": fields.get("invocation_id", ""),
-                            "userId": fields.get("user_id", ""),
-                            "createdAt": fields.get("created_at", ""),
-                            "evaluationSetId": evaluation_set.id,
-                            "evaluationSetName": evaluation_set.name,
-                            "workspaceId": evaluation_set.workspace_id,
-                            "source": "user",
-                            "score": 0 if is_annotated_bad_case else None,
-                            "reason": comment if is_annotated_bad_case else "",
-                        }
-                    )
-            if studio:
-                automatic = AgentKitAutoEvaluationRepository(
-                    _evaluation_post,
-                    project_name=project_name,
-                )
-                automatic_cases = await automatic.list_cases(
-                    agent_name=agent_name,
-                    page_size=page_size,
-                )
-                response_items.extend(
-                    case.model_dump(mode="json", by_alias=True)
-                    for case in automatic_cases
-                )
-                for item in response_sets:
-                    item["itemCount"] = sum(
-                        case["kind"] == item["kind"] for case in response_items
-                    )
-            return {
-                "agentName": agent_name,
-                "runtimeId": runtimeId,
-                "region": region,
-                "projectName": project_name,
-                "sets": response_sets,
-                "items": response_items,
-            }
-        except HTTPException:
-            raise
-        except ValueError as error:
-            raise HTTPException(status_code=400, detail=str(error)) from error
-        except RuntimeError as error:
-            if provider == "byteplus" and "AgentKit OpenAPI returned HTTP 404" in str(
-                error
-            ):
-                return {
-                    "agentName": appName,
-                    "runtimeId": runtimeId,
-                    "region": region,
-                    "projectName": getattr(runtime, "project_name", "") or "default",
-                    "sets": [],
-                    "items": [],
-                    "unsupported": True,
-                    "unsupportedMessage": "BytePlus 暂不支持 AgentKit 评测集。",
-                }
-            raise HTTPException(
-                status_code=502,
-                detail="读取 AgentKit 评测集失败：" + _safe_exception_detail(error),
-            ) from error
-
-    @app.post("/web/evaluation/feedback-cases/delete")
-    async def _web_delete_feedback_cases(
-        deletion: _DeleteFeedbackCasesRequest,
-        request: Request,
-    ) -> dict[str, Any]:
-        """Remove feedback cases and clear their thumbs state without deleting chat."""
-        deletion.region = _coerce_cloud_region(deletion.region)
-        requested_ids = {
-            item_id.strip()
-            for item_id in deletion.item_ids
-            if item_id and item_id.strip()
-        }
-        if not requested_ids:
-            raise HTTPException(status_code=400, detail="No feedback cases selected")
-        runtime = _authorized_runtime(
-            request,
-            deletion.runtime_id,
-            deletion.region,
-            coded_access_error=True,
-        )
-        agent_info_path = f"web/agent-info/{quote(deletion.app_name, safe='')}"
-        try:
-            try:
-                agent_info = await _runtime_json_request(
-                    request,
-                    runtime=runtime,
-                    runtime_id=deletion.runtime_id,
-                    region=deletion.region,
-                    method="GET",
-                    path=agent_info_path,
-                )
-            except HTTPException as error:
-                if error.status_code != 404:
-                    raise
-                agent_info = {"name": deletion.app_name}
-            from frontend.server.evaluation_automation.repository import (
-                AgentKitAutoEvaluationRepository,
-            )
-            from veadk.integrations.agentkit.evaluation import (
-                AgentKitEvaluationDatasetsClient,
-            )
-            from veadk.integrations.agentkit.evaluation.feedback import (
-                feedback_state_key,
-            )
-
-            agent_name = str(agent_info.get("name") or deletion.app_name)
-            project_name = str(getattr(runtime, "project_name", "") or "default")
-
-            async def _evaluation_post(
-                *,
-                action: str,
-                payload: dict[str, Any],
-                query: dict[str, str] | None = None,
-            ) -> dict[str, Any]:
-                return await _agentkit_openapi_post(
-                    region=deletion.region,
-                    action=action,
-                    payload=payload,
-                    query=query,
-                )
-
-            evaluation = AgentKitEvaluationDatasetsClient(
-                _evaluation_post,
-                project_name=project_name,
-            )
-            matched: list[tuple[str, str, dict[str, str]]] = []
-            for rating in ("good", "bad"):
-                evaluation_set, items = await evaluation.list_feedback_items(
-                    agent_name=agent_name,
-                    rating=rating,
-                    page_size=200,
-                )
-                if evaluation_set is None:
-                    continue
-                for item in items:
-                    if item.id not in requested_ids:
-                        continue
-                    matched.append(
-                        (evaluation_set.id, evaluation_set.workspace_id, item.fields)
-                    )
-                    await evaluation.delete_item(
-                        evaluation_set_id=evaluation_set.id,
-                        workspace_id=evaluation_set.workspace_id,
-                        item_id=item.id,
-                    )
-
-            automatic_deleted = 0
-            if studio:
-                automatic = AgentKitAutoEvaluationRepository(
-                    _evaluation_post,
-                    project_name=project_name,
-                )
-                automatic_cases = await automatic.list_cases(
-                    agent_name=agent_name,
-                    page_size=200,
-                )
-                for case in automatic_cases:
-                    if case.id not in requested_ids:
-                        continue
-                    await evaluation.delete_item(
-                        evaluation_set_id=case.evaluation_set_id,
-                        workspace_id=case.workspace_id,
-                        item_id=case.id,
-                    )
-                    automatic_deleted += 1
-
-            for _set_id, _workspace_id, fields in matched:
-                session_id = str(fields.get("session_id") or "")
-                message_id = str(fields.get("message_id") or "")
-                user_id = str(fields.get("user_id") or "")
-                if not session_id or not message_id or not user_id:
-                    continue
-                session_path = (
-                    f"apps/{quote(deletion.app_name, safe='')}/users/"
-                    f"{quote(user_id, safe='')}/sessions/"
-                    f"{quote(session_id, safe='')}"
-                )
-                feedback_state = {
-                    "rating": None,
-                    "evaluationSetId": None,
-                    "evaluationSetName": None,
-                    "workspaceId": None,
-                    "evaluationItemId": None,
-                    "syncStatus": "synced",
-                    "statePersistence": "runtime",
-                    "updatedAt": time.time(),
-                }
-                try:
-                    await _runtime_json_request(
-                        request,
-                        runtime=runtime,
-                        runtime_id=deletion.runtime_id,
-                        region=deletion.region,
-                        method="PATCH",
-                        path=session_path,
-                        payload={
-                            "state_delta": {
-                                feedback_state_key(message_id): feedback_state,
-                            }
-                        },
-                    )
-                except HTTPException as error:
-                    if error.status_code != 404:
-                        raise
-                    logger.warning(
-                        "Runtime %s does not expose Session PATCH; feedback case "
-                        "was deleted but message state could not be cleared",
-                        deletion.runtime_id,
-                    )
-            return {"deletedCount": len(matched) + automatic_deleted}
-        except HTTPException:
-            raise
-        except ValueError as error:
-            raise HTTPException(status_code=400, detail=str(error)) from error
-        except RuntimeError as error:
-            raise HTTPException(
-                status_code=502,
-                detail="删除 AgentKit 评测案例失败：" + _safe_exception_detail(error),
-            ) from error
+            allow_shared=shared,
+        ),
+        principal=_current_principal,
+        runtime_request=_runtime_json_request,
+        normalize_region=_coerce_cloud_region,
+    )
 
     @app.get("/web/a2a-spaces")
     async def _web_list_a2a_spaces(
@@ -17660,6 +17741,7 @@ def frontend_deploy(
         ),
     )
     github_app_review_environment = _github_app_review_environment(veadk_environments)
+    gitlab_app_review_environment = _gitlab_app_review_environment(veadk_environments)
 
     # SECURITY: VeFaaS._create_function uploads *everything* in veadk_environments
     # (i.e. the deployer's whole .env) as function env vars. The frontend must
@@ -17725,6 +17807,7 @@ def frontend_deploy(
     veadk_environments.update(studio_storage_environment)
     veadk_environments.update(studio_environment_resource_environment)
     veadk_environments.update(github_app_review_environment)
+    veadk_environments.update(gitlab_app_review_environment)
     if client_secret:
         veadk_environments["OAUTH2_CLIENT_SECRET"] = client_secret
     veadk_environments.update(sidecar_environment)
@@ -17782,10 +17865,17 @@ def frontend_deploy(
             from veadk.cli.studio_package import stage_studio_provider_requirements
 
             try:
-                requirements = (
-                    stage_studio_provider_requirements(Path(tmp), provider_id)
-                    + requirements
+                provider_requirements = stage_studio_provider_requirements(
+                    Path(tmp), provider_id
                 )
+                if provider_id == "byteplus":
+                    requirements = (
+                        "--extra-index-url https://pypi.org/simple\n"
+                        + provider_requirements
+                        + requirements
+                    )
+                else:
+                    requirements = provider_requirements + requirements
             except ValueError as error:
                 raise click.ClickException(str(error)) from error
 
@@ -17805,6 +17895,11 @@ def frontend_deploy(
 
         # 3) Deploy the function + a plain public APIG trigger on the serverless
         #    gateway (auth_method="none" — no gateway SSO plugin / domain upstream).
+        from frontend.server.studio_deployment import (
+            STUDIO_CPU_MILLI,
+            STUDIO_MAX_INSTANCE,
+            STUDIO_MEMORY_MB,
+        )
         from veadk.cloud.cloud_agent_engine import CloudAgentEngine
 
         engine = CloudAgentEngine(
@@ -17831,6 +17926,9 @@ def frontend_deploy(
             enable_mcp_session=False,
             keep_failed_deploy=keep_failed_deploy,
             disable_gateway_cors=True,
+            cpu_milli=STUDIO_CPU_MILLI,
+            memory_mb=STUDIO_MEMORY_MB,
+            max_instance=STUDIO_MAX_INSTANCE,
         )
         url = (app.vefaas_endpoint or "").rstrip("/")
         redirect_uri = f"{url}/oauth2/callback"
@@ -18115,6 +18213,14 @@ def frontend_deploy(
     default=None,
     help="Replace the snapshot-enabled Hermes AgentKit Tool ID.",
 )
+@click.option(
+    "--skip-cronjob-scheduler",
+    is_flag=True,
+    help=(
+        "Update only the main Studio Application and leave the existing cronjob "
+        "scheduler unchanged."
+    ),
+)
 @click.option("--volcengine-access-key", default=None)
 @click.option("--volcengine-secret-key", default=None)
 @click.option("--volcengine-session-token", default=None)
@@ -18139,6 +18245,7 @@ def frontend_update(
     sandbox_chat_codex_snapshot_tool_id: str | None,
     sandbox_chat_openclaw_snapshot_tool_id: str | None,
     sandbox_chat_hermes_snapshot_tool_id: str | None,
+    skip_cronjob_scheduler: bool,
     volcengine_access_key: str | None,
     volcengine_secret_key: str | None,
     volcengine_session_token: str | None,
@@ -18307,6 +18414,10 @@ def frontend_update(
                 provider=provider_id,
                 offline_runtime=False,
             )
+            if provider_id == "byteplus":
+                requirements = (
+                    "--extra-index-url https://pypi.org/simple\n" + requirements
+                )
         except ValueError as error:
             raise click.ClickException(str(error)) from error
         try:
@@ -18838,6 +18949,10 @@ def frontend_update(
 
         if branding_title is not None:
             environment_overrides["VEADK_SITE_TITLE"] = branding_title
+        environment_overrides.update(_github_app_review_environment(current_env))
+        environment_overrides.update(_gitlab_app_review_environment(current_env))
+        if "VEADK_GITLAB_TOKEN" in current_env:
+            environment_overrides["VEADK_GITLAB_TOKEN"] = ""
         if sandbox_dev_tool_id is not None:
             environment_overrides["SANDBOX_DEV"] = sandbox_dev_tool_id
         if sandbox_chat_codex_tool_id is not None:
@@ -18887,29 +19002,33 @@ def frontend_update(
                 ),
             }
         )
-        from frontend.service.studio_scheduler.deploy import (
-            deploy_scheduler_for_studio_update,
-        )
-
-        click.echo("Updating the Studio cronjob scheduler and minute timer…")
         try:
-            _, _, _, _, scheduler_base = deploy_scheduler_for_studio_update(
-                service,
-                studio_function_id=target.function_id,
-                package_root=package_dir,
-                provider=provider_id,
-                project=target.project,
-                environment_overrides=environment_overrides,
-            )
-            environment_overrides["VEADK_STUDIO_CRONJOB_SCHEDULER_BASE"] = (
-                scheduler_base
-            )
+            if skip_cronjob_scheduler:
+                click.echo("Skipping the Studio cronjob scheduler update.")
+            else:
+                from frontend.service.studio_scheduler.deploy import (
+                    deploy_scheduler_for_studio_update,
+                )
+
+                click.echo("Updating the Studio cronjob scheduler and minute timer…")
+                _, _, _, _, scheduler_base = deploy_scheduler_for_studio_update(
+                    service,
+                    studio_function_id=target.function_id,
+                    package_root=package_dir,
+                    provider=provider_id,
+                    project=target.project,
+                    environment_overrides=environment_overrides,
+                )
+                environment_overrides["VEADK_STUDIO_CRONJOB_SCHEDULER_BASE"] = (
+                    scheduler_base
+                )
             url = service.update_application_code_bundle(
                 application_id=target.application_id,
                 function_id=target.function_id,
                 path=str(package_dir),
                 environment_overrides=environment_overrides or None,
                 disable_gateway_cors=True,
+                normalize_studio_entrypoint=True,
             )
         except Exception as error:
             if _is_retryable_cloud_read_error(error):

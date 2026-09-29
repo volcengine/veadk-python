@@ -22,7 +22,7 @@ import os
 import re
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 import httpx
 
@@ -42,25 +42,16 @@ from frontend.server.studio_tools.sandbox_shell import (
     SandboxResolutionError,
     SandboxTargetResolver,
 )
-from veadk.cli.codex_app_server import (
-    CodexAppServerError,
-    CodexAppServerEvent,
-    CodexAppServerSession,
-    CodexAppServerTransportError,
-    CodexAppServerTurnTimeoutError,
-    CodexPermissionSettings,
-    sandbox_service_url,
-)
 from veadk.utils.logger import get_logger
+
+if TYPE_CHECKING:
+    from veadk.cli.codex_app_server import (
+        CodexAppServerEvent,
+        CodexPermissionSettings,
+    )
 
 logger = get_logger(__name__)
 
-_CODEX_PERMISSIONS = CodexPermissionSettings(
-    approval_policy="never",
-    approvals_reviewer="auto_review",
-    sandbox_mode="danger-full-access",
-    network_access=True,
-)
 _CONNECT_RETRY_DELAYS_SECONDS = (1.0, 2.0, 4.0)
 _READINESS_TIMEOUT_SECONDS = 5.0
 _CODEX_TOOL_TIMEOUT_MS = 30 * 60 * 1_000
@@ -82,6 +73,51 @@ _SENSITIVE_VALUE_RE = re.compile(
 )
 _BEARER_RE = re.compile(r"(?i)(\bbearer\s+)\S+")
 _URL_QUERY_RE = re.compile(r"https?://[^\s?]+\?[^\s]+")
+
+
+def CodexAppServerSession(endpoint: str) -> CodexSandboxConnection:
+    """Construct the heavy app-server transport on the first delegated task."""
+
+    from veadk.cli.codex_app_server import CodexAppServerSession as _Session
+
+    return _Session(endpoint)
+
+
+def sandbox_service_url(endpoint: str, path: str) -> str:
+    """Resolve the private app-server URL only when readiness is probed."""
+
+    from veadk.cli.codex_app_server import sandbox_service_url as _service_url
+
+    return _service_url(endpoint, path)
+
+
+def _codex_permissions() -> CodexPermissionSettings:
+    from veadk.cli.codex_app_server import CodexPermissionSettings
+
+    return CodexPermissionSettings(
+        approval_policy="never",
+        approvals_reviewer="auto_review",
+        sandbox_mode="danger-full-access",
+        network_access=True,
+    )
+
+
+def _codex_error_type() -> type[Exception]:
+    from veadk.cli.codex_app_server import CodexAppServerError
+
+    return CodexAppServerError
+
+
+def _codex_transport_error_type() -> type[Exception]:
+    from veadk.cli.codex_app_server import CodexAppServerTransportError
+
+    return CodexAppServerTransportError
+
+
+def _codex_turn_timeout_error_type() -> type[Exception]:
+    from veadk.cli.codex_app_server import CodexAppServerTurnTimeoutError
+
+    return CodexAppServerTurnTimeoutError
 
 
 class CodexSandboxConnection(Protocol):
@@ -119,19 +155,20 @@ class CodexSandboxDelegate:
         self,
         target_resolver: SandboxTargetResolver,
         *,
-        connection_factory: Callable[[str], CodexSandboxConnection] = (
-            CodexAppServerSession
-        ),
+        connection_factory: Callable[[str], CodexSandboxConnection] | None = None,
         readiness_probe: Callable[[SandboxExecutionTarget], Awaitable[bool]]
         | None = None,
         sleep: Callable[[float], Awaitable[Any]] = asyncio.sleep,
     ) -> None:
         self._target_resolver = target_resolver
-        self._connection_factory = connection_factory
+        default_connection_factory = connection_factory is None
+        self._connection_factory = (
+            connection_factory
+            if connection_factory is not None
+            else CodexAppServerSession
+        )
         self._readiness_probe = readiness_probe or (
-            _codex_app_server_ready
-            if connection_factory is CodexAppServerSession
-            else _always_ready
+            _codex_app_server_ready if default_connection_factory else _always_ready
         )
         self._sleep = sleep
         self._connections: dict[
@@ -177,7 +214,7 @@ class CodexSandboxDelegate:
 
         try:
             entry = await self._ready_connection(target, mount, context)
-        except CodexAppServerTransportError as error:
+        except _codex_transport_error_type() as error:
             failure = await _report_failure(context, mount, "Codex Sandbox 连接失败")
             _append_activity_event(activity_events, failure)
             raise StudioToolRuntimeError(
@@ -210,7 +247,7 @@ class CodexSandboxDelegate:
             try:
                 async for event in entry.connection.stream_turn(
                     prompt,
-                    permissions=_CODEX_PERMISSIONS,
+                    permissions=_codex_permissions(),
                 ):
                     if event.kind == "text":
                         if event.text:
@@ -231,7 +268,7 @@ class CodexSandboxDelegate:
                             _progress_event(event, fallback_id=text_event_id),
                         ),
                     )
-            except CodexAppServerTurnTimeoutError as error:
+            except _codex_turn_timeout_error_type() as error:
                 failure = await _report_failure(
                     context, mount, "Codex Sandbox 执行超时"
                 )
@@ -247,7 +284,7 @@ class CodexSandboxDelegate:
                         ok=False,
                     ),
                 ) from error
-            except CodexAppServerTransportError as error:
+            except _codex_transport_error_type() as error:
                 failure = await _report_failure(
                     context, mount, "Codex Sandbox 连接中断"
                 )
@@ -264,7 +301,7 @@ class CodexSandboxDelegate:
                         ok=False,
                     ),
                 ) from error
-            except CodexAppServerError as error:
+            except _codex_error_type() as error:
                 failure = await _report_failure(
                     context, mount, "Codex Sandbox 执行失败"
                 )
@@ -325,7 +362,7 @@ class CodexSandboxDelegate:
             entry: _CodexConnectionEntry | None = None
             try:
                 if not await self._readiness_probe(target):
-                    raise CodexAppServerTransportError(
+                    raise _codex_transport_error_type()(
                         "Codex app-server readiness check did not pass."
                     )
                 entry = await self._connection(target, mount, context)
@@ -335,7 +372,7 @@ class CodexSandboxDelegate:
                 async with entry.lock:
                     await entry.connection.connect()
                 return entry
-            except CodexAppServerTransportError as error:
+            except _codex_transport_error_type() as error:
                 logger.warning(
                     "Codex Sandbox app-server connection failed "
                     "environment_id_prefix=%s attempt=%d/%d error_type=%s",

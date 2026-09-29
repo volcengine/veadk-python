@@ -1,8 +1,22 @@
+# Copyright (c) 2025 Beijing Volcano Engine Technology Co., Ltd. and/or its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 from __future__ import annotations
 
 import io
 import json
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any
 
@@ -101,7 +115,7 @@ def _repository(tos: _FakeTosClient) -> TosMpaOperationRepository:
 
 
 def _operation(**overrides: Any) -> MpaLifecycleOperation:
-    now = datetime(2026, 9, 15, tzinfo=UTC)
+    now = datetime(2026, 9, 15, tzinfo=timezone.utc)
     values: dict[str, Any] = {
         "operationKind": "create",
         "ownerId": "owner-1",
@@ -159,7 +173,7 @@ async def test_update_operation_uses_etag_compare_and_swap() -> None:
         update={
             "stage": "profile_applying",
             "runtime_id": "runtime-1",
-            "updated_at": datetime(2026, 9, 15, 0, 1, tzinfo=UTC),
+            "updated_at": datetime(2026, 9, 15, 0, 1, tzinfo=timezone.utc),
         }
     )
 
@@ -187,7 +201,7 @@ async def test_list_active_operations_filters_terminal_states() -> None:
         update={
             "status": "succeeded",
             "stage": "runnable",
-            "updated_at": datetime(2026, 9, 15, 0, 2, tzinfo=UTC),
+            "updated_at": datetime(2026, 9, 15, 0, 2, tzinfo=timezone.utc),
         }
     )
     await repository.update_operation(succeeded, failed.etag)
@@ -213,7 +227,7 @@ async def test_in_memory_repository_matches_idempotency_and_cas() -> None:
     updated = created.value.model_copy(
         update={
             "stage": "profile_applying",
-            "updated_at": datetime(2026, 9, 15, 0, 1, tzinfo=UTC),
+            "updated_at": datetime(2026, 9, 15, 0, 1, tzinfo=timezone.utc),
         }
     )
 

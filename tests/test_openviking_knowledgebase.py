@@ -57,22 +57,69 @@ class FakeOpenVikingClient:
     def close(self):
         self.close_calls += 1
 
-    def add_resource(self, **kwargs):
-        self.add_resource_calls.append(kwargs)
-        path = kwargs.get("path")
+    def add_resource(
+        self,
+        path: str,
+        to: str | None = None,
+        parent: str | None = None,
+        wait: bool = False,
+        timeout: float | None = None,
+        options: dict[str, Any] | None = None,
+    ):
+        call = {
+            "path": path,
+            "to": to,
+            "parent": parent,
+            "wait": wait,
+            "timeout": timeout,
+            "options": options,
+        }
+        self.add_resource_calls.append(call)
         if path and Path(path).is_file():
             self.added_texts.append(Path(path).read_text(encoding="utf-8"))
         return {
             "status": "ok",
-            "result": {"root_uri": kwargs.get("to") or kwargs.get("parent")},
+            "result": {"root_uri": to or parent},
         }
 
-    def find(self, **kwargs):
-        self.find_calls.append(kwargs)
+    def find(
+        self,
+        query: str = "",
+        target_uri: str | list[str] = "",
+        limit: int = 10,
+        image: Any = None,
+        options: dict[str, Any] | None = None,
+    ):
+        self.find_calls.append(
+            {
+                "query": query,
+                "target_uri": target_uri,
+                "limit": limit,
+                "image": image,
+                "options": options,
+            }
+        )
         return self.find_response
 
-    def search(self, **kwargs):
-        self.search_calls.append(kwargs)
+    def search(
+        self,
+        query: str = "",
+        session_id: str | None = None,
+        target_uri: str | list[str] = "",
+        limit: int = 10,
+        image: Any = None,
+        options: dict[str, Any] | None = None,
+    ):
+        self.search_calls.append(
+            {
+                "query": query,
+                "session_id": session_id,
+                "target_uri": target_uri,
+                "limit": limit,
+                "image": image,
+                "options": options,
+            }
+        )
         return self.search_response
 
     def read(self, uri: str, offset: int = 0, limit: int = -1):
@@ -347,6 +394,17 @@ def test_add_from_files_imports_each_file_under_target_uri():
     )
     assert all(call["wait"] is True for call in client.add_resource_calls)
     assert all(call["timeout"] == 300 for call in client.add_resource_calls)
+    assert all(
+        call["options"]
+        == {
+            "strict": False,
+            "reason": "",
+            "instruction": "",
+            "directly_upload_media": True,
+            "telemetry": False,
+        }
+        for call in client.add_resource_calls
+    )
 
 
 def test_add_from_directory_imports_to_target_uri_with_structure():
@@ -359,17 +417,16 @@ def test_add_from_directory_imports_to_target_uri_with_structure():
         {
             "path": "./docs",
             "to": "viking://user/owner/resources/demo/",
+            "parent": None,
             "wait": True,
             "timeout": 300,
-            "strict": False,
-            "ignore_dirs": None,
-            "include": None,
-            "exclude": None,
-            "directly_upload_media": True,
-            "preserve_structure": True,
-            "watch_interval": 0,
-            "args": None,
-            "telemetry": False,
+            "options": {
+                "strict": False,
+                "directly_upload_media": True,
+                "preserve_structure": True,
+                "watch_interval": 0,
+                "telemetry": False,
+            },
         }
     ]
 
@@ -423,6 +480,37 @@ def test_search_converts_resources_to_entries_without_memories_or_skills():
     }
     assert client.find_calls[0]["target_uri"] == "viking://user/owner/resources/demo/"
     assert client.find_calls[0]["limit"] == 3
+    assert client.find_calls[0]["options"] == {"telemetry": False}
+
+
+def test_find_search_options_are_nested_for_new_sdk_signature():
+    client = FakeOpenVikingClient()
+    backend = make_backend(client, index="demo", hydrate_results=False)
+
+    backend.search(
+        "policy",
+        top_k=4,
+        score_threshold=0.45,
+        filter={"owner": "support"},
+        context_type="resource",
+        tags=["faq", "policy"],
+        telemetry={"trace": "enabled"},
+    )
+
+    assert client.search_calls == []
+    assert client.find_calls[0] == {
+        "query": "policy",
+        "target_uri": "viking://user/owner/resources/demo/",
+        "limit": 4,
+        "image": None,
+        "options": {
+            "score_threshold": 0.45,
+            "filter": {"owner": "support"},
+            "context_type": "resource",
+            "tags": ["faq", "policy"],
+            "telemetry": {"trace": "enabled"},
+        },
+    }
 
 
 def test_hydrate_file_resource_reads_content():
@@ -527,6 +615,10 @@ def test_score_threshold_and_context_search_are_forwarded():
     backend.search("policy", top_k=7, session_id="s1")
 
     assert client.find_calls == []
-    assert client.search_calls[0]["score_threshold"] == 0.3
     assert client.search_calls[0]["limit"] == 7
     assert client.search_calls[0]["session_id"] == "s1"
+    assert client.search_calls[0]["options"] == {
+        "score_threshold": 0.3,
+        "telemetry": False,
+    }
+    assert "session" not in client.search_calls[0]

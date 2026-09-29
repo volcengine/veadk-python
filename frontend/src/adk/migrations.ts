@@ -1,6 +1,7 @@
 import { withAuth } from "./auth";
 import { withLocalUser } from "./identity";
 import { adkT, withLocaleHeaders } from "./i18n";
+import type { SandboxTokenUsage } from "./sandbox";
 import {
   DEFAULT_REQUEST_TIMEOUT_MS,
   requestSignal,
@@ -203,6 +204,18 @@ export interface MigrationAnalysis {
   warnings: string[];
 }
 
+export interface MigrationPendingQuestion {
+  id: string;
+  header: string;
+  question: string;
+  options: Array<{ label: string; description: string }>;
+}
+
+export interface MigrationPendingInput {
+  id: string;
+  questions: MigrationPendingQuestion[];
+}
+
 export interface MigrationTask {
   id: string;
   state: MigrationTaskState;
@@ -225,6 +238,7 @@ export interface MigrationTask {
     deployReady: boolean;
   };
   analysis?: MigrationAnalysis;
+  pendingInput?: MigrationPendingInput;
   analysisRef?: {
     attempt: number;
     sha256: string;
@@ -255,7 +269,8 @@ export type MigrationActivityKind =
   | "message"
   | "plan"
   | "command"
-  | "status";
+  | "status"
+  | "summary";
 
 export interface MigrationActivityTool {
   name: string;
@@ -270,6 +285,21 @@ export interface MigrationActivityPlanItem {
   status: "pending" | "in_progress" | "completed" | "failed";
 }
 
+/** One turn's own cost, in the shape the shared turn summary renders. */
+export interface MigrationActivityTurn {
+  turnId: string;
+  status: string;
+  model?: string;
+  durationMs?: number;
+  startedAt?: number;
+  completedAt?: number;
+  usage?: Partial<SandboxTokenUsage>;
+  usageIncomplete?: boolean;
+  toolCalls: number;
+  toolDurationMs?: number;
+  toolDurationComplete: boolean;
+}
+
 export interface MigrationActivityItem {
   id: string;
   kind: MigrationActivityKind;
@@ -278,6 +308,14 @@ export interface MigrationActivityItem {
   detail?: string;
   tool?: MigrationActivityTool;
   plan?: MigrationActivityPlanItem[];
+  /** Codex' own item type: the shared row renderer keys its native look off it. */
+  itemType?: string;
+  /** How long Codex spent on the item; the process header sums these. */
+  durationMs?: number;
+  /** Codex' message phase (commentary / final_answer) when it reports one. */
+  phase?: string;
+  /** The turn's timing and token usage, on the item that summarizes a turn. */
+  turn?: MigrationActivityTurn;
 }
 
 export interface MigrationActivity {
@@ -415,7 +453,69 @@ const ACTIVITY_KINDS = new Set<MigrationActivityKind>([
   "plan",
   "command",
   "status",
+  "summary",
 ]);
+
+const TURN_USAGE_KEYS = [
+  "totalTokens",
+  "inputTokens",
+  "outputTokens",
+  "cachedInputTokens",
+  "cacheWriteInputTokens",
+  "reasoningOutputTokens",
+] as const;
+
+const TURN_NUMBER_KEYS = ["durationMs", "startedAt", "completedAt"] as const;
+
+/** A turn summary the page can hand to the shared component, or a contract error. */
+function normalizeActivityTurn(value: unknown): MigrationActivityTurn {
+  const turn = record(value, adkT("migrations.labels.activityItem"));
+  if (
+    typeof turn.turnId !== "string" ||
+    typeof turn.status !== "string" ||
+    !Number.isSafeInteger(turn.toolCalls) ||
+    (turn.toolCalls as number) < 0 ||
+    typeof turn.toolDurationComplete !== "boolean"
+  ) {
+    throw new Error(adkT("migrations.invalidActivityItem"));
+  }
+  const normalized: MigrationActivityTurn = {
+    turnId: turn.turnId,
+    status: turn.status,
+    toolCalls: turn.toolCalls as number,
+    toolDurationComplete: turn.toolDurationComplete,
+  };
+  if (typeof turn.model === "string" && turn.model) normalized.model = turn.model;
+  if (turn.usageIncomplete === true) normalized.usageIncomplete = true;
+  for (const key of TURN_NUMBER_KEYS) {
+    const number = turn[key];
+    if (number === undefined) continue;
+    if (!Number.isFinite(number) || (number as number) < 0) {
+      throw new Error(adkT("migrations.invalidActivityItem"));
+    }
+    normalized[key] = number as number;
+  }
+  if (turn.toolDurationMs !== undefined) {
+    if (!Number.isFinite(turn.toolDurationMs) || (turn.toolDurationMs as number) < 0) {
+      throw new Error(adkT("migrations.invalidActivityItem"));
+    }
+    normalized.toolDurationMs = turn.toolDurationMs as number;
+  }
+  if (turn.usage !== undefined) {
+    const usage = record(turn.usage, adkT("migrations.labels.activityItem"));
+    const counts: Partial<SandboxTokenUsage> = {};
+    for (const key of TURN_USAGE_KEYS) {
+      const count = usage[key];
+      if (count === undefined) continue;
+      if (!Number.isSafeInteger(count) || (count as number) < 0) {
+        throw new Error(adkT("migrations.invalidActivityItem"));
+      }
+      counts[key] = count as number;
+    }
+    normalized.usage = counts;
+  }
+  return normalized;
+}
 
 const ACTIVITY_STATES = new Set<MigrationActivityItem["status"]>([
   "running",
@@ -780,6 +880,47 @@ function normalizeAnalysis(value: unknown): MigrationAnalysis {
   };
 }
 
+function normalizePendingInput(value: unknown): MigrationPendingInput {
+  const input = record(value, adkT("migrations.labels.pendingInput"));
+  if (typeof input.id !== "string" || !input.id.trim()) {
+    throw new Error(adkT("migrations.invalidPendingInput"));
+  }
+  if (!Array.isArray(input.questions) || input.questions.length === 0) {
+    throw new Error(adkT("migrations.invalidPendingInput"));
+  }
+  const questions = input.questions.map((item) => {
+    const question = record(item, adkT("migrations.labels.pendingQuestion"));
+    if (
+      typeof question.id !== "string" ||
+      !question.id.trim() ||
+      typeof question.header !== "string" ||
+      typeof question.question !== "string"
+    ) {
+      throw new Error(adkT("migrations.invalidPendingInput"));
+    }
+    const rawOptions = question.options;
+    const options = Array.isArray(rawOptions)
+      ? rawOptions.map((option) => {
+          const entry = record(option, adkT("migrations.labels.pendingOption"));
+          if (
+            typeof entry.label !== "string" ||
+            typeof entry.description !== "string"
+          ) {
+            throw new Error(adkT("migrations.invalidPendingInput"));
+          }
+          return { label: entry.label, description: entry.description };
+        })
+      : [];
+    return {
+      id: question.id,
+      header: question.header,
+      question: question.question,
+      options,
+    };
+  });
+  return { id: input.id, questions };
+}
+
 function normalizeTask(value: unknown): MigrationTask {
   const task = record(value, adkT("migrations.labels.task"));
   const artifact = record(
@@ -831,6 +972,8 @@ function normalizeTask(value: unknown): MigrationTask {
   }
   if (task.analysis !== undefined)
     normalized.analysis = normalizeAnalysis(task.analysis);
+  if (task.pendingInput !== undefined)
+    normalized.pendingInput = normalizePendingInput(task.pendingInput);
   if (task.analysisRef !== undefined) {
     const reference = record(
       task.analysisRef,
@@ -1000,6 +1143,15 @@ function normalizeActivity(value: unknown): MigrationActivity {
         ...(typeof item.detail === "string" ? { detail: item.detail } : {}),
         ...(tool ? { tool } : {}),
         ...(plan ? { plan } : {}),
+        // Codex' own row fields and the turn summary are what the shared renderer
+        // reads; a normalization that dropped them would hand the page a stream it
+        // renders as something else.
+        ...(typeof item.itemType === "string" ? { itemType: item.itemType } : {}),
+        ...(typeof item.durationMs === "number" ? { durationMs: item.durationMs } : {}),
+        ...(typeof item.phase === "string" ? { phase: item.phase } : {}),
+        ...(item.turn !== undefined
+          ? { turn: normalizeActivityTurn(item.turn) }
+          : {}),
       };
     }),
   };
@@ -1686,6 +1838,188 @@ export async function getMigrationActivity(
   );
 }
 
+/** One frame of the task event stream; every payload is a whole snapshot. */
+export type MigrationTaskEvent =
+  | { kind: "task"; seq: number; task: MigrationTask }
+  | { kind: "activity"; seq: number; activity: MigrationActivity }
+  /** ``code`` and ``message`` are empty on the frame that reports recovery. */
+  | {
+      kind: "error";
+      seq: number;
+      code: string;
+      message: string;
+      retryable: boolean;
+    }
+  | { kind: "done"; seq: number; state: string };
+
+const STREAM_RETRY_MS = 1_000;
+const STREAM_RETRY_MAX_MS = 15_000;
+
+function invalidStream(): Error {
+  return new Error(adkT("migrations.invalidEventsResponse"));
+}
+
+/**
+ * Parse one Server-Sent Events frame into a task event.
+ *
+ * Heartbeats, comments, and event names this build does not know yet return ``null``
+ * rather than throwing, so a newer Studio can add events without breaking the page.
+ */
+export function parseMigrationStreamFrame(frame: string): MigrationTaskEvent | null {
+  const lines = frame.split(/\r?\n/);
+  const name = lines
+    .find((line) => line.startsWith("event:"))
+    ?.slice(6)
+    .trim();
+  if (!name) return null;
+  const data = lines
+    .filter((line) => line.startsWith("data:"))
+    .map((line) => line.slice(5).trimStart())
+    .join("\n");
+  if (!data) return null;
+  let payload: unknown;
+  try {
+    payload = JSON.parse(data);
+  } catch {
+    throw invalidStream();
+  }
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw invalidStream();
+  }
+  const value = payload as Record<string, unknown>;
+  const seq = value.seq;
+  if (typeof seq !== "number" || !Number.isSafeInteger(seq) || seq < 1) {
+    throw invalidStream();
+  }
+  if (name === "task") return { kind: "task", seq, task: normalizeTask(value) };
+  if (name === "activity") {
+    return { kind: "activity", seq, activity: normalizeActivity(value) };
+  }
+  if (name === "error") {
+    return {
+      kind: "error",
+      seq,
+      // An error frame without a code or a message says the task is readable again.
+      code: typeof value.code === "string" ? value.code : "",
+      message: typeof value.message === "string" ? value.message : "",
+      retryable: value.retryable === true,
+    };
+  }
+  if (name === "done") {
+    return {
+      kind: "done",
+      seq,
+      state: typeof value.state === "string" ? value.state : "",
+    };
+  }
+  return null;
+}
+
+function streamPause(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const finish = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, ms);
+    signal.addEventListener("abort", finish, { once: true });
+    if (signal.aborted) finish();
+  });
+}
+
+async function readMigrationStream(args: {
+  taskId: string;
+  cursor: number;
+  signal: AbortSignal;
+  onEvent: (event: MigrationTaskEvent) => void;
+  advance: (seq: number) => void;
+}): Promise<boolean> {
+  const response = await request(
+    `/tasks/${encodeURIComponent(args.taskId)}/events?after=${args.cursor}`,
+    {
+      signal: args.signal,
+      cache: "no-store",
+      headers: { Accept: "text/event-stream" },
+    },
+    0,
+  );
+  if (!response.ok) {
+    throw await errorFrom(response, adkT("migrations.loadEventsFailed"));
+  }
+  if (!response.body) throw invalidStream();
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let done = false;
+  try {
+    while (!done) {
+      const chunk = await reader.read();
+      buffer += decoder.decode(chunk.value, { stream: !chunk.done });
+      const frames = buffer.split(/\r?\n\r?\n/);
+      buffer = frames.pop() ?? "";
+      for (const frame of frames) {
+        const event = parseMigrationStreamFrame(frame);
+        if (!event) continue;
+        args.advance(event.seq);
+        args.onEvent(event);
+        if (event.kind === "done") done = true;
+      }
+      if (chunk.done) break;
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined);
+    reader.releaseLock();
+  }
+  return done;
+}
+
+/**
+ * Follow one migration task until it settles, reconnecting from the last sequence it
+ * saw.  The server owns the payloads and the settlement rule, so the page no longer
+ * polls: it applies snapshots and stops when the stream says ``done``.
+ */
+export async function observeMigrationTask(args: {
+  taskId: string;
+  signal: AbortSignal;
+  after?: number;
+  onEvent: (event: MigrationTaskEvent) => void;
+  onConnection?: (message: string) => void;
+}): Promise<void> {
+  let cursor = Math.max(0, Math.trunc(args.after ?? 0));
+  let retry = 0;
+  while (!args.signal.aborted) {
+    try {
+      const done = await readMigrationStream({
+        taskId: args.taskId,
+        cursor,
+        signal: args.signal,
+        onEvent: args.onEvent,
+        advance: (seq) => {
+          cursor = seq;
+        },
+      });
+      retry = 0;
+      if (done || args.signal.aborted) return;
+      args.onConnection?.("");
+      await streamPause(STREAM_RETRY_MS, args.signal);
+    } catch (error) {
+      if (args.signal.aborted) return;
+      if (
+        error instanceof MigrationApiError &&
+        [401, 403, 404].includes(error.status)
+      ) {
+        throw error;
+      }
+      args.onConnection?.(adkT("migrations.reconnecting"));
+      await streamPause(
+        Math.min(STREAM_RETRY_MS * 2 ** retry++, STREAM_RETRY_MAX_MS),
+        args.signal,
+      );
+    }
+  }
+}
+
 export async function confirmMigrationTask(args: {
   taskId: string;
   framework: MigrationFramework;
@@ -1749,6 +2083,32 @@ export async function submitMigrationAnalysisAnswers(args: {
         SESSION_START_TIMEOUT_MS,
       ),
       adkT("migrations.submitAnswersFailed"),
+    ),
+  );
+}
+
+export async function submitMigrationAnalysisInput(args: {
+  taskId: string;
+  requestId: string;
+  answers: Record<string, string>;
+  signal?: AbortSignal;
+}): Promise<MigrationTask> {
+  return normalizeTask(
+    await json(
+      await request(
+        `/tasks/${encodeURIComponent(args.taskId)}/input`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            requestId: args.requestId,
+            answers: args.answers,
+          }),
+          signal: args.signal,
+        },
+        SESSION_START_TIMEOUT_MS,
+      ),
+      adkT("migrations.submitInputFailed"),
     ),
   );
 }

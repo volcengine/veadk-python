@@ -23,7 +23,6 @@ from typing import Any
 from frontend.server.agentkit_clients import create_agentkit_client
 from frontend.server.storage import StudioProvider, StudioStorageConfig
 from frontend.server.storage.tos import CredentialResolver, create_tos_client_factory
-from veadk.auth.veauth.ark_veauth import get_ark_token
 from veadk.cli.agentkit_sandbox_region import resolve_sandbox_client_region
 from veadk.cli.studio_model_catalog import modelark_base_url, studio_agent_model_name
 from veadk.utils.cloud_provider import default_region
@@ -33,6 +32,18 @@ from .resources import EnvironmentResourceSettings, StudioEnvironmentCloudGatewa
 from .routes import mount_environment_routes
 from .service import EnvironmentService, WorkspaceReferenceLookup
 from .tool_provisioning import AgentkitEnvironmentToolProvisioner
+
+
+def _get_ark_token() -> Callable[..., str]:
+    from veadk.auth.veauth.ark_veauth import get_ark_token
+
+    return get_ark_token
+
+
+def get_ark_token(*args: Any, **kwargs: Any) -> str:
+    """Resolve Ark auth lazily while preserving the patchable public symbol."""
+
+    return _get_ark_token()(*args, **kwargs)
 
 
 def _environment_tool_model_env(

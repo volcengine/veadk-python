@@ -11,10 +11,11 @@ The `viking` backend (`VikingDBLTMBackend`) uses Volcengine [VikingDB memory](ht
 
 ## Configuration
 
-Authenticated via Volcengine AK/SK. VeADK reads AK/SK from environment variables first, falling back to VeFaaS IAM credentials (for cloud deployments).
+Authenticate with a VikingDB memory API key or Volcengine AK/SK. VeADK prefers `api_key` / `DATABASE_VIKINGMEM_API_KEY` for memory operations on an existing collection; when it is unset, it uses AK/SK and then falls back to VeFaaS IAM credentials for cloud deployments. Collection creation, listing, and deletion still require AK/SK or IAM credentials.
 
 | Field | Env var | Default | Description |
 | :--- | :--- | :--- | :--- |
+| `api_key` | `DATABASE_VIKINGMEM_API_KEY` | — | VikingDB memory API key for memory operations on an existing collection. |
 | `volcengine_access_key` | `VOLCENGINE_ACCESS_KEY` | — | Volcengine Access Key. |
 | `volcengine_secret_key` | `VOLCENGINE_SECRET_KEY` | — | Volcengine Secret Key. |
 | `volcengine_project` | `DATABASE_VIKINGMEM_PROJECT` | `default` | VikingDB memory project. |

@@ -1,3 +1,17 @@
+# Copyright (c) 2025 Beijing Volcano Engine Technology Co., Ltd. and/or its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import asyncio
 from unittest.mock import AsyncMock
 
@@ -24,8 +38,9 @@ from tests.integrations.mpa_managed.test_agent_deployment import (
 @pytest.mark.parametrize("image", [None, "registry.example/mpa:pinned"])
 @pytest.mark.parametrize("split_workspaces", [False, True])
 @pytest.mark.parametrize("openviking", [False, True])
+@pytest.mark.parametrize("studio_runtime_owner", [None, "studio-user"])
 def test_network_gateway_worker_precede_runtime(
-    monkeypatch, source, image, split_workspaces, openviking
+    monkeypatch, source, image, split_workspaces, openviking, studio_runtime_owner
 ):
     async def run():
         entry = Registry()
@@ -139,6 +154,34 @@ def test_network_gateway_worker_precede_runtime(
         async def create(request):
             assert events == ["gateway", "worker"]
             assert request["ToolId"] == "t-one"
+            runtime_tags = {
+                item["Key"]: item["Value"] for item in request.get("Tags", [])
+            }
+            assert runtime_tags["veadk:agent-type"] == "mpa"
+            studio_tags = {
+                key: runtime_tags.get(key)
+                for key in (
+                    "veadk:managed",
+                    "veadk:provisioner",
+                    "veadk:owner",
+                    "veadk:mpa-instance-id",
+                )
+            }
+            assert studio_tags == (
+                {
+                    "veadk:managed": "true",
+                    "veadk:provisioner": "studio-mpa",
+                    "veadk:owner": "studio-user",
+                    "veadk:mpa-instance-id": "mi-123456789abc",
+                }
+                if studio_runtime_owner
+                else {
+                    "veadk:managed": None,
+                    "veadk:provisioner": None,
+                    "veadk:owner": None,
+                    "veadk:mpa-instance-id": None,
+                }
+            )
             openviking_env = {
                 key: value
                 for key, value in service.env_map(request).items()
@@ -179,7 +222,10 @@ def test_network_gateway_worker_precede_runtime(
 
         cloud.create = create
         result = await service.provision(
-            profile, agent_id="mi-123456789abc", owner="user-a"
+            profile,
+            agent_id="mi-123456789abc",
+            owner="owner-hash-a",
+            studio_runtime_owner=studio_runtime_owner,
         )
         assert result["runtime_id"] == "r-agent"
         assert result["gateway_id"] == "gw-one"
@@ -190,10 +236,18 @@ def test_network_gateway_worker_precede_runtime(
             profile.managed.postgres.business_workspace_id = "ws-other"
             with pytest.raises(DeploymentError, match="Workspace"):
                 await service.provision(
-                    profile, agent_id="mi-123456789abc", owner="user-a"
+                    profile,
+                    agent_id="mi-123456789abc",
+                    owner="owner-hash-a",
+                    studio_runtime_owner=studio_runtime_owner,
                 )
         with pytest.raises(DeploymentError, match="owner"):
-            await service.provision(profile, agent_id="mi-123456789abc", owner="user-b")
+            await service.provision(
+                profile,
+                agent_id="mi-123456789abc",
+                owner="owner-hash-b",
+                studio_runtime_owner=studio_runtime_owner,
+            )
 
     asyncio.run(run())
 

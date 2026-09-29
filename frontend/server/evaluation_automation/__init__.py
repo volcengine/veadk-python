@@ -25,11 +25,12 @@ from frontend.server.storage import StudioProvider, StudioStorageConfig
 from frontend.server.storage.tos import create_tos_client_factory
 from veadk.utils.logger import get_logger
 
-from .datasets import ensure_feedback_sets
+from frontend.server.evaluation import EvaluationStorage
+from frontend.server.evaluation.automatic import TosAutomaticCases
+
 from .model_gateway import StructuredEvaluationModels
 from .models import RunSseActivity
 from .repository import (
-    AgentKitAutoEvaluationRepository,
     InMemoryOptimizationRepository,
     TosOptimizationRepository,
 )
@@ -44,7 +45,7 @@ logger = get_logger(__name__)
 
 def create_service(
     *,
-    openapi_post: OpenApiPost,
+    evaluation_storage: EvaluationStorage | None = None,
     provider: StudioProvider = "volcengine",
     resolve_credentials: CredentialResolver | None = None,
     quiet_seconds: float = 300,
@@ -84,26 +85,10 @@ def create_service(
             raise TypeError("Runtime returned an invalid JSON response")
         return payload
 
-    async def case_repository(
-        activity: RunSseActivity,
-    ) -> AgentKitAutoEvaluationRepository:
-        async def post(
-            *,
-            action: str,
-            payload: dict[str, Any],
-            query: dict[str, str] | None = None,
-        ) -> dict[str, Any]:
-            return await openapi_post(
-                region=activity.region,
-                action=action,
-                payload=payload,
-                query=query,
-            )
-
-        return AgentKitAutoEvaluationRepository(
-            post,
-            project_name=activity.project_name,
-        )
+    async def case_repository(activity: RunSseActivity) -> TosAutomaticCases:
+        if evaluation_storage is None:
+            raise RuntimeError("管理员未配置评测持久化存储")
+        return TosAutomaticCases(evaluation_storage.for_runtime(activity.runtime_id))
 
     return EvaluationAutomationService(
         evaluator=models,
@@ -120,7 +105,6 @@ __all__ = [
     "RunSseActivity",
     "RunSseObservation",
     "create_service",
-    "ensure_feedback_sets",
     "mount_routes",
     "observed_sse_stream",
 ]

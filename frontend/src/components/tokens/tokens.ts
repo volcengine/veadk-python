@@ -10,7 +10,13 @@ export type StudioToken = {
 
 export const studioTokens: readonly StudioToken[] = [
   { name: "--studio-size-sidebar-collapsed", label: "折叠侧栏宽度", value: "56px", category: "size" },
-  { name: "--studio-size-control-pill", label: "紧凑胶囊按钮高度", value: "22px", category: "size" },
+  { name: "--studio-size-control-pill", label: "胶囊按钮默认高度", value: "32px", category: "size" },
+  { name: "--studio-size-button-compact", label: "Compact 按钮高度", value: "28px", category: "size" },
+  { name: "--studio-size-button-default", label: "Default 按钮高度", value: "32px", category: "size" },
+  { name: "--studio-size-button-large", label: "Large 按钮高度", value: "36px", category: "size" },
+  { name: "--studio-size-icon-button-compact", label: "Compact 图标按钮边长", value: "20px", category: "size" },
+  { name: "--studio-size-icon-button-default", label: "Default 图标按钮边长", value: "28px", category: "size" },
+  { name: "--studio-size-icon-button-large", label: "Large 图标按钮边长", value: "36px", category: "size" },
   {
     "name": "--studio-bg-canvas",
     "label": "画布背景",

@@ -1,3 +1,17 @@
+# Copyright (c) 2025 Beijing Volcano Engine Technology Co., Ltd. and/or its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Deployment lifecycle without external resources."""
 
 import asyncio
@@ -640,6 +654,41 @@ def test_legacy_lost_response_resumes_exact_payload_and_rejects_changed_inputs()
         assert cloud.creates == [original, original]
         assert result["runtime_name"] == original["Name"]
         assert len(cloud.runtimes) == 1
+        assert not registry.row["pending"]
+
+    asyncio.run(run())
+
+
+def test_legacy_pending_create_accepts_studio_provenance_upgrade():
+    async def run():
+        svc, registry, cloud, _ = deployer()
+        legacy = template()
+        cloud.lose_create_response = True
+        with pytest.raises(TimeoutError):
+            await svc.deploy(legacy)
+
+        original_create = copy.deepcopy(cloud.creates[0])
+        studio = template()
+        studio["Tags"] = [
+            {"Key": "veadk:agent-type", "Value": "mpa"},
+            {"Key": "veadk:managed", "Value": "true"},
+            {"Key": "veadk:provisioner", "Value": "studio-mpa"},
+            {"Key": "veadk:owner", "Value": "studio-user"},
+            {"Key": "veadk:mpa-instance-id", "Value": "agent-one"},
+        ]
+
+        result = await svc.deploy(studio, legacy_tag_items=legacy.get("Tags", []))
+
+        assert result["runtime_id"] == "r-agent"
+        assert cloud.creates == [original_create, original_create]
+        assert cloud.updates
+        assert {item["Key"]: item["Value"] for item in cloud.updates[-1]["Tags"]} == {
+            "veadk:agent-type": "mpa",
+            "veadk:managed": "true",
+            "veadk:provisioner": "studio-mpa",
+            "veadk:owner": "studio-user",
+            "veadk:mpa-instance-id": "agent-one",
+        }
         assert not registry.row["pending"]
 
     asyncio.run(run())

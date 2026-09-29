@@ -1,23 +1,26 @@
 /* Figma: Ig6wLTUxhfAxb20bKrXqh1 / 740:296907 */
 .studio-button {
+  --studio-button-height: var(--studio-size-button-default);
+  --studio-button-icon-only-size: var(--studio-size-icon-button-default);
+  --studio-button-icon-size: calc(1em + 2px);
   box-sizing: border-box;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 4px;
   min-width: 80px;
-  height: 32px;
+  height: var(--studio-button-height);
   padding: 5px 12px;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--studio-radius-md);
   background: #ffffff;
   color: #101013;
-  font-family: "Century Gothic", sans-serif;
-  font-size: 14px;
+  font-family: var(--studio-font-family-ui);
+  font-size: var(--studio-font-size-md);
   font-style: normal;
-  font-weight: 400;
+  font-weight: var(--studio-font-weight-regular);
   font-synthesis: none;
-  line-height: 22px;
+  line-height: var(--studio-line-height-md);
   letter-spacing: 0;
   white-space: nowrap;
   cursor: pointer;
@@ -41,32 +44,25 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  flex: 0 0 16px;
-  width: 16px;
-  height: 16px;
+  flex: 0 0 var(--studio-button-icon-size);
+  width: var(--studio-button-icon-size);
+  height: var(--studio-button-icon-size);
 }
 
-/* Figma 635:258177 — compact account action */
+/* Rounded action, using the same size options as other buttons */
 .studio-button--pill {
   min-width: 65px;
-  height: var(--studio-size-control-pill);
-  padding: 2px 12px;
   border-radius: var(--studio-radius-pill);
   background: var(--studio-surface-update);
   color: var(--studio-text-strong);
-  font-size: var(--studio-font-size-xs);
-  line-height: var(--studio-line-height-xs);
+}
+.studio-button--pill.studio-button--size-default {
+  --studio-button-height: var(--studio-size-control-pill);
 }
 .studio-button--pill:not(:disabled):hover { background: color-mix(in srgb, var(--studio-surface-update), var(--studio-text-primary) 10%); }
 .studio-button--pill:not(:disabled):active { background: color-mix(in srgb, var(--studio-surface-update), var(--studio-text-primary) 16%); }
 .studio-button--pill:focus-visible { outline: 2px solid var(--studio-focus-ring); outline-offset: 2px; }
 .studio-button--pill:disabled { opacity: .45; cursor: not-allowed; }
-
-.studio-button--secondary .studio-button__icon {
-  flex-basis: 10px;
-  width: 10px;
-  height: 10px;
-}
 
 .studio-button__icon > svg,
 .studio-button__icon > img {
@@ -83,25 +79,15 @@
 .studio-button--ghost {
   justify-content: flex-start;
   min-width: 86.5px;
-  height: 24px;
   padding: 0;
   gap: 8px;
   border-radius: 0;
   background: transparent;
   color: var(--studio-text-secondary, rgba(219, 222, 231, .6));
-  font-size: 16px;
-  line-height: 24px;
 }
-.studio-button--ghost .studio-button__icon {
-  flex-basis: 17px;
-  width: 17px;
-  height: 17px;
-}
-
 .studio-button--link {
   justify-content: flex-start;
   min-width: 0;
-  height: 24px;
   padding: 0;
   gap: 4px;
   border-radius: 0;
@@ -126,9 +112,6 @@
 }
 
 .studio-button--link .studio-button__end-icon {
-  flex-basis: 1em;
-  width: 1em;
-  height: 1em;
   opacity: 0;
   transition: opacity 160ms ease-out;
 }
@@ -147,53 +130,36 @@
   cursor: not-allowed;
 }
 
-.studio-button--icon-only {
-  justify-content: center;
-  flex-shrink: 0;
-  width: 28px;
-  min-width: 28px;
-  height: 28px;
-  padding: 6px;
-  gap: 0;
-  border-radius: 6px;
-}
-
-.studio-button--icon-only .studio-button__icon {
-  flex-basis: 16px;
-  width: 16px;
-  height: 16px;
+.studio-button--size-compact {
+  --studio-button-height: var(--studio-size-button-compact);
+  --studio-button-icon-only-size: var(--studio-size-icon-button-compact);
+  padding: 3px 10px;
+  font-size: var(--studio-font-size-xs);
+  line-height: var(--studio-line-height-sm);
 }
 
 .studio-button--size-large {
-  height: 36px;
-  padding: 7px 12px;
+  --studio-button-height: var(--studio-size-button-large);
+  --studio-button-icon-only-size: var(--studio-size-icon-button-large);
+  padding: 6px 12px;
+  font-size: var(--studio-font-size-lg);
+  line-height: var(--studio-line-height-lg);
 }
 
-.studio-button--size-large .studio-button__icon {
-  flex-basis: 16px;
-  width: 16px;
-  height: 16px;
-}
-
-.studio-button--size-large.studio-button--icon-only {
-  width: 36px;
-  min-width: 36px;
-  padding: 8px;
-}
-
-.studio-button--size-large.studio-button--icon-only .studio-button__icon,
-.studio-button--size-compact.studio-button--icon-only .studio-button__icon {
-  flex-basis: 20px;
-  width: 20px;
-  height: 20px;
-}
-
-.studio-button--size-compact.studio-button--icon-only {
-  width: 20px;
-  min-width: 20px;
-  height: 20px;
+.studio-button--ghost,
+.studio-button--link {
   padding: 0;
-  border-radius: 0;
+}
+
+.studio-button--icon-only {
+  justify-content: center;
+  flex-shrink: 0;
+  width: var(--studio-button-icon-only-size);
+  min-width: var(--studio-button-icon-only-size);
+  height: var(--studio-button-icon-only-size);
+  padding: 0;
+  gap: 0;
+  border-radius: var(--studio-radius-sm);
 }
 
 .studio-button--icon-only:focus-visible {

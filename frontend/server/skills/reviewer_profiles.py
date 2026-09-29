@@ -20,8 +20,6 @@ from time import monotonic
 from typing import Any, TypedDict
 from urllib.parse import urlsplit
 
-import volcenginesdkid as sdk
-
 from frontend.server.user_management.directory import IdentityDirectory
 from frontend.server.user_management.errors import UserManagementError
 
@@ -89,6 +87,8 @@ class ReviewerProfileResolver:
                 self._cache.move_to_end(uid)
                 return {**cached[1], "name": cached[1]["name"] or fallback["name"]}
         try:
+            import volcenginesdkid as sdk
+
             # PoolUser intentionally omits profile fields; read the SDK response
             # through the same authenticated adapter without listing other users
             user = self.directory._call(

@@ -38,7 +38,7 @@
 - 命令：`scripts/verify-mpa-p0-e2e.sh --manifest <redacted-json> --case VC-01`（runner 已存在；`VC-01` live driver stage 随 S1 增加）。
 - 输入：两次 Studio Agent draft/Profile apply 请求，携带 `sourceProfileId + digest`，不携带调用方分配的 revision。
 - 预期：Runtime prepare -> Profile apply/status -> update/replay -> delete 成功；Runtime 分别返回 revision 1 和 2；不调用 Managed Agent API，清理后无残留。
-- 证据：`evidence/live/<run-id>/VC-01.json`、request IDs、版本序列、cleanup report。
+- 原始本地证据：被忽略的 `evidence/live/<run-id>/VC-01.json`、request IDs、版本序列、cleanup report。
 - 失败处理：部署态失败阻止发布并回到对应 S1/S5 task，不回溯否定已完成的本地 M0 门禁；不得改用 arkcli 子进程。
 
 ### VC-02：统一 RuntimePrincipal
@@ -47,7 +47,7 @@
 - 命令：live runner `--case VC-02`；Runtime `uv run pytest -q tests/test_runtime_principal.py`（需新增）。
 - 输入：有效 bearer/TIP，错误 issuer/audience/kid，过期/缺 claim token，跨 scope 与已撤权主体。
 - 预期：bearer/TIP 映射相同 principal；所有非法请求在副作用前 401/403；JWKS 轮换收敛。
-- 证据：`evidence/live/<run-id>/VC-02.json` 与 JUnit；仅记录 issuer/audience/TTL/kid hash。
+- 原始本地证据：被忽略的 `evidence/live/<run-id>/VC-02.json` 与 JUnit；仅记录 issuer/audience/TTL/kid hash。
 - 失败处理：本地 contract 失败阻止 S1；部署态 issuer/JWKS/撤权失败阻止发布。禁止关闭 JWT、使用 Runtime key 或用户 Header 绕过。
 
 ### VC-03：Studio Profile 映射与 Runtime client contract
@@ -56,7 +56,7 @@
 - 命令：`uv run --extra dev pytest tests/frontend/server/mpa/test_runtime_profile_client.py tests/frontend/server/mpa/test_profile_mapping.py -q`（`test_runtime_profile_client.py` 已存在；`test_profile_mapping.py` 随 S1 增加）。
 - 输入：确定性的 AgentDraft 规范化、支持/未知字段、create/update precondition、Runtime timeout、HTTP 错误和非 JSON。
 - 预期：Profile DTO/digest 稳定；转发 bearer、幂等键以及 `If-None-Match`/`If-Match` 二选一；冲突映射 `409 profile_version_conflict`；保留 request ID；Managed Agent/OpenTOP 调用次数为零。
-- 证据：`evidence/contract/<run-id>/VC-03.xml` 与 fixture diff。
+- 原始本地证据：被忽略的 `evidence/contract/<run-id>/VC-03.xml` 与 fixture diff。
 - 失败处理：回 Step 1 修契约或修 adapter；不得放宽 schema/吞错。
 
 ### VC-04：Profile precondition 与版本
@@ -83,7 +83,7 @@
 - 命令：`uv run --extra dev pytest tests/frontend/server/mpa/test_agent_operations_repository.py tests/frontend/server/mpa/test_agent_operations_service.py tests/frontend/server/mpa/test_agent_routes.py -q`（需新增）。
 - 输入：create/update 幂等键；首次响应丢失；Runtime/Profile/smoke 前后 crash；cleanup 失败。
 - 预期：均返回 `202 + operationId`；同 key 恢复原 operation；active list 找回；retry 从安全阶段继续；副作用 effect 至多一次。
-- 证据：`evidence/automated/<run-id>/VC-06.xml`、TOS ETag、attempt/effect count、阶段序列。
+- 原始本地证据：被忽略的 `evidence/automated/<run-id>/VC-06.xml`、TOS ETag、attempt/effect count、阶段序列。
 - 失败处理：任何重复 Runtime/Profile effect 或刷新丢失均阻断 S1。
 
 ### VC-07：Profile 参数映射
@@ -92,7 +92,7 @@
 - 命令：VeADK `uv run --extra dev pytest tests/frontend/server/mpa/test_profile_mapping.py -q --junitxml=prd-spec/features/mpa-p0-productionization/evidence/contract/<run-id>/VC-07-veadk.xml`；Runtime `uv run pytest -q tests/test_profile_apply.py --junitxml=<veadk-worktree>/prd-spec/features/mpa-p0-productionization/evidence/contract/<run-id>/VC-07-runtime.xml`（需新增目标文件）。
 - 输入：全部已支持字段、无版本 Skill、不支持 Tool/Multiagent、Secret/signed URL。
 - 预期：映射 `sourceProfileId`、name、description、System、Model、Tools、Skills、MCP、Multiagent、allowlisted Metadata；`profileRevision` 由 Runtime 分配；资源版本先解析；不支持字段 422；只传 Secret ref。
-- 证据：`evidence/contract/<run-id>/VC-07.json` 与两仓 JUnit。
+- 原始本地证据：被忽略的 `evidence/contract/<run-id>/VC-07.json` 与两仓 JUnit。
 - 失败处理：修映射/allowlist；不得将未知字段静默丢弃后声称 applied。
 
 ### VC-08：execution-config CAS
@@ -173,7 +173,7 @@
 - 命令：`uv run --extra dev pytest tests/frontend/server/mpa/test_agent_view.py -q && npm --prefix frontend test`（需新增首个文件与 `mpaAgents.test.mjs`/`mpaAgentDetail.test.mjs`）。
 - 输入：所有 view 状态、不同 scope 的同 ID、慢响应切换。
 - 预期：view-model 合并正确；写门禁正确；MPA 不进入 GitHub/generic draft/evaluation；缓存不串；无 Secret。
-- 证据：`evidence/automated/<run-id>/VC-16.json`、pytest/npm 输出。
+- 原始本地证据：被忽略的 `evidence/automated/<run-id>/VC-16.json`、pytest/npm 输出。
 - 失败处理：状态误判或误入通用流阻断 S5。
 
 ### VC-17：真实浏览器
@@ -182,7 +182,7 @@
 - 命令：S1 执行 BC-01/02 与 BC-07 create-busy/IME 子集；S2 执行 BC-04/05；S3 执行 BC-06；S4 执行 BC-09；S5 严格执行 [browser-cases.zh.md](browser-cases.zh.md) 的 BC-01～BC-09 全量回归。
 - 输入：创建/失败/刷新/双客户端/upgrade/cursor/IME/窄屏场景。
 - 预期：各切片子集通过仅作为切片门禁；S5 全部 BC pass 且 console 无未处理错误后才将 `VC-17=pass`。
-- 证据：`evidence/browser/<run-id>/<case-id>/`。
+- 原始本地证据：被忽略的 `evidence/browser/<run-id>/<case-id>/`。
 - 失败处理：环境不可用为 `blocked`；Node tests 不替代。
 
 ### VC-18A：PostgreSQL 基座
@@ -191,7 +191,7 @@
 - 命令：`make test-postgres TEST_SELECT='foundation or migration_harness'`。
 - 输入：PostgreSQL 16、schema 0、两连接、restart/failpoint harness。
 - 预期：容器、migration runner、双连接、重启与 failpoint 基础设施可用；基础 schema migration 可重入；finally 清理 container/volume。
-- 证据：`evidence/postgres/<run-id>/VC-18A.xml`、image digest、schema dump、cleanup。
+- 原始本地证据：被忽略的 `evidence/postgres/<run-id>/VC-18A.xml`、image digest、schema dump、cleanup。
 - 失败处理：阻断 S1；不可用内存替代。
 
 ### VC-18B：PostgreSQL Profile/Session CAS
@@ -200,7 +200,7 @@
 - 命令：`make test-postgres TEST_SELECT='profile_cas or execution_config_cas or upgrade_cas'`。
 - 输入：两连接同 ETag/profile revision 并发。
 - 预期：一个成功、一个冲突；无 lost update；唯一 current Profile/config revision。
-- 证据：`evidence/postgres/<run-id>/VC-18B.xml` 与 rows。
+- 原始本地证据：被忽略的 `evidence/postgres/<run-id>/VC-18B.xml` 与 rows。
 - 失败处理：阻断 S2。
 
 ### VC-18C：PostgreSQL Outbox/SSE
@@ -209,7 +209,7 @@
 - 命令：`make test-postgres TEST_SELECT='active_turn or ledger or outbox or sse_restart'`。
 - 输入：并发 run、三 failpoint、restart、persistent cursor。
 - 预期：唯一 active Turn/effect；outbox 收敛；重启后 cursor replay 正确。
-- 证据：`evidence/postgres/<run-id>/VC-18C.xml`。
+- 原始本地证据：被忽略的 `evidence/postgres/<run-id>/VC-18C.xml`。
 - 失败处理：阻断 S3。
 
 ### VC-18D：PostgreSQL Participants/Continuation
@@ -218,7 +218,7 @@
 - 命令：`make test-postgres TEST_SELECT='participant or continuation'`。
 - 输入：并发 ACK/lease/generation/continue。
 - 预期：row lock/CAS 正确；全 barrier；唯一 linked Turn/effect。
-- 证据：`evidence/postgres/<run-id>/VC-18D.xml`。
+- 原始本地证据：被忽略的 `evidence/postgres/<run-id>/VC-18D.xml`。
 - 失败处理：阻断 S4。
 
 ### VC-18E：PostgreSQL Secret migration
@@ -227,7 +227,7 @@
 - 命令：`make test-postgres TEST_SELECT='secret_migration'`。
 - 输入：reference 创建成功、provider 失败、清空前进程中断、重启重跑、旧镜像回滚。
 - 预期：成功建 ref 后才清空；失败/中断保留旧值；重跑不重复 ref；最终 DB/log/evidence 无 canary；不兼容回滚被拒绝。
-- 证据：`evidence/postgres/<run-id>/VC-18E.xml`、仅显示 empty/ref-type 的 DB 快照和 secret scan。
+- 原始本地证据：被忽略的 `evidence/postgres/<run-id>/VC-18E.xml`、仅显示 empty/ref-type 的 DB 快照和 secret scan。
 - 失败处理：阻断 S5 和发布；不得以 local/fake 结果替代。
 
 ### VC-19：兼容、回归与性能
@@ -236,9 +236,9 @@
 - 命令：`scripts/verify-mpa-p0-contract.sh --manifest <redacted-compatibility-json> --matrix contracts/mpa-p0/compatibility-matrix.json`，随后 Runtime `make test && make coverage && make test-postgres`，VeADK `uv run --extra dev pytest -n 2 -m "not codex_smoke and not piagent_smoke" && npm --prefix frontend test && npm --prefix frontend run build && uv run --extra dev pre-commit run --all-files`。性能 runner 为 `scripts/benchmark-mpa-p0.py --warmup 5 --requests 100 --concurrency 10 --list-size 20`。
 - 输入：PRD 全部兼容组合和固定 fixtures。
 - 预期：矩阵结果吻合；MPA update/release/rollback 写路由在副作用前拒绝不兼容 manifest；Runtime coverage ≥95%；无回归；性能报告含 p50/p95/max/error rate。
-- 证据：`evidence/contract/<run-id>/VC-19.json`、测试/build/coverage/benchmark 输出。
+- 原始本地证据：被忽略的 `evidence/contract/<run-id>/VC-19.json`、测试/build/coverage/benchmark 输出。
 - 失败处理：允许组合失败或指标超限阻断 S5；矩阵外需求先回 Step 1。
-- 2026-09-18 执行记录：S5-10 使用固定 VeADK `486dc06e429573ce43d6462b6dc960be4bc34ab6`、Runtime `eecc6e3115685e5cb86dcfbff4fb7c6ac7a10dee` 和已部署 v62 镜像 digest `sha256:6ac6a2712ecd1c7950125dc9afc6467373a08142fbd6c3577aba12f126079bef` 完成预检。实时 Runtime 为 version 62、状态 `Ready`，registry 查询结果与固定 digest 一致。真实 manifest 命中 `p0-codex-rest-v1`；负向 fixture 按预期返回 `worker_protocol_incompatible` 和 `invalid_runtime_image_digest`。证据位于 `evidence/contract/s5-10-v62-20260918/`。这不代表 VC-21 后的最终全量回归/性能部分已完成；该部分仍属于 S5-13。
+- 2026-09-18 执行记录：S5-10 使用固定 VeADK `486dc06e429573ce43d6462b6dc960be4bc34ab6`、Runtime `eecc6e3115685e5cb86dcfbff4fb7c6ac7a10dee` 和已部署 v62 镜像 digest `sha256:6ac6a2712ecd1c7950125dc9afc6467373a08142fbd6c3577aba12f126079bef` 完成预检。实时 Runtime 为 version 62、状态 `Ready`，registry 查询结果与固定 digest 一致。真实 manifest 命中 `p0-codex-rest-v1`；负向 fixture 按预期返回 `worker_protocol_incompatible` 和 `invalid_runtime_image_digest`。原始证据已写入被忽略的本地 `evidence/contract/s5-10-v62-20260918/`。这不代表 VC-21 后的最终全量回归/性能部分已完成；该部分仍属于 S5-13。
 
 ### VC-20A：S1 live 创建至首轮对话
 
@@ -246,7 +246,7 @@
 - 命令：`scripts/verify-mpa-p0-e2e.sh --manifest <redacted-json> --case VC-20A`（需新增）。
 - 输入：全新 Agent、最小 Profile、合法 model。
 - 预期：创建 operation、Runtime、Profile、deterministic smoke、mpa-agent Session 和首轮 A2A/worker/result 成功；Session create/read、A2A acceptance、worker/tool dispatch 使用共享 authorizer，撤权后 effect count 为 0；不要求 S2～S4 的 upgrade/cursor/continue。
-- 证据：`evidence/live/<run-id>/VC-20A/` 中 manifest、operation、HTTP/SSE、trace、cleanup。
+- 原始本地证据：被忽略的 `evidence/live/<run-id>/VC-20A/` 中 manifest、operation、HTTP/SSE、trace、cleanup。
 - 失败处理：权限/配额不足记 blocked；功能失败记 fail；EXIT trap 清理，清理失败单独阻断 S1。
 
 ### VC-20B：完整 live 创建、身份与 Profile 回归
@@ -255,7 +255,7 @@
 - 命令：`scripts/verify-mpa-p0-e2e.sh --manifest <redacted-json> --case VC-20B --cases AC-11,AC-1,AC-2,AC-6`（需新增）。
 - 输入：全新 Agent、最小 Profile、合法 model、有效/非法/撤权身份。
 - 预期：创建到首轮 A2A/worker/result；Profile update/replay/conflict；安全拒绝；中断可续；最终清理零残留。
-- 证据：`evidence/live/<run-id>/VC-20B/` 中 manifest、operation、HTTP/SSE、trace、cleanup。
+- 原始本地证据：被忽略的 `evidence/live/<run-id>/VC-20B/` 中 manifest、operation、HTTP/SSE、trace、cleanup。
 - 失败处理：权限/配额不足记 blocked；功能失败记 fail；EXIT trap 清理，清理失败单独阻断。
 
 ### VC-21：Runtime 生命周期、回滚与删除
@@ -264,9 +264,9 @@
 - 命令：`VEADK_MPA_P0_LIVE=1 VEADK_MPA_P0_ASYNC_STAGE_TIMEOUT_SECONDS=900 scripts/verify-mpa-p0-e2e.sh --manifest <redacted-json> --case VC-21 --execute`。
 - 输入：合法 update/release、受控失败、兼容 rollback、不兼容 downgrade、malformed compatibility manifest、存在 active MPA operation 的删除预览、存在 active Runtime Session 的删除预览、包含可见 idle Runtime Session 的删除执行、最终 delete。
 - 预期：每步有 operation ID/request ID/version timeline；受控失败可恢复；不兼容 downgrade 或 manifest 在 mutation 前拒绝；兼容回滚后 smoke 通过。若目标 Runtime 已运行被批准的目标镜像，而 AgentKit 会拒绝在 `Ready` 状态重复 `ReleaseRuntime`，rollback 检查记录 `noRollbackNeeded=true`，但仍必须通过 execution-ready smoke。删除预览在 mutation 前返回阻断原因和清理阶段；真正 `active` 的 operation 或 active Session 以 `409` 阻止删除，已恢复且 Profile 为 `applied` 的 `failed_retryable` operation 不再永久阻塞清理。idle 可见 Session 先通过 Runtime `DELETE /api/v1/sessions/{sessionId}` 删除，再删除 AgentKit Runtime；最终删除且零残留。
-- 证据：`evidence/live/<run-id>/VC-21/` 中版本时间线、平台响应、smoke trace、cleanup report。
+- 原始本地证据：被忽略的 `evidence/live/<run-id>/VC-21/` 中版本时间线、平台响应、smoke trace、cleanup report。
 - 失败处理：任一 unsafe mutation、错误成功状态或残留资源均使 `AC-9=fail`。
-- 2026-09-18 执行记录：`vc21-20260918-045` 使用 v29 镜像 digest `sha256:078519c796b03b298a95ef7a6614f92121bc124513dbb472a7496c95821ee723` 通过全部 VC-21 阶段；runner 返回 `{"case":"VC-21","residue":[],"status":"passed"}`，证据位于 `evidence/live/vc21-20260918-045/`。
+- 2026-09-18 执行记录：`vc21-20260918-045` 使用 v29 镜像 digest `sha256:078519c796b03b298a95ef7a6614f92121bc124513dbb472a7496c95821ee723` 通过全部 VC-21 阶段；runner 返回 `{"case":"VC-21","residue":[],"status":"passed"}`，原始证据已写入被忽略的本地 `evidence/live/vc21-20260918-045/`。
 
 ### VC-22：CLI parity
 
@@ -274,7 +274,7 @@
 - 命令：`uv run --extra dev pytest tests/integrations/test_mpa_control_plane_client.py tests/cli/test_cli_mpa_control.py -q`。
 - 输入：`veadk mpa control` 的 view、create/update、operation list/get/retry、Profile status/apply、Session config get/patch/profile-upgrade、delete preview，以及 401/403/409/412/428、旧 Runtime、timeout/replay；不调用 Managed Agent endpoint，也不直连 Runtime URL。历史基础设施命令仍为 `veadk mpa create`。
 - 预期：CLI 不 import FastAPI route；与 Studio 共用 schema 和 `MpaControlPlaneClient`；写操作携带由调用方持久复用的 key 并处理 202；CAS 命令要求当前 ETag 或 Runtime revision；JSON 可解析；不输出 bearer、Runtime credential 或含 Secret 的 Profile 字段。退出码固定为：`0` 成功、`2` 本地用法/输入错误、`3` 鉴权错误、`4` 冲突/前置条件错误、`5` 可重试 transport/server 失败、`1` 其他控制面失败。timeout 后重试复用同一 key，不重复写。Chat/Turn/Debug 因缺少共享 Studio BFF CLI 契约，不属于本 Case；CLI 不得通过绕过 Studio 补偿。
-- 证据：`evidence/automated/<run-id>/VC-22.xml`、UI/CLI 响应对照与 secret scan。
+- 原始本地证据：被忽略的 `evidence/automated/<run-id>/VC-22.xml`、UI/CLI 响应对照与 secret scan。
 - 失败处理：任何语义分叉、重复写或泄漏阻断 S5。
 
 ## 4. 准出规则

@@ -1,9 +1,23 @@
+# Copyright (c) 2025 Beijing Volcano Engine Technology Co., Ltd. and/or its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import asyncio
 import sys
 
 import pytest
 
-from veadk.integrations.mpa.managed.tasks import CreationTasks, TaskError
+from veadk.integrations.mpa.managed.tasks import CreationTasks, TaskError, owner_key
 
 
 def test_tasks_are_owner_scoped_and_duplicate_submission_reuses_identity(tmp_path):
@@ -98,6 +112,79 @@ def test_studio_task_sends_builtin_profile_marker_to_child(tmp_path):
         assert service.get("owner", task["taskId"])["state"] == "succeeded"
         assert json.loads(received.read_text()) is None
         await service.close()
+
+    asyncio.run(run())
+
+
+def test_studio_runtime_owner_reaches_child_without_task_persistence(tmp_path):
+    import json
+
+    async def run():
+        service = CreationTasks(tmp_path / "tasks.sqlite3")
+        received = tmp_path / "studio-owner.json"
+        result = {
+            "runtime_id": "r-test",
+            "skill_space_id": "ss-test",
+            "gateway_id": "gw-test",
+            "agent_id": "mi-test",
+            "region": "cn-beijing",
+            "state": "ready",
+        }
+        code = (
+            "import json,sys,pathlib; "
+            "data=json.loads(sys.stdin.read()); "
+            f"pathlib.Path({str(received)!r}).write_text("
+            "json.dumps(data['studioRuntimeOwner'])); "
+            f"print('MPA_EVENT '+json.dumps({{'result': {result!r}}}))"
+        )
+        service.command = lambda: [sys.executable, "-c", code]
+        payload = {
+            "requestId": "99999999-9999-4999-8999-999999999998",
+            "agentId": "mi-test",
+            "description": "",
+            "region": "cn-beijing",
+        }
+        raw_owner = "studio-user@example.com"
+        hashed_owner = owner_key(raw_owner)
+        task = await service.start(
+            hashed_owner,
+            payload,
+            config_path=None,
+            timeout=60,
+            studio_runtime_owner=raw_owner,
+        )
+        await asyncio.gather(*service.running.values())
+
+        assert service.get(hashed_owner, task["taskId"])["state"] == "succeeded"
+        assert json.loads(received.read_text()) == raw_owner
+        assert raw_owner not in str(task)
+        assert raw_owner.encode() not in service.path.read_bytes()
+        await service.close()
+
+    asyncio.run(run())
+
+
+def test_studio_runtime_owner_must_match_hashed_task_owner(tmp_path):
+    async def run():
+        service = CreationTasks(tmp_path / "tasks.sqlite3")
+        service.command = lambda: [sys.executable, "-c", "import time; time.sleep(30)"]
+        payload = {
+            "requestId": "99999999-9999-4999-8999-999999999997",
+            "agentId": "mi-test",
+            "description": "",
+            "region": "cn-beijing",
+        }
+        try:
+            with pytest.raises(TaskError, match="does not match task owner"):
+                await service.start(
+                    "unrelated-owner-key",
+                    payload,
+                    config_path=None,
+                    timeout=60,
+                    studio_runtime_owner="studio-user@example.com",
+                )
+        finally:
+            await service.close()
 
     asyncio.run(run())
 

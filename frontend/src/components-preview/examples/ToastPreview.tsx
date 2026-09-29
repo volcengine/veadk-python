@@ -1,6 +1,6 @@
 import { Button } from "../../components/primitives/Button";
 import { Toast, ToastProvider, useToast, type ToastVariant } from "../../components/primitives/Toast";
-import { ComponentApi } from "../api/ComponentApi";
+
 import "./ToastPreview.css";
 
 const variants: { variant: ToastVariant; label: string; title: string; description: string }[] = [
@@ -36,12 +36,15 @@ function ToastExamples() {
     </div>
     <p className="toast-preview__hint">通知在顶部居中显示，间距 8px，4 秒后自动关闭；悬停或键盘聚焦时暂停，带操作示例保持显示</p>
     <div className="toast-preview__states" aria-label="Toast 样式">
-      {variants.map(({ variant, title, description }) => <Toast key={variant} role="presentation" variant={variant} title={title} description={description} />)}
+      {variants.map(({ variant, label, title, description }) => <section key={variant} aria-labelledby={`toast-${variant}-title`}>
+        <h2 data-preview-heading tabIndex={-1} id={`toast-${variant}-title`}>{label}</h2>
+        <Toast role="presentation" variant={variant} title={title} description={description} />
+      </section>)}
     </div>
   </>;
 }
 
-function ToastHookApi() {
+export function ToastHookApi() {
   return <div className="component-api">
     <section aria-label="useToast 方法">
       <h3>useToast 方法</h3>
@@ -74,9 +77,7 @@ function ToastHookApi() {
 
 export function ToastPreview() {
   return <section aria-labelledby="toast-preview-title">
-    <h2 id="toast-preview-title" className="component-preview-title">Toast</h2>
+    <h2 data-preview-heading tabIndex={-1} id="toast-preview-title" className="component-preview-title">交互示例</h2>
     <ToastProvider><ToastExamples /></ToastProvider>
-    <ComponentApi names={["Toast", "ToastProvider"]} />
-    <ToastHookApi />
   </section>;
 }

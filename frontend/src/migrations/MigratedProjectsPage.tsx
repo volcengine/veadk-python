@@ -43,12 +43,6 @@ export function MigratedProjectsPage({
   return (
     <>
       <main className="migration-main migration-projects-page">
-        <header className="migration-main__header">
-          <div>
-            <h2>{t("projects.title")}</h2>
-            <p>{t("projects.description")}</p>
-          </div>
-        </header>
         <div className="migration-projects-page__content">
           <IntelligentProjectLibrary
             origin="migration"

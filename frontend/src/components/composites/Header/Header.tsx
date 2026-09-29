@@ -55,6 +55,7 @@ export function Header({
         >Edit</Button>
         <Button
           className="studio-header__chat"
+          variant="primary"
           size="large"
           startIcon={<img src={chatIcon} alt="" />}
           onClick={onChat}

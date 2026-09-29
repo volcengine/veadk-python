@@ -22,17 +22,14 @@ import logging
 import shlex
 from collections.abc import Mapping
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
-from frontend.server.intelligent_development import DeliveryReference, release_path
-from frontend.server.intelligent_development_task import IntentDecision
-from frontend.server.sandbox_remote import SandboxRemoteTransport
 from frontend.server.source_project_limits import (
     SOURCE_PROJECT_MAX_BYTES,
     SOURCE_PROJECT_MAX_FILES,
     SOURCE_PROJECT_MAX_REPORT_BYTES,
 )
-from veadk.cli.frontend_sandbox import SandboxSessionUnavailableError
 
 from .models import (
     IntelligentDevelopmentProject,
@@ -40,14 +37,30 @@ from .models import (
     IntelligentDevelopmentVersion,
     SourceProjectOrigin,
     SourceVersionEnvironment,
+    SourceVersionView,
     StoredDevelopmentVersion,
 )
 from .repository import (
     IntelligentDevelopmentProjectNotFound,
     IntelligentDevelopmentProjectStorageUnavailable,
+    IntelligentDevelopmentVersionNotFound,
     TosIntelligentDevelopmentProjectRepository,
 )
-from .models import SourceVersionView
+
+if TYPE_CHECKING:
+    from frontend.server.intelligent_development import DeliveryReference
+    from frontend.server.intelligent_development_task import IntentDecision
+    from frontend.server.sandbox_remote import SandboxRemoteTransport
+else:
+
+    def SandboxRemoteTransport(endpoint: str):  # noqa: N802
+        """Preserve the injectable transport factory without loading it at startup."""
+        from frontend.server.sandbox_remote import (
+            SandboxRemoteTransport as _SandboxRemoteTransport,
+        )
+
+        return _SandboxRemoteTransport(endpoint)
+
 
 _MAX_ARTIFACT_BYTES = SOURCE_PROJECT_MAX_BYTES
 _MAX_REPORT_BYTES = SOURCE_PROJECT_MAX_REPORT_BYTES
@@ -183,6 +196,7 @@ class IntelligentDevelopmentProjectService:
         from frontend.server.intelligent_development_source import (
             load_intelligent_development_artifact,
         )
+        from veadk.cli.frontend_sandbox import SandboxSessionUnavailableError
 
         from .repository import IntelligentDevelopmentVersionIntegrityError
 
@@ -269,8 +283,34 @@ class IntelligentDevelopmentProjectService:
         transport: SandboxRemoteTransport,
         delivery: DeliveryReference,
         decision: IntentDecision,
+        version_id: str | None = None,
+        created_at: datetime | None = None,
     ) -> tuple[IntelligentDevelopmentProject, IntelligentDevelopmentVersion]:
+        from frontend.server.intelligent_development import release_path
+
         binding = await self._resolved_binding(owner_id, session_id)
+        if version_id is not None:
+            try:
+                existing = await self.repository.get_version(
+                    owner_id, binding.project_id, version_id
+                )
+            except IntelligentDevelopmentVersionNotFound:
+                pass
+            else:
+                if (
+                    existing.artifact_sha256 != delivery.artifact_sha256
+                    or existing.validation_report_sha256
+                    != delivery.validation_report_sha256
+                ):
+                    raise ValueError(
+                        "A task version cannot be reused for different artifacts"
+                    )
+                project = await self.repository.get_project(
+                    owner_id, binding.project_id
+                )
+                # _resolved_binding repairs the newest committed version. A
+                # delayed retry of this task must never rewind that association.
+                return project, existing
         base_version = (
             await self.repository.get_version(
                 owner_id,
@@ -329,10 +369,10 @@ class IntelligentDevelopmentProjectService:
             if isinstance(criteria, list)
             else list(decision.acceptance_criteria)
         )
-        now = datetime.now(timezone.utc)
+        now = created_at or datetime.now(timezone.utc)
         version = IntelligentDevelopmentVersion(
             projectId=binding.project_id,
-            versionId=uuid4().hex,
+            versionId=version_id or uuid4().hex,
             parentVersionId=binding.base_version_id,
             sourceSessionId=session_id,
             createdAt=now,

@@ -98,7 +98,12 @@
     "title": "Codex activity",
     "startingAnalysis": "Codex is starting the analysis…",
     "startingMigration": "Codex is starting the migration…",
-    "loadError": "Codex activity is temporarily unavailable. The current task is unaffected."
+    "loadError": "Codex activity is temporarily unavailable. The current task is unaffected.",
+    "liveAnalyzing": "Analyzing the project",
+    "liveMigrating": "Running the migration",
+    "liveValidating": "Verifying the migration",
+    "livePackaging": "Packaging the migration",
+    "liveDelivery": "Reviewing the delivery"
   },
   "artifact": {
     "title": "Migration output",
@@ -145,9 +150,11 @@
     "reselect": "Select again",
     "selectZip": "Select ZIP",
     "continue": "Continue upload",
-    "start": "Start migration",
+    "start": "Upload and analyze",
     "inputAria": "Select a local project ZIP",
-    "retention": "The temporary migration environment is retained for 1 hour after creation. Successfully saved source versions are unaffected."
+    "retention": "The temporary migration environment is retained for 1 hour after creation. Successfully saved source versions are unaffected.",
+    "uploading": "Uploading…",
+    "sizeHint": "Project ZIP, up to {{size}}"
   },
   "deployment": {
     "requiredPlaceholder": "Enter {{key}}",
@@ -160,11 +167,21 @@
     "title": "Migrate existing project",
     "newMigration": "New migration",
     "recent": "Recent migrations",
-    "sessionsAria": "Migration sessions",
     "loadingSessions": "Loading migration sessions…",
     "noSessions": "No migration sessions",
     "heading": "Migrate an existing Agent project",
-    "intro": "Upload a local project ZIP. Codex will first perform a read-only analysis, then ask you to confirm the migration method."
+    "intro": "Upload a local project ZIP. Codex will first perform a read-only analysis, then ask you to confirm the migration method.",
+    "backToHome": "Migration home",
+    "navigation": "Migration navigation",
+    "showMore": "Show more",
+    "showLess": "Show less",
+    "projectName": "Project name",
+    "status": "Status",
+    "createdAt": "Created",
+    "actions": "Actions",
+    "openTask": "Open migration {{name}}",
+    "continueTask": "Continue",
+    "viewTask": "View"
   },
   "actions": {
     "stop": "Stop migration",
@@ -178,8 +195,6 @@
     "defaultReason": "Dev Sandbox is currently unavailable. Contact your administrator to check the configuration."
   },
   "conversation": {
-    "requestZip": "Provide a local project ZIP. After upload, I’ll identify the framework, entry point, and migration boundaries, then ask you to confirm the migration method before making changes.",
-    "zipHint": "Only local ZIP files are supported, up to {{size}}. The migration environment is retained for 1 hour after creation.",
     "creatingSandbox": "Creating Dev Sandbox",
     "initializing": "Initializing the migration workspace and checking AgentKit CLI, Codex, and migration capabilities. The project will upload automatically when the environment is ready.",
     "elapsed": "Elapsed: {{duration}}",
@@ -203,10 +218,18 @@
     "submitting": "Continuing analysis…",
     "submit": "Submit and continue analysis"
   },
+  "pendingInput": {
+    "ariaLabel": "Answer the questions the migration needs you to decide",
+    "title": "The migration needs your answer",
+    "description": "Your answer continues the current step instead of restarting it",
+    "other": "Other",
+    "otherPlaceholder": "Or type your own answer",
+    "submitting": "Submitting your answer…",
+    "submit": "Submit answer and continue"
+  },
   "confirmation": {
     "ariaLabel": "Confirm migration method",
     "title": "Confirm migration method",
-    "description": "Migration starts only after confirmation",
     "framework": "Migration method",
     "frameworkPlaceholder": "Select a migration method",
     "agentName": "Agent name",

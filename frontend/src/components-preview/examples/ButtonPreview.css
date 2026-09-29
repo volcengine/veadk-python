@@ -14,11 +14,6 @@
   font-weight: 400;
 }
 
-/* Exact frame width of the Figma specimen 631:246580 */
-.button-preview-create {
-  width: 138px;
-}
-
 .button-preview-icon-section,
 .button-preview-loading-section {
   margin-top: 32px;
@@ -38,3 +33,13 @@
   align-items: center;
   gap: 4px;
 }
+
+.button-preview-sizes {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 20px 24px;
+}
+.button-preview-size-example { display: grid; justify-items: start; gap: 8px; }
+.button-preview-size-label { display: grid; color: var(--studio-text-secondary); font-size: 12px; line-height: 20px; white-space: nowrap; }
+.button-preview-icon-section > .button-preview-sizes { margin-bottom: 28px; }

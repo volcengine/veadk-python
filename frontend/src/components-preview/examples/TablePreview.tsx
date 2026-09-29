@@ -3,7 +3,7 @@ import { PlusIcon } from "../../components/icons/PlusIcon";
 import { Button } from "../../components/primitives/Button";
 import { InputWithTailIcon } from "../../components/primitives/InputWithTailIcon";
 import { Table, TableCellText, TableStatus, type TableColumn } from "../../components/primitives/Table";
-import { ComponentApi } from "../api/ComponentApi";
+
 import { TableHeaderControlsPreview } from "./TableHeaderControlsPreview";
 import "./TablePreview.css";
 
@@ -98,11 +98,11 @@ export function TablePreview() {
   ];
 
   return <section aria-labelledby="table-preview-title">
-    <h2 id="table-preview-title" className="component-preview-title">Table</h2>
+    <h2 data-preview-heading tabIndex={-1} id="table-preview-title" className="component-preview-title">Default</h2>
     <Table caption="Cases" columns={columns} data={data} rowKey={row => row.id} />
 
     <section className="table-preview__example" aria-labelledby="table-content-preview-title">
-      <h3 id="table-content-preview-title" className="table-preview__heading">搜索、长内容与操作</h3>
+      <h2 data-preview-heading tabIndex={-1} id="table-content-preview-title" className="table-preview__heading">搜索、长内容与操作</h2>
       <p className="table-preview__description">标题与描述分层展示，长文本可换行或省略；滚动时固定表头、首列和操作列</p>
       <Table
         aria-label="Searchable cases"
@@ -120,6 +120,5 @@ export function TablePreview() {
     </section>
 
     <TableHeaderControlsPreview />
-    <ComponentApi names={["Table", "TableCellText", "TableStatus"]} />
   </section>;
 }

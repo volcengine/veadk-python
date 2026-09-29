@@ -118,8 +118,6 @@
 .studio-date-picker__time { box-sizing: border-box; padding: 4px 10px; border: 1px solid var(--date-picker-border); border-radius: 6px; background: var(--date-picker-input); }
 .studio-date-picker__footer-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .studio-date-picker__timezone { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--date-picker-muted); font-size: 12px; white-space: nowrap; }
-.studio-date-picker__done.studio-button { min-width: 56px; background: var(--date-picker-selected); color: var(--date-picker-on-selected); font-family: inherit; font-size: 13px; }
-.studio-date-picker__done.studio-button:not(:disabled):hover { filter: brightness(.94); }
 @keyframes studio-date-picker-in { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: translateY(0); } }
 @media (prefers-reduced-motion: reduce) {
   .studio-date-picker__popover[data-entering], .studio-date-picker__popover[data-exiting] { animation: none; }

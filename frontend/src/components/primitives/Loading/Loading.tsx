@@ -5,8 +5,8 @@ import "./Loading.css";
 export type LoadingProps = {
   /** infinity 为无限路径，ring 为旋转圆环 */
   variant?: "infinity" | "ring";
-  /** 图形宽度，单位 px；无限路径高度为宽度的一半，圆环宽高相同 */
-  size?: number;
+  /** 图形宽度，数字单位为 px，也支持 CSS 长度；无限路径高度为宽度的一半，圆环宽高相同 */
+  size?: number | string;
   /** 仅供屏幕阅读器读取的加载状态文案 */
   label?: string;
   /** 作为按钮内图标等装饰时启用，由外层提供状态说明 */
@@ -17,8 +17,10 @@ export type LoadingProps = {
 
 const infinityPath = "M 15 15 C 15 5, 25 5, 30 15 C 35 25, 45 25, 45 15 C 45 5, 35 5, 30 15 C 25 25, 15 25, 15 15";
 
-export function Loading({ variant = "infinity", size = variant === "ring" ? 40 : 48, label = "加载中", decorative = false, className = "", style }: LoadingProps) {
+export function Loading({ variant = "infinity", size = variant === "ring" ? 20 : 32, label = "加载中", decorative = false, className = "", style }: LoadingProps) {
   const reducedMotion = useReducedMotion();
+  const halfSize = typeof size === "number" ? size / 2 : `calc(${size} / 2)`;
+  const ringBorderWidth = typeof size === "number" ? size * 3 / 40 : `calc(${size} * 3 / 40)`;
 
   return <span
     className={`studio-loading studio-loading--${variant} ${className}`.trim()}
@@ -29,8 +31,9 @@ export function Loading({ variant = "infinity", size = variant === "ring" ? 40 :
   >
     {variant === "infinity" ? <svg
       className="studio-loading__infinity"
-      width={size}
-      height={size / 2}
+      width={typeof size === "number" ? size : undefined}
+      height={typeof halfSize === "number" ? halfSize : undefined}
+      style={typeof size === "string" ? { width: size, height: halfSize } : undefined}
       viewBox="0 0 60 30"
       fill="none"
       aria-hidden="true"
@@ -48,7 +51,7 @@ export function Loading({ variant = "infinity", size = variant === "ring" ? 40 :
       />
     </svg> : <motion.div
       className="studio-loading__ring"
-      style={{ width: size, height: size, borderWidth: size * 3 / 40 }}
+      style={{ width: size, height: size, borderWidth: ringBorderWidth }}
       aria-hidden="true"
       animate={{ rotate: reducedMotion ? 0 : 360 }}
       transition={{ duration: reducedMotion ? 0 : 1, repeat: reducedMotion ? 0 : Infinity, ease: "linear" }}

@@ -11,14 +11,15 @@ const STUDIO_TOOL_LABEL_KEYS: Record<string, string> = {
   get_city_weather: "studioTools.labels.get_city_weather",
   get_location_weather: "studioTools.labels.get_location_weather",
   web_fetch: "studioTools.labels.web_fetch",
+  studio_write_artifact: "studioTools.labels.studio_write_artifact",
 };
 
-export function studioToolLabel(name: string, t: TFunction): string {
+export function studioToolLabel(name: string, t: TFunction, displayName?: string): string {
   const catalogTool = BUILTIN_TOOLS.find(
     (tool) => tool.id === name || tool.toolNames.includes(name),
   );
   const labelKey = STUDIO_TOOL_LABEL_KEYS[name];
-  return labelKey ? t(labelKey) : catalogTool?.label ?? name;
+  return labelKey ? t(labelKey) : displayName || catalogTool?.label || name;
 }
 
 function CloseIcon() {
@@ -143,7 +144,7 @@ export function StudioToolDialog({
                   <article key={tool.id} className="studio-tool-option" role="listitem">
                     <span className="studio-tool-option-icon"><ToolCapabilityIcon /></span>
                     <span className="studio-tool-option-copy">
-                      <strong>{tool.name || studioToolLabel(tool.id, t)}</strong>
+                      <strong>{studioToolLabel(tool.id, t, tool.name)}</strong>
                       <code>{tool.id}</code>
                       <span>{tool.description}</span>
                     </span>

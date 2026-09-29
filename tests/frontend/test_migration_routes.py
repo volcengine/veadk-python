@@ -27,6 +27,7 @@ from frontend.server.migration.models import (
     ConfirmMigrationBody,
     CreateMigrationTaskBody,
     SubmitAnalysisAnswersBody,
+    SubmitAnalysisInputBody,
 )
 from frontend.server.migration.routes import mount_migration_routes
 from frontend.server.migration.service import MigrationError
@@ -68,6 +69,20 @@ class RouteService:
     def get_task(self, task_id: str, owner_id: str) -> dict[str, object]:
         return self.record("get_task", task_id, owner_id)
 
+    def recover_stalled_analysis(self, task_id: str, owner_id: str) -> bool:
+        self.calls.append(("recover_stalled_analysis", (task_id, owner_id)))
+        return False
+
+    def drive_delivery_turn(
+        self,
+        task_id: str,
+        owner_id: str,
+        *,
+        task: dict[str, object] | None = None,
+    ) -> bool:
+        self.calls.append(("drive_delivery_turn", (task_id, owner_id)))
+        return False
+
     def submit_answers(
         self,
         task_id: str,
@@ -75,6 +90,14 @@ class RouteService:
         body: SubmitAnalysisAnswersBody,
     ) -> dict[str, object]:
         return self.record("submit_answers", task_id, owner_id, body)
+
+    def submit_analysis_input(
+        self,
+        task_id: str,
+        owner_id: str,
+        body: SubmitAnalysisInputBody,
+    ) -> dict[str, object]:
+        return self.record("submit_analysis_input", task_id, owner_id, body)
 
     def confirm(
         self,
@@ -225,6 +248,14 @@ def test_all_migration_routes_delegate_with_owner_and_return_artifacts() -> None
             },
         ),
         client.post(
+            f"/web/agent-migrations/tasks/{TASK_ID}/input",
+            headers=headers,
+            json={
+                "requestId": "request-1",
+                "answers": {"framework": "dify"},
+            },
+        ),
+        client.post(
             f"/web/agent-migrations/tasks/{TASK_ID}/confirm",
             headers=headers,
             json={
@@ -272,7 +303,12 @@ def test_all_migration_routes_delegate_with_owner_and_return_artifacts() -> None
         "create_task",
         "upload_source",
         "get_task",
+        # 每次读取任务都会顺带检查是否要接管停滞的后台分析。
+        "recover_stalled_analysis",
+        # 交付落定以后由 Studio 收尾一次，成功时核对并发布产物。
+        "drive_delivery_turn",
         "submit_answers",
+        "submit_analysis_input",
         "confirm",
         "stop",
         "activity",
@@ -471,6 +507,9 @@ def test_evaluation_failures_do_not_hide_task_stop_or_artifact(
     assert stopped.json()["evaluation"]["error"]["code"] == expected_code
     assert [name for name, _ in service.calls] == [
         "get_task",
+        "recover_stalled_analysis",
+        "drive_delivery_turn",
+        # 终止迁移时会再看一次任务，但收尾回合只在读任务的路径上发起。
         "get_task",
         "stop",
         "artifact",

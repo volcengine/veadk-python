@@ -154,7 +154,7 @@ test("active sandbox conversation identifies the selected agent and never uses n
   assert.doesNotMatch(sandboxSessionSource, /退出内置智能体/);
   assert.match(
     appSource,
-    /const activeClient = activeSession\.intelligentDevelopment[\s\S]*?\? intelligentDevelopmentClient[\s\S]*?: sandboxClient/,
+    /if \(activeSession\?\.intelligentDevelopment\)[\s\S]*?development\.submit[\s\S]*?return;[\s\S]*?const activeClient = sandboxClient/,
   );
   assert.match(appSource, /activeClient\.sendMessage/);
   assert.doesNotMatch(sandboxClientSource, /runSSE/);

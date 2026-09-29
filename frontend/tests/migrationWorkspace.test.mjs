@@ -232,7 +232,7 @@ test("keeps new migration and migrated projects as parallel workspace pages", ()
   assert.match(source, /t\("workspace\.recent"\)/);
   assert.match(
     source,
-    /aria-current=\{page === "projects" \? "page" : undefined\}/,
+    /className="migration-workspace__nav"[\s\S]*?t\("workspace\.backToHome"\)[\s\S]*?t\("workspace\.newMigration"\)/,
   );
   assert.match(source, /page === "projects" \? \(/);
   assert.match(source, /<MigratedProjectsPage/);
@@ -325,7 +325,15 @@ test("implements the confirmed migration lifecycle as a desktop chat workspace",
     /if \([\s\S]*?action === "confirm"[\s\S]*?!task \|\|[\s\S]*?taskEnvironmentExpired/,
   );
   assert.match(source, /stopMigrationTask/);
-  assert.match(source, /getMigrationActivity/);
+  // Detail state and the activity feed arrive on one Server-Sent Events stream: the
+  // page no longer polls either endpoint itself.
+  assert.match(source, /observeMigrationTask/);
+  assert.match(
+    source,
+    /observeMigrationTask\(\{[\s\S]*?taskId: task\.id[\s\S]*?signal: controller\.signal/,
+  );
+  assert.doesNotMatch(source, /getMigrationActivity/);
+  assert.doesNotMatch(source, /ACTIVITY_POLL_INTERVAL_MS/);
   assert.match(source, /function MigrationActivityFeed/);
   assert.match(source, /import \{ Blocks \} from "\.\.\/ui\/Blocks"/);
   assert.match(source, /useStickToBottom<HTMLDivElement>/);
@@ -357,14 +365,12 @@ test("implements the confirmed migration lifecycle as a desktop chat workspace",
     /createMigrationTask\(\{[\s\S]*?signal: controller\.signal/,
   );
   assert.match(source, /uploadMigrationSource\([\s\S]*?controller\.signal/);
+  assert.match(source, /const navigationBusy = composerBusy \|\|/);
   assert.match(
     source,
-    /className="migration-new-button"[\s\S]*?disabled=\{composerBusy\}/,
+    /className="migration-new-button"[\s\S]*?disabled=\{navigationBusy\}/,
   );
-  assert.match(
-    source,
-    /className=\{item\.id === selectedTaskId \? "is-active" : ""\}[\s\S]*?disabled=\{composerBusy\}/,
-  );
+  assert.match(source, /setSelectedTaskId\(item\.id\)/);
   assert.match(source, /type="file"[\s\S]*?disabled=\{composerBusy\}/);
   assert.match(
     source,
@@ -545,6 +551,21 @@ test("renders Codex migration events through one shared block stream", () => {
   assert.match(activityBlocks, /kind: "plan"/);
   assert.match(activityBlocks, /kind: "tool"/);
   assert.match(source, /<Blocks[\s\S]*?blocks=\{blocks\}/);
+  assert.match(
+    source,
+    /<Blocks[\s\S]*?groupProcess[\s\S]*?streaming=\{streaming\}[\s\S]*?liveStatus=\{status\}/,
+    "the Codex output renders as the intelligent build's grouped process stream",
+  );
+  assert.match(
+    source,
+    /const streaming =\s*!activity\?\.complete \|\| items\.some\(\(item\) => item\.status === "running"\)/,
+    "a closing turn keeps the stream live after the task has settled",
+  );
+  assert.match(
+    source,
+    /status=\{migrationLiveStatus\(task\)\}/,
+    "the process header reports what Codex is doing, like the intelligent build's",
+  );
   assert.doesNotMatch(source, /migration-activity__status/);
   assert.doesNotMatch(styles, /\.migration-activity__status/);
 });
@@ -562,4 +583,130 @@ test("preserves Codex activity while the same migration advances", () => {
     source.indexOf("const analysisKey ="),
   );
   assert.doesNotMatch(pollingEffect, /setActivity\(null\)/);
+});
+
+test("migration home exposes upload and recent tasks without a navigation sidebar", () => {
+  const source = readFileSync(workspaceUrl, "utf8");
+  const styles = readFileSync(stylesUrl, "utf8");
+  assert.doesNotMatch(source, /<aside className="migration-history"/);
+  assert.match(source, /className="migration-workspace__nav"/);
+  assert.match(source, /aria-labelledby="migration-recent-heading"/);
+  assert.match(source, /tasks\.slice\(0, 5\)/);
+  assert.match(source, /t\("workspace\.backToHome"\)/);
+  assert.match(source, /aria-expanded=\{showAllTasks\}/);
+  assert.match(source, /"workspace\.showMore"/);
+  assert.match(source, /"workspace\.showLess"/);
+  assert.match(source, /disabled=\{!sourceFile \|\| composerBusy\}/);
+  assert.match(source, /onClick=\{isHome \? onBack : startNewMigration\}/);
+  assert.match(styles, /\.migration-home\s*\{/);
+  const startNewMigration = source.slice(
+    source.indexOf("function startNewMigration"),
+    source.indexOf("const composer"),
+  );
+  assert.doesNotMatch(startNewMigration, /stopMigrationTask|deleteMigrationTask/);
+});
+
+test("loads migration capabilities and sessions independently", () => {
+  const source = readFileSync(workspaceUrl, "utf8");
+  assert.match(source, /Promise\.allSettled\(\[\s*getMigrationCapabilities/);
+  assert.doesNotMatch(source, /Promise\.all\(\[\s*getMigrationCapabilities/);
+  assert.match(source, /const \[capabilityError, setCapabilityError\]/);
+  assert.match(source, /setLoadError\(/);
+  assert.match(source, /localeCompatibleBackendText\(capabilityError, locale\)/);
+  const retries = source.match(
+    /disabled=\{loading\} onClick=\{\(\) => setLoadKey\(\(key\) => key \+ 1\)\}/g,
+  );
+  assert.ok(
+    retries && retries.length >= 2,
+    "both the capability and the session failure paths must offer a retry",
+  );
+});
+
+test("confirmation card keeps labels beside bounded single-column controls", () => {
+  const source = readFileSync(workspaceUrl, "utf8");
+  const styles = readFileSync(stylesUrl, "utf8");
+  const card = source.slice(
+    source.indexOf('className="migration-confirmation"'),
+    source.indexOf('className="migration-result"'),
+  );
+  assert.equal(
+    (card.match(/className="migration-confirmation__row"/g) || []).length,
+    2,
+    "the method and entry selects render as plain label/control rows",
+  );
+  assert.equal(
+    (card.match(/className="migration-field migration-confirmation__row"/g) || []).length,
+    2,
+    "the name and entry rows wrap their inputs as labelled rows",
+  );
+  assert.equal(
+    (card.match(/hideLabel/g) || []).length,
+    2,
+    "both selects render their label outside the control",
+  );
+  assert.match(card, /className="migration-confirmation__footer"/);
+  assert.match(card, /className="migration-confirmation__consent"/);
+  assert.doesNotMatch(
+    card,
+    /confirmation\.description/,
+    "the card title stands alone; the removed subtitle must not come back",
+  );
+  assert.doesNotMatch(card, /migration-running-note/);
+
+  assert.match(styles, /\.migration-confirmation__grid\s*\{[^}]*grid-template-columns: minmax\(0, 1fr\)/);
+  assert.match(
+    styles,
+    /\.migration-confirmation \.migration-confirmation__row\s*\{[^}]*max-width: 640px;[^}]*grid-template-columns: 112px minmax\(0, 1fr\);/,
+    "confirmation rows bound the label column and cap the row width",
+  );
+  assert.match(styles, /\.migration-confirmation__row > small\s*\{[^}]*grid-column: 2;/);
+  assert.match(styles, /\.migration-confirmation__footer\s*\{[^}]*display: flex;[^}]*justify-content: space-between;/);
+  assert.match(
+    styles,
+    /\.migration-confirmation \.migration-confirmation__row \{ grid-template-columns: minmax\(0, 1fr\); gap: 6px; \}/,
+    "narrow screens stack the label above the control",
+  );
+});
+
+test("answers the questions of a running analysis without re-running it", () => {
+  const source = readFileSync(workspaceUrl, "utf8");
+  const api = readFileSync(apiUrl, "utf8");
+  const styles = readFileSync(stylesUrl, "utf8");
+  const zhQuestions = JSON.parse(readFileSync(zhResourceUrl, "utf8")).pendingInput;
+  const enQuestions = JSON.parse(readFileSync(enResourceUrl, "utf8")).pendingInput;
+
+  // 卡片跟着活着的提问走，不跟着状态走：交付收尾回合提问时任务已经落定。
+  assert.match(source, /const pendingInput = task\?\.pendingInput;/);
+  assert.doesNotMatch(source, /task\?\.state === "analyzing" \? task\.pendingInput/);
+  assert.match(source, /submitMigrationAnalysisInput\(\{/);
+  assert.match(source, /requestId: pendingInput\.id/);
+  assert.match(source, /className="migration-question__options"/);
+  assert.match(source, /role="radiogroup"/);
+  assert.match(source, /t\("pendingInput\.other"\)/);
+  assert.match(source, /disabled=\{!canSubmitInput\}/);
+  assert.match(
+    source,
+    /catch \(cause\) \{[\s\S]*?await reconcileTaskState\(task\.id\)[\s\S]*?!authoritative\.pendingInput[\s\S]*?setError/,
+    "a failed answer should restore the authoritative task before surfacing the error",
+  );
+  const submitInput =
+    source.match(/async function submitInput\(\) \{[\s\S]*?\n  \}\n/)?.[0] ?? "";
+  assert.ok(submitInput, "the in-turn answers need their own submit path");
+  assert.match(submitInput, /submitMigrationAnalysisInput\(/);
+  assert.doesNotMatch(
+    submitInput,
+    /submitMigrationAnalysisAnswers\(/,
+    "the in-turn card must not fall back to the needs_input re-run",
+  );
+  assert.match(api, /`\/tasks\/\$\{encodeURIComponent\(args\.taskId\)\}\/input`/);
+
+  assert.match(styles, /\.migration-question__option\.is-selected/);
+  assert.match(styles, /\.migration-question__other textarea/);
+
+  assert.deepEqual(Object.keys(zhQuestions).sort(), Object.keys(enQuestions).sort());
+  for (const key of Object.keys(zhQuestions)) {
+    assert.equal(typeof enQuestions[key], "string");
+    assert.ok(enQuestions[key].length > 0);
+    assert.ok(zhQuestions[key].length > 0);
+  }
 });

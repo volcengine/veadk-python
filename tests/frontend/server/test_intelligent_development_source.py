@@ -243,7 +243,9 @@ class FakeService:
         self.cloud = cloud
         self.requested: list[str] = []
 
-    async def _cloud_session(self, session_id: str) -> SandboxCloudSession:
+    async def owned_cloud_session(
+        self, session_id: str, owner_id: str
+    ) -> SandboxCloudSession:
         self.requested.append(session_id)
         return self.cloud
 

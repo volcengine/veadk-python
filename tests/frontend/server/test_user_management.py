@@ -81,6 +81,39 @@ class Directory:
         )
 
 
+class ReadOnlyDirectory:
+    """Expose Identity reads while failing the test on every write attempt."""
+
+    def __init__(self, source: Directory):
+        self.source = source
+        self.write_attempts: list[str] = []
+
+    def users(self):
+        return self.source.users()
+
+    def user(self, uid):
+        return self.source.user(uid)
+
+    def groups(self):
+        return self.source.groups()
+
+    def _reject(self, operation: str):
+        self.write_attempts.append(operation)
+        pytest.fail(f"Runtime must not write Identity through {operation}")
+
+    def create_group(self, *_args, **_kwargs):
+        self._reject("create_group")
+
+    def describe_group(self, *_args, **_kwargs):
+        self._reject("describe_group")
+
+    def add(self, *_args, **_kwargs):
+        self._reject("add")
+
+    def remove(self, *_args, **_kwargs):
+        self._reject("remove")
+
+
 @pytest.fixture
 def setup_service():
     directory = Directory()
@@ -479,6 +512,7 @@ def test_http_permissions_refresh_and_cross_origin_mutations_are_blocked(
 def test_directory_uses_provider_host_and_fetches_all_pages(
     monkeypatch, provider, region, host
 ):
+    import importlib
     from types import SimpleNamespace
     from frontend.server.user_management import directory as module
 
@@ -507,8 +541,10 @@ def test_directory_uses_provider_host_and_fetches_all_pages(
             )
             return SimpleNamespace(data=[value], total_count=2)
 
-    monkeypatch.setattr(module.volcenginesdkcore, "ApiClient", api_client)
-    monkeypatch.setattr(module.sdk, "IDApi", Api)
+    monkeypatch.setattr(
+        importlib.import_module("volcenginesdkcore"), "ApiClient", api_client
+    )
+    monkeypatch.setattr(module._identity_sdk(), "IDApi", Api)
     monkeypatch.delenv("IDENTITY_OPENAPI_HOST", raising=False)
     directory = module.IdentityDirectory(
         "pool", provider, region, lambda: ("test-ak", "test-sk", None)
@@ -520,6 +556,24 @@ def test_directory_uses_provider_host_and_fetches_all_pages(
     )
 
 
+def test_directory_normalizes_credential_resolver_failure():
+    from frontend.server.user_management.directory import IdentityDirectory
+
+    def unavailable_credentials():
+        raise RuntimeError("credential source unavailable")
+
+    directory = IdentityDirectory(
+        "pool",
+        "volcengine",
+        "cn-shanghai",
+        unavailable_credentials,
+    )
+    with pytest.raises(UserManagementError) as error:
+        directory._resolve_credentials()
+    assert error.value.status == 503
+    assert error.value.code == "identity_unavailable"
+
+
 @pytest.mark.parametrize(
     "provider,region",
     [
@@ -528,117 +582,196 @@ def test_directory_uses_provider_host_and_fetches_all_pages(
         ("byteplus", "ap-southeast-1"),
     ],
 )
-@pytest.mark.parametrize(
-    "admins,developers,expected",
-    [
-        ("", "", (StudioRole.ADMIN, StudioRole.ADMIN)),
-        (
-            "owner@example.com",
-            "member@example.com",
-            (StudioRole.ADMIN, StudioRole.DEVELOPER),
-        ),
-    ],
-)
-def test_old_updater_runtime_migrates_then_cleans_cloud_environment(
-    monkeypatch, provider, region, admins, developers, expected
+def test_old_updater_runtime_requires_predeployment_identity_migration(
+    monkeypatch, provider, region
 ):
-    from types import SimpleNamespace
+    import click
     from frontend.server.user_management import deployment
 
-    directory = Directory()
+    directory = ReadOnlyDirectory(Directory())
     monkeypatch.setattr(deployment, "IdentityDirectory", lambda *args: directory)
     environment = {
         "OAUTH2_USER_POOL_ID": "pool",
         "OAUTH2_USER_POOL_CLIENT_ID": "client",
         "VEADK_STUDIO_FUNCTION_ID": "function",
         "VEADK_STUDIO_DEPLOY_REGION": region,
-        "VEADK_STUDIO_ADMINS": admins,
-        "VEADK_STUDIO_DEVELOPERS": developers,
+        "VEADK_STUDIO_ADMINS": "owner@example.com",
+        "VEADK_STUDIO_DEVELOPERS": "member@example.com",
         "UNRELATED": "preserve",
     }
-    updates = []
-    connections = []
-
-    def update(request):
-        assert any(
-            '"initialized": true' in group.description for group in directory.groups()
-        )
-        updates.append(request)
-        environment.update({item.key: item.value for item in request.envs})
-
-    client = SimpleNamespace(
-        get_function=lambda request: SimpleNamespace(
-            envs=[SimpleNamespace(key=k, value=v) for k, v in environment.items()]
-        ),
-        update_function=update,
-    )
     monkeypatch.setattr(
-        "veadk.integrations.ve_faas.ve_faas.VeFaaS",
-        lambda **kwargs: connections.append(kwargs) or SimpleNamespace(client=client),
+        deployment,
+        "clear_legacy_role_environment",
+        lambda **kwargs: pytest.fail("Runtime must not update Function configuration"),
     )
-    options = dict(
-        pool_uid="pool",
-        client_uid="client",
-        provider=provider,
-        identity_region=region,
-        credentials=lambda: ("ak", "sk", "token"),
-        admins=admins,
-        developers=developers,
-    )
-    stale_instance_environment = dict(environment)
-    service = deployment.initialize_runtime_roles(
-        **options, environment=stale_instance_environment
-    )
-    assert len(updates) == 1
-    assert (
-        environment["VEADK_STUDIO_ADMINS"]
-        == environment["VEADK_STUDIO_DEVELOPERS"]
-        == ""
-    )
-    assert environment["VEADK_STUDIO_IDENTITY_ROLES"] == "1"
-    assert environment["UNRELATED"] == "preserve"
-    assert connections[0]["provider"] == provider
-    assert connections[0]["region"] == region
-    for uid, role in zip(("owner", "member"), expected):
-        assert (
-            service.principal_for(
-                StudioPrincipal.from_claims({"sub": f"oidc|{uid}"})
-            ).role
-            == role
+
+    with pytest.raises(click.ClickException, match="roles_not_initialized"):
+        deployment.initialize_runtime_roles(
+            pool_uid="pool",
+            client_uid="client",
+            provider=provider,
+            identity_region=region,
+            credentials=lambda: ("ak", "sk", "token"),
+            environment=environment,
         )
-    # Another instance of the same immutable revision still has old env values
-    service._set_role(directory.user("member"), StudioRole.USER)
-    restarted = deployment.initialize_runtime_roles(
-        **options, environment=stale_instance_environment
-    )
-    assert len(updates) == 1
-    assert (
-        restarted.principal_for(
-            StudioPrincipal.from_claims({"sub": "oidc|member"})
-        ).role
-        == StudioRole.USER
-    )
+    assert directory.write_attempts == []
 
 
-def test_failed_runtime_migration_never_clears_old_environment(monkeypatch):
+def test_uninitialized_runtime_with_readable_identity_never_writes(monkeypatch):
     import click
     from frontend.server.user_management import deployment
 
-    directory = Directory()
+    directory = ReadOnlyDirectory(Directory())
     monkeypatch.setattr(deployment, "IdentityDirectory", lambda *args: directory)
     monkeypatch.setattr(
         deployment,
         "clear_legacy_role_environment",
-        lambda **kwargs: pytest.fail("must not clear before successful migration"),
+        lambda **kwargs: pytest.fail("Runtime must not update Function configuration"),
     )
-    with pytest.raises(click.ClickException, match="legacy_role_member_not_unique"):
+
+    with pytest.raises(click.ClickException, match="roles_not_initialized"):
         deployment.initialize_runtime_roles(
             pool_uid="pool",
             client_uid="client",
             provider="volcengine",
-            identity_region="cn-beijing",
-            credentials=lambda: ("ak", "sk", ""),
+            identity_region="cn-shanghai",
+            credentials=lambda: ("ak", "sk", "token"),
             environment={"VEADK_STUDIO_FUNCTION_ID": "function"},
-            admins="missing@example.com",
         )
-    assert not directory.group_records
+    assert directory.write_attempts == []
+
+
+def test_missing_marker_blocks_runtime_even_after_identity_was_prepared(monkeypatch):
+    import click
+    from frontend.server.user_management import deployment
+
+    backing = Directory()
+    UserManagementService(backing, "pool", "client", "volcengine").initialize(
+        allow_initialize=True
+    )
+    directory = ReadOnlyDirectory(backing)
+    monkeypatch.setattr(deployment, "IdentityDirectory", lambda *args: directory)
+    monkeypatch.setattr(
+        deployment,
+        "clear_legacy_role_environment",
+        lambda **kwargs: pytest.fail("Runtime must not update Function configuration"),
+    )
+
+    with pytest.raises(click.ClickException, match="roles_not_initialized"):
+        deployment.initialize_runtime_roles(
+            pool_uid="pool",
+            client_uid="client",
+            provider="volcengine",
+            identity_region="cn-shanghai",
+            credentials=lambda: ("ak", "sk", "token"),
+            environment={"VEADK_STUDIO_FUNCTION_ID": "function"},
+        )
+    assert directory.write_attempts == []
+
+
+def test_deployment_identity_migration_allows_read_only_runtime_start(monkeypatch):
+    from frontend.server.user_management import deployment
+
+    backing = Directory()
+    selected_directory = backing
+    monkeypatch.setattr(
+        deployment, "IdentityDirectory", lambda *args: selected_directory
+    )
+    environment = deployment.prepare_identity_roles(
+        pool_uid="pool",
+        client_uid="client",
+        provider="volcengine",
+        region="cn-shanghai",
+        access_key="ak",
+        secret_key="sk",
+        session_token="token",
+    )
+    assert len(backing.group_records) == len(StudioRole)
+    assert environment == {
+        "VEADK_STUDIO_IDENTITY_ROLES": "1",
+        "VEADK_STUDIO_SUPER_ADMIN": "",
+        "VEADK_STUDIO_ADMINS": "",
+        "VEADK_STUDIO_DEVELOPERS": "",
+    }
+
+    directory = ReadOnlyDirectory(backing)
+    selected_directory = directory
+    monkeypatch.setattr(
+        deployment,
+        "clear_legacy_role_environment",
+        lambda **kwargs: pytest.fail("Runtime must not update Function configuration"),
+    )
+    service = deployment.initialize_runtime_roles(
+        pool_uid="pool",
+        client_uid="client",
+        provider="volcengine",
+        identity_region="cn-shanghai",
+        credentials=lambda: ("runtime-ak", "runtime-sk", "runtime-token"),
+        environment=environment,
+    )
+
+    assert len(service.role_groups) == len(StudioRole)
+    assert directory.write_attempts == []
+
+
+def test_initialized_runtime_identity_failure_blocks_studio_startup(monkeypatch):
+    import click
+    from frontend.server.user_management import deployment
+
+    directory = Directory()
+    seeded = UserManagementService(directory, "pool", "client", "volcengine")
+    seeded.initialize("owner", allow_initialize=True)
+    attempts = 0
+
+    def unavailable_groups():
+        nonlocal attempts
+        attempts += 1
+        raise UserManagementError(503, "identity_unavailable")
+
+    directory.groups = unavailable_groups
+    monkeypatch.setattr(deployment, "IdentityDirectory", lambda *args: directory)
+
+    with pytest.raises(click.ClickException, match="identity_unavailable"):
+        deployment.initialize_runtime_roles(
+            pool_uid="pool",
+            client_uid="client",
+            provider="volcengine",
+            identity_region="cn-shanghai",
+            credentials=lambda: ("ak", "sk", "token"),
+            environment={"VEADK_STUDIO_IDENTITY_ROLES": "1"},
+        )
+    assert attempts == 1
+
+
+def test_uninitialized_runtime_blocks_before_identity_access_or_writes(monkeypatch):
+    import click
+    from frontend.server.user_management import deployment
+
+    directory = Directory()
+    reads = 0
+
+    def unavailable_groups():
+        nonlocal reads
+        reads += 1
+        raise UserManagementError(503, "identity_unavailable")
+
+    directory.groups = unavailable_groups
+    monkeypatch.setattr(deployment, "IdentityDirectory", lambda *args: directory)
+    monkeypatch.setattr(
+        deployment,
+        "clear_legacy_role_environment",
+        lambda **kwargs: pytest.fail("must not clear after failed Identity startup"),
+    )
+
+    with pytest.raises(click.ClickException, match="roles_not_initialized"):
+        deployment.initialize_runtime_roles(
+            pool_uid="pool",
+            client_uid="client",
+            provider="volcengine",
+            identity_region="cn-shanghai",
+            credentials=lambda: ("ak", "sk", "token"),
+            environment={"VEADK_STUDIO_FUNCTION_ID": "function"},
+        )
+    assert reads == 0
+    assert directory.group_records == {}
+    assert all(not user.groups for user in directory.records.values())

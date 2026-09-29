@@ -28,11 +28,27 @@ from veadk.cli.frontend_branding import (
     resolve_site_logo,
 )
 from veadk.cli.cli_frontend import studio
+from veadk.cli.studio_dependencies import STUDIO_AGENTKIT_CLI_ARTIFACT
 
 _PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUB"
     "AScY42YAAAAASUVORK5CYII="
 )
+
+
+def _stage_test_agentkit_cli_archive(destination: Path, **_kwargs: object) -> Path:
+    destination.mkdir(parents=True, exist_ok=True)
+    archive = destination / STUDIO_AGENTKIT_CLI_ARTIFACT.filename
+    archive.write_bytes(b"test-agentkit-cli")
+    return archive
+
+
+@pytest.fixture(autouse=True)
+def _avoid_network_cli_archive_download(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "veadk.cli.studio_package.stage_studio_agentkit_cli_archive",
+        _stage_test_agentkit_cli_archive,
+    )
 
 
 class _LogoResponse:

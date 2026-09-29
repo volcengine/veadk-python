@@ -160,8 +160,44 @@ def create_tos_client_factory(
     return factory
 
 
+def create_cached_tos_client_factory(
+    config: StudioStorageConfig,
+    resolve_credentials: CredentialResolver,
+) -> TosClientFactory:
+    """Reuse a connection pool while resolving complete credentials on every call"""
+    current_credentials: tuple[str, str, str | None] = ("", "", None)
+    cached_credentials: tuple[str, str, str | None] | None = None
+    cached_client: Any = None
+    cache_lock = Lock()
+    # Keep the selected endpoint when credentials rotate or resolution fails
+    create_client = create_tos_client_factory(config, lambda: current_credentials)
+
+    def factory() -> Any:
+        nonlocal current_credentials, cached_credentials, cached_client
+        with cache_lock:
+            try:
+                current_credentials = resolve_credentials()
+                if not current_credentials[0] or not current_credentials[1]:
+                    raise ValueError("Studio TOS credentials are unavailable")
+                if cached_client is None or current_credentials != cached_credentials:
+                    cached_client = None
+                    cached_credentials = None
+                    cached_client = create_client()
+                    cached_credentials = current_credentials
+                return cached_client
+            except Exception:
+                # A failed refresh must not return or later revive the old client
+                cached_client = None
+                cached_credentials = None
+                current_credentials = ("", "", None)
+                raise
+
+    return factory
+
+
 __all__ = [
     "CredentialResolver",
     "TosClientFactory",
     "create_tos_client_factory",
+    "create_cached_tos_client_factory",
 ]

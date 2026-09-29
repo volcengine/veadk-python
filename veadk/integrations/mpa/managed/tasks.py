@@ -1,3 +1,17 @@
+# Copyright (c) 2025 Beijing Volcano Engine Technology Co., Ltd. and/or its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Durable, owner-scoped Studio tasks with cancellable child processes."""
 
 from __future__ import annotations
@@ -154,13 +168,27 @@ class CreationTasks:
         }
 
     async def start(
-        self, owner, payload, *, config_path, timeout, images=None, secrets=None
+        self,
+        owner,
+        payload,
+        *,
+        config_path,
+        timeout,
+        images=None,
+        secrets=None,
+        studio_runtime_owner=None,
     ):
         if "openvikingApiKey" in payload:
             raise TaskError("Secrets must not be included in stored task inputs")
         secrets = secrets or {}
         if set(secrets) - {"openvikingApiKey"}:
             raise TaskError("Unsupported creation secret")
+        if studio_runtime_owner is not None:
+            studio_runtime_owner = str(studio_runtime_owner).strip()
+            if not studio_runtime_owner:
+                raise TaskError("Studio Runtime owner is required")
+            if owner_key(studio_runtime_owner) != owner:
+                raise TaskError("Studio Runtime owner does not match task owner")
         encoded = json.dumps(payload, sort_keys=True)
         # Reconcile stopped supervisors before acquiring the write transaction.
         # get() may write interrupted status and must not nest a SQLite writer.
@@ -206,13 +234,30 @@ class CreationTasks:
                 ),
             )
         task = asyncio.create_task(
-            self._run(task_id, owner, payload, config_path, timeout, secrets)
+            self._run(
+                task_id,
+                owner,
+                payload,
+                config_path,
+                timeout,
+                secrets,
+                studio_runtime_owner,
+            )
         )
         self.running[task_id] = task
         task.add_done_callback(lambda _: self.running.pop(task_id, None))
         return self.get(owner, task_id)
 
-    async def _run(self, task_id, owner, payload, config_path, timeout, secrets):
+    async def _run(
+        self,
+        task_id,
+        owner,
+        payload,
+        config_path,
+        timeout,
+        secrets,
+        studio_runtime_owner,
+    ):
         process = None
         succeeded = None
         terminal = {"state": "failed", "error": "creationFailed"}
@@ -247,6 +292,8 @@ class CreationTasks:
                     if key in payload
                 },
             }
+            if studio_runtime_owner is not None:
+                data["studioRuntimeOwner"] = studio_runtime_owner
             if secrets.get("openvikingApiKey"):
                 data["resources"]["openvikingApiKey"] = secrets["openvikingApiKey"]
             assert process.stdin is not None and process.stdout is not None

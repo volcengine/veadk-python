@@ -14,22 +14,52 @@
 
 """Dynamic sub-agent creation toolset."""
 
-from veadk.tools.builtin_tools.create_agent.models import (
-    AgentBlueprint,
-    AgentCapabilities,
-    CollectResourcesResponse,
-    CreateAgentsResponse,
-    ResourceDescriptor,
-)
-from veadk.tools.builtin_tools.create_agent.resource_store import (
-    ResourceStore,
-    StoredResource,
-)
-from veadk.tools.builtin_tools.create_agent.sources import (
-    ResourceSource,
-    SourceCollection,
-)
-from veadk.tools.builtin_tools.create_agent.toolset import CreateAgentToolset
+from __future__ import annotations
+
+import importlib
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from veadk.tools.builtin_tools.create_agent.models import (
+        AgentBlueprint,
+        AgentCapabilities,
+        CollectResourcesResponse,
+        CreateAgentsResponse,
+        ResourceDescriptor,
+    )
+    from veadk.tools.builtin_tools.create_agent.resource_store import (
+        ResourceStore,
+        StoredResource,
+    )
+    from veadk.tools.builtin_tools.create_agent.sources import (
+        ResourceSource,
+        SourceCollection,
+    )
+    from veadk.tools.builtin_tools.create_agent.toolset import CreateAgentToolset
+
+_EXPORT_MODULES = {
+    "AgentBlueprint": "models",
+    "AgentCapabilities": "models",
+    "CollectResourcesResponse": "models",
+    "CreateAgentsResponse": "models",
+    "ResourceDescriptor": "models",
+    "ResourceStore": "resource_store",
+    "StoredResource": "resource_store",
+    "ResourceSource": "sources",
+    "SourceCollection": "sources",
+    "CreateAgentToolset": "toolset",
+}
+
+
+def __getattr__(name: str) -> Any:
+    module_name = _EXPORT_MODULES.get(name)
+    if module_name is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    module = importlib.import_module(f"{__name__}.{module_name}")
+    value = getattr(module, name)
+    globals()[name] = value
+    return value
+
 
 __all__ = [
     "AgentBlueprint",

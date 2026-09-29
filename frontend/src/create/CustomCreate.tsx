@@ -79,6 +79,7 @@ import {
   firstMissingRuntimeEnv,
   firstInvalidRuntimeEnv,
   runtimeEnvConfiguration,
+  runtimeDebugEnvVars,
   runtimeEnvJsonError,
   runtimeEnvVars,
   type RuntimeEnvConfiguration,
@@ -92,20 +93,15 @@ import {
   isOrchestratorType,
 } from "./agentTypeMeta";
 import { localPickerMatches } from "./localPickerSearch";
+import { modelApiKeyDescription, modelApiKeyMatches, modelOptionsWithPermissions } from "./modelApiKeyPresentation";
 import { draftToYaml } from "./configYaml";
 import {
-  confirmMcpCredentialReuse,
-  clearMcpConfiguredAuth,
   deploymentMcpSecretValues,
   type McpConfigurationConflict,
   mcpAuthTokenInputValue,
-  mcpCredentialActionRequired,
   mcpConfigurationConflict,
-  mcpCredentialReuseValues,
   mcpUrlNeedsPathWarning,
   prepareMcpAuth,
-  removeMcpCredentialForChangedUrl,
-  replaceMcpCredentialForChangedUrl,
   removedConfiguredMcpEnvKeys,
   sourcePreservingMcpSecretValues,
   updateMcpAuthTokenInput,
@@ -745,6 +741,8 @@ function vikingMemoryDisplayName(item: VikingMemoryRef, fallback = createT("trad
 }
 
 function modelAvailabilityKey(model: ModelOption): string {
+  if (model.apiKeyAllowed === false) return "modelApiKey.noModelPermission";
+  if (model.unavailableReason) return `modelApiKey.permissionState.${model.unavailableReason}`;
   if (model.available) return "traditional.model.available";
   if (model.lifecycleStatus === "Retiring") return "traditional.model.retiring";
   if (model.activationState && model.activationState !== "Available") {
@@ -754,7 +752,9 @@ function modelAvailabilityKey(model: ModelOption): string {
 }
 
 function isModelSelectable(model: ModelOption): boolean {
-  return model.available || model.lifecycleStatus === "Retiring";
+  return model.apiKeyAllowed !== false &&
+    !model.unavailableReason &&
+    (model.available || model.lifecycleStatus === "Retiring");
 }
 
 interface ModelMenuPosition {
@@ -1027,7 +1027,7 @@ function ModelOptionSelect({
           response.keys.find((key) => key.id === apiKeyId) ??
           response.keys.find((key) => key.name === apiKeyName) ??
           response.keys.find((key) => key.id === response.defaultKeyId) ??
-          response.keys[0];
+          response.keys.find((key) => key.status !== "Restricted");
         if (selected) onApiKeyChange(selected);
       })
       .catch((err) => {
@@ -1059,8 +1059,13 @@ function ModelOptionSelect({
     })
       .then((response) => {
         if (!controller.signal.aborted) {
-          setModels(response.models);
+          const nextModels = modelOptionsWithPermissions(response.models, response.apiKeyModelPermissions);
+          setModels(nextModels);
           setModelsApiKeyId(apiKeyId);
+          const denied = new Set(nextModels.filter((model) => model.apiKeyAllowed === false || model.unavailableReason).map((model) => model.id));
+          if (denied.has(value.trim())) onChange("");
+          const permittedFallbacks = fallbacks.filter((fallback) => typeof fallback !== "string" || !denied.has(fallback));
+          if (permittedFallbacks.length !== fallbacks.length) onFallbacksChange(permittedFallbacks);
         }
       })
       .catch((err) => {
@@ -1079,7 +1084,7 @@ function ModelOptionSelect({
   const visibleModels = modelsAreCurrent ? models : [];
   const selectedApiKey = apiKeys.find((key) => key.id === apiKeyId);
   const selectedApiKeyLabel = selectedApiKey
-    ? selectedApiKey.name
+    ? selectedApiKey.name || t("modelApiKey.unnamed")
     : apiKeyId
       ? t("traditional.model.currentApiKey")
       : keysLoading
@@ -1090,9 +1095,9 @@ function ModelOptionSelect({
   const filteredApiKeys = useMemo(
     () =>
       apiKeys.filter((key) =>
-        localPickerMatches(apiKeySearchQuery, [key.name]),
+        modelApiKeyMatches(apiKeySearchQuery, key.name, modelApiKeyDescription(key, t)),
       ),
-    [apiKeySearchQuery, apiKeys],
+    [apiKeySearchQuery, apiKeys, t],
   );
   const selectedModel = visibleModels.find(
     (model) => model.id === normalizedValue,
@@ -1175,7 +1180,7 @@ function ModelOptionSelect({
             menuAriaLabel={t("traditional.model.apiKeyList")}
             searchAriaLabel={t("traditional.model.searchApiKey")}
             searchValue={apiKeySearchQuery}
-            searchPlaceholder={t("traditional.model.searchApiKeyName")}
+            searchPlaceholder={t("modelApiKey.search")}
             onSearchChange={setApiKeySearchQuery}
             empty={filteredApiKeys.length === 0}
             emptyLabel={t("traditional.model.noMatchingApiKey")}
@@ -1183,23 +1188,28 @@ function ModelOptionSelect({
             renderOptions={(closeMenu) =>
               filteredApiKeys.map((key) => {
                 const selected = key.id === apiKeyId;
+                const description = modelApiKeyDescription(key, t);
                 return (
                   <button
                     key={key.id}
                     type="button"
                     role="option"
                     aria-selected={selected}
+                    disabled={key.status === "Restricted"}
                     className={`cw-a2a-space-option cw-model-key-option ${
                       selected ? "is-selected" : ""
                     }`}
-                    title={key.name}
+                    title={`${key.name || t("modelApiKey.unnamed")} · ${description}`}
                     onClick={() => {
                       setKeySelectionRevision((revision) => revision + 1);
                       onApiKeyChange(key);
                       closeMenu();
                     }}
                   >
-                    <span>{key.name}</span>
+                    <span className="cw-model-option-copy">
+                      <strong>{key.name || t("modelApiKey.unnamed")}</strong>
+                      <small>{description}</small>
+                    </span>
                   </button>
                 );
               })
@@ -1249,7 +1259,7 @@ function ModelOptionSelect({
                     const selected = model.id === normalizedValue;
                     const selectable = isModelSelectable(model);
                     const activationRequired =
-                      !selectable && model.activationState !== "Available";
+                      model.apiKeyAllowed !== false && !model.unavailableReason && !selectable && model.activationState !== "Available";
                     if (activationRequired) {
                       return (
                         <button
@@ -1306,11 +1316,13 @@ function ModelOptionSelect({
                         </span>
                         <span
                           className={`cw-model-status ${
-                            model.available
-                              ? "is-available"
-                              : model.lifecycleStatus === "Retiring"
-                                ? "is-retiring"
-                                : "is-unavailable"
+                            model.apiKeyAllowed === false || model.unavailableReason
+                              ? "is-unavailable"
+                              : model.available
+                                ? "is-available"
+                                : model.lifecycleStatus === "Retiring"
+                                  ? "is-retiring"
+                                  : "is-unavailable"
                           }`}
                         >
                           {t(modelAvailabilityKey(model))}
@@ -1409,7 +1421,7 @@ function ModelOptionSelect({
                         const selected = model.id === fallbackValue.trim();
                         const selectable = isModelSelectable(model);
                         const activationRequired =
-                          !selectable && model.activationState !== "Available";
+                          model.apiKeyAllowed !== false && !model.unavailableReason && !selectable && model.activationState !== "Available";
                         if (activationRequired) {
                           return (
                             <button
@@ -1469,11 +1481,13 @@ function ModelOptionSelect({
                             </span>
                             <span
                               className={`cw-model-status ${
-                                model.available
-                                  ? "is-available"
-                                  : model.lifecycleStatus === "Retiring"
-                                    ? "is-retiring"
-                                    : "is-unavailable"
+                                model.apiKeyAllowed === false || model.unavailableReason
+                                  ? "is-unavailable"
+                                  : model.available
+                                    ? "is-available"
+                                    : model.lifecycleStatus === "Retiring"
+                                      ? "is-retiring"
+                                      : "is-unavailable"
                               }`}
                             >
                               {t(modelAvailabilityKey(model))}
@@ -1494,12 +1508,7 @@ function ModelOptionSelect({
           <Info className="cw-i" />
           <span>{error}</span>
         </div>
-      ) : loading ? (
-        <span className="cw-help cw-a2a-space-status" aria-live="polite">
-          <Loader2 className="cw-i cw-i-sm cw-spin" />
-          {t("traditional.model.loading")}
-        </span>
-      ) : visibleModels.length === 0 ? (
+      ) : loading ? null : visibleModels.length === 0 ? (
         <span className="cw-help">{t("traditional.model.empty")}</span>
       ) : (
         <span className="cw-help">
@@ -2120,6 +2129,34 @@ function VikingMemorySelect({
  * (http / stdio) and shows the matching fields. http -> url + optional
  * bearer token; stdio -> command + space-separated args. Optional name.
  * ---------------------------------------------------------------- */
+function McpTokenVisibilityIcon({ hidden }: { hidden: boolean }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      {hidden ? (
+        <>
+          <path d="M3 3l18 18" />
+          <path d="M9.7 6.95A9.7 9.7 0 0 1 12 6.68c5.9 0 9.25 5.32 9.25 5.32a16 16 0 0 1-2.28 2.85" />
+          <path d="M14.35 14.55A3.25 3.25 0 0 1 9.5 10.2" />
+          <path d="M6.25 8.12A16.4 16.4 0 0 0 2.75 12S6.1 17.32 12 17.32c.8 0 1.55-.1 2.25-.27" />
+        </>
+      ) : (
+        <>
+          <path d="M2.75 12s3.35-5.25 9.25-5.25S21.25 12 21.25 12 17.9 17.25 12 17.25 2.75 12 2.75 12Z" />
+          <circle cx="12" cy="12" r="2.5" />
+        </>
+      )}
+    </svg>
+  );
+}
+
 function McpToolEditor({
   tools,
   conflict,
@@ -2133,11 +2170,20 @@ function McpToolEditor({
 }) {
   const { t } = useTranslation("create");
   const conflictErrorId = useId();
+  const [revealedTokenIndex, setRevealedTokenIndex] = useState<number | null>(
+    null,
+  );
   const visibleConflict = showConflict ? conflict : null;
   const update = (i: number, p: Partial<McpTool>) =>
     onChange(tools.map((tool, idx) => (idx === i ? { ...tool, ...p } : tool)));
 
-  const remove = (i: number) => onChange(tools.filter((_, idx) => idx !== i));
+  const remove = (i: number) => {
+    setRevealedTokenIndex((current) => {
+      if (current == null || current < i) return current;
+      return current === i ? null : current - 1;
+    });
+    onChange(tools.filter((_, idx) => idx !== i));
+  };
 
   const add = () =>
     onChange([...tools, { name: "", transport: "http", url: "" }]);
@@ -2235,119 +2281,49 @@ function McpToolEditor({
                         </span>
                       </p>
                     )}
-                    <input
-                      className="cw-input"
-                      aria-invalid={mcpCredentialActionRequired(tool)}
-                      value={mcpAuthTokenInputValue(tool)}
-                      placeholder={
-                        tool.credentialConfigured && !tool.authToken
-                          ? t("traditional.mcp.configuredPlaceholder")
-                          : t("traditional.mcp.tokenPlaceholder")
-                      }
-                      onChange={(e) =>
-                        onChange(
-                          tools.map((tool, index) =>
-                            index === i
-                              ? updateMcpAuthTokenInput(tool, e.target.value)
-                              : tool,
-                          ),
-                        )
-                      }
-                    />
-                    {tool.credentialUpdate === "pending" && (
-                      <div
-                        className="cw-mcp-auth-state is-warning"
-                        role="alert"
+                    <div className="cw-mcp-token-field">
+                      <input
+                        className="cw-input"
+                        type={revealedTokenIndex === i ? "text" : "password"}
+                        value={mcpAuthTokenInputValue(tool)}
+                        placeholder={t("traditional.mcp.tokenPlaceholder")}
+                        autoComplete="new-password"
+                        spellCheck={false}
+                        onChange={(e) =>
+                          onChange(
+                            tools.map((tool, index) =>
+                              index === i
+                                ? updateMcpAuthTokenInput(tool, e.target.value)
+                                : tool,
+                            ),
+                          )
+                        }
+                      />
+                      <button
+                        type="button"
+                        className="cw-mcp-token-toggle"
+                        aria-label={
+                          revealedTokenIndex === i
+                            ? t("traditional.mcp.hideToken")
+                            : t("traditional.mcp.showToken")
+                        }
+                        title={
+                          revealedTokenIndex === i
+                            ? t("traditional.mcp.hideToken")
+                            : t("traditional.mcp.showToken")
+                        }
+                        aria-pressed={revealedTokenIndex === i}
+                        onClick={() =>
+                          setRevealedTokenIndex((current) =>
+                            current === i ? null : i,
+                          )
+                        }
                       >
-                        <span>
-                          {t("traditional.mcp.changedUrlWarning")}
-                        </span>
-                        <div className="cw-mcp-auth-actions">
-                          <button
-                            type="button"
-                            onClick={() =>
-                              onChange(
-                                tools.map((tool, index) =>
-                                  index === i
-                                    ? confirmMcpCredentialReuse(tool)
-                                    : tool,
-                                ),
-                              )
-                            }
-                          >
-                            {t("traditional.mcp.reuseCredential")}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() =>
-                              onChange(
-                                tools.map((tool, index) =>
-                                  index === i
-                                    ? replaceMcpCredentialForChangedUrl(tool)
-                                    : tool,
-                                ),
-                              )
-                            }
-                          >
-                            {t("traditional.mcp.replaceCredential")}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() =>
-                              onChange(
-                                tools.map((tool, index) =>
-                                  index === i
-                                    ? removeMcpCredentialForChangedUrl(tool)
-                                    : tool,
-                                ),
-                              )
-                            }
-                          >
-                            {t("traditional.mcp.noAuth")}
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                    {tool.credentialUpdate === "reuse" && (
-                      <div className="cw-mcp-auth-state" role="status">
-                        <span>{t("traditional.mcp.reuseHint")}</span>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            onChange(
-                              tools.map((tool, index) =>
-                                index === i
-                                  ? replaceMcpCredentialForChangedUrl(tool)
-                                  : tool,
-                              ),
-                            )
-                          }
-                        >
-                          {t("traditional.mcp.changeToReplace")}
-                        </button>
-                      </div>
-                    )}
-                    {tool.credentialConfigured &&
-                      !tool.authToken &&
-                      !tool.credentialUpdate && (
-                      <div className="cw-mcp-auth-state" role="status">
-                        <span>{t("traditional.mcp.credentialConfigured")}</span>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            onChange(
-                              tools.map((tool, index) =>
-                                index === i
-                                  ? clearMcpConfiguredAuth(tool)
-                                  : tool,
-                              ),
-                            )
-                          }
-                        >
-                          {t("traditional.mcp.removeCredential")}
-                        </button>
-                      </div>
-                    )}
+                        <McpTokenVisibilityIcon
+                          hidden={revealedTokenIndex !== i}
+                        />
+                      </button>
+                    </div>
                   </>
                 ) : (
                   <>
@@ -2550,9 +2526,6 @@ function nodeProblem(
   if (nameProblem) return nameProblem as NodeProblemCode;
   if (duplicateNames.has(n.name)) return "duplicateName";
   if (n.description.trim().length === 0) return "missingDescription";
-  if ((n.mcpTools ?? []).some(mcpCredentialActionRequired)) {
-    return "mcpAuthRequired";
-  }
   if (isOrchestratorType(n.agentType))
     return n.subAgents.length === 0 ? "missingSubagent" : null;
   return n.instruction.trim().length === 0 ? "missingPrompt" : null;
@@ -2566,7 +2539,6 @@ type NodeProblemCode =
   | "name.characters"
   | "duplicateName"
   | "missingDescription"
-  | "mcpAuthRequired"
   | "mcpDuplicateName"
   | "mcpDuplicateUrl"
   | "missingSubagent"
@@ -3111,6 +3083,8 @@ function shouldUseProviderDefaultModel(
   previousProvider: CloudProvider,
   nextProvider: CloudProvider,
 ): boolean {
+  // Keep an explicitly cleared selection when its API Key loses permission.
+  if (modelName === "" && previousProvider === nextProvider) return false;
   const trimmed = (modelName ?? "").trim();
   if (!trimmed) return true;
   if (trimmed === defaultModelName(previousProvider)) return true;
@@ -3241,10 +3215,11 @@ function debugRuntimeDraft(
       modelApiKeyId: draft.deployment?.modelApiKeyId ?? "",
       modelApiKeyName: draft.deployment?.modelApiKeyName ?? "",
       envValues: Object.fromEntries(
-        runtimeEnvVars(runtimeEnv.specs, values).map(({ key, value }) => [
-          key,
-          value,
-        ]),
+        runtimeDebugEnvVars(
+          runtimeEnv.specs,
+          values,
+          prepareMcpAuth(draft).envValues,
+        ).map(({ key, value }) => [key, value]),
       ),
     },
   };
@@ -3433,6 +3408,7 @@ function DebugComparisonWorkspace({
                     <section
                       className="cw-ab-card-face cw-ab-card-front"
                       aria-hidden={variant.configOpen}
+                      inert={variant.configOpen}
                     >
                       <header className="cw-ab-card-head">
                         <div className="cw-ab-card-title">
@@ -3570,6 +3546,7 @@ function DebugComparisonWorkspace({
                     <section
                       className="cw-ab-card-face cw-ab-card-back"
                       aria-hidden={!variant.configOpen}
+                      inert={!variant.configOpen}
                     >
                       <header className="cw-ab-config-head">
                         <div>
@@ -4868,7 +4845,6 @@ export function CustomCreate({
           ? {
               runtimeId: deploymentTarget.runtimeId,
               region: deploymentTarget.region,
-              mcpCredentialReuses: mcpCredentialReuseValues(variantDraft),
             }
           : undefined,
       );
@@ -5165,9 +5141,6 @@ export function CustomCreate({
           : mcpGatewayManaged
             ? deploymentMcpSecretValues(draft)
             : undefined,
-        mcpCredentialReuses: deploymentTarget
-          ? mcpCredentialReuseValues(draft)
-          : undefined,
         removeRuntimeEnvKeys: deploymentTarget
           ? [
               ...removedConfiguredMcpEnvKeys(

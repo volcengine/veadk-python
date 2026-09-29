@@ -9,6 +9,7 @@ import { ConversationAuthorizationIcon, ConversationCancelIcon, ConversationChec
 import { ConversationMarkdown, ConversationVisualization } from "./ConversationRichContent";
 import { useConversationElapsedTime } from "./ConversationTiming";
 import { ConversationMedia } from "./ConversationMedia";
+import { ConversationStepEntrance } from "./ConversationStepEntrance";
 
 export function formatConversationDuration(value: number | undefined, running = false): string | null {
   if (value === undefined || !Number.isFinite(value) || value < 0) return null;
@@ -61,7 +62,7 @@ export function ConversationStepView({ step }: { step: ConversationStep }) {
     setOpen(next);
     if (next) setHasOpened(true);
   }
-  return <div className="studio-conversation-step" data-type={step.type} data-status={status}>
+  return <ConversationStepEntrance stepId={step.id} type={step.type} status={status}>
     <Dropdown className="studio-conversation-step__dropdown" open={open} onOpenChange={changeOpen}
       label={<StepLabel id={step.id} title={step.title} status={status} durationMs={step.durationMs} startedAt={step.startedAt} endedAt={step.endedAt} icon={step.type === "reasoning" ? <ConversationReasoningIcon /> : <ConversationToolIcon />} />}>
       <div className="studio-conversation-step__details" inert={!open || undefined} aria-hidden={!open || undefined}>
@@ -73,13 +74,13 @@ export function ConversationStepView({ step }: { step: ConversationStep }) {
         </>)}
       </div>
     </Dropdown>
-  </div>;
+  </ConversationStepEntrance>;
 }
 
 function HandoffBlock({ block }: { block: ConversationHandoffBlock }) {
   const [open, setOpen] = useState(block.defaultOpen ?? false);
   const [hasOpened, setHasOpened] = useState(block.defaultOpen ?? false);
-  return <div className="studio-conversation-step studio-conversation-handoff" data-type="handoff" data-status={block.status}>
+  return <ConversationStepEntrance stepId={block.id} type="handoff" status={block.status} className="studio-conversation-handoff">
     <Dropdown className="studio-conversation-step__dropdown" open={open} onOpenChange={next => { setOpen(next); if (next) setHasOpened(true); }}
       label={<StepLabel id={block.id} title={block.title} status={block.status} durationMs={block.durationMs} startedAt={block.startedAt} endedAt={block.endedAt} icon={<ConversationHandoffIcon />} target={block.toAgent} />}>
       <div className="studio-conversation-step__details" inert={!open || undefined} aria-hidden={!open || undefined}>
@@ -93,7 +94,7 @@ function HandoffBlock({ block }: { block: ConversationHandoffBlock }) {
         </>}
       </div>
     </Dropdown>
-  </div>;
+  </ConversationStepEntrance>;
 }
 
 function PlanBlock({ block }: { block: ConversationPlanBlock }) {

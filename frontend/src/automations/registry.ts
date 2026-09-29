@@ -1,6 +1,7 @@
 import { mpaChannelsAutomation } from "./mpaChannels";
 import { codingAgentsAutomation } from "./codingAgents";
 import { feishuBotAutomation } from "./feishuBot";
+import { gitLabMergeRequestReviewAutomation } from "./gitlabMergeRequestReview";
 import { pullRequestReviewAutomation } from "./pullRequestReview";
 import { runtimeDeliveryAutomation } from "./runtimeDelivery";
 import { templateProjectAutomation } from "./templateProject";
@@ -25,6 +26,7 @@ export const AUTOMATIONS: readonly AutomationDefinition[] = [
   templateProjectAutomation,
   runtimeDeliveryAutomation,
   pullRequestReviewAutomation,
+  gitLabMergeRequestReviewAutomation,
   feishuBotAutomation,
   mpaChannelsAutomation,
   websiteIntegrationAutomation,

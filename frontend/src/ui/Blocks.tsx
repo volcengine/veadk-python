@@ -1,4 +1,4 @@
-import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Fragment, memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   ChevronRight,
   Download,
@@ -12,6 +12,10 @@ import { motion } from "motion/react";
 import { Trans, useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { flattenCodexActivityBlocks, type Block } from "../blocks";
+import { DevelopmentTurnSummary } from "../create/DevelopmentTurnSummary";
+import { DevelopmentItemIcon } from "../create/DevelopmentItemIcon";
+import { DevelopmentProcess } from "../create/DevelopmentProcess";
+import { developmentToolLabel } from "../create/developmentPresentation";
 import { buildSurfaces, SurfaceView } from "../a2ui/Surface";
 import { useStickToBottom } from "./useStickToBottom";
 import { Markdown } from "./Markdown";
@@ -371,6 +375,9 @@ function DeliveryCard({
   onDeploy?: (value: Extract<Block, { kind: "delivery" }>["value"]) => void;
 }) {
   const { t, i18n } = useTranslation("conversation");
+  const breakableIdentifier = (text: string) => text.split(/(?<=[/_-])/).map((part, index) =>
+    <Fragment key={`${index}:${part}`}>{part}<wbr /></Fragment>
+  );
   const [resolved, setResolved] = useState<
     Extract<Block, { kind: "delivery" }>["value"] | null
   >(value.files ? value : null);
@@ -485,20 +492,16 @@ function DeliveryCard({
           <span className="delivery-card-icon">
             {value.verified ? <DeliveryVerifiedIcon /> : <DeliverySourceIcon />}
           </span>
-          <div>
-            <strong>
-              {value.verified
-                ? t("blocks.verifiedDelivery")
-                : t("blocks.generatedSource")}
-            </strong>
-            <span>{value.agentName}</span>
+          <div className="delivery-card-heading">
+            <strong>{breakableIdentifier(value.agentName)}</strong>
+            <span>{value.verified ? t("blocks.verifiedDelivery") : t("blocks.generatedSource")}</span>
           </div>
         </header>
         <dl className="delivery-card-grid">
-          <div>
+          <div className="delivery-card-entry">
             <dt>{t("blocks.entryPoint")}</dt>
             <dd>
-              <code>{value.entryPoint}</code>
+              <code>{breakableIdentifier(value.entryPoint)}</code>
             </dd>
           </div>
           <div>
@@ -509,12 +512,8 @@ function DeliveryCard({
             <dt>{t("blocks.size")}</dt>
             <dd>{(value.artifactSize / 1024).toFixed(1)} KiB</dd>
           </div>
-          <div>
-            <dt>
-              {value.verified
-                ? t("blocks.validationTime")
-                : t("blocks.generationTime")}
-            </dt>
+          <div className="delivery-card-time">
+            <dt>{value.verified ? t("blocks.validationTime") : t("blocks.generationTime")}</dt>
             <dd>{time}</dd>
           </div>
         </dl>
@@ -528,6 +527,7 @@ function DeliveryCard({
           <p className="delivery-card-guidance">{t("blocks.sourceGuidance")}</p>
         ) : null}
         <div className="delivery-card-actions">
+          <div className="delivery-card-secondary-actions">
           <button
             type="button"
             className="delivery-card-secondary"
@@ -568,8 +568,10 @@ function DeliveryCard({
               ? t("blocks.preparing")
               : t("blocks.downloadSource")}
           </button>
+          </div>
           <button
             type="button"
+            className="delivery-card-primary"
             onClick={() => void deploy()}
             disabled={
               !value.deployable ||
@@ -577,12 +579,12 @@ function DeliveryCard({
               !onResolve ||
               busyAction !== null
             }
-            title={value.deployable ? undefined : t("blocks.sourceNotReady")}
+            title={value.deployable ? t("blocks.manualDeploy") : t("blocks.sourceNotReady")}
           >
             {busyAction === "deploy" ? (
               <Loader2 className="spin" aria-hidden="true" />
             ) : null}
-            {t("blocks.manualDeploy")}
+            {t("blocks.deployAgent")}
           </button>
         </div>
         {error ? (
@@ -770,11 +772,15 @@ function ToolBlock({
   retrying = false,
   codexActivity,
   source,
+  native = false,
+  progressText,
   onBranchSelect,
   onAction,
 }: {
   name: string;
   callId?: string;
+  native?: boolean;
+  progressText?: string;
   args?: unknown;
   response?: unknown;
   done: boolean;
@@ -866,7 +872,7 @@ function ToolBlock({
         ? response
         : JSON.stringify(response, null, 2);
   const truncated =
-    respText && respText.length > 2000
+    !native && respText && respText.length > 2000
       ? `${respText.slice(0, 2000)}\n${t("blocks.truncated")}`
       : respText;
   return (
@@ -902,7 +908,7 @@ function ToolBlock({
           aria-expanded={open}
         >
           <span className="tool-icon tool-icon--generic" aria-hidden="true">
-            <GenericToolIcon />
+            {native ? <DevelopmentItemIcon kind="tool" /> : <GenericToolIcon />}
           </span>
           {done ? (
             <span className="tool-name">{label}</span>
@@ -911,6 +917,7 @@ function ToolBlock({
               {label}
             </TextShimmer>
           )}
+          {native && toolStatus === "failed" && <span className="development-tool-failure"><Trans ns="adk" i18nKey="developmentRuns.toolFailed" /></span>}
           <ToolDisclosureIcon
             className={`tool-chevron${open ? " is-open" : ""}`}
           />
@@ -959,6 +966,7 @@ function ToolBlock({
             />
           ) : !codexActivity ? (
             <div className="tool-detail">
+              {progressText && <div className="development-tool-meta">{progressText}</div>}
               {args != null && (
                 <div className="tool-section">
                   <div className="tool-section-label">
@@ -1269,6 +1277,8 @@ function AuthCard({
 }
 
 export interface BlocksProps {
+  groupProcess?: boolean;
+  liveStatus?: string;
   blocks: Block[];
   appName?: string;
   streaming?: boolean;
@@ -1382,6 +1392,8 @@ function groupDisplayBlocks(blocks: Block[], t: TFunction): DisplayBlock[] {
 }
 
 export function Blocks({
+  groupProcess = false,
+  liveStatus,
   blocks,
   appName = "",
   streaming = false,
@@ -1397,6 +1409,33 @@ export function Blocks({
   onDeployDelivery,
   onBranchSelect,
 }: BlocksProps) {
+  if (groupProcess) {
+    return (
+      <DevelopmentProcess
+        blocks={blocks}
+        active={streaming}
+        status={liveStatus}
+        render={(items) => (
+          <Blocks
+            blocks={items}
+            appName={appName}
+            streaming={streaming}
+            onStreamFrame={onStreamFrame}
+            onStreamComplete={onStreamComplete}
+            onAction={onAction}
+            onAuth={onAuth}
+            onArtifactDownload={onArtifactDownload}
+            onArtifactPreview={onArtifactPreview}
+            onResolveDelivery={onResolveDelivery}
+            onResolveDeliveryComparison={onResolveDeliveryComparison}
+            onDownloadDelivery={onDownloadDelivery}
+            onDeployDelivery={onDeployDelivery}
+            onBranchSelect={onBranchSelect}
+          />
+        )}
+      />
+    );
+  }
   const { t } = useTranslation("conversation");
   const displayBlocks = groupDisplayBlocks(
     flattenCodexActivityBlocks(blocks),
@@ -1410,6 +1449,9 @@ export function Blocks({
     <>
       {displayBlocks.map((b, i) => {
         switch (b.kind) {
+          case "turn-summary": return <DevelopmentTurnSummary key={b.id || i} value={b.value} />;
+          case "diff":
+            return <details className="development-diff" key={b.id ?? i}><summary><span className="tool-icon"><DevelopmentItemIcon kind="diff" /></span><span><Trans ns="adk" i18nKey="developmentRuns.diff" /></span><ToolDisclosureIcon className="tool-chevron" /></summary><pre>{b.text}</pre></details>;
           case "progress":
             return <BuildProgressBlock key="build-progress" text={b.text} />;
           case "activity-source":
@@ -1430,7 +1472,7 @@ export function Blocks({
               );
             return (
               <ThinkingBlock
-                key={i}
+                key={b.id ?? i}
                 text={b.text}
                 done={b.done}
                 thoughtKind={b.thoughtKind}
@@ -1444,7 +1486,7 @@ export function Blocks({
             const t = b.text.replace(/^\s+/, "");
             return t ? (
               <StreamingTextBlock
-                key={i}
+                key={b.id ?? i}
                 text={t}
                 streaming={streaming}
                 onStreamFrame={onStreamFrame}
@@ -1457,7 +1499,7 @@ export function Blocks({
           case "plan":
             return (
               <PlanBlock
-                key={i}
+                key={b.id ?? i}
                 title={b.title}
                 summary={b.summary}
                 items={b.items}
@@ -1465,11 +1507,11 @@ export function Blocks({
               />
             );
           case "attachment":
-            return <MediaGroup key={i} appName={appName} items={b.files} />;
+            return <MediaGroup key={b.id ?? i} appName={appName} items={b.files} />;
           case "artifact":
             return (
               <ArtifactCard
-                key={i}
+                key={b.id ?? i}
                 block={b}
                 onDownload={onArtifactDownload}
                 onPreview={onArtifactPreview}
@@ -1478,7 +1520,7 @@ export function Blocks({
           case "delivery":
             return (
               <DeliveryCard
-                key={i}
+                key={b.id ?? i}
                 value={b.value}
                 onResolve={onResolveDelivery}
                 onResolveComparison={onResolveDeliveryComparison}
@@ -1487,7 +1529,7 @@ export function Blocks({
               />
             );
           case "invocation":
-            return <InvocationChips key={i} value={b.value} />;
+            return <InvocationChips key={b.id ?? i} value={b.value} />;
           case "tool": {
             if (b.name === A2UI_TOOL && b.done) return null;
             const hasLaterCreateAgentAttempt =
@@ -1500,9 +1542,11 @@ export function Blocks({
                 );
             return (
               <ToolBlock
-                key={i}
-                name={b.name}
+                key={b.id ?? i}
+                name={b.itemType ? developmentToolLabel(b) : b.name}
                 callId={b.callId}
+                native={Boolean(b.itemType)}
+                progressText={b.progressText}
                 args={b.args}
                 response={b.response}
                 done={b.done}
@@ -1522,7 +1566,7 @@ export function Blocks({
           case "agent-transfer":
             return null;
           case "auth":
-            return <AuthCard key={i} block={b} onAuth={onAuth} />;
+            return <AuthCard key={b.id ?? i} block={b} onAuth={onAuth} />;
           case "a2ui":
             // Skip surfaces with no renderable root (e.g. a createSurface that
             // was never followed by updateComponents) so we don't emit an empty box.

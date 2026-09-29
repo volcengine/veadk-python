@@ -84,6 +84,12 @@ export interface SandboxComposerProps {
   onRequestSkills: () => void;
   onSelectedSkillsChange: (skills: SandboxSkill[]) => void;
   textOnly?: boolean;
+  allowSteer?: boolean;
+  sending?: boolean;
+  stopping?: boolean;
+  statusText?: string;
+  errorText?: string;
+  onResume?: () => void;
 }
 
 export function SandboxComposer({
@@ -110,6 +116,12 @@ export function SandboxComposer({
   onRequestSkills,
   onSelectedSkillsChange,
   textOnly = false,
+  allowSteer = false,
+  sending = false,
+  stopping = false,
+  statusText,
+  errorText,
+  onResume,
 }: SandboxComposerProps) {
   const { t, i18n } = useTranslation("sandbox");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -192,10 +204,10 @@ export function SandboxComposer({
   const uploadPending = attachments.some(
     (attachment) => attachment.status !== "ready",
   );
-  const canStop = busy && Boolean(onStop);
+  const canStop = (busy || sending) && Boolean(onStop);
   const canSend =
     !disabled &&
-    !busy &&
+    (!busy || allowSteer) && !sending && !stopping &&
     !uploadPending &&
     (value.trim().length > 0 || attachments.length > 0);
 
@@ -260,6 +272,14 @@ export function SandboxComposer({
 
   return (
     <div className="composer sandbox-codex-composer">
+      {statusText || stopping || errorText || onResume ? (
+        <div className="sandbox-run-status">
+          <span role={errorText ? "alert" : "status"}>
+            {errorText || (stopping ? t("composer.stopping") : statusText)}
+          </span>
+          {onResume ? <button type="button" className="cw-btn cw-btn-ghost" onClick={onResume} disabled={stopping}>{t("composer.resume")}</button> : null}
+        </div>
+      ) : null}
       {attachments.length > 0 ? (
         <MediaGroup
           appName={appName}
@@ -513,7 +533,7 @@ export function SandboxComposer({
             disabled={disabled}
             placeholder={
               textOnly
-                ? t("composer.continuePlaceholder")
+                ? t(busy && allowSteer ? "composer.steerPlaceholder" : "composer.continuePlaceholder")
                 : t("composer.messagePlaceholder")
             }
             aria-expanded={menuVisible}
@@ -575,7 +595,20 @@ export function SandboxComposer({
             }}
           />
         </div>
-        <button
+        {allowSteer ? (
+          <div className="sandbox-run-actions">
+            {canStop ? (
+              <button type="button" className="comp-send" disabled={stopping} onClick={onStop}
+                aria-label={t(stopping ? "composer.stopping" : "composer.stop")} title={t("composer.stop")}>
+                <SandboxStopIcon className="icon" />
+              </button>
+            ) : null}
+            <button type="button" className="comp-send" disabled={!canSend} onClick={() => onSubmit(value)}
+              aria-label={t(busy ? "composer.steer" : "composer.send")} title={t(busy ? "composer.steer" : "composer.send")}>
+              {sending ? <SandboxSpinnerIcon className="icon spin" /> : <SandboxSendIcon className="icon" />}
+            </button>
+          </div>
+        ) : <button
           type="button"
           className="comp-send"
           disabled={canStop ? false : !canSend}
@@ -590,7 +623,7 @@ export function SandboxComposer({
           ) : (
             <SandboxSendIcon className="icon" />
           )}
-        </button>
+        </button>}
       </div>
 
       <input

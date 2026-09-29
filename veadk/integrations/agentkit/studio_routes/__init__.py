@@ -14,18 +14,33 @@
 
 """Runtime host for Studio BFF-owned dynamic HTTP routes."""
 
-from veadk.integrations.agentkit.studio_routes.host import (
-    StudioDynamicRouteMiddleware,
-    StudioRouteHost,
-    mount_studio_route_host,
-)
-from veadk.integrations.agentkit.studio_routes.protocol import (
-    ROUTE_PROTOCOL_VERSION,
-    RouteCatalogSnapshot,
-    StudioRouteManifest,
-    match_route_path,
-    route_catalog_revision,
-)
+from __future__ import annotations
+
+import importlib
+from typing import Any
+
+
+_EXPORT_MODULES = {
+    "StudioDynamicRouteMiddleware": "host",
+    "StudioRouteHost": "host",
+    "mount_studio_route_host": "host",
+    "ROUTE_PROTOCOL_VERSION": "protocol",
+    "RouteCatalogSnapshot": "protocol",
+    "StudioRouteManifest": "protocol",
+    "match_route_path": "protocol",
+    "route_catalog_revision": "protocol",
+}
+
+
+def __getattr__(name: str) -> Any:
+    module_name = _EXPORT_MODULES.get(name)
+    if module_name is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    module = importlib.import_module(f"{__name__}.{module_name}")
+    value = getattr(module, name)
+    globals()[name] = value
+    return value
+
 
 __all__ = [
     "ROUTE_PROTOCOL_VERSION",

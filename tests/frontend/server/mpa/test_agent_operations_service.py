@@ -1,6 +1,20 @@
+# Copyright (c) 2025 Beijing Volcano Engine Technology Co., Ltd. and/or its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any
 
 import pytest
@@ -146,7 +160,7 @@ def test_create_operation_applies_profile_runs_smoke_and_marks_runnable():
         service = MpaAgentOperationService(
             repository=repository,
             runtime_client=runtime,
-            now=lambda: datetime(2026, 9, 15, tzinfo=UTC),
+            now=lambda: datetime(2026, 9, 15, tzinfo=timezone.utc),
         )
 
         result = await service.start(_request(), idempotency_key="idem-1")
@@ -177,7 +191,7 @@ def test_update_operation_applies_profile_without_smoke_and_marks_succeeded():
         service = MpaAgentOperationService(
             repository=repository,
             runtime_client=runtime,
-            now=lambda: datetime(2026, 9, 15, tzinfo=UTC),
+            now=lambda: datetime(2026, 9, 15, tzinfo=timezone.utc),
         )
 
         result = await service.start(
@@ -208,7 +222,7 @@ def test_same_operation_request_replays_without_duplicate_runtime_effects():
         service = MpaAgentOperationService(
             repository=repository,
             runtime_client=runtime,
-            now=lambda: datetime(2026, 9, 15, tzinfo=UTC),
+            now=lambda: datetime(2026, 9, 15, tzinfo=timezone.utc),
         )
         request = _request()
 
@@ -233,7 +247,7 @@ def test_failed_operation_replay_does_not_retry_without_explicit_retry():
         service = MpaAgentOperationService(
             repository=repository,
             runtime_client=runtime,
-            now=lambda: datetime(2026, 9, 15, tzinfo=UTC),
+            now=lambda: datetime(2026, 9, 15, tzinfo=timezone.utc),
         )
         request = _request()
 
@@ -256,7 +270,7 @@ def test_same_key_different_request_hash_conflicts():
         service = MpaAgentOperationService(
             repository=MemoryOperationRepository(),
             runtime_client=FakeRuntimeClient(),
-            now=lambda: datetime(2026, 9, 15, tzinfo=UTC),
+            now=lambda: datetime(2026, 9, 15, tzinfo=timezone.utc),
         )
 
         await service.start(_request(), idempotency_key="idem-1")
@@ -280,7 +294,7 @@ def test_failed_retryable_operation_can_retry_from_safe_stage():
         service = MpaAgentOperationService(
             repository=repository,
             runtime_client=runtime,
-            now=lambda: datetime(2026, 9, 15, tzinfo=UTC),
+            now=lambda: datetime(2026, 9, 15, tzinfo=timezone.utc),
         )
         request = _request()
         failed = await service.start(request, idempotency_key="idem-1")

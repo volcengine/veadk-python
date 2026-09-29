@@ -43,17 +43,21 @@
   border-radius: var(--studio-radius-xl);
   background: var(--studio-bg-secondary);
 }
-.studio-conversation-message[data-role="user"] .studio-conversation-message__body > .studio-conversation-blocks { gap: 12px; }
-.studio-conversation-message[data-role="user"] .studio-conversation-message__body > .studio-conversation-blocks > .studio-conversation-rich-markdown { margin: 0; }
-.studio-conversation-message__steps { display: grid; gap: 4px; margin-bottom: 20px; }
+.studio-conversation-message[data-role="user"] .studio-conversation-message__body > .studio-conversation-blocks { --studio-conversation-block-gap: 12px; }
+.studio-conversation-message[data-role="user"] .studio-conversation-message__body > .studio-conversation-blocks > .studio-conversation-rich-markdown:first-child { margin: 0; }
+.studio-conversation-message__steps { display: grid; margin-bottom: 20px; }
 .studio-conversation-message__blocks { display: grid; gap: 16px; }
-.studio-conversation-blocks { display: grid; gap: 16px; min-width: 0; }
-.studio-conversation-blocks > .studio-conversation-step + .studio-conversation-step { margin-top: -12px; }
+.studio-conversation-blocks { --studio-conversation-block-gap: 16px; display: grid; min-width: 0; }
+.studio-conversation-blocks > * + * { margin-top: var(--studio-conversation-block-gap); }
+.studio-conversation-blocks > .studio-conversation-step { --studio-conversation-entry-gap: var(--studio-conversation-block-gap); }
+.studio-conversation-blocks > .studio-conversation-step + .studio-conversation-step,
+.studio-conversation-message__steps > .studio-conversation-step + .studio-conversation-step,
+.studio-conversation-handoff__steps > .studio-conversation-step + .studio-conversation-step { --studio-conversation-entry-gap: 4px; margin-top: 4px; }
 .studio-conversation-block__title { margin: 0 0 8px; color: var(--studio-text-secondary); font: inherit; font-size: 13px; }
 .studio-conversation-step__target { color: var(--studio-text-primary); min-width: 0; }
 .studio-conversation-handoff__route { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--studio-text-secondary); font-size: 12px; }
 .studio-conversation-handoff__route svg { width: 14px; height: 14px; }
-.studio-conversation-handoff__steps { display: grid; gap: 4px; border-left: 1px solid var(--studio-border-subtle); padding-left: 16px; }
+.studio-conversation-handoff__steps { display: grid; border-left: 1px solid var(--studio-border-subtle); padding-left: 16px; }
 .studio-conversation-handoff__content { color: var(--studio-text-secondary); font-size: 13px; }
 .studio-conversation-plan__items { display: grid; gap: 6px; list-style: none; margin: 0; padding: 0; }
 .studio-conversation-plan__item { display: flex; align-items: baseline; gap: 8px; color: var(--studio-text-secondary); font-size: 13px; }
@@ -99,7 +103,24 @@
 .studio-conversation-invocation { display: flex; flex-wrap: wrap; gap: 8px; font-size: 13px; color: var(--studio-text-secondary); }
 .studio-conversation-invocation > span { border: 1px solid var(--studio-border-subtle); border-radius: 6px; padding: 2px 8px; }
 .studio-conversation-message[data-role="system"] { display: block; color: var(--studio-text-tertiary); font-size: 12px; }
-.studio-conversation-step { min-width: 0; }
+.studio-conversation-step { --studio-conversation-entry-gap: 0px; display: grid; grid-template-rows: 1fr; align-self: start; min-width: 0; }
+.studio-conversation-step:first-child { --studio-conversation-entry-gap: 0px; }
+.studio-conversation-step__entry-content { min-width: 0; min-height: 0; }
+.studio-conversation-step[data-entering] {
+  animation: studio-conversation-step-space-in 180ms cubic-bezier(.22, 1, .36, 1) both;
+}
+.studio-conversation-step[data-entering] > .studio-conversation-step__entry-content {
+  overflow: hidden;
+  animation: studio-conversation-step-content-in 180ms ease-out 180ms both;
+}
+@keyframes studio-conversation-step-space-in {
+  from { grid-template-rows: 0fr; margin-top: 0; }
+  to { grid-template-rows: 1fr; margin-top: var(--studio-conversation-entry-gap); }
+}
+@keyframes studio-conversation-step-content-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
 .studio-conversation-step__dropdown,
 .studio-conversation-step__io-dropdown { width: 100%; min-width: 0; }
 .studio-conversation-step__dropdown > .studio-dropdown__trigger,
@@ -125,8 +146,8 @@
 .studio-conversation-step__status,
 .studio-conversation-step__duration { flex: none; color: var(--studio-text-tertiary); font-size: 12px; white-space: nowrap; }
 .studio-conversation-step__duration { font-variant-numeric: tabular-nums; }
-.studio-conversation-step[data-status="error"] > .studio-dropdown > .studio-dropdown__trigger .studio-conversation-step__icon,
-.studio-conversation-step[data-status="error"] > .studio-dropdown > .studio-dropdown__trigger .studio-conversation-step__status { color: var(--studio-danger); }
+.studio-conversation-step[data-status="error"] > .studio-conversation-step__entry-content > .studio-dropdown > .studio-dropdown__trigger .studio-conversation-step__icon,
+.studio-conversation-step[data-status="error"] > .studio-conversation-step__entry-content > .studio-dropdown > .studio-dropdown__trigger .studio-conversation-step__status { color: var(--studio-danger); }
 .studio-conversation-step__details { display: grid; gap: 12px; padding-bottom: 12px; min-width: 0; }
 .studio-conversation-step__reasoning { color: var(--studio-text-secondary); white-space: pre-wrap; }
 .studio-conversation-step__reasoning > :first-child { margin-top: 0; }
@@ -153,6 +174,11 @@
 .studio-conversation-message__action-status { min-width: 0; color: var(--studio-text-secondary); font-size: 12px; line-height: 20px; }
 .studio-conversation-message__action-status[data-error="true"] { color: var(--studio-danger); }
 .studio-conversation-flow__sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+@media (prefers-reduced-motion: reduce) {
+  .studio-conversation-step[data-entering],
+  .studio-conversation-step[data-entering] > .studio-conversation-step__entry-content { animation: none; }
+  .studio-conversation-step[data-entering] > .studio-conversation-step__entry-content { overflow: visible; }
+}
 @container studio-conversation (max-width: 480px) {
   .studio-conversation-message[data-role="user"] { max-width: 92%; }
   .studio-conversation-message__footer { gap: 8px; }
