@@ -452,7 +452,7 @@ class CreationTasks:
         tasks = list(self.running.values())
         await asyncio.sleep(0)
         for task in tasks:
-            if not task.cancelling():
+            if not task.done():
                 task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
 
