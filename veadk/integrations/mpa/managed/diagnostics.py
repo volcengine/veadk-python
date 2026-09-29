@@ -106,6 +106,18 @@ _sink: ContextVar[Callable[[Diagnostic], None] | None] = ContextVar(
 )
 T = TypeVar("T")
 _SAFE_PROVIDER_CODE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
+_MESSAGE_HINTS = (
+    ("AccessDenied", ("accessdenied", "access denied", "not authorized")),
+    ("PassRole", ("passrole", "pass role", "pass the role")),
+    ("Permission", ("permission", "forbidden", "unauthorized")),
+    ("Credential", ("credential", "access key", "secret key", "token")),
+    ("Image", ("image", "registry", "repository")),
+    ("Tos", ("tos", "bucket", "mount")),
+    ("Role", ("role",)),
+    ("Invalid", ("invalid", "malformed", "missing parameter")),
+    ("Quota", ("quota", "limit exceeded")),
+    ("Internal", ("internal error", "unknown error")),
+)
 
 
 def provider_error_code(error: BaseException) -> str | None:
@@ -117,6 +129,15 @@ def provider_error_code(error: BaseException) -> str | None:
         if isinstance(current, ApiError) and current.error_code:
             code = str(current.error_code)
             return code if _SAFE_PROVIDER_CODE.fullmatch(code) else None
+        if isinstance(current, ApiError):
+            message = str(current).lower()
+            hints = [
+                name
+                for name, tokens in _MESSAGE_HINTS
+                if any(token in message for token in tokens)
+            ]
+            if hints:
+                return "MessageHint." + ".".join(hints)
         current = current.__cause__
     return None
 

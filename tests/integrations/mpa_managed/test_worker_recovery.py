@@ -272,6 +272,12 @@ def test_retry_reports_only_allowlisted_provider_code():
     wrapped.__cause__ = ApiError("private", error_code="Nested.ProviderCode")
     assert diagnostics.provider_error_code(wrapped) == "Nested.ProviderCode"
     assert diagnostics.provider_error_code(RuntimeError("private")) is None
+    assert (
+        diagnostics.provider_error_code(
+            ApiError("Failed to CreateTool: not authorized to pass the role")
+        )
+        == "MessageHint.AccessDenied.PassRole.Role"
+    )
 
     async def run():
         events = []
