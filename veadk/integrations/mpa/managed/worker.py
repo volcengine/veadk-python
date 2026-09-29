@@ -158,7 +158,7 @@ async def _ensure_worker(entry, cloud, options, *, account, region, agent_id, pr
             }
         env["MPA_AGENT_ID"] = agent_id
         request = {
-            "Name": "mpa_worker_" + suffix,
+            "Name": agent_id.strip().replace("-", "_"),
             "ToolType": "Private",
             "ImageUrl": options.image,
             "Command": "/opt/gem/run.sh",
@@ -183,9 +183,16 @@ async def _ensure_worker(entry, cloud, options, *, account, region, agent_id, pr
             json.dumps(request, sort_keys=True).encode()
         ).hexdigest()
         if record.get("worker_hash") and record["worker_hash"] != digest:
-            raise DeploymentError(
-                "Unfinished worker configuration changed; resume original inputs"
-            )
+            # Preserve the exact pre-upgrade payload for an unfinished intent.
+            legacy_request = {**request, "Name": "mpa_worker_" + suffix}
+            legacy_digest = hashlib.sha256(
+                json.dumps(legacy_request, sort_keys=True).encode()
+            ).hexdigest()
+            if record["worker_hash"] != legacy_digest:
+                raise DeploymentError(
+                    "Unfinished worker configuration changed; resume original inputs"
+                )
+            request, digest = legacy_request, legacy_digest
         matches = await retry_worker("find_worker", lambda: cloud.find(request["Name"]))
         if matches:
             if len(matches) != 1 or not record.get("worker_token"):

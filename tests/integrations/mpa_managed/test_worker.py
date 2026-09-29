@@ -13,18 +13,129 @@
 # limitations under the License.
 
 import asyncio
+import hashlib
+import json
 from unittest.mock import AsyncMock
 
 import pytest
 
+from tests.integrations.mpa_managed.test_agent_deployment import Registry
+from veadk.integrations.mpa.managed.config import Worker
+from veadk.integrations.mpa.managed.database import DeploymentError, agent_suffix
 from veadk.integrations.mpa.managed.worker import (
     WorkerCloud,
     _missing_worker_metadata,
     ensure_worker,
 )
-from veadk.integrations.mpa.managed.config import Worker
-from veadk.integrations.mpa.managed.database import DeploymentError, agent_suffix
-from tests.integrations.mpa_managed.test_agent_deployment import Registry
+
+
+@pytest.mark.parametrize("agent_id", ["mi-example-id", " mi-example-id "])
+def test_new_worker_uses_agent_derived_name(agent_id):
+    async def run():
+        cloud = AsyncMock()
+        cloud.find.return_value = []
+        cloud.create.side_effect = DeploymentError("stop after request capture")
+        with pytest.raises(DeploymentError, match="request capture"):
+            await ensure_worker(
+                Registry(),
+                cloud,
+                Worker(image="worker:v1"),
+                account="a",
+                region="r",
+                agent_id=agent_id,
+            )
+        request = cloud.create.call_args.args[0]
+        assert request["Name"] == "mi_example_id"
+        cloud.find.assert_awaited_once_with("mi_example_id")
+        assert {item["Key"]: item["Value"] for item in request["Tags"]}[
+            "mpa_agent_key"
+        ] == agent_suffix("a", "r", agent_id)
+        assert {item["Key"]: item["Value"] for item in request["Envs"]}[
+            "MPA_AGENT_ID"
+        ] == agent_id
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("discovered", [False, True])
+@pytest.mark.parametrize("changed_image", [False, True])
+def test_unfinished_legacy_worker_retains_request_and_token(discovered, changed_image):
+    async def run():
+        from tests.integrations.mpa_managed.test_worker_recovery import ready
+
+        registry = Registry()
+        cloud = AsyncMock()
+        cloud.find.return_value = []
+        cloud.create.side_effect = DeploymentError("response lost")
+        options = Worker(image="worker:v1")
+        with pytest.raises(DeploymentError, match="response lost"):
+            await ensure_worker(
+                registry, cloud, options, account="a", region="r", agent_id="agent"
+            )
+        # Model a durable pre-upgrade intent whose provider response was lost.
+        previous_request = dict(cloud.create.call_args.args[0])
+        token = previous_request.pop("ClientToken")
+        previous_request["Name"] = "mpa_worker_" + agent_suffix("a", "r", "agent")
+        registry.row["worker_hash"] = hashlib.sha256(
+            json.dumps(previous_request, sort_keys=True).encode()
+        ).hexdigest()
+        previous_hash = registry.row["worker_hash"]
+        cloud.reset_mock()
+        cloud.find.return_value = [ready()] if discovered else []
+        cloud.create.side_effect = None
+        cloud.create.return_value = "t-test"
+        cloud.get.return_value = ready()
+        if changed_image:
+            options = Worker(image="worker:v2")
+            with pytest.raises(DeploymentError, match="configuration changed"):
+                await ensure_worker(
+                    registry, cloud, options, account="a", region="r", agent_id="agent"
+                )
+            cloud.find.assert_not_awaited()
+            cloud.create.assert_not_awaited()
+        else:
+            assert (
+                await ensure_worker(
+                    registry, cloud, options, account="a", region="r", agent_id="agent"
+                )
+                == "t-test"
+            )
+            cloud.find.assert_awaited_once_with(previous_request["Name"])
+            if discovered:
+                cloud.create.assert_not_awaited()
+            else:
+                cloud.create.assert_awaited_once_with(
+                    {**previous_request, "ClientToken": token}
+                )
+        assert registry.row["worker_token"] == token
+        assert registry.row["worker_hash"] == previous_hash
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("registered", [False, True])
+def test_existing_worker_id_is_reused_without_name_discovery(registered):
+    async def run():
+        from tests.integrations.mpa_managed.test_worker_recovery import ready
+
+        registry = Registry()
+        if registered:
+            registry.row.update(worker_id="t-test", worker_managed=True)
+        cloud = AsyncMock()
+        cloud.get.return_value = {**ready(), "Name": "mpa_worker_previous"}
+        options = (
+            Worker(image="worker:v1") if registered else Worker(existing_id="t-test")
+        )
+        assert (
+            await ensure_worker(
+                registry, cloud, options, account="a", region="r", agent_id="agent"
+            )
+            == "t-test"
+        )
+        cloud.find.assert_not_awaited()
+        cloud.create.assert_not_awaited()
+
+    asyncio.run(run())
 
 
 def test_lost_worker_response_reuses_token_and_scoped_identity(monkeypatch):

@@ -37,8 +37,9 @@ def test_studio_profile_uses_builtin_beijing_defaults_without_yaml(monkeypatch):
     assert postgres is not None
     assert postgres.mode == "auto"
     assert postgres.bootstrap_path == "/tmp/veadk-studio/mpa-pg-bootstrap.sqlite3"
-    assert profile.managed.network.vpc_id == "vpc-iior17eqo0lc74o8cuqfopoj"
-    assert profile.managed.apig.adopt_id == "gd72bh4cnjkrkkoplj2ig"
+    assert profile.managed.network.vpc_id == ""
+    assert profile.managed.network.subnet_ids == []
+    assert profile.managed.apig.adopt_id == ""
     assert profile.managed.worker.reference_id == "t-yeuujqfldstkidoad4p0"
     assert profile.summary()["configured"] is True
     assert "test-model-key" not in str(profile.summary())

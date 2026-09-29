@@ -33,7 +33,6 @@ def studio_profile_values() -> dict:
         "model-api-key": "${VEADK_MPA_CONFIG_MODEL_AGENT_API_KEY}",
         "managed": {
             "version": 1,
-            "apig": {"adopt-id": "gd72bh4cnjkrkkoplj2ig"},
             "postgres": {
                 "mode": "auto",
                 "legacy-urls": "ignore",
@@ -93,9 +92,5 @@ def studio_profile_values() -> dict:
                 "role-name": role,
             },
             "timeout-seconds": 1800,
-            "network": {
-                "vpc-id": "vpc-iior17eqo0lc74o8cuqfopoj",
-                "subnet-ids": ["subnet-iior802kmtj474o8cu9arqzl"],
-            },
         },
     }

@@ -39,6 +39,22 @@ To preserve and migrate old relationships instead, keep the default `legacy-urls
 No live migration or cloud allocation is performed by the repository tests. See the [automatic PG design](../../../../prd-spec/features/mpa-space-scoped-resources/2026-09-23-auto-pg-workspaces.md) for limitations and verification.
 
 
+## Shared network and gateway preparation
+
+Studio does not pin existing VPC/subnet/APIG IDs. After preparing PostgreSQL,
+it reads `mpa_account_network` and `mpa_account_apig` in
+`mpa_admin_workspace/mpa_admin_db`, scoped by verified account and region.
+Registered resources are validated and reused; missing VPC/subnet and APIG/IM
+Gateway resources are created and saved before Runtime deployment. Later agents
+reuse the same records. Account locks and saved creation intents protect
+concurrent requests and retries from duplicate creation.
+
+Existing records are retained, including previously adopted resources. This
+change does not move existing agents or replace an exhausted VPC. A quota or
+permission error remains a failure; increasing quota or migrating the shared
+network is a separate operation. Restart local Studio (or redeploy cloud Studio)
+to load the updated defaults. Explicit CLI network/APIG adoption remains supported.
+
 ## CLI YAML and manual / legacy server setup
 
 1. Copy the [example YAML](../../../../prd-spec/features/mpa-agent-oneclick-provision/mpa-create.config.example.yaml) to a private `mpa-create.config.yaml`. Keep filled-in configuration outside Git.
@@ -100,7 +116,7 @@ VPC/APIG still share by account and region. Deployment JSON records retain both 
 
 ## Use in Studio
 
-After a new `veadk studio deploy`, managed creation automatically reuses that Studio's UserPool, client, Identity region, and `/oauth/callback` from server-side VeFaaS environment. Studio uses built-in Beijing account, VPC/subnet, APIG, Runtime/worker image and model defaults without any creation YAML. Its model API key stays in `VEADK_MPA_CONFIG_MODEL_AGENT_API_KEY`. For standalone CLI YAML profiles, explicitly different `user-pool-name`, `user-pool-client-name`, `identity-callback-url`, `identity-region`, or corresponding `managed.runtime.env` values fail configuration inspection before cloud writes. A Studio deployed before this capability must be redeployed to receive the values. Standalone `veadk mpa provision` without these Studio environment values continues to use explicit YAML. The shared PostgreSQL Workspace is created later during MPA creation and is not the deployment-time Identity store.
+After a new `veadk studio deploy`, managed creation automatically reuses that Studio's UserPool, client, Identity region, and `/oauth/callback` from server-side VeFaaS environment. Studio uses built-in Beijing account, Runtime/worker image and model defaults without any creation YAML. Its model API key stays in `VEADK_MPA_CONFIG_MODEL_AGENT_API_KEY`. For standalone CLI YAML profiles, explicitly different `user-pool-name`, `user-pool-client-name`, `identity-callback-url`, `identity-region`, or corresponding `managed.runtime.env` values fail configuration inspection before cloud writes. A Studio deployed before this capability must be redeployed to receive the values. Standalone `veadk mpa provision` without these Studio environment values continues to use explicit YAML. The shared PostgreSQL Workspace is created later during MPA creation and is not the deployment-time Identity store.
 
 Choose **Agents → MPA agents → Create MPA agent**. The three steps collect basic information, automatic PostgreSQL preparation, and optional OpenViking service URL/resource ID/API Key. The generated agent ID is read-only. The PG step links to the [Volcengine AIDAP console](https://console.volcengine.com/aidap/region:aidap+cn-beijing/); the service obtains Workspace connections after submission. The OpenViking step links to the [context-management console](https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing/ov-6689fabdf032294/context-management?accountId=default&userId=default&projectName=default); this is a console page, not the service URL to enter. PG credentials stay server-configured. Enter the OpenViking URL, resource ID and masked API Key together to inject `OPENVIKING_URL`, `OPENVIKING_RESOURCE_ID`, `OPENVIKING_API_KEY` and `OPENVIKING_USER=default`. Leave all three blank to omit these variables, including inherited template/reference values. The key is not saved in browser drafts or task SQLite and must be re-entered after a browser restart. Review the resource plan and submit on step three. The workflow prepares account network/APIG/IM Gateway, a worker, an isolated business database and Skill Space, then deploys and checks Runtime and application readiness. Successful creation refreshes the directory.
 
@@ -210,3 +226,7 @@ Managed provisioning accepts PostgreSQL registry URLs with `sslmode` and convert
 ## Studio Runtime authentication defaults
 
 Flat creation defaults to `ENABLE_A2A=true` and `DISABLE_JWT_AUTH=true`. The inner legacy REST JWT gate is bypassed, including its admin checks and header-based identity paths; trusted Studio/gateway callers must control identity headers. Outer gateway key-auth and `A2A_TIP_VERIFY_ENABLED=false` are unchanged. Studio prefers a usable Agent Card for control-plane-classified MPA, selecting `a2a-default` even if `/list-apps` also advertises ADK; general Runtimes and MPA without a usable card retain existing discovery. This skips native session Profile preflight, not independent management authentication, and does not migrate old sessions. Explicit `managed.runtime.env` overrides remain supported, including `DISABLE_JWT_AUTH=false`, and referenced Runtime/template environments are preserved. Existing Runtimes need an explicit configuration update and release for environment changes; reconnect in Studio to refresh discovery. `MPA_AGENTKIT_MODE` is not enabled. Restart Studio for the backend discovery change; no frontend rebuild is needed.
+
+### Managed sandbox template naming
+
+New managed sandbox templates use the trimmed agent ID with every `-` replaced by `_` (for example, `mi-example` → `mi_example`). Existing worker IDs remain authoritative and are never renamed. A pre-change unfinished creation intent retains its hashed name only when the complete legacy request matches the persisted worker_hash; its ClientToken is preserved. Other payload changes and unrelated same-name resources remain errors. Scoped ownership tags and Runtime ToolId bindings are unchanged.

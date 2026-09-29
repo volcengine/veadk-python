@@ -58,3 +58,6 @@ CON-8/CON-11 修正（已实现）：保留 sandbox 完成后的不同外层文�
 - `CON-12`：仅 MPA A2A 对同源默认 `/a2a/jsonrpc` 卡片地址补齐可信控制面 endpoint 的 `/runtime/[a-z0-9-]+` 前缀。已经有前缀、其他路径、跨源、查询/片段/用户信息不改写。发送和历史恢复一致使用该地址；通用智能体保持不变。参见 [A2A 发现修复](../../prd-spec/bugfixes/2026-09-23-mpa-a2a-discovery-default.zh.md)。
 
 - `CON-13`（已实现）：已授权 GET Runtime 代理 `list-apps` 对控制面识别的 MPA 优先探测可用 Agent Card，在 ADK 探测前返回 `["a2a-default"]`。普通 Runtime 和无可用卡片的 MPA 保留原发现/错误行为。其他请求、授权、凭据/header 构造和已有会话不变；重新连接刷新缓存应用，不迁移会话。参见 [MPA A2A 优先](../../prd-spec/bugfixes/studio-mpa-a2a-preference/2026-09-30-prefer-a2a.zh.md) 及 `tests/cli/test_frontend_runtime_proxy.py`。
+
+### CON-8 带类型的事件标识（已实施修正，2026-09-29）
+在 `mpa.sandbox-event.v1` 中，来源 ID 标识上游记录，不唯一标识标准化事件类型。每个 `(task_id, invocation_id, event_type, source_event_id)` 投影一次；缺失来源 ID 时不做标识去重。MPA artifact 帧交给逐部分投影，包括新旧部分混合的快照。相同 ID 的用量及完成事件无论何种顺序都须保留。通用 A2A 帧去重不变。agentkit-mpa-agent 转发器在调用闭包内按类型/来源标识去重，保留传输 ID 及原回调。参见[设计与验证](../../prd-spec/bugfixes/mpa-sandbox-event-identity/2026-09-29-typed-event-dedup.zh.md)。

@@ -1623,6 +1623,16 @@ The production entry loads both component token stylesheets before rendering. Wh
 
 ### MPA creation image inputs / MPA 创建镜像输入
 
+Studio resolves shared VPC/subnet and APIG/IM Gateway from the account/region
+records in `mpa_admin_workspace/mpa_admin_db`. It creates and persists missing
+resources, then reuses them for later agents. The built-in profile does not pin
+existing resource IDs. Existing records are preserved; this does not migrate
+agents or bypass resource quotas.
+
+Studio 从 `mpa_admin_workspace/mpa_admin_db` 的账号/地域记录解析共享 VPC/子网及
+APIG/IM Gateway；缺失时创建并保存，后续智能体复用。内置配置不固定已有资源 ID。
+已有记录保持不变；本次不迁移智能体或绕过资源配额。
+
 With `managed.postgres` configured, the PG step uses a shared business Workspace with a separate database per MPA. Shared account/region resource records live in `mpa_admin_workspace/mpa_admin_db`. With `managed.postgres.mode: auto`, deployment STS creates/reuses both Workspaces and the PG step needs no connection input. Manual profiles remain supported. See the [setup and registry migration instructions](../veadk/integrations/mpa/managed/README.md).
 
 配置 `managed.postgres` 后，PG 步骤使用共享业务 Workspace，每个 MPA 保留独立业务库。账号/地域共享资源记录存入 `mpa_admin_workspace/mpa_admin_db`。设置 `managed.postgres.mode: auto` 后，由部署 STS 创建/复用两个 Workspace，PG 步骤无需填写连接信息；仍兼容手动配置。参见[配置和注册库迁移说明](../veadk/integrations/mpa/managed/README.zh.md)。
@@ -1648,6 +1658,8 @@ MPA grouped replies hide exact answer mirrors only in their derived view: an ext
 MPA conversations (native or A2A) hide the separate “会话产物” entry because it does not read the Worker `/data/output` mount. General Runtime sessions retain the entry. Existing MPA Markdown file-download links are unchanged.
 
 Fresh flat MPA creation defaults to `ENABLE_A2A=true` and `DISABLE_JWT_AUTH=true`; explicit `false` overrides and referenced Runtime/template environments are preserved. The inner legacy REST JWT gate is bypassed, including its admin checks and header-based identity paths; trusted callers must control identity headers. Outer gateway key-auth is unchanged. Studio now prefers a valid Agent Card for tagged MPA Runtimes, selecting `a2a-default` even when the Runtime also advertises ADK. General Runtimes and MPA without a usable card keep existing discovery behavior. This avoids native Profile/session preflight on the A2A path; it does not enable `MPA_AGENTKIT_MODE`, change independent management-endpoint authentication or migrate old sessions. If a tagged MPA Runtime's agent card omits the shared gateway `/runtime/<ID>` prefix from its same-origin `/a2a/jsonrpc` URL, the Studio backend still restores the prefix from the control-plane endpoint for chat and history requests. General-agent URLs are unchanged. Existing Runtimes need an explicit configuration release for environment changes; reconnect to refresh discovery. Restart Studio after this backend update; no frontend rebuild is required.
+
+新建 MPA 沙箱模板按智能体 ID 命名，并将 `-` 替换为 `_`（例如 `mi-example` → `mi_example`）；已有模板保持原绑定，未完成的旧创建任务继续按原名称重试。
 
 ### 智能构建首页与任务找回
 
