@@ -201,6 +201,7 @@ def template_from_runtime(runtime, agent_id):
     fields = (
         "ArtifactType",
         "ArtifactUrl",
+        "Command",
         "RoleName",
         "CpuMilli",
         "MemoryMb",

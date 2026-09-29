@@ -8,6 +8,7 @@
 - **Related PRD:** [MPA Studio Workload Identity Provisioning](../../prd-spec/features/mpa-studio-workload-identity/2026-09-20-mpa-studio-workload-identity.md)
 - **Related PRD:** [MPA per-session TOS output mount](../../prd-spec/features/mpa-agent-oneclick-provision/2026-09-23-mpa-tos-output-mount.md)
 - **Related PRD:** [Initial Runtime Tool attachment](../../prd-spec/bugfixes/mpa-runtime-initial-tool/2026-09-29-runtime-initial-tool-attachment.md)
+- **Related PRD:** [Reference Runtime command preservation](../../prd-spec/bugfixes/mpa-runtime-reference-command/2026-09-29-preserve-runtime-command.md)
 - **Owned code:** `veadk/cli/cli_mpa.py`, `veadk/integrations/mpa/mpa_provision.py`, `veadk/integrations/mpa/mpa_runtime.py`, `veadk/integrations/mpa/mpa_tool.py`, `veadk/integrations/mpa/managed/worker.py`
 
 ## Responsibility
@@ -36,6 +37,12 @@ This component converts `veadk mpa create` inputs into one recoverable AgentKit 
 ## State, security, and compatibility
 
 The lifecycle is `prepared -> resource-created -> ready -> environment-finalized -> metadata-finalized -> verified`. Reuse-by-name converges the existing Runtime through `UpdateRuntime(ReleaseEnable=True)` and waits for a newer ready version. Secrets remain process/control-plane data and must be redacted from CLI output, documents, logs, and test fixtures. Native mpa-agent deployments retain their own defaults because the opt-out switches are injected by this component rather than changing native defaults.
+
+When `managed.from-runtime` selects a reference Runtime, provisioning preserves
+its explicit container `Command` together with the existing infrastructure
+allowlist. It does not invent a command when the reference omits one; agent
+identity, credentials, endpoints, Tool binding, and finalization values remain
+new-deployment-owned.
 
 ## Failure and observability
 

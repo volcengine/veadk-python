@@ -8,6 +8,7 @@
 - **关联 PRD：** [MPA Studio 工作负载身份创建](../../prd-spec/features/mpa-studio-workload-identity/2026-09-20-mpa-studio-workload-identity.zh.md)
 - **关联 PRD：** [MPA 会话级 TOS 输出挂载](../../prd-spec/features/mpa-agent-oneclick-provision/2026-09-23-mpa-tos-output-mount.zh.md)
 - **关联 PRD：** [Runtime 首次挂载 Tool](../../prd-spec/bugfixes/mpa-runtime-initial-tool/2026-09-29-runtime-initial-tool-attachment.zh.md)
+- **关联 PRD：** [保留参考 Runtime 启动命令](../../prd-spec/bugfixes/mpa-runtime-reference-command/2026-09-29-preserve-runtime-command.zh.md)
 - **负责代码：** `veadk/cli/cli_mpa.py`、`veadk/integrations/mpa/mpa_provision.py`、`veadk/integrations/mpa/mpa_runtime.py`、`veadk/integrations/mpa/mpa_tool.py`、`veadk/integrations/mpa/managed/worker.py`
 
 ## 职责
@@ -36,6 +37,10 @@
 ## 状态、安全与兼容
 
 生命周期为 `prepared -> resource-created -> ready -> environment-finalized -> metadata-finalized -> verified`。按名称复用时通过 `UpdateRuntime(ReleaseEnable=True)` 收敛现有 Runtime，并等待更新版本 Ready。Secret 只属于进程/控制面数据，必须从 CLI 输出、文档、日志及测试夹具中脱敏。退出开关由本组件注入，不改变原生默认值，因此原生 mpa-agent 部署保持兼容。
+
+当 `managed.from-runtime` 选择参考 Runtime 时，部署会在现有基础设施白名单中保留其
+显式容器 `Command`。参考 Runtime 未提供命令时不会推断默认值；agent 身份、凭据、
+endpoint、Tool 绑定和最终化值仍由新部署持有。
 
 ## 失败与可观测性
 

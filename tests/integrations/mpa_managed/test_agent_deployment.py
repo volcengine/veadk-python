@@ -308,6 +308,7 @@ def test_reference_template_does_not_copy_agent_or_bot_credentials():
     reference = {
         **template(),
         "RuntimeId": "r-reference",
+        "Command": "bash run.sh",
         "NetworkConfigurations": [
             {"NetworkType": "public", "Endpoint": "https://public"},
             {
@@ -328,6 +329,7 @@ def test_reference_template_does_not_copy_agent_or_bot_credentials():
         ]
     ]
     result = template_from_runtime(reference, "another-agent")
+    assert result["Command"] == "bash run.sh"
     assert env_map(result)["MPA_AGENT_ID"] == "another-agent"
     assert "reference-secret" not in str(result)
     assert result["NetworkConfiguration"]["EnablePrivateNetwork"]
@@ -516,6 +518,7 @@ def test_reference_without_private_network_uses_account_bootstrap():
         "new-agent",
     )
     assert "NetworkConfiguration" not in result
+    assert "Command" not in result
 
 
 def test_concurrent_agents_share_one_network_and_have_distinct_runtimes():
