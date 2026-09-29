@@ -91,6 +91,14 @@ from veadk.cli.studio_vpc_network import (
     studio_function_id,
 )
 from veadk.integrations.mpa.mpa_provision import generate_mpa_agent_id
+from veadk.integrations.mpa.tags import (
+    MPA_AGENT_TYPE_TAG,
+    MPA_AGENT_TYPE_VALUE,
+    MPA_INSTANCE_ID_TAG,
+    MPA_MANAGED_TAG,
+    MPA_MANAGED_VALUE,
+    studio_mpa_runtime_tags,
+)
 from veadk.utils.cloud_provider import (
     DEFAULT_BYTEPLUS_REGION,
     DEFAULT_BYTEPLUS_VIKING_MEMORY_HOST,
@@ -281,7 +289,7 @@ _RUNTIME_NAME_MIN_LENGTH = 4
 _RUNTIME_NAME_MAX_LENGTH = 64
 _RUNTIME_ENVIRONMENT_ID_TAG = "veadk:environment-id"
 _RUNTIME_ENVIRONMENT_VERSION_TAG = "veadk:environment-version"
-_MPA_INSTANCE_ID_TAG = "veadk:mpa-instance-id"
+_MPA_INSTANCE_ID_TAG = MPA_INSTANCE_ID_TAG
 _RUNTIME_ENVIRONMENT_ID_ENV = "VEADK_STUDIO_ENVIRONMENT_ID"
 _RUNTIME_ENVIRONMENT_VERSION_ENV = "VEADK_STUDIO_ENVIRONMENT_VERSION_ID"
 _DEFAULT_RUNTIME_ENVIRONMENT = "default"
@@ -3037,8 +3045,17 @@ def _run_frontend_server(
 
     from frontend.server.mpa_creation import mount_mpa_creation_routes
 
+    def _mpa_creation_owner(request: Request) -> str:
+        principal = _require_agent_management(request)
+        if principal is None:
+            raise HTTPException(
+                status_code=401,
+                detail="Studio identity is required for MPA creation",
+            )
+        return principal.owner_id
+
     mount_mpa_creation_routes(
-        app, owner=_feishu_setup_owner, supported=provider == "volcengine"
+        app, owner=_mpa_creation_owner, supported=provider == "volcengine"
     )
 
     mount_feishu_bot_setup_routes(
@@ -7062,6 +7079,12 @@ def _run_frontend_server(
 
         principal = _require_agent_management(request)
         data = await request.json()
+        agent_category = str(data.get("agentCategory") or "").strip().lower()
+        if agent_category == "mpa" and principal is None:
+            raise HTTPException(
+                status_code=401,
+                detail="Studio identity is required for MPA deployment",
+            )
         agent_name = (data.get("name") or "").strip()
         runtime_id = (data.get("runtimeId") or "").strip()
         mpa_compatibility_report: dict[str, Any] | None = None
@@ -7957,7 +7980,7 @@ def _run_frontend_server(
             }
         )
         mpa_instance_id_for_deploy = ""
-        if str(data.get("agentCategory") or "").strip().lower() == "mpa":
+        if agent_category == "mpa":
             mpa_instance_id_for_deploy = _resolve_mpa_instance_id(
                 existing_runtime=existing_runtime,
                 runtime_id=runtime_id,
@@ -7965,8 +7988,12 @@ def _run_frontend_server(
                 agent_name=agent_name,
                 tags=runtime_tag_values,
             )
-            runtime_tag_values["veadk:agent-type"] = "mpa"
-            runtime_tag_values[_MPA_INSTANCE_ID_TAG] = mpa_instance_id_for_deploy
+            runtime_tag_values.update(
+                studio_mpa_runtime_tags(
+                    owner=owner_id,
+                    mpa_instance_id=mpa_instance_id_for_deploy,
+                )
+            )
         runtime_tag_values.update(
             _runtime_environment_tags(
                 environment_id,
@@ -10097,6 +10124,15 @@ def _run_frontend_server(
 
         result: dict[str, dict[str, str]] = {}
         for item in getattr(response, "resource_tag_mapping_list", None) or []:
+            resource_trn = str(getattr(item, "resource_trn", "") or "")
+            trn_parts = resource_trn.split(":", 4)
+            if (
+                len(trn_parts) >= 3
+                and trn_parts[:2] == ["trn", "agentkit"]
+                and trn_parts[2]
+                and trn_parts[2] != region
+            ):
+                continue
             runtime_id = _runtime_id_from_resource_tag_mapping(item)
             if not runtime_id:
                 continue
@@ -10109,8 +10145,8 @@ def _run_frontend_server(
 
     def _runtime_agent_category(runtime: Any, tags: Mapping[str, str]) -> str:
         """Classify Runtime products from explicit, persisted Runtime tags."""
-        tagged = str(tags.get("veadk:agent-type") or "").strip().lower()
-        if tagged == "mpa":
+        tagged = str(tags.get(MPA_AGENT_TYPE_TAG) or "").strip().lower()
+        if tagged == MPA_AGENT_TYPE_VALUE:
             return "mpa"
         return "general"
 
@@ -11039,7 +11075,10 @@ def _run_frontend_server(
         list_lock = _runtime_list_locks.setdefault(cache_key, asyncio.Lock())
 
         # next_token format for cross-region mode: "all:<offset>".
-        mpa_tag_filter = ("veadk:agent-type", "mpa")
+        mpa_tag_filters = (
+            (MPA_AGENT_TYPE_TAG, MPA_AGENT_TYPE_VALUE),
+            (MPA_MANAGED_TAG, MPA_MANAGED_VALUE),
+        )
 
         async def _list_region(
             reg: str,
@@ -11203,7 +11242,7 @@ def _run_frontend_server(
             max_results: int = page_size,
             extra_tag_filters: Sequence[tuple[str, str]] = (),
         ) -> tuple[list[dict], str]:
-            tag_filters = [mpa_tag_filter, *extra_tag_filters]
+            tag_filters = [*mpa_tag_filters, *extra_tag_filters]
 
             async def _tagged_runtime_item(
                 runtime_id: str,
@@ -11212,16 +11251,17 @@ def _run_frontend_server(
                 try:
                     runtime = await asyncio.to_thread(_get_runtime, runtime_id, reg)
                 except Exception as error:
+                    if not is_agentkit_resource_not_found(error):
+                        raise
                     logger.warning(
-                        "tagged MPA runtime detail lookup failed runtime_id=%s "
-                        "region=%s error=%s",
+                        "stale tagged MPA runtime ignored runtime_id=%s region=%s",
                         runtime_id,
                         reg,
-                        _safe_exception_detail(error, secrets=(ak, sk, svc_token)),
                     )
                     return None
                 merged_tags = {**_runtime_tags(runtime), **tags}
-                merged_tags.setdefault(mpa_tag_filter[0], mpa_tag_filter[1])
+                for key, value in mpa_tag_filters:
+                    merged_tags.setdefault(key, value)
                 return _runtime_to_visible_item(runtime, merged_tags, reg)
 
             out: list[dict] = []

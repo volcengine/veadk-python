@@ -99,7 +99,8 @@ def mount_mpa_creation_routes(
 
     @app.post("/web/mpa-creation/tasks", status_code=202)
     async def create(request: Request):
-        identity = owner_key(owner(request))
+        studio_runtime_owner = owner(request)
+        identity = owner_key(studio_runtime_owner)
         content = bytearray()
         async for chunk in request.stream():
             content.extend(chunk)
@@ -135,6 +136,7 @@ def mount_mpa_creation_routes(
                 timeout=config.managed.timeout_seconds,
                 images=images,
                 secrets={"openvikingApiKey": openviking_api_key},
+                studio_runtime_owner=studio_runtime_owner,
             )
         except ConfigurationError as exc:
             raise HTTPException(400, str(exc)) from None

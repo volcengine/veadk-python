@@ -29,6 +29,7 @@
 - `CON-13`：已脱敏工具输入/结果可通过显式复制/下载完整获取；预览渲染有界、截断有提示，所有详情路径共享同一脱敏规则。
 - `CON-14`：Turn 模型选择支持搜索和键盘访问，并在非终态 Turn 拥有不可变模型快照期间保持禁用。
 - `CON-15`：Runtime 列表暴露 `agentCategory`，并接受 `agentCategory=general|mpa` 在可见分页前执行服务端分类过滤。MPA 的权威且唯一来源是 Runtime 标签 `veadk:agent-type=mpa`；镜像名和 artifact URL 不参与分类。`agentCategory=mpa` 必须先通过 Volcano Tag 服务正向标签过滤获得候选 Runtime ID，再按 Runtime ID 补齐详情，避免 MPA 结果稀疏时扫描无关 Runtime 页。
+- `CON-31`：Studio MPA 列表把 `CON-15` 发现范围收窄到同时带 `veadk:agent-type=mpa` 和 `veadk:managed=true` 的 Runtime；`scope=all` 管理员看到全部 Studio 管理的 MPA Runtime，`scope=mine` 还必须匹配可信 `veadk:owner`。创建时写入 `veadk:provisioner=studio-mpa` 用于未来来源审计，但为兼容已有通用 Studio MPA，当前不把它作为强制条件。Tag 服务失败保持 fail-closed，浏览器参数不能关闭强制 managed 过滤，授权继续独立。由于 Tag 服务可能返回全局映射，补齐详情前必须按 Runtime TRN 地域过滤。provider 明确确认 Runtime 不存在时可把它作为过期标签映射跳过；其他 Runtime 详情补齐失败必须保持错误态，不能渲染为空列表。已由 [Studio 创建的 MPA Runtime 过滤](../../prd-spec/features/studio-mpa-source-filter/2026-09-28-studio-mpa-source-filter.zh.md) 于 2026-09-29 实现并完成本地验证；真实浏览器发现仍是独立的本机验收步骤。
 
 ## 状态与数据
 

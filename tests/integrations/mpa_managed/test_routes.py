@@ -71,6 +71,7 @@ def test_studio_creation_ignores_missing_yaml_path(tmp_path, monkeypatch):
     start_call = service.start.await_args
     assert start_call is not None
     assert start_call.kwargs["config_path"] is None
+    assert start_call.kwargs["studio_runtime_owner"] == "local"
 
 
 def test_creation_routes_require_management_authorization(tmp_path):

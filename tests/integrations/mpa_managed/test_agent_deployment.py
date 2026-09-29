@@ -643,3 +643,38 @@ def test_legacy_lost_response_resumes_exact_payload_and_rejects_changed_inputs()
         assert not registry.row["pending"]
 
     asyncio.run(run())
+
+
+def test_legacy_pending_create_accepts_studio_provenance_upgrade():
+    async def run():
+        svc, registry, cloud, _ = deployer()
+        legacy = template()
+        cloud.lose_create_response = True
+        with pytest.raises(TimeoutError):
+            await svc.deploy(legacy)
+
+        original_create = copy.deepcopy(cloud.creates[0])
+        studio = template()
+        studio["Tags"] = [
+            {"Key": "veadk:agent-type", "Value": "mpa"},
+            {"Key": "veadk:managed", "Value": "true"},
+            {"Key": "veadk:provisioner", "Value": "studio-mpa"},
+            {"Key": "veadk:owner", "Value": "studio-user"},
+            {"Key": "veadk:mpa-instance-id", "Value": "agent-one"},
+        ]
+
+        result = await svc.deploy(studio, legacy_tag_items=legacy.get("Tags", []))
+
+        assert result["runtime_id"] == "r-agent"
+        assert cloud.creates == [original_create, original_create]
+        assert cloud.updates
+        assert {item["Key"]: item["Value"] for item in cloud.updates[-1]["Tags"]} == {
+            "veadk:agent-type": "mpa",
+            "veadk:managed": "true",
+            "veadk:provisioner": "studio-mpa",
+            "veadk:owner": "studio-user",
+            "veadk:mpa-instance-id": "agent-one",
+        }
+        assert not registry.row["pending"]
+
+    asyncio.run(run())

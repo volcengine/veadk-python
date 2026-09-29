@@ -30,6 +30,7 @@ def run():
                     profile,
                     agent_id=data["agentId"],
                     owner=data["owner"],
+                    studio_runtime_owner=data.get("studioRuntimeOwner"),
                     description=data["description"],
                     progress=lambda stage: emit(stage=stage),
                 ),

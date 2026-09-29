@@ -5846,6 +5846,52 @@ def test_mpa_update_rejects_incompatible_manifest_before_launch(
     assert launch_calls == []
 
 
+def test_mpa_deploy_without_trusted_owner_fails_before_cloud_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    launch_calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        "agentkit.toolkit.sdk.launch",
+        lambda **kwargs: launch_calls.append(kwargs),
+    )
+    app = _create_studio_app(monkeypatch, tmp_path)
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.post(
+            "/web/deploy-agentkit",
+            json={
+                "name": "mpa-agent",
+                "agentCategory": "mpa",
+                "createEvaluationSets": False,
+                "files": [{"path": "app.py", "content": "app = object()\n"}],
+                "config": {"region": "cn-beijing", "projectName": "default"},
+            },
+        )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == (
+        "Studio identity is required for MPA deployment"
+    )
+    assert launch_calls == []
+
+
+def test_managed_mpa_creation_without_trusted_owner_is_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    app = _create_studio_app(monkeypatch, tmp_path)
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/web/mpa-creation/config",
+            params={"region": "cn-beijing"},
+        )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == ("Studio identity is required for MPA creation")
+
+
 def test_mpa_update_allows_compatible_manifest_to_reach_launch(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -5862,6 +5908,7 @@ def test_mpa_update_allows_compatible_manifest_to_reach_launch(
     runtime.tags.append(SimpleNamespace(key="veadk:agent-type", value="mpa"))
     update_requests: list[Any] = []
     captured_config: dict[str, Any] = {}
+    runtime_tag_sync_calls: list[dict[str, Any]] = []
 
     def get_runtime(_self: Any, _request: Any) -> SimpleNamespace:
         runtime.current_version_number = 4 if update_requests else 3
@@ -5898,7 +5945,7 @@ def test_mpa_update_allows_compatible_manifest_to_reach_launch(
     monkeypatch.setattr("agentkit.toolkit.sdk.launch", launch)
     monkeypatch.setattr(
         "veadk.cli.cli_frontend._sync_volcengine_runtime_tags",
-        lambda **_kwargs: None,
+        lambda **kwargs: runtime_tag_sync_calls.append(kwargs),
     )
     monkeypatch.setattr(
         "veadk.auth.veauth.ark_veauth.get_ark_token",
@@ -6021,6 +6068,13 @@ def test_mpa_update_allows_compatible_manifest_to_reach_launch(
     assert runtime_envs["IDENTITY_CALLBACK_URL"] == (
         "https://studio.example.com/oauth/callback"
     )
+    assert len(runtime_tag_sync_calls) == 1
+    runtime_tags = runtime_tag_sync_calls[0]["tags"]
+    assert runtime_tags["veadk:agent-type"] == "mpa"
+    assert runtime_tags["veadk:managed"] == "true"
+    assert runtime_tags["veadk:provisioner"] == "studio-mpa"
+    assert runtime_tags["veadk:owner"] == "developer"
+    assert runtime_tags["veadk:mpa-instance-id"] == runtime.runtime_id
 
 
 def test_update_deployment_rechecks_runtime_identity_before_update(
