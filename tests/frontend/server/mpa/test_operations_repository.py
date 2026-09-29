@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import io
 import json
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any
 
@@ -115,7 +115,7 @@ def _repository(tos: _FakeTosClient) -> TosMpaOperationRepository:
 
 
 def _operation(**overrides: Any) -> MpaLifecycleOperation:
-    now = datetime(2026, 9, 15, tzinfo=UTC)
+    now = datetime(2026, 9, 15, tzinfo=timezone.utc)
     values: dict[str, Any] = {
         "operationKind": "create",
         "ownerId": "owner-1",
@@ -173,7 +173,7 @@ async def test_update_operation_uses_etag_compare_and_swap() -> None:
         update={
             "stage": "profile_applying",
             "runtime_id": "runtime-1",
-            "updated_at": datetime(2026, 9, 15, 0, 1, tzinfo=UTC),
+            "updated_at": datetime(2026, 9, 15, 0, 1, tzinfo=timezone.utc),
         }
     )
 
@@ -201,7 +201,7 @@ async def test_list_active_operations_filters_terminal_states() -> None:
         update={
             "status": "succeeded",
             "stage": "runnable",
-            "updated_at": datetime(2026, 9, 15, 0, 2, tzinfo=UTC),
+            "updated_at": datetime(2026, 9, 15, 0, 2, tzinfo=timezone.utc),
         }
     )
     await repository.update_operation(succeeded, failed.etag)
@@ -227,7 +227,7 @@ async def test_in_memory_repository_matches_idempotency_and_cas() -> None:
     updated = created.value.model_copy(
         update={
             "stage": "profile_applying",
-            "updated_at": datetime(2026, 9, 15, 0, 1, tzinfo=UTC),
+            "updated_at": datetime(2026, 9, 15, 0, 1, tzinfo=timezone.utc),
         }
     )
 

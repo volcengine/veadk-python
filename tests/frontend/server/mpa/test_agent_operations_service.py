@@ -14,7 +14,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any
 
 import pytest
@@ -160,7 +160,7 @@ def test_create_operation_applies_profile_runs_smoke_and_marks_runnable():
         service = MpaAgentOperationService(
             repository=repository,
             runtime_client=runtime,
-            now=lambda: datetime(2026, 9, 15, tzinfo=UTC),
+            now=lambda: datetime(2026, 9, 15, tzinfo=timezone.utc),
         )
 
         result = await service.start(_request(), idempotency_key="idem-1")
@@ -191,7 +191,7 @@ def test_update_operation_applies_profile_without_smoke_and_marks_succeeded():
         service = MpaAgentOperationService(
             repository=repository,
             runtime_client=runtime,
-            now=lambda: datetime(2026, 9, 15, tzinfo=UTC),
+            now=lambda: datetime(2026, 9, 15, tzinfo=timezone.utc),
         )
 
         result = await service.start(
@@ -222,7 +222,7 @@ def test_same_operation_request_replays_without_duplicate_runtime_effects():
         service = MpaAgentOperationService(
             repository=repository,
             runtime_client=runtime,
-            now=lambda: datetime(2026, 9, 15, tzinfo=UTC),
+            now=lambda: datetime(2026, 9, 15, tzinfo=timezone.utc),
         )
         request = _request()
 
@@ -247,7 +247,7 @@ def test_failed_operation_replay_does_not_retry_without_explicit_retry():
         service = MpaAgentOperationService(
             repository=repository,
             runtime_client=runtime,
-            now=lambda: datetime(2026, 9, 15, tzinfo=UTC),
+            now=lambda: datetime(2026, 9, 15, tzinfo=timezone.utc),
         )
         request = _request()
 
@@ -270,7 +270,7 @@ def test_same_key_different_request_hash_conflicts():
         service = MpaAgentOperationService(
             repository=MemoryOperationRepository(),
             runtime_client=FakeRuntimeClient(),
-            now=lambda: datetime(2026, 9, 15, tzinfo=UTC),
+            now=lambda: datetime(2026, 9, 15, tzinfo=timezone.utc),
         )
 
         await service.start(_request(), idempotency_key="idem-1")
@@ -294,7 +294,7 @@ def test_failed_retryable_operation_can_retry_from_safe_stage():
         service = MpaAgentOperationService(
             repository=repository,
             runtime_client=runtime,
-            now=lambda: datetime(2026, 9, 15, tzinfo=UTC),
+            now=lambda: datetime(2026, 9, 15, tzinfo=timezone.utc),
         )
         request = _request()
         failed = await service.start(request, idempotency_key="idem-1")

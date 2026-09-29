@@ -19,7 +19,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -92,7 +92,7 @@ class MpaAgentOperationService:
     ) -> None:
         self._repository = repository
         self._runtime_client = runtime_client
-        self._now = now or (lambda: datetime.now(UTC))
+        self._now = now or (lambda: datetime.now(timezone.utc))
 
     async def start(
         self,
