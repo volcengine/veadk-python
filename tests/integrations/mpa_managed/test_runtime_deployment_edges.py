@@ -83,18 +83,72 @@ def test_cloud_wrappers_validate_requests_and_parse_ids(monkeypatch):
         assert (await cloud.get("r-one"))["RuntimeId"] == "r-one"
         assert await cloud.create({**template(), "Name": "agent"}) == "r-one"
         await cloud.update({"RuntimeId": "r-one", "ArtifactUrl": "image:v2"})
+        await cloud.delete("r-one")
+        assert await cloud.instances("r-one") == []
         assert await cloud.create_skill_space({"Name": "skills"}) == "ss-one"
         assert (await cloud.get_skill_space("ss-one"))["Id"] == "ss-one"
         assert [c[0] for c in calls] == [
             "get_runtime",
             "create_runtime",
             "update_runtime",
+            "delete_runtime",
+            "list_runtime_instances",
             "create_skill_space",
             "get_skill_space",
         ]
         monkeypatch.setattr(cloud, "call", AsyncMock(return_value={}))
         with pytest.raises(DeploymentError, match="no ID"):
             await cloud.create({**template(), "Name": "agent"})
+
+    asyncio.run(run())
+
+
+def test_new_empty_v0_runtime_is_replaced_once():
+    async def run():
+        svc, registry, cloud, _ = deployer()
+        original_create = cloud.create
+
+        async def create(request):
+            runtime_id = await original_create(request)
+            if len(cloud.creates) == 1:
+                cloud.runtimes[runtime_id].update(
+                    Status="Error",
+                    CurrentVersionNumber=0,
+                    NetworkConfigurations=[],
+                )
+            return runtime_id
+
+        cloud.create = create
+        result = await svc.deploy(template())
+
+        assert result["state"] == "ready"
+        assert cloud.deletes == ["r-agent"]
+        assert len(cloud.creates) == 2
+        assert cloud.creates[0]["ClientToken"] != cloud.creates[1]["ClientToken"]
+        assert registry.row["runtime_id"] == "r-agent"
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    "runtime",
+    [
+        {"Status": "Failed", "CurrentVersionNumber": 0},
+        {"Status": "Error", "CurrentVersionNumber": 1},
+        {
+            "Status": "Error",
+            "CurrentVersionNumber": 0,
+            "NetworkConfigurations": [{"NetworkType": "Public"}],
+        },
+        {"Status": "Error", "CurrentVersionNumber": 0, "InstanceItems": [{}]},
+    ],
+)
+def test_runtime_recovery_never_deletes_nonempty_or_existing_runtime(runtime):
+    async def run():
+        svc, _, cloud, _ = deployer()
+        cloud.runtimes["r-one"] = runtime
+        assert not await svc.replace_empty_failed_create("r-one")
+        assert cloud.deletes == []
 
     asyncio.run(run())
 
