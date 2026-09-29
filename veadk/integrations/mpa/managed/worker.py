@@ -95,18 +95,24 @@ async def ensure_worker(
     project="default",
     timeout: float = 600,
 ):
-    return await asyncio.wait_for(
-        _ensure_worker(
-            entry,
-            cloud,
-            options,
-            account=account,
-            region=region,
-            agent_id=agent_id,
-            project=project,
-        ),
-        timeout=timeout,
-    )
+    try:
+        return await asyncio.wait_for(
+            _ensure_worker(
+                entry,
+                cloud,
+                options,
+                account=account,
+                region=region,
+                agent_id=agent_id,
+                project=project,
+            ),
+            timeout=timeout,
+        )
+    except asyncio.TimeoutError as error:
+        # Python 3.11 aliases asyncio.TimeoutError to the built-in TimeoutError,
+        # while Python 3.10 exposes a distinct exception class. Keep the public
+        # provisioning contract stable across every supported Python version.
+        raise TimeoutError() from error
 
 
 async def _ensure_worker(entry, cloud, options, *, account, region, agent_id, project):
