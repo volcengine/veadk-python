@@ -594,6 +594,16 @@ async def test_provision_resolves_pg_before_template_and_overrides_inherited_cre
         get=AsyncMock(return_value=old),
     )
     monkeypatch.setattr(service, "RuntimeCloud", lambda **kw: cloud)
+    monkeypatch.setattr(
+        service,
+        "ensure_workload_identity",
+        AsyncMock(
+            return_value=SimpleNamespace(
+                workload_pool_name="agentkit-studio-workload",
+                workload_identity_name="mi-123456789abc-studio",
+            )
+        ),
+    )
     monkeypatch.setattr(pg_cloud, "PGCloud", lambda **kw: FakePG())
     monkeypatch.setattr(pg_bootstrap, "initialize_admin_database", AsyncMock())
 

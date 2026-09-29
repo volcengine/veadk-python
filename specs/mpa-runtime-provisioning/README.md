@@ -6,6 +6,8 @@
 - **Chinese version:** [README.zh.md](README.zh.md)
 - **Related PRD:** [MPA Runtime Integration Hardening](../../prd-spec/bugfixes/mpa-runtime-integration/2026-09-12-mpa-runtime-integration-hardening.md)
 - **Related PRD:** [MPA Studio Workload Identity Provisioning](../../prd-spec/features/mpa-studio-workload-identity/2026-09-20-mpa-studio-workload-identity.md)
+- **Related PRD:** [Managed Workload Identity ensure](../../prd-spec/bugfixes/mpa-managed-workload-identity/2026-09-29-ensure-managed-workload-identity.md)
+- **Related PRD:** [Fresh managed Runtime command](../../prd-spec/bugfixes/mpa-runtime-fresh-command/2026-09-29-set-fresh-runtime-command.md)
 - **Related PRD:** [MPA per-session TOS output mount](../../prd-spec/features/mpa-agent-oneclick-provision/2026-09-23-mpa-tos-output-mount.md)
 - **Related PRD:** [Initial Runtime Tool attachment](../../prd-spec/bugfixes/mpa-runtime-initial-tool/2026-09-29-runtime-initial-tool-attachment.md)
 - **Related PRD:** [Reference Runtime command preservation](../../prd-spec/bugfixes/mpa-runtime-reference-command/2026-09-29-preserve-runtime-command.md)
@@ -30,7 +32,7 @@ This component converts `veadk mpa create` inputs into one recoverable AgentKit 
 - `CON-4`: Phase one writes placeholders before startup; phase two overwrites them only with non-empty authoritative Runtime values. A phase-two deployment failure is reported as failure, not partial success.
 - `CON-5`: Explicit caller `extra_env` remains last-wins, including an intentional override of VeADK profile defaults.
 - `CON-6`: AgentKit Runtime create and convergent update persist `veadk:agent-type=mpa` as the stable Studio classification tag. Untagged Runtime resources remain outside the MPA filter until an explicit tag repair is performed.
-- `CON-7`: Before other provisioning mutations, the CLI creates or reuses the account-and-region scoped pool `agentkit-studio-workload` and identity `{MPA_AGENT_ID}-studio`, then injects them as `MPA_WORKLOAD_POOL_NAME` and `MPA_WORKLOAD_IDENTITY_NAME`.
+- `CON-7`: Before other provisioning mutations, both `veadk mpa create` and managed Studio provisioning create or reuse the account-and-region scoped pool `agentkit-studio-workload` and identity `{MPA_AGENT_ID}-studio`, then inject them as `MPA_WORKLOAD_POOL_NAME` and `MPA_WORKLOAD_IDENTITY_NAME`. Managed reference/template values cannot supply another agent's identity; empty explicit values are treated as unspecified and conflicting non-empty values fail before mutation.
 - `CON-8`: `veadk mpa create` continues to generate `mi-[0-9a-z]{12}` ids. Explicit ids accept that form and the existing Studio `mi-[0-9a-z]{24}` form for flat managed provisioning. The base id remains the Runtime and metadata identity; only the workload identity receives the `-studio` suffix.
 - `CON-9`: Workload get-or-create is exact-name idempotent. Concurrent create conflicts are followed by a read. Other Identity errors fail before Tool, database, or Runtime mutations. Created identity resources are retained for retry.
 
@@ -43,6 +45,8 @@ its explicit container `Command` together with the existing infrastructure
 allowlist. It does not invent a command when the reference omits one; agent
 identity, credentials, endpoints, Tool binding, and finalization values remain
 new-deployment-owned.
+The MPA-only fresh managed template uses the standard `bash run.sh` command;
+explicit JSON templates remain authoritative.
 
 ## Failure and observability
 

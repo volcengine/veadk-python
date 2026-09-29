@@ -16,15 +16,25 @@
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import re
 
 from sqlalchemy.engine import make_url
 
+from veadk.integrations.mpa.mpa_identity import (
+    MpaIdentityError,
+    ensure_studio_workload_identity,
+)
+from veadk.integrations.mpa.mpa_provision import (
+    STUDIO_WORKLOAD_POOL_NAME,
+    workload_identity_name,
+)
 from veadk.integrations.mpa.tags import (
     merge_runtime_tag_items,
     studio_mpa_runtime_tags,
 )
+from veadk.integrations.ve_identity.identity_client import IdentityClient
 
 from .config import ConfigurationError, Profile, Runtime, validate_postgres_layout
 from .database import AgentDatabaseProvisioner, AgentDeploymentRegistry, DeploymentError
@@ -91,6 +101,7 @@ def fresh_template(profile, agent_id, account):
     return {
         "ArtifactType": "image",
         "ArtifactUrl": params.image,
+        "Command": "bash run.sh",
         "RoleName": values.get("runtime_role_name", "IDRoleForArkClawShareAgent"),
         "ApmplusEnable": True,
         "MinInstance": 1,
@@ -123,6 +134,31 @@ def apply_runtime_settings(template: dict, options: Runtime):
     minimum, maximum = template.get("MinInstance"), template.get("MaxInstance")
     if minimum is not None and maximum is not None and minimum > maximum:
         raise ConfigurationError("Minimum instances exceed maximum instances")
+
+
+async def ensure_workload_identity(profile: Profile, cloud, agent_id: str):
+    expected = {
+        "MPA_WORKLOAD_POOL_NAME": STUDIO_WORKLOAD_POOL_NAME,
+        "MPA_WORKLOAD_IDENTITY_NAME": workload_identity_name(agent_id),
+    }
+    for key, value in expected.items():
+        explicit = profile.managed.runtime.env.get(key, "").strip()
+        if explicit and explicit != value:
+            raise DeploymentError(f"Managed Runtime {key} differs from Studio identity")
+    credential = cloud._credentials()
+    client = IdentityClient(
+        access_key=credential.access_key_id,
+        secret_key=credential.secret_access_key,
+        session_token=credential.session_token,
+        region=profile.region,
+        enable_vefaas_iam_fallback=False,
+    )
+    try:
+        return await asyncio.to_thread(
+            ensure_studio_workload_identity, client, agent_id
+        )
+    except MpaIdentityError as exc:
+        raise DeploymentError(str(exc)) from exc
 
 
 def apply_identity_settings(template: dict, values: dict):
@@ -186,6 +222,7 @@ async def provision(
     expected = str(profile.values.get("account_id", ""))
     if expected and account != expected:
         raise DeploymentError("Deployment credentials differ from the expected account")
+    identity = await ensure_workload_identity(profile, cloud, agent_id)
     if profile.managed.postgres and profile.managed.postgres.mode == "auto":
         from .pg_bootstrap import prepare_postgres
         from .pg_cloud import PGCloud
@@ -241,6 +278,10 @@ async def provision(
     if profile.managed.postgres:
         env.pop(profile.managed.postgres.admin_database_url_env, None)
     env["MPA_AGENT_ID"] = agent_id
+    env.update(
+        MPA_WORKLOAD_POOL_NAME=identity.workload_pool_name,
+        MPA_WORKLOAD_IDENTITY_NAME=identity.workload_identity_name,
+    )
     apply_tos_runtime_env(env, profile.managed.worker)
     template["Envs"] = [{"Key": k, "Value": v} for k, v in env.items()]
     template["Description"] = description[:512]

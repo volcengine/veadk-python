@@ -326,6 +326,8 @@ def test_reference_template_does_not_copy_agent_or_bot_credentials():
             "AGENTKIT_RUNTIME_ID",
             "A2A_PUBLIC_URL",
             "SKILL_SPACE_ID",
+            "MPA_WORKLOAD_POOL_NAME",
+            "MPA_WORKLOAD_IDENTITY_NAME",
         ]
     ]
     result = template_from_runtime(reference, "another-agent")

@@ -6,6 +6,8 @@
 - **English version:** [README.md](README.md)
 - **关联 PRD：** [MPA Runtime 集成加固](../../prd-spec/bugfixes/mpa-runtime-integration/2026-09-12-mpa-runtime-integration-hardening.zh.md)
 - **关联 PRD：** [MPA Studio 工作负载身份创建](../../prd-spec/features/mpa-studio-workload-identity/2026-09-20-mpa-studio-workload-identity.zh.md)
+- **关联 PRD：** [托管 Workload Identity ensure](../../prd-spec/bugfixes/mpa-managed-workload-identity/2026-09-29-ensure-managed-workload-identity.zh.md)
+- **关联 PRD：** [全新托管 Runtime 启动命令](../../prd-spec/bugfixes/mpa-runtime-fresh-command/2026-09-29-set-fresh-runtime-command.zh.md)
 - **关联 PRD：** [MPA 会话级 TOS 输出挂载](../../prd-spec/features/mpa-agent-oneclick-provision/2026-09-23-mpa-tos-output-mount.zh.md)
 - **关联 PRD：** [Runtime 首次挂载 Tool](../../prd-spec/bugfixes/mpa-runtime-initial-tool/2026-09-29-runtime-initial-tool-attachment.zh.md)
 - **关联 PRD：** [保留参考 Runtime 启动命令](../../prd-spec/bugfixes/mpa-runtime-reference-command/2026-09-29-preserve-runtime-command.zh.md)
@@ -30,7 +32,7 @@
 - `CON-4`：第一阶段在启动前写入占位符；第二阶段只使用非空权威 Runtime 值覆盖。第二阶段部署失败必须报告失败，不得报告部分成功。
 - `CON-5`：调用方显式提供的 `extra_env` 继续保持 last-wins，包括有意覆盖 VeADK 配置默认值。
 - `CON-6`：AgentKit Runtime 创建及收敛更新必须持久化 `veadk:agent-type=mpa`，作为 Studio 稳定分类标签。未打标签 Runtime 在执行显式标签修复前不进入 MPA 筛选。
-- `CON-7`：在其他创建副作用之前，CLI 创建或复用账号和地域范围内的 `agentkit-studio-workload` Pool 与 `{MPA_AGENT_ID}-studio` Identity，然后以 `MPA_WORKLOAD_POOL_NAME` 和 `MPA_WORKLOAD_IDENTITY_NAME` 注入 Runtime。
+- `CON-7`：在其他创建副作用之前，`veadk mpa create` 与 Studio 托管创建都会创建或复用账号和地域范围内的 `agentkit-studio-workload` Pool 与 `{MPA_AGENT_ID}-studio` Identity，然后以 `MPA_WORKLOAD_POOL_NAME` 和 `MPA_WORKLOAD_IDENTITY_NAME` 注入 Runtime。托管参考 Runtime 或模板不得提供其他 Agent 的 Identity；显式空值视为未配置，冲突的非空值在资源修改前失败。
 - `CON-8`：`veadk mpa create` 继续自动生成 `mi-[0-9a-z]{12}` ID。显式 ID 接受该格式及 Studio 原有的 `mi-[0-9a-z]{24}` 格式，以兼容托管平铺创建。基础 ID 仍作为 Runtime 和元数据身份，只有 WorkloadIdentity 增加 `-studio` 后缀。
 - `CON-9`：工作负载资源按精确名称幂等 get-or-create。并发创建冲突后重新读取；其他 Identity 错误在 Tool、数据库或 Runtime 修改前失败。已创建的身份资源保留供重试。
 
@@ -41,6 +43,7 @@
 当 `managed.from-runtime` 选择参考 Runtime 时，部署会在现有基础设施白名单中保留其
 显式容器 `Command`。参考 Runtime 未提供命令时不会推断默认值；agent 身份、凭据、
 endpoint、Tool 绑定和最终化值仍由新部署持有。
+MPA 专用的全新托管模板使用标准命令 `bash run.sh`；显式 JSON 模板保持权威。
 
 ## 失败与可观测性
 
