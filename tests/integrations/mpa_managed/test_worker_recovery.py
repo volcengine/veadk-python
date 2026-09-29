@@ -265,6 +265,44 @@ def test_unknown_error_text_is_never_used_for_retry_or_diagnostics():
     )
 
 
+def test_retry_logs_only_allowlisted_provider_code(caplog):
+    from veadk.integrations.mpa.managed import diagnostics
+
+    wrapped = RuntimeError("wrapper text")
+    wrapped.__cause__ = ApiError("private", error_code="Nested.ProviderCode")
+    assert diagnostics.provider_error_code(wrapped) == "Nested.ProviderCode"
+    assert diagnostics.provider_error_code(RuntimeError("private")) is None
+
+    async def run():
+        with caplog.at_level("WARNING"), pytest.raises(ApiError):
+            await diagnostics.retry_worker(
+                "create_worker",
+                AsyncMock(
+                    side_effect=ApiError(
+                        "private credential and request body",
+                        error_code="RoleNotAuthorized.AgentKit",
+                    )
+                ),
+            )
+        text = caplog.text
+        assert "RoleNotAuthorized.AgentKit" in text
+        assert "private credential" not in text
+
+        caplog.clear()
+        with caplog.at_level("WARNING"), pytest.raises(ApiError):
+            await diagnostics.retry_worker(
+                "create_worker",
+                AsyncMock(
+                    side_effect=ApiError(
+                        "private payload",
+                        error_code="unsafe code with secret=value",
+                    )
+                ),
+            )
+        assert "unsafe code" not in caplog.text
+        assert "private payload" not in caplog.text
+
+    asyncio.run(run())
 def test_task_diagnostic_history_survives_retry_and_is_bounded(tmp_path, caplog):
     from veadk.integrations.mpa.managed.tasks import CreationTasks
 

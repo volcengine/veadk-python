@@ -21,6 +21,7 @@ from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 import logging
+import re
 from typing import TypeVar
 
 from agentkit.auth.errors import AuthError, NetworkError
@@ -104,6 +105,20 @@ _sink: ContextVar[Callable[[Diagnostic], None] | None] = ContextVar(
     "mpa_diagnostic_sink", default=None
 )
 T = TypeVar("T")
+_SAFE_PROVIDER_CODE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
+
+
+def provider_error_code(error: BaseException) -> str | None:
+    """Return only an allowlisted provider code, never provider message text."""
+    current = error
+    seen: set[BaseException] = set()
+    while current is not None and len(seen) < 8 and current not in seen:
+        seen.add(current)
+        if isinstance(current, ApiError) and current.error_code:
+            code = str(current.error_code)
+            return code if _SAFE_PROVIDER_CODE.fullmatch(code) else None
+        current = current.__cause__
+    return None
 
 
 def classify_error(error: BaseException) -> str:
@@ -205,6 +220,13 @@ async def retry_worker(
             return await call()
         except Exception as error:
             category = classify_error(error)
+            code = provider_error_code(error)
+            if code:
+                logger.warning(
+                    "MPA Worker provider error code: operation=%s code=%s",
+                    operation,
+                    code,
+                )
             recoverable = category in {
                 "timeout",
                 "connection",
