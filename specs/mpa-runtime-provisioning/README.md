@@ -2,11 +2,12 @@
 
 - **Component ID:** `mpa-runtime-provisioning`
 - **Status:** Draft; proposed changes are governed by the related PRD
-- **Revision:** 2026-09-23
+- **Revision:** 2026-09-29
 - **Chinese version:** [README.zh.md](README.zh.md)
 - **Related PRD:** [MPA Runtime Integration Hardening](../../prd-spec/bugfixes/mpa-runtime-integration/2026-09-12-mpa-runtime-integration-hardening.md)
 - **Related PRD:** [MPA Studio Workload Identity Provisioning](../../prd-spec/features/mpa-studio-workload-identity/2026-09-20-mpa-studio-workload-identity.md)
 - **Related PRD:** [MPA per-session TOS output mount](../../prd-spec/features/mpa-agent-oneclick-provision/2026-09-23-mpa-tos-output-mount.md)
+- **Related PRD:** [Initial Runtime Tool attachment](../../prd-spec/bugfixes/mpa-runtime-initial-tool/2026-09-29-runtime-initial-tool-attachment.md)
 - **Owned code:** `veadk/cli/cli_mpa.py`, `veadk/integrations/mpa/mpa_provision.py`, `veadk/integrations/mpa/mpa_runtime.py`, `veadk/integrations/mpa/mpa_tool.py`, `veadk/integrations/mpa/managed/worker.py`
 
 ## Responsibility
@@ -90,6 +91,13 @@ override the YAML defaults. AK/SK pass only in memory through child-process
 stdin and MUST NOT enter sessionStorage, task SQLite, or task responses. Partial
 input MUST be rejected. A profile using an existing Worker must first select a
 new Worker image for the creation.
+
+For a newly managed Runtime, the initial `CreateRuntime` request MUST include
+the `ToolId` of the already prepared worker Tool. The final convergent update
+retains the same `ToolId` while publishing authoritative endpoint/key
+environment values. Delaying the first Tool attachment until after Runtime
+creation is unsupported because the control plane may fail the unbound Runtime
+before it reaches `Ready`.
 
 For every newly created Sandbox Session, mpa-agent MUST set
 `CreateSessionRequest.TosMountPoints` using AgentKit's

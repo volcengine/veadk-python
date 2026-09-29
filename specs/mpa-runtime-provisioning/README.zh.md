@@ -2,11 +2,12 @@
 
 - **Component ID：** `mpa-runtime-provisioning`
 - **状态：** 草案；提议变更由关联 PRD 管理
-- **修订日期：** 2026-09-23
+- **修订日期：** 2026-09-29
 - **English version:** [README.md](README.md)
 - **关联 PRD：** [MPA Runtime 集成加固](../../prd-spec/bugfixes/mpa-runtime-integration/2026-09-12-mpa-runtime-integration-hardening.zh.md)
 - **关联 PRD：** [MPA Studio 工作负载身份创建](../../prd-spec/features/mpa-studio-workload-identity/2026-09-20-mpa-studio-workload-identity.zh.md)
 - **关联 PRD：** [MPA 会话级 TOS 输出挂载](../../prd-spec/features/mpa-agent-oneclick-provision/2026-09-23-mpa-tos-output-mount.zh.md)
+- **关联 PRD：** [Runtime 首次挂载 Tool](../../prd-spec/bugfixes/mpa-runtime-initial-tool/2026-09-29-runtime-initial-tool-attachment.zh.md)
 - **负责代码：** `veadk/cli/cli_mpa.py`、`veadk/integrations/mpa/mpa_provision.py`、`veadk/integrations/mpa/mpa_runtime.py`、`veadk/integrations/mpa/mpa_tool.py`、`veadk/integrations/mpa/managed/worker.py`
 
 ## 职责
@@ -87,6 +88,11 @@ Studio/CLI 通过共享编排遵循相同保证。平台 operation 清单与 boo
 Studio 创建页可以为单次创建传入完整三元组并覆盖 YAML 默认值；AK/SK 只经子进程
 stdin 在内存中传递，不得进入 sessionStorage、任务 SQLite 或任务查询响应。部分输入
 必须拒绝；使用已有 Worker 时必须先通过本次创建的 Worker 镜像覆盖为新建 Worker。
+
+对于新建托管 Runtime，首次 `CreateRuntime` 请求必须携带已经准备完成的 Worker Tool
+的 `ToolId`。最终收敛更新在发布权威 endpoint/key 环境时继续保留相同 `ToolId`。
+不支持将首次 Tool 挂载延迟到 Runtime 创建之后，因为控制面可能在未绑定 Runtime
+达到 `Ready` 前将其置为失败。
 
 每次新建 Sandbox Session 时，mpa-agent 必须按 AgentKit 标准会话路径
 `/sandbox-session/tool-{tool_id}/session-{session_id}/` 设置

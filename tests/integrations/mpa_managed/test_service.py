@@ -153,7 +153,7 @@ def test_network_gateway_worker_precede_runtime(
 
         async def create(request):
             assert events == ["gateway", "worker"]
-            assert "ToolId" not in request
+            assert request["ToolId"] == "t-one"
             runtime_tags = {
                 item["Key"]: item["Value"] for item in request.get("Tags", [])
             }

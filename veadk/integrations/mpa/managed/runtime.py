@@ -535,15 +535,9 @@ class AgentRuntimeDeployer:
             record.update(pending=True, request_hash=digest)
             await entry.save(record)
             if not runtime_id:
-                # AgentKit can reject a first Runtime release when it is created
-                # together with a newly provisioned TOS-enabled Tool.  Create the
-                # Runtime infrastructure first, then attach the Tool in the
-                # normal update/release below after the Runtime is Ready.
-                create_desired = dict(desired)
-                create_desired.pop("ToolId", None)
                 # A lost response is retried using the same persisted ClientToken.
                 runtime_id = await self.cloud.create(
-                    {**create_desired, "ClientToken": record["client_token"]}
+                    {**desired, "ClientToken": record["client_token"]}
                 )
             record["runtime_id"] = runtime_id
             await entry.save(record)
