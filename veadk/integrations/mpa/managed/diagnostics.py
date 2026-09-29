@@ -167,12 +167,17 @@ def classify_error(error: BaseException) -> str:
 
 
 def validate_diagnostic(value: object) -> Diagnostic | None:
-    if not isinstance(value, dict) or set(value) != {
+    required = {
         "operation",
         "category",
         "attempt",
         "outcome",
-    }:
+    }
+    if (
+        not isinstance(value, dict)
+        or not required <= set(value)
+        or not set(value) <= required | {"provider_code"}
+    ):
         return None
     if (
         not isinstance(value["operation"], str)
@@ -183,6 +188,13 @@ def validate_diagnostic(value: object) -> Diagnostic | None:
         or not 1 <= value["attempt"] <= 4
         or not isinstance(value["outcome"], str)
         or value["outcome"] not in {"retrying", "failed", "cancelled"}
+        or (
+            "provider_code" in value
+            and (
+                not isinstance(value["provider_code"], str)
+                or not _SAFE_PROVIDER_CODE.fullmatch(value["provider_code"])
+            )
+        )
     ):
         return None
     return dict(value)
@@ -198,11 +210,19 @@ def diagnostic_scope(sink: Callable[[Diagnostic], None]) -> Iterator[None]:
 
 
 def report(
-    operation: str, category: str, *, attempt: int = 1, outcome: str = "failed"
+    operation: str,
+    category: str,
+    *,
+    attempt: int = 1,
+    outcome: str = "failed",
+    provider_code: str | None = None,
 ) -> None:
-    diagnostic = validate_diagnostic(
-        dict(operation=operation, category=category, attempt=attempt, outcome=outcome)
+    payload: Diagnostic = dict(
+        operation=operation, category=category, attempt=attempt, outcome=outcome
     )
+    if provider_code:
+        payload["provider_code"] = provider_code
+    diagnostic = validate_diagnostic(payload)
     if diagnostic is None:
         raise ValueError("Invalid internal diagnostic")
     sink = _sink.get()
@@ -221,12 +241,6 @@ async def retry_worker(
         except Exception as error:
             category = classify_error(error)
             code = provider_error_code(error)
-            if code:
-                logger.warning(
-                    "MPA Worker provider error code: operation=%s code=%s",
-                    operation,
-                    code,
-                )
             recoverable = category in {
                 "timeout",
                 "connection",
@@ -239,6 +253,7 @@ async def retry_worker(
                 category,
                 attempt=attempt,
                 outcome="retrying" if retrying else "failed",
+                provider_code=code,
             )
             if not retrying:
                 raise

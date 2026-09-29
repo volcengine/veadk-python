@@ -265,7 +265,7 @@ def test_unknown_error_text_is_never_used_for_retry_or_diagnostics():
     )
 
 
-def test_retry_logs_only_allowlisted_provider_code(caplog):
+def test_retry_reports_only_allowlisted_provider_code():
     from veadk.integrations.mpa.managed import diagnostics
 
     wrapped = RuntimeError("wrapper text")
@@ -274,35 +274,35 @@ def test_retry_logs_only_allowlisted_provider_code(caplog):
     assert diagnostics.provider_error_code(RuntimeError("private")) is None
 
     async def run():
-        with caplog.at_level("WARNING"), pytest.raises(ApiError):
-            await diagnostics.retry_worker(
-                "create_worker",
-                AsyncMock(
-                    side_effect=ApiError(
-                        "private credential and request body",
-                        error_code="RoleNotAuthorized.AgentKit",
-                    )
-                ),
-            )
-        text = caplog.text
-        assert "RoleNotAuthorized.AgentKit" in text
-        assert "private credential" not in text
-
-        caplog.clear()
-        with caplog.at_level("WARNING"), pytest.raises(ApiError):
-            await diagnostics.retry_worker(
-                "create_worker",
-                AsyncMock(
-                    side_effect=ApiError(
-                        "private payload",
-                        error_code="unsafe code with secret=value",
-                    )
-                ),
-            )
-        assert "unsafe code" not in caplog.text
-        assert "private payload" not in caplog.text
+        events = []
+        with diagnostics.diagnostic_scope(events.append):
+            with pytest.raises(ApiError):
+                await diagnostics.retry_worker(
+                    "create_worker",
+                    AsyncMock(
+                        side_effect=ApiError(
+                            "private credential and request body",
+                            error_code="RoleNotAuthorized.AgentKit",
+                        )
+                    ),
+                )
+            with pytest.raises(ApiError):
+                await diagnostics.retry_worker(
+                    "create_worker",
+                    AsyncMock(
+                        side_effect=ApiError(
+                            "private payload",
+                            error_code="unsafe code with secret=value",
+                        )
+                    ),
+                )
+        assert events[0]["provider_code"] == "RoleNotAuthorized.AgentKit"
+        assert "provider_code" not in events[1]
+        assert "private" not in json.dumps(events)
 
     asyncio.run(run())
+
+
 def test_task_diagnostic_history_survives_retry_and_is_bounded(tmp_path, caplog):
     from veadk.integrations.mpa.managed.tasks import CreationTasks
 
@@ -317,7 +317,7 @@ def test_task_diagnostic_history_survives_retry_and_is_bounded(tmp_path, caplog)
         events = [
             {"stage": "worker"},
             {"diagnostic": {**valid, "message": "private"}},
-            {"diagnostic": valid},
+            {"diagnostic": {**valid, "provider_code": "RoleNotAuthorized.AgentKit"}},
         ]
         script = (
             "import json; events="
@@ -345,6 +345,7 @@ def test_task_diagnostic_history_survives_retry_and_is_bounded(tmp_path, caplog)
         assert rows[0]["category"] == "not_found" and rows[0]["stage"] == "worker"
         assert rows[-1]["category"] == "child_exit"
         assert "private" not in json.dumps(rows) + caplog.text
+        assert "RoleNotAuthorized.AgentKit" in caplog.text
         initial_id = rows[0]["id"]
         await service.start("owner", payload, config_path="unused", timeout=60)
         await asyncio.gather(*service.running.values())
