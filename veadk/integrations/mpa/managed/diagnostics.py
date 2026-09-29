@@ -21,7 +21,6 @@ from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 import logging
-import re
 from typing import TypeVar
 
 from agentkit.auth.errors import AuthError, NetworkError
@@ -105,54 +104,6 @@ _sink: ContextVar[Callable[[Diagnostic], None] | None] = ContextVar(
     "mpa_diagnostic_sink", default=None
 )
 T = TypeVar("T")
-_SAFE_PROVIDER_CODE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
-_MESSAGE_HINTS = (
-    ("AccessDenied", ("accessdenied", "access denied", "not authorized")),
-    ("PassRole", ("passrole", "pass role", "pass the role")),
-    ("Permission", ("permission", "forbidden", "unauthorized")),
-    ("Credential", ("credential", "access key", "secret key", "token")),
-    ("Image", ("image", "registry", "repository")),
-    (
-        "Schema",
-        (
-            "validation error",
-            "extra inputs",
-            "not permitted",
-            "unexpected keyword",
-            "field required",
-        ),
-    ),
-    ("Tos", ("tos",)),
-    ("Bucket", ("bucket",)),
-    ("Mount", ("mount",)),
-    ("Endpoint", ("endpoint",)),
-    ("Role", ("role",)),
-    ("Invalid", ("invalid", "malformed", "missing parameter")),
-    ("Quota", ("quota", "limit exceeded")),
-    ("Internal", ("internal error", "unknown error")),
-)
-
-
-def provider_error_code(error: BaseException) -> str | None:
-    """Return only an allowlisted provider code, never provider message text."""
-    current = error
-    seen: set[BaseException] = set()
-    while current is not None and len(seen) < 8 and current not in seen:
-        seen.add(current)
-        if isinstance(current, ApiError) and current.error_code:
-            code = str(current.error_code)
-            return code if _SAFE_PROVIDER_CODE.fullmatch(code) else None
-        if isinstance(current, ApiError):
-            message = str(current).lower()
-            hints = [
-                name
-                for name, tokens in _MESSAGE_HINTS
-                if any(token in message for token in tokens)
-            ]
-            if hints:
-                return "MessageHint." + ".".join(hints)
-        current = current.__cause__
-    return None
 
 
 def classify_error(error: BaseException) -> str:
@@ -201,17 +152,12 @@ def classify_error(error: BaseException) -> str:
 
 
 def validate_diagnostic(value: object) -> Diagnostic | None:
-    required = {
+    if not isinstance(value, dict) or set(value) != {
         "operation",
         "category",
         "attempt",
         "outcome",
-    }
-    if (
-        not isinstance(value, dict)
-        or not required <= set(value)
-        or not set(value) <= required | {"provider_code"}
-    ):
+    }:
         return None
     if (
         not isinstance(value["operation"], str)
@@ -222,13 +168,6 @@ def validate_diagnostic(value: object) -> Diagnostic | None:
         or not 1 <= value["attempt"] <= 4
         or not isinstance(value["outcome"], str)
         or value["outcome"] not in {"retrying", "failed", "cancelled"}
-        or (
-            "provider_code" in value
-            and (
-                not isinstance(value["provider_code"], str)
-                or not _SAFE_PROVIDER_CODE.fullmatch(value["provider_code"])
-            )
-        )
     ):
         return None
     return dict(value)
@@ -244,19 +183,11 @@ def diagnostic_scope(sink: Callable[[Diagnostic], None]) -> Iterator[None]:
 
 
 def report(
-    operation: str,
-    category: str,
-    *,
-    attempt: int = 1,
-    outcome: str = "failed",
-    provider_code: str | None = None,
+    operation: str, category: str, *, attempt: int = 1, outcome: str = "failed"
 ) -> None:
-    payload: Diagnostic = dict(
-        operation=operation, category=category, attempt=attempt, outcome=outcome
+    diagnostic = validate_diagnostic(
+        dict(operation=operation, category=category, attempt=attempt, outcome=outcome)
     )
-    if provider_code:
-        payload["provider_code"] = provider_code
-    diagnostic = validate_diagnostic(payload)
     if diagnostic is None:
         raise ValueError("Invalid internal diagnostic")
     sink = _sink.get()
@@ -274,7 +205,6 @@ async def retry_worker(
             return await call()
         except Exception as error:
             category = classify_error(error)
-            code = provider_error_code(error)
             recoverable = category in {
                 "timeout",
                 "connection",
@@ -287,7 +217,6 @@ async def retry_worker(
                 category,
                 attempt=attempt,
                 outcome="retrying" if retrying else "failed",
-                provider_code=code,
             )
             if not retrying:
                 raise

@@ -540,7 +540,7 @@ class AgentRuntimeDeployer:
             if not runtime_id:
                 # A lost response is retried using the same persisted ClientToken.
                 runtime_id = await self.cloud.create(
-                    {**desired, "ClientToken": record["client_token"]}
+                    {**create_desired, "ClientToken": record["client_token"]}
                 )
             record["runtime_id"] = runtime_id
             await entry.save(record)

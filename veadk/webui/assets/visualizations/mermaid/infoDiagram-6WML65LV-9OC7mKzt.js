@@ -1,6 +1,0 @@
-<<<<<<<< HEAD:veadk/webui/assets/visualizations/mermaid/infoDiagram-6WML65LV-9OC7mKzt.js
-import{a as e,at as s,aP as n,B as i}from"./mermaid.core-Wi2Gy8N0.js";import{p}from"./cynefin-OW5HDTMX-vKP3tD6r.js";import"../../app/index-CsAnaRYF.js";import"../../chunks/purify.es-BnINGy_Y.js";var g={parse:e(async r=>{const a=await p("info",r);s.debug(a)},"parse")},v={version:"11.16.1"},d=e(()=>v.version,"getVersion"),m={getVersion:d},c=e((r,a,o)=>{s.debug(`rendering info diagram
-========
-import{a as e,at as s,aP as n,B as i}from"./mermaid.core-CsRTEj1P.js";import{p}from"./cynefin-OW5HDTMX-DtXb4xLY.js";import"../../app/index-dC1yPN2z.js";import"../../chunks/purify.es-BnINGy_Y.js";var g={parse:e(async r=>{const a=await p("info",r);s.debug(a)},"parse")},v={version:"11.16.1"},d=e(()=>v.version,"getVersion"),m={getVersion:d},c=e((r,a,o)=>{s.debug(`rendering info diagram
->>>>>>>> 2f6d68ce (feat(studio): accept TOS mounts during MPA creation):veadk/webui/assets/visualizations/mermaid/infoDiagram-6WML65LV-Dp8cNX4g.js
-`+r);const t=n(a);i(t,100,400,!0),t.append("g").append("text").attr("x",100).attr("y",40).attr("class","version").attr("font-size",32).style("text-anchor","middle").text(`v${o}`)},"draw"),f={draw:c},w={parser:g,db:m,renderer:f};export{w as diagram};
