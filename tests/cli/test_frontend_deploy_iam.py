@@ -338,7 +338,11 @@ def test_frontend_policy_allows_complete_managed_pg_workflow() -> None:
 
 
 def test_frontend_policy_allows_complete_managed_mpa_cloud_workflow() -> None:
-    actions = set(FRONTEND_DEPLOY_POLICY["Statement"][0]["Action"])
+    actions = {
+        action
+        for statement in FRONTEND_DEPLOY_POLICY["Statement"]
+        for action in statement["Action"]
+    }
     required = {
         "sts:GetCallerIdentity",
         "ecs:DescribeZones",
@@ -369,6 +373,11 @@ def test_frontend_policy_allows_complete_managed_mpa_cloud_workflow() -> None:
         "apig:*",
         "aidap:*",
     }.isdisjoint(actions)
+    assert {
+        "Effect": "Allow",
+        "Action": ["iam:PassRole"],
+        "Resource": ["trn:iam::*:role/*"],
+    } in FRONTEND_DEPLOY_POLICY["Statement"]
 
 
 @pytest.mark.parametrize(
