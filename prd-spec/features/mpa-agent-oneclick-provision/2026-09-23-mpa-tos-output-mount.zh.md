@@ -39,6 +39,10 @@ options；浏览器 sessionStorage、任务 SQLite 和任务查询响应均不�
 `MPA_CODEX_WORKER_TOS_MOUNT_ENABLED=true` 和非敏感 bucket 名，不注入 TOS
 AK/SK。
 
+VeADK 要求 `agentkit-sdk-python>=0.8.5`；这是 Studio 支持的首个会序列化
+access-key `CredentialType` 的 SDK 契约。Studio 的轻量增量更新必须升级更旧的
+已安装 SDK，不能把旧版本视为已满足依赖。
+
 启用后，mpa-agent 复用 AgentKit SDK 的 `build_session_bucket_path` 生成会话
 目录，并写入 `CreateSessionRequest`。TIP Session 客户端不支持 GetTool，因此这里不
 读取 Tool；bucket 缺失时关闭式失败，不能静默创建未挂载 Session。已有 Session
@@ -52,6 +56,7 @@ AK/SK。
 - 不完整的 TOS YAML 在本地失败，且错误信息不泄露密钥。
 - 两个 Session ID 生成不同的 BucketPath，本地路径都为 `/data/output`。
 - 未启用时不增加 GetTool 请求。
+- Studio 更新后不能继续保留低于 0.8.5 的 AgentKit SDK。
 - 单测覆盖校验、请求构造、密钥脱敏与 Session 请求；增量可执行代码覆盖率高于 95%。
 
 ## 评审记录

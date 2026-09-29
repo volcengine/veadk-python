@@ -44,6 +44,11 @@ path `/sandbox-session/default/default` and local path `/data/output`. VeADK
 sets `MPA_CODEX_WORKER_TOS_MOUNT_ENABLED=true` and the non-secret bucket name
 on the Runtime. AK/SK never enter the Runtime.
 
+VeADK requires `agentkit-sdk-python>=0.8.5`, the first supported Studio SDK
+contract that serializes the access-key `CredentialType`. Thin Studio updates
+must therefore upgrade an older installed SDK instead of accepting it as an
+already satisfied dependency.
+
 When that flag is enabled, mpa-agent delegates path derivation to AgentKit
 SDK's `build_session_bucket_path` and attaches the result to
 `CreateSessionRequest`. It does not call GetTool because the TIP Session client
@@ -60,6 +65,7 @@ silently creating an unmounted Session. Existing Sessions remain unchanged.
 - Two Session IDs produce distinct bucket paths and the same `/data/output`
   local path.
 - Disabled configuration performs no extra GetTool request.
+- A Studio update cannot retain an AgentKit SDK older than 0.8.5.
 - Unit tests cover validation, payload construction, secret redaction, and
   Session request behavior; changed executable lines remain above 95% coverage.
 
