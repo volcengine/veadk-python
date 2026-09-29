@@ -353,6 +353,7 @@ def test_frontend_policy_allows_complete_managed_mpa_cloud_workflow() -> None:
         "apig:GetGateway",
         "apig:CreateIMChannelGateway",
         "apig:GetIMChannelGatewayStatus",
+        "iam:PassRole",
         "id:GetWorkloadPool",
         "id:CreateWorkloadPool",
         "id:GetWorkloadIdentity",

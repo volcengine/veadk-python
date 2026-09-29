@@ -137,6 +137,7 @@ FRONTEND_DEPLOY_POLICY: dict = {
                 "iam:ListUsers",
                 "iam:UpdateRole",
                 "iam:ListAttachedRolePolicies",
+                "iam:PassRole",
                 "id:CreateApiKey",
                 "id:CreateApiKeyCredentialProvider",
                 "id:CreateInboundAuthConfig",
