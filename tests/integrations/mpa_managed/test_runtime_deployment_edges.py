@@ -130,6 +130,28 @@ def test_new_empty_v0_runtime_is_replaced_once():
     asyncio.run(run())
 
 
+def test_registered_pending_empty_v0_runtime_is_replaced_on_retry():
+    async def run():
+        svc, registry, cloud, _ = deployer()
+        await svc.deploy(template())
+        first_token = cloud.creates[0]["ClientToken"]
+        registry.row["pending"] = True
+        cloud.runtimes["r-agent"].update(
+            Status="Error",
+            CurrentVersionNumber=0,
+            NetworkConfigurations=[],
+        )
+
+        result = await svc.deploy(template())
+
+        assert result["state"] == "ready"
+        assert cloud.deletes == ["r-agent"]
+        assert len(cloud.creates) == 2
+        assert cloud.creates[1]["ClientToken"] != first_token
+
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize(
     "runtime",
     [
