@@ -278,6 +278,12 @@ def test_retry_reports_only_allowlisted_provider_code():
         )
         == "MessageHint.AccessDenied.PassRole.Role"
     )
+    assert (
+        diagnostics.provider_error_code(
+            ApiError("TosMountConfig validation error: extra inputs not permitted")
+        )
+        == "MessageHint.Schema.Tos.Mount"
+    )
 
     async def run():
         events = []
