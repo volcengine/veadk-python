@@ -4,7 +4,7 @@
 
 - Component ID: `studio-mpa-creation`
 - Status: active
-- Revised: 2026-09-24
+- Revised: 2026-09-30
 - Design and evidence: [Studio MPA creation](../../prd-spec/features/mpa-agent-oneclick-provision/2026-09-20-studio-mpa-creation.md)
 - Owned code: `veadk/integrations/mpa/managed/`, `frontend/server/mpa_creation.py`, `frontend/src/adk/mpaCreation.ts`, `frontend/src/ui/mpa-create/`; CLI and directory integration.
 - Tests: `tests/integrations/mpa_managed/`, `frontend/tests/mpaCreation.test.tsx`.
@@ -39,7 +39,7 @@ draft; submitted fields stay locked and retry keeps the same identity. Forward
 navigation validates image references and the PG target. Busy actions disable
 navigation. See [navigation fix](../../prd-spec/bugfixes/mpa-create-navigation/2026-09-30-recover-step-navigation.md).
 
-CON-9 explicit-new-request amendment (2026-09-30, approved): any submitted draft
+CON-9 explicit-new-request amendment (2026-09-30, implemented): any submitted draft
 offers New Agent, including running/uncertain/unavailable tasks. This explicitly
 replaces the browser recovery draft with fresh identity and editable defaults,
 without cancelling or modifying the old cloud task. Pending UI actions and config

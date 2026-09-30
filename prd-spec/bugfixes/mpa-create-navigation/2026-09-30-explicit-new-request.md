@@ -2,7 +2,7 @@
 
 [中文](2026-09-30-explicit-new-request.zh.md)
 
-Change ID: mpa-create-new-request. Date: 2026-09-30. Status: approved.
+Change ID: mpa-create-new-request. Date: 2026-09-30. Status: implemented.
 Predecessor: [navigation fix](2026-09-30-recover-step-navigation.md).
 Component: [Studio MPA creation](../../../specs/studio-mpa-creation/README.md), CON-9.
 
@@ -46,6 +46,11 @@ directly. Approval: user's explicit New Agent/new-request instruction in this ch
 Verification (2026-09-30): regression failed before the fix (7 failures), then
 targeted dialog tests passed 30/30. Added executable statements covered 1/1
 (100%). Full frontend test: 1367 Node + 47 Vitest passed; production build and
-pre-commit all-files (including secrets) passed. Cloud/browser acceptance pending.
-Python checks: not_applicable, no Python or
-API payload changes.
+pre-commit all-files (including secrets) passed. Code `4f1650de` deployed to the
+existing cloud Studio (`f5d61f368888` / `xuime6ro`) at 11:02 Asia/Shanghai.
+Cloud/browser: pass. The user's restored locked tab offered New Agent; Return
+opened step 1 with a different ID and editable description/images. Description
+and TOS bucket edits worked, OpenViking/TOS fields were enabled, and 720px-window
+layout passed. Test values were cleared; no new MPA was submitted or old task
+cancelled. The viewport was reset and the fresh form left open. Python checks:
+not_applicable, no Python or API payload changes.

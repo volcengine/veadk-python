@@ -2,7 +2,7 @@
 
 [English](2026-09-30-explicit-new-request.md)
 
-变更 ID：mpa-create-new-request。日期：2026-09-30。状态：approved。
+变更 ID：mpa-create-new-request。日期：2026-09-30。状态：implemented。
 前序：[导航修复](2026-09-30-recover-step-navigation.zh.md)。
 组件：[Studio MPA 创建](../../../specs/studio-mpa-creation/README.zh.md)，CON-9。
 
@@ -39,6 +39,9 @@ POST、取消或云端变更。旧任务未结束时，现有单用户任务限�
 `review-spec` 不可用，已直接评审。批准：用户在本对话明确要求新建生成新请求。
 验证（2026-09-30）：修复前回归失败（7 项），修复后定向弹窗测试 30/30 pass。
 新增可执行语句覆盖 1/1（100%）。全量前端 1367 个 Node + 47 个 Vitest pass。
-生产构建及 pre-commit 全量检查（含密钥扫描）pass。云端/浏览器验收等待完成。
-Python 检查：not_applicable，
-不改 Python/API 载荷。
+生产构建及 pre-commit 全量检查（含密钥扫描）pass。代码 `4f1650de` 已于北京时间
+11:02 发布至现有云端 Studio（`f5d61f368888` / `xuime6ro`）。云端/浏览器：pass。
+用户恢复的锁定页签显示新建入口；Return 键触发后进入第一步，ID 不同，描述/镜像
+可编辑。描述及 TOS 桶名实际输入成功，OpenViking/TOS 字段可编辑，720px 窗口
+布局正常。测试值已清空，未提交新 MPA 或取消旧任务。已恢复窗口尺寸并保留新表单。
+Python 检查：not_applicable，不改 Python/API 载荷。
