@@ -36,10 +36,16 @@ class of bug, and the union of the three hid the interesting ones entirely.
   and its output appended -- a second request under one token;
 * it emits real ``openai_codex`` notification models when the SDK is importable
   and name-compatible shims when it is not.
+
+:class:`DirectDrivingCodex` is the counterpart for the direct mode, where Codex
+calls the model provider itself and reaches ADK tools through VeADK's local
+streamable-HTTP MCP bridge: no shim, a real ``mcp`` client, and ``mcpToolCall``
+thread items shaped like codex 0.159.2's.
 """
 
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import json
 import os
@@ -435,6 +441,16 @@ def _usage_block(usage: dict[str, Any]) -> dict[str, int]:
 
 def _item_notifications(turn_id: str, item: dict[str, Any]) -> list[_Note]:
     """Map one Responses output item onto the Codex thread-item lifecycle."""
+    return [
+        _Note(make_notification(name, payload))
+        for name, payload in _item_payloads(turn_id, item)
+    ]
+
+
+def _item_payloads(
+    turn_id: str, item: dict[str, Any]
+) -> list[tuple[str, dict[str, Any]]]:
+    """``(notification class name, payload)`` pairs for one output item."""
     item_id = str(item.get("id") or "item")
     itype = item.get("type")
 
@@ -446,26 +462,20 @@ def _item_notifications(turn_id: str, item: dict[str, Any]) -> list[_Note]:
         )
         thread_item = {"id": item_id, "type": "agentMessage", "text": text}
         return [
-            _Note(
-                make_notification(
-                    "ItemStartedNotification",
-                    {
-                        "turn_id": turn_id,
-                        "item": {"id": item_id, "type": "agentMessage", "text": ""},
-                    },
-                )
+            (
+                "ItemStartedNotification",
+                {
+                    "turn_id": turn_id,
+                    "item": {"id": item_id, "type": "agentMessage", "text": ""},
+                },
             ),
-            _Note(
-                make_notification(
-                    "AgentMessageDeltaNotification",
-                    {"turn_id": turn_id, "item_id": item_id, "delta": text},
-                )
+            (
+                "AgentMessageDeltaNotification",
+                {"turn_id": turn_id, "item_id": item_id, "delta": text},
             ),
-            _Note(
-                make_notification(
-                    "ItemCompletedNotification",
-                    {"turn_id": turn_id, "item": thread_item},
-                )
+            (
+                "ItemCompletedNotification",
+                {"turn_id": turn_id, "item": thread_item},
             ),
         ]
 
@@ -477,35 +487,29 @@ def _item_notifications(turn_id: str, item: dict[str, Any]) -> list[_Note]:
         ]
         thread_item = {"id": item_id, "type": "reasoning", "summary": summary}
         notes = [
-            _Note(
-                make_notification(
-                    "ItemStartedNotification",
-                    {
-                        "turn_id": turn_id,
-                        "item": {"id": item_id, "type": "reasoning", "summary": []},
-                    },
-                )
+            (
+                "ItemStartedNotification",
+                {
+                    "turn_id": turn_id,
+                    "item": {"id": item_id, "type": "reasoning", "summary": []},
+                },
             )
         ]
         for entry in summary:
             notes.append(
-                _Note(
-                    make_notification(
-                        "ReasoningSummaryTextDeltaNotification",
-                        {
-                            "turn_id": turn_id,
-                            "item_id": item_id,
-                            "delta": entry["text"],
-                        },
-                    )
+                (
+                    "ReasoningSummaryTextDeltaNotification",
+                    {
+                        "turn_id": turn_id,
+                        "item_id": item_id,
+                        "delta": entry["text"],
+                    },
                 )
             )
         notes.append(
-            _Note(
-                make_notification(
-                    "ItemCompletedNotification",
-                    {"turn_id": turn_id, "item": thread_item},
-                )
+            (
+                "ItemCompletedNotification",
+                {"turn_id": turn_id, "item": thread_item},
             )
         )
         return notes
@@ -522,17 +526,13 @@ def _item_notifications(turn_id: str, item: dict[str, Any]) -> list[_Note]:
             "status": "completed",
         }
         return [
-            _Note(
-                make_notification(
-                    "ItemStartedNotification",
-                    {"turn_id": turn_id, "item": {**thread_item, "status": None}},
-                )
+            (
+                "ItemStartedNotification",
+                {"turn_id": turn_id, "item": {**thread_item, "status": None}},
             ),
-            _Note(
-                make_notification(
-                    "ItemCompletedNotification",
-                    {"turn_id": turn_id, "item": thread_item},
-                )
+            (
+                "ItemCompletedNotification",
+                {"turn_id": turn_id, "item": thread_item},
             ),
         ]
 
@@ -579,3 +579,686 @@ def parse_sse_events(text: str) -> list[dict[str, Any]]:
                 data = json.loads(line[len("data:") :].strip())
         events.append({"event": name, "data": data})
     return events
+
+
+# ===================================================================== direct
+#
+# The Codex "direct" mode: Codex talks to the model provider itself (thread
+# config ``model_providers.<id>``) and reaches ADK tools through VeADK's local
+# streamable-HTTP MCP bridge (thread config ``mcp_servers.<name>``). There is no
+# Responses shim in the loop, so the double below must not use one either.
+
+#: Every model request any :class:`DirectDrivingCodex` made, in order.
+DIRECT_REQUEST_LOG: list[dict[str, Any]] = []
+
+#: Text Codex puts in ``function_call_output`` when an MCP tool needs approval
+#: under a never-ask policy (verbatim from codex 0.159.2).
+MCP_APPROVAL_DENIED = "MCP tool call requires approval, but approval policy is never"
+
+_END = object()
+
+
+def _default_model_call() -> Any:
+    """The *currently patched* ``litellm.aresponses`` the shim would have used.
+
+    Resolved per call rather than at import so a ``monkeypatch.setattr`` made
+    after the fake was constructed still wins -- which keeps
+    ``ScriptedBackend.as_aresponses()`` a drop-in model for this fake.
+    """
+    from veadk.runtime.codex import proxy
+
+    return proxy.litellm.aresponses
+
+
+def _as_dict(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    dump = getattr(value, "model_dump", None)
+    if callable(dump):
+        return dict(dump())
+    return dict(value)
+
+
+def _enum_value(value: Any) -> Any:
+    return getattr(value, "value", value)
+
+
+def _strip_schema_titles(schema: Any) -> Any:
+    """Drop JSON-schema ``title`` annotations the way Codex does before
+    advertising an MCP tool (``properties`` keys are data, never stripped)."""
+    if isinstance(schema, list):
+        return [_strip_schema_titles(entry) for entry in schema]
+    if not isinstance(schema, dict):
+        return schema
+    out: dict[str, Any] = {}
+    for key, value in schema.items():
+        if key == "title" and isinstance(value, str):
+            continue
+        if key in ("properties", "$defs", "definitions") and isinstance(value, dict):
+            out[key] = {k: _strip_schema_titles(v) for k, v in value.items()}
+        else:
+            out[key] = _strip_schema_titles(value)
+    return out
+
+
+def _now_ms() -> int:
+    import time
+
+    return int(time.time() * 1000)
+
+
+class DirectDrivingCodex:
+    """``AsyncCodex`` replacement for the direct-provider + MCP-bridge mode.
+
+    Select it the same way as :class:`ShimDrivingCodex`::
+
+        monkeypatch.setattr(runtime_module, "AsyncCodex", DirectDrivingCodex)
+
+    or, to override knobs without touching the class, ``DirectDrivingCodex
+    .configured(model_call=..., max_agent_loops=...)``, which returns a fresh
+    subclass whose ``instances`` list records every client the runtime built.
+
+    Per thread it reads ``model_provider`` / ``config["model_providers"]`` and
+    ``config["mcp_servers"]`` from ``thread_start`` kwargs and credentials from
+    ``CodexConfig.env``; per turn it connects to every MCP server with the real
+    ``mcp`` streamable-HTTP client, advertises its tools as a
+    ``{"type": "namespace", "name": "mcp__<server>"}`` tool, and loops model
+    call -> namespaced ``function_call`` -> MCP ``tools/call`` ->
+    ``function_call_output`` until the model stops calling tools.
+    """
+
+    #: Model requests per turn before the loop gives up (Codex has no such
+    #: cap; a scripted plan that never stops must still terminate).
+    max_agent_loops = 8
+    model_context_window = 128000
+    #: Async callable taking Responses kwargs; ``None`` = patched litellm.
+    model_call: Any = None
+    #: Mirror codex's ``Wall time: ...\nOutput:`` framing of MCP outputs.
+    wall_time_framing = True
+    #: Clients built from a ``configured()`` subclass (``None`` on the base
+    #: class, so nothing accumulates process-wide; use ``DIRECT_REQUEST_LOG``).
+    instances: list["DirectDrivingCodex"] | None = None
+
+    def __init__(self, *, config: Any, model_call: Any = None) -> None:
+        self.config = config
+        self.env: dict[str, str] = dict(getattr(config, "env", None) or {})
+        if model_call is not None:
+            self.model_call = model_call
+        #: Every model request body this client sent (plus ``_provider``).
+        self.requests: list[dict[str, Any]] = []
+        #: Every MCP ``tools/call`` this client issued.
+        self.mcp_calls: list[dict[str, Any]] = []
+        #: Every notification payload this client streamed, in order.
+        self.notifications: list[Any] = []
+        self.threads: list[_DirectThread] = []
+        if type(self).instances is not None:
+            type(self).instances.append(self)
+
+    @classmethod
+    def configured(cls, **overrides: Any) -> type["DirectDrivingCodex"]:
+        """A subclass with class attributes overridden and its own registry."""
+        attrs = dict(overrides)
+        if "model_call" in attrs and attrs["model_call"] is not None:
+            attrs["model_call"] = staticmethod(attrs["model_call"])
+        attrs["instances"] = []
+        return type(f"Configured{cls.__name__}", (cls,), attrs)
+
+    async def __aenter__(self) -> "DirectDrivingCodex":
+        return self
+
+    async def __aexit__(self, *exc: Any) -> None:
+        return None
+
+    async def thread_start(self, **kwargs: Any) -> "_DirectThread":
+        thread = _DirectThread(self, kwargs)
+        self.threads.append(thread)
+        return thread
+
+    # ------------------------------------------------------------ resolution
+
+    def _resolve_model_call(self) -> Any:
+        call = self.model_call
+        return call if call is not None else _default_model_call()
+
+
+class _DirectThread:
+    def __init__(self, client: DirectDrivingCodex, start_kwargs: dict[str, Any]):
+        import uuid
+
+        self.client = client
+        self.start_kwargs = start_kwargs
+        self.id = f"thread-{uuid.uuid4().hex[:12]}"
+        config = dict(start_kwargs.get("config") or {})
+        self.provider_id = str(start_kwargs.get("model_provider") or "")
+        providers = dict(config.get("model_providers") or {})
+        self.provider: dict[str, Any] = dict(providers.get(self.provider_id) or {})
+        if not self.provider and "CODEX_HOME" in client.env:
+            # Tolerate a provider still written to config.toml.
+            path = os.path.join(client.env["CODEX_HOME"], "config.toml")
+            if os.path.exists(path):
+                with open(path, "rb") as handle:
+                    home = tomllib.load(handle)
+                self.provider = dict(
+                    (home.get("model_providers") or {}).get(self.provider_id) or {}
+                )
+        self.mcp_servers: dict[str, dict[str, Any]] = {
+            str(name): dict(value or {})
+            for name, value in dict(config.get("mcp_servers") or {}).items()
+        }
+        #: Thread history carried across turns, as real Codex does.
+        self.history: list[dict[str, Any]] = []
+        self.turns: list[_DirectTurn] = []
+
+    async def turn(self, input_items: Any, **kwargs: Any) -> "_DirectTurn":
+        turn = _DirectTurn(self, input_items, kwargs)
+        self.turns.append(turn)
+        return turn
+
+
+class _McpServer:
+    """One connected MCP server for the lifetime of a turn."""
+
+    def __init__(self, name: str, config: dict[str, Any], session: Any) -> None:
+        self.name = name
+        self.config = config
+        self.session = session
+        self.namespace = f"mcp__{name}"
+        self.tools: dict[str, Any] = {}
+
+    @property
+    def parallel(self) -> bool:
+        return bool(self.config.get("supports_parallel_tool_calls"))
+
+    def approved(self, tool: str) -> bool:
+        per_tool = dict((self.config.get("tools") or {}).get(tool) or {})
+        mode = per_tool.get("approval_mode") or self.config.get(
+            "default_tools_approval_mode"
+        )
+        return mode == "approve"
+
+    def namespace_tool(self) -> dict[str, Any]:
+        return {
+            "type": "namespace",
+            "name": self.namespace,
+            "description": f"Tools in the {self.namespace} namespace.",
+            "tools": [
+                {
+                    "type": "function",
+                    "name": tool.name,
+                    "description": tool.description or "",
+                    "strict": False,
+                    "parameters": _strip_schema_titles(
+                        dict(tool.inputSchema or {"type": "object"})
+                    ),
+                }
+                for tool in self.tools.values()
+            ],
+        }
+
+
+class _DirectTurn:
+    def __init__(
+        self, thread: _DirectThread, input_items: Any, turn_kwargs: dict[str, Any]
+    ) -> None:
+        import uuid
+
+        self.thread = thread
+        self.client = thread.client
+        self.input_items = input_items
+        self.turn_kwargs = turn_kwargs
+        self.id = f"turn-{uuid.uuid4().hex[:12]}"
+        self._worker: asyncio.Task[None] | None = None
+        self._interrupted = False
+
+    async def interrupt(self) -> None:
+        """Cancel the in-flight model / MCP calls; the stream then closes
+        with a ``turn/completed`` whose status is ``interrupted``."""
+        self._interrupted = True
+        worker = self._worker
+        if worker is not None and not worker.done():
+            worker.cancel()
+
+    def stream(self) -> AsyncIterator[_Note]:
+        return self._stream()
+
+    # ------------------------------------------------------------- plumbing
+
+    def _note(self, name: str, payload: dict[str, Any]) -> _Note:
+        payload = dict(payload)
+        if name != "TurnStartedNotification" and name != "TurnCompletedNotification":
+            payload.setdefault("turn_id", self.id)
+        payload.setdefault("thread_id", self.thread.id)
+        if name == "ItemStartedNotification":
+            payload.setdefault("started_at_ms", _now_ms())
+        elif name == "ItemCompletedNotification":
+            payload.setdefault("completed_at_ms", _now_ms())
+        elif name == "ReasoningSummaryTextDeltaNotification":
+            payload.setdefault("summary_index", 0)
+        note = _Note(make_notification(name, payload))
+        self.client.notifications.append(note.payload)
+        return note
+
+    def _turn_note(self, status: str, error: dict[str, Any] | None) -> _Note:
+        return self._note(
+            "TurnCompletedNotification",
+            {
+                "turn": {
+                    "id": self.id,
+                    "items": [],
+                    "status": status,
+                    "error": error,
+                }
+            },
+        )
+
+    async def _stream(self) -> AsyncIterator[_Note]:
+        queue: asyncio.Queue[Any] = asyncio.Queue()
+        self._worker = asyncio.create_task(self._run(queue))
+        if self._interrupted:
+            self._worker.cancel()
+        try:
+            while True:
+                note = await queue.get()
+                if note is _END:
+                    break
+                yield note
+            try:
+                await self._worker
+            except asyncio.CancelledError:
+                if not self._interrupted:
+                    raise
+                yield self._turn_note("interrupted", None)
+        finally:
+            if not self._worker.done():
+                self._worker.cancel()
+                await asyncio.gather(self._worker, return_exceptions=True)
+
+    async def _run(self, queue: asyncio.Queue[Any]) -> None:
+        from contextlib import AsyncExitStack
+
+        emit = queue.put_nowait
+        try:
+            emit(
+                self._note(
+                    "TurnStartedNotification",
+                    {"turn": {"id": self.id, "items": [], "status": "inProgress"}},
+                )
+            )
+            async with AsyncExitStack() as stack:
+                servers = await self._connect(stack)
+                error = await self._loop(servers, emit)
+            if error is None:
+                emit(self._turn_note("completed", None))
+            else:
+                emit(
+                    self._note(
+                        "ErrorNotification", {"error": error, "will_retry": False}
+                    )
+                )
+                emit(self._turn_note("failed", error))
+        finally:
+            emit(_END)
+
+    async def _connect(self, stack: Any) -> dict[str, _McpServer]:
+        from mcp import ClientSession
+        from mcp.client.streamable_http import streamable_http_client
+
+        servers: dict[str, _McpServer] = {}
+        for name, config in self.thread.mcp_servers.items():
+            if config.get("enabled") is False:
+                continue
+            headers = dict(config.get("http_headers") or {})
+            token_var = config.get("bearer_token_env_var")
+            if token_var:
+                token = self.client.env.get(str(token_var))
+                if token is None:
+                    raise AssertionError(
+                        f"mcp_servers.{name}.bearer_token_env_var={token_var!r} "
+                        "is not set in CodexConfig.env"
+                    )
+                headers["Authorization"] = f"Bearer {token}"
+            http = await stack.enter_async_context(
+                httpx.AsyncClient(
+                    headers=headers,
+                    timeout=httpx.Timeout(30.0, read=300.0),
+                )
+            )
+            read, write, _ = await stack.enter_async_context(
+                streamable_http_client(str(config["url"]), http_client=http)
+            )
+            session = await stack.enter_async_context(ClientSession(read, write))
+            await session.initialize()
+            server = _McpServer(name, config, session)
+            enabled = config.get("enabled_tools")
+            disabled = set(config.get("disabled_tools") or ())
+            for tool in (await session.list_tools()).tools:
+                if enabled is not None and tool.name not in enabled:
+                    continue
+                if tool.name in disabled:
+                    continue
+                server.tools[tool.name] = tool
+            servers[server.namespace] = server
+        return servers
+
+    def _request_body(self, servers: dict[str, _McpServer]) -> dict[str, Any]:
+        start = self.thread.start_kwargs
+        return {
+            "model": str(start.get("model") or "scripted-model"),
+            "instructions": str(start.get("base_instructions") or ""),
+            "input": json.loads(json.dumps(self.thread.history)),
+            "tools": [s.namespace_tool() for s in servers.values() if s.tools],
+            "tool_choice": "auto",
+            "parallel_tool_calls": True,
+            "store": False,
+            "stream": False,
+        }
+
+    def _seed_history(self) -> None:
+        history = self.thread.history
+        developer = self.thread.start_kwargs.get("developer_instructions")
+        if developer and not history:
+            history.append(
+                {
+                    "type": "message",
+                    "role": "developer",
+                    "content": [{"type": "input_text", "text": str(developer)}],
+                }
+            )
+        history.append(
+            {
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": _prompt_text(self.input_items)}
+                ],
+            }
+        )
+
+    async def _loop(
+        self, servers: dict[str, _McpServer], emit: Any
+    ) -> dict[str, Any] | None:
+        import uuid
+
+        user_item_id = f"user-{uuid.uuid4().hex[:12]}"
+        user_item = {
+            "id": user_item_id,
+            "type": "userMessage",
+            "content": [
+                {
+                    "type": "text",
+                    "text": _prompt_text(self.input_items),
+                    "text_elements": [],
+                }
+            ],
+        }
+        emit(self._note("ItemStartedNotification", {"item": user_item}))
+        emit(self._note("ItemCompletedNotification", {"item": user_item}))
+        self._seed_history()
+
+        provider = self.thread.provider
+        env_key = provider.get("env_key")
+        api_key = self.client.env.get(str(env_key)) if env_key else None
+        running: dict[str, int] = {}
+
+        for _ in range(self.client.max_agent_loops):
+            body = self._request_body(servers)
+            record = json.loads(json.dumps(body))
+            record["_provider"] = {
+                "id": self.thread.provider_id,
+                "base_url": provider.get("base_url"),
+                "env_key": env_key,
+                "wire_api": provider.get("wire_api"),
+                "api_key": api_key,
+            }
+            self.client.requests.append(record)
+            DIRECT_REQUEST_LOG.append(record)
+            try:
+                response = _as_dict(
+                    await self.client._resolve_model_call()(
+                        **body, api_base=provider.get("base_url"), api_key=api_key
+                    )
+                )
+            except Exception as e:  # noqa: BLE001 - becomes a failed turn
+                return {"message": f"{type(e).__name__}: {e}"}
+
+            output = [_as_dict(item) for item in response.get("output") or []]
+            calls: list[dict[str, Any]] = []
+            for item in output:
+                itype = item.get("type")
+                if itype == "function_call":
+                    calls.append(item)
+                    self.thread.history.append(
+                        {
+                            key: item[key]
+                            for key in (
+                                "type",
+                                "id",
+                                "name",
+                                "namespace",
+                                "arguments",
+                                "call_id",
+                            )
+                            if key in item
+                        }
+                    )
+                    continue
+                if itype in ("message", "reasoning"):
+                    self.thread.history.append(item)
+                for name, payload in _item_payloads(self.id, item):
+                    emit(self._note(name, payload))
+
+            outputs = await self._execute(calls, servers, emit)
+            self.thread.history.extend(outputs)
+
+            last = _usage_block(_normalize_usage(response.get("usage") or {}))
+            for key, value in last.items():
+                running[key] = running.get(key, 0) + value
+            emit(
+                self._note(
+                    "ThreadTokenUsageUpdatedNotification",
+                    {
+                        "token_usage": {
+                            "last": last,
+                            "total": dict(running),
+                            "model_context_window": self.client.model_context_window,
+                        }
+                    },
+                )
+            )
+            if not calls:
+                break
+        return None
+
+    # ------------------------------------------------------------ tool calls
+
+    async def _execute(
+        self, calls: list[dict[str, Any]], servers: dict[str, _McpServer], emit: Any
+    ) -> list[dict[str, Any]]:
+        """Run one response's calls; return outputs in call order."""
+        results: list[dict[str, Any] | None] = [None] * len(calls)
+
+        async def run(index: int, call: dict[str, Any]) -> None:
+            results[index] = await self._execute_one(call, servers, emit)
+
+        concurrent: list[asyncio.Task[None]] = []
+        for index, call in enumerate(calls):
+            server = servers.get(str(call.get("namespace") or ""))
+            if server is not None and server.parallel:
+                # Codex starts every parallel-safe call before awaiting any.
+                concurrent.append(asyncio.ensure_future(run(index, call)))
+                await asyncio.sleep(0)
+            else:
+                await run(index, call)
+        if concurrent:
+            try:
+                await asyncio.gather(*concurrent)
+            except BaseException:
+                for task in concurrent:
+                    task.cancel()
+                await asyncio.gather(*concurrent, return_exceptions=True)
+                raise
+        return [r for r in results if r is not None]
+
+    async def _execute_one(
+        self, call: dict[str, Any], servers: dict[str, _McpServer], emit: Any
+    ) -> dict[str, Any]:
+        import time
+        from datetime import timedelta
+
+        call_id = str(call.get("call_id") or call.get("id") or "call")
+        namespace = call.get("namespace")
+        server = servers.get(str(namespace or ""))
+        if server is None:
+            # Not an MCP call: behave like ShimDrivingCodex's native tools.
+            for name, payload in _item_payloads(self.id, call):
+                emit(self._note(name, payload))
+            return {
+                "type": "function_call_output",
+                "call_id": call_id,
+                "output": json.dumps(
+                    {"status": "completed", "output": "codex-executed"}
+                ),
+            }
+
+        tool = str(call.get("name") or "")
+        raw_args = call.get("arguments") or "{}"
+        try:
+            arguments = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+        except json.JSONDecodeError:
+            arguments = raw_args
+        item = {
+            "id": call_id,
+            "type": "mcpToolCall",
+            "server": server.name,
+            "tool": tool,
+            "arguments": arguments,
+            "status": "inProgress",
+        }
+        emit(self._note("ItemStartedNotification", {"item": dict(item)}))
+        started = time.monotonic()
+
+        result: dict[str, Any] | None = None
+        error: dict[str, Any] | None = None
+        texts: list[str] = []
+        failed = False
+        if not isinstance(arguments, dict):
+            error = {"message": f"failed to parse function arguments: {raw_args}"}
+        elif tool not in server.tools:
+            error = {"message": f"unknown MCP tool {tool!r} on server {server.name!r}"}
+        elif not server.approved(tool) and (
+            _enum_value(self.turn_kwargs.get("approval_mode"))
+            or _enum_value(self.thread.start_kwargs.get("approval_mode"))
+        ) in ("deny_all", "never"):
+            error = {"message": MCP_APPROVAL_DENIED}
+        else:
+            meta = {
+                "callId": call_id,
+                "threadId": self.thread.id,
+                "sessionId": self.thread.id,
+                "x-codex-turn-metadata": {
+                    "session_id": self.thread.id,
+                    "thread_id": self.thread.id,
+                    "turn_id": self.id,
+                    "model": self.thread.start_kwargs.get("model"),
+                },
+            }
+            record = {
+                "server": server.name,
+                "tool": tool,
+                "arguments": arguments,
+                "meta": meta,
+                "status": "started",
+            }
+            self.client.mcp_calls.append(record)
+            timeout = server.config.get("tool_timeout_sec")
+            try:
+                outcome = await server.session.call_tool(
+                    tool,
+                    arguments,
+                    read_timeout_seconds=(
+                        timedelta(seconds=float(timeout)) if timeout else None
+                    ),
+                    meta=meta,
+                )
+            except asyncio.CancelledError:
+                record["status"] = "cancelled"
+                raise
+            except Exception as e:  # noqa: BLE001 - transport errors fail the call
+                record["status"] = "error"
+                error = {"message": f"tool call error: {e}"}
+            else:
+                record["status"] = "completed"
+                content = [c.model_dump(mode="json") for c in outcome.content]
+                result = {"content": content}
+                if outcome.structuredContent is not None:
+                    result["structured_content"] = outcome.structuredContent
+                texts = [str(c.get("text")) for c in content if c.get("type") == "text"]
+                failed = bool(outcome.isError)
+                record["is_error"] = failed
+
+        duration_ms = int((time.monotonic() - started) * 1000)
+        done = {**item, "duration_ms": duration_ms}
+        if error is not None:
+            done.update(status="failed", error=error)
+        else:
+            done.update(status="failed" if failed else "completed", result=result)
+        emit(self._note("ItemCompletedNotification", {"item": done}))
+
+        return {
+            "type": "function_call_output",
+            "call_id": call_id,
+            "output": self._frame_output(
+                started, result, error, texts, failed or error is not None
+            ),
+        }
+
+    def _frame_output(
+        self,
+        started: float,
+        result: dict[str, Any] | None,
+        error: dict[str, Any] | None,
+        texts: list[str],
+        failed: bool,
+    ) -> Any:
+        """Shape the model-facing output the way codex 0.159.2 does."""
+        import time
+
+        if error is not None:
+            body = str(error.get("message") or "")
+        elif not failed and result and result.get("structured_content") is not None:
+            body = json.dumps(result["structured_content"], separators=(",", ":"))
+        else:
+            body = "\n".join(texts)
+        if not self.client.wall_time_framing:
+            return body
+        header = f"Wall time: {time.monotonic() - started:.4f} seconds\nOutput:"
+        if failed:
+            return [
+                {"type": "input_text", "text": header},
+                {"type": "input_text", "text": body},
+            ]
+        return f"{header}\n{body}"
+
+
+def _normalize_usage(usage: dict[str, Any]) -> dict[str, Any]:
+    """Fold Responses ``*_details`` into the flat keys ``_usage_block`` reads."""
+    usage = _as_dict(usage)
+    flat = dict(usage)
+    details = usage.get("input_tokens_details") or {}
+    if isinstance(details, dict) and "cached_input_tokens" not in flat:
+        flat["cached_input_tokens"] = details.get("cached_tokens") or 0
+    details = usage.get("output_tokens_details") or {}
+    if isinstance(details, dict) and "reasoning_output_tokens" not in flat:
+        flat["reasoning_output_tokens"] = details.get("reasoning_tokens") or 0
+    return flat
+
+
+def mcp_output_body(output: Any) -> str:
+    """The payload of a framed ``function_call_output`` (wall-time stripped)."""
+    if isinstance(output, list):
+        return "\n".join(
+            str(part.get("text") or "") for part in output[1:] if isinstance(part, dict)
+        )
+    text = str(output)
+    marker = "\nOutput:\n"
+    return text.split(marker, 1)[1] if marker in text else text

@@ -192,18 +192,23 @@ class ScriptedBackend:
             rnd = self._next()
             if rnd.raises is not None:
                 raise rnd.raises
+            namespaces = _namespace_index(kwargs.get("tools"))
             output: list[dict[str, Any]] = []
             for offset, (name, args) in enumerate(rnd.tool_calls):
-                output.append(
-                    {
-                        "id": f"fc-{index}-{offset}",
-                        "call_id": f"call-{index}-{offset}",
-                        "type": "function_call",
-                        "name": name,
-                        "arguments": json.dumps(dict(args)),
-                        "status": "completed",
-                    }
-                )
+                call = {
+                    "id": f"fc-{index}-{offset}",
+                    "call_id": f"call-{index}-{offset}",
+                    "type": "function_call",
+                    "name": name,
+                    "arguments": json.dumps(dict(args)),
+                    "status": "completed",
+                }
+                # A plan names a tool by its plain name; when the request only
+                # advertises it inside a namespace tool (Codex's MCP shape),
+                # answer the way a real model does: plain name + `namespace`.
+                if name in namespaces:
+                    call["namespace"] = namespaces[name]
+                output.append(call)
             for chunk_index, chunk in enumerate(rnd.reply_texts):
                 output.append(
                     {
@@ -264,11 +269,20 @@ class ScriptedBackend:
         )
 
     def _record_codex(self, kwargs: dict[str, Any]) -> RecordedCall:
-        tool_names = tuple(
-            str(tool.get("name"))
-            for tool in kwargs.get("tools") or []
-            if isinstance(tool, dict) and tool.get("type") == "function"
-        )
+        tool_names: list[str] = []
+        for tool in kwargs.get("tools") or []:
+            if not isinstance(tool, dict):
+                continue
+            if tool.get("type") == "function":
+                tool_names.append(str(tool.get("name")))
+            elif tool.get("type") == "namespace":
+                # Codex's MCP tools: compare by the plain tool name, which is
+                # what the ADK arm declares.
+                tool_names.extend(
+                    str(inner.get("name"))
+                    for inner in tool.get("tools") or []
+                    if isinstance(inner, dict) and inner.get("type") == "function"
+                )
 
         history: list[str] = []
         current = ""
@@ -305,7 +319,7 @@ class ScriptedBackend:
 
         return RecordedCall(
             arm="codex",
-            tool_names=tool_names,
+            tool_names=tuple(tool_names),
             history_texts=tuple(history),
             current_text=current,
             tool_records=tuple(tool_records),
@@ -317,6 +331,24 @@ class ScriptedBackend:
 
 
 # --------------------------------------------------------------- helpers
+
+
+def _namespace_index(tools: Any) -> dict[str, str]:
+    """``{plain tool name: namespace}`` for tools advertised *only* inside a
+    ``{"type": "namespace"}`` tool; a top-level function of the same name wins.
+    """
+    top_level: set[str] = set()
+    nested: dict[str, str] = {}
+    for tool in tools or []:
+        if not isinstance(tool, dict):
+            continue
+        if tool.get("type") == "function":
+            top_level.add(str(tool.get("name")))
+        elif tool.get("type") == "namespace":
+            for inner in tool.get("tools") or []:
+                if isinstance(inner, dict) and inner.get("name"):
+                    nested.setdefault(str(inner["name"]), str(tool.get("name")))
+    return {name: ns for name, ns in nested.items() if name not in top_level}
 
 
 def _system_instruction_text(value: Any) -> str:
