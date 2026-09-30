@@ -210,6 +210,7 @@ def load_orders(day: str) -> dict:
 | `reasoning_effort` | `"medium"` | 推理强度，可选 `minimal`/`low`/`medium`/`high`/`xhigh`。越高越慢、消耗 token 越多。 |
 | `personality` | `"pragmatic"` | Codex 自带的回复风格，可选 `none`/`friendly`/`pragmatic`。 |
 | `model_transport` | `"auto"` | Codex 如何访问模型：`direct` 让 Codex 直接调用支持 Responses API 的后端，并通过 runtime 为本轮启动的本地 MCP server 使用 Agent 的工具，工具循环由 Codex 驱动；`shim` 经由进程内 Responses→Chat 转换层，由转换层执行工具，适用于只支持 chat 的后端；`auto` 对火山方舟（`*.volces.com`）、BytePlus（`*.bytepluses.com`）与 `api.openai.com` 选 `direct`，其余选 `shim`。 |
+| `thread_mode` | `"resume"` | `resume`：每个 Session 绑定一个 Codex thread，thread 的 rollout 随 Session 一起保存（短期记忆使用数据库时存进同一个库），下一轮在任意实例上恢复该 thread，Codex 保有自己的完整历史，不再注入对话记录；Agent 的 instruction 变化时会新开 thread 并用对话记录引导。`ephemeral`：每次调用新开 thread。仅 `direct` 传输生效，`shim` 始终为 `ephemeral`。 |
 | `max_tool_iterations` | `32` | 整个 Codex turn 内 shim 可执行的 ADK/MCP 工具轮次上限（1–256），仅 `shim` 传输生效。见下方行为变更说明。 |
 | `tool_timeout_seconds` | `120.0` | 单个 ADK/MCP 工具调用的超时秒数；设为 `None` 表示不超时。 |
 | `reuse_workspace` | `False` | 仅在同时设置了 `workspace_root` 时生效，而且只值得在单租户场景下开启，见上方 [Workspace 生命周期](#workspace-生命周期)。否则两个字段都别设，让工具调用 `current_workspace()`，见 [Workspace 是数据面](#workspace-是数据面)。 |
@@ -237,7 +238,7 @@ Codex 自带一份约 20KB、针对自身工具链（`apply_patch`、`update_pla
 ### Codex 环境变量
 
 <Callout type="warn">
-以下五个环境变量**覆盖** Python 中的 `CodexRuntimeConfig`，而不是作为它的默认值。也就是说，即使代码里写死了 `sandbox="workspace_write"`，部署环境里的 `VEADK_CODEX_SANDBOX=full_access` 依然会生效。这一优先级与大多数配置项相反，在容器/函数计算等由平台注入环境变量的场景中尤其需要注意。
+以下六个环境变量**覆盖** Python 中的 `CodexRuntimeConfig`，而不是作为它的默认值。也就是说，即使代码里写死了 `sandbox="workspace_write"`，部署环境里的 `VEADK_CODEX_SANDBOX=full_access` 依然会生效。这一优先级与大多数配置项相反，在容器/函数计算等由平台注入环境变量的场景中尤其需要注意。
 </Callout>
 
 | 环境变量 | 覆盖的配置项 | 说明 |
@@ -247,6 +248,7 @@ Codex 自带一份约 20KB、针对自身工具链（`apply_patch`、`update_pla
 | `VEADK_CODEX_WORKSPACE_ROOT` | `workspace_root` | 工作目录绝对路径。 |
 | `VEADK_CODEX_NETWORK_ACCESS` | `network_access` | `1`/`true`/`yes`/`on` 视为开启，其余视为关闭。 |
 | `VEADK_CODEX_MODEL_TRANSPORT` | `model_transport` | `auto`/`direct`/`shim`。 |
+| `VEADK_CODEX_THREAD_MODE` | `thread_mode` | `resume`/`ephemeral`。 |
 
 另有四个用于 Responses→Chat 转换层（shim）的环境变量。它们不参与上面的覆盖规则，只是 shim 自身的调参：
 

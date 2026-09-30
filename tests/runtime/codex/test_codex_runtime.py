@@ -1047,3 +1047,82 @@ def test_recorded_command_is_what_the_model_sent_not_the_shell_wrapper() -> None
     assert calls[0].name == "exec_command"
     assert calls[0].args["command"] == "python3 analysis/agg.py metrics.csv"
     assert calls[0].args["cwd"] == "/workspace"
+
+
+def test_turn_usage_reports_this_turn_not_the_resumed_threads_total() -> None:
+    """A resumed thread's usage `total` includes every earlier turn.
+
+    Reported as-is, turn 2 would be charged turn 1's tokens again, and every
+    consumer that sums usage per turn (telemetry, cost limits) double counts.
+    """
+    from veadk.runtime.codex.runtime import _turn_usage
+
+    baseline: dict = {}
+    # First update of turn 2: the thread had used 50k before this call.
+    first = _turn_usage(
+        {
+            "last": {"input_tokens": 10_000, "output_tokens": 100},
+            "total": {"input_tokens": 60_000, "output_tokens": 600},
+        },
+        baseline,
+    )
+    second = _turn_usage(
+        {
+            "last": {"input_tokens": 12_000, "output_tokens": 50},
+            "total": {"input_tokens": 72_000, "output_tokens": 650},
+        },
+        baseline,
+    )
+
+    assert first["total"] == {"input_tokens": 10_000, "output_tokens": 100}
+    assert second["total"] == {"input_tokens": 22_000, "output_tokens": 150}
+
+
+def test_turn_usage_on_a_fresh_thread_is_the_threads_total() -> None:
+    from veadk.runtime.codex.runtime import _turn_usage
+
+    baseline: dict = {}
+    update = {
+        "last": {"input_tokens": 5, "output_tokens": 1},
+        "total": {"input_tokens": 5, "output_tokens": 1},
+    }
+    assert _turn_usage(update, baseline)["total"] == update["total"]
+
+
+def _text_event(author: str, text: str, invocation_id: str) -> Event:
+    return Event(
+        author=author,
+        invocation_id=invocation_id,
+        content=types.Content(role="model", parts=[types.Part(text=text)]),
+    )
+
+
+def test_resumed_turn_is_told_what_others_said_since_its_last_reply() -> None:
+    """A resumed thread only knows its own turns.
+
+    Whatever the user or another agent said while this agent was not running
+    has to be handed over, or the thread answers as if it never happened;
+    anything the thread already saw must not be repeated.
+    """
+    from veadk.runtime.codex.runtime import _turns_since_own, _with_backfill
+
+    events = [
+        _text_event("user", "hello", "inv-1"),
+        _text_event("codex_agent", "hi, I can help", "inv-1"),
+        _text_event("user", "ask the billing agent", "inv-2"),
+        _text_event("billing_agent", "invoice INV-7 is overdue", "inv-2"),
+        _text_event("user", "codex, summarize", "inv-3"),
+    ]
+    ctx = SimpleNamespace(invocation_id="inv-3", session=SimpleNamespace(events=events))
+
+    lines = _turns_since_own(ctx, "codex_agent")
+
+    assert lines == [
+        "user: ask the billing agent",
+        "billing_agent: invoice INV-7 is overdue",
+    ]
+    prompt = _with_backfill("codex, summarize", lines)
+    assert "invoice INV-7 is overdue" in prompt
+    assert "hi, I can help" not in prompt
+    assert prompt.endswith("codex, summarize")
+    assert _with_backfill("same", []) == "same"

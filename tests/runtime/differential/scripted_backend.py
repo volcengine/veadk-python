@@ -119,6 +119,9 @@ class ScriptedBackend:
         self.rounds: list[Round] = list(rounds)
         self.arm = arm
         self.calls: list[RecordedCall] = []
+        #: The codex arm's request bodies as received, for assertions the
+        #: normalized :class:`RecordedCall` cannot express.
+        self.raw_requests: list[dict[str, Any]] = []
         self._cursor = 0
 
     # ---------------------------------------------------------------- plan
@@ -188,6 +191,7 @@ class ScriptedBackend:
 
         async def aresponses(**kwargs: Any) -> dict[str, Any]:
             index = self._cursor
+            self.raw_requests.append(kwargs)
             self.calls.append(self._record_codex(kwargs))
             rnd = self._next()
             if rnd.raises is not None:

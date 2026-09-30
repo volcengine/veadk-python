@@ -431,6 +431,48 @@ class CodexDirectAdapter(CodexAdapter):
 
     name = "codex-direct"
     transport = "direct"
+    capabilities = CodexAdapter.capabilities | {Capability.RESUME_ACROSS_RESTART}
+
+    def __init__(self, monkeypatch: Any, tmp_path: Any) -> None:
+        super().__init__(monkeypatch, tmp_path)
+        # session id -> Codex thread id, as last written to the thread store.
+        self._saved_threads: dict[str, str] = {}
+
+    def setup(self) -> None:
+        super().setup()
+        from veadk.runtime.codex import runtime as runtime_module
+
+        original_save = runtime_module._save_thread
+        adapter = self
+
+        async def recording_save(store, key, codex_home, thread_id, *args, **kw):
+            await original_save(store, key, codex_home, thread_id, *args, **kw)
+            record = await store.load(key)
+            if record is not None:
+                adapter._saved_threads[key.session_id] = record.thread_id
+
+        self.monkeypatch.setattr(runtime_module, "_save_thread", recording_save)
+
+    def restart(self) -> None:
+        """Drop everything a process would lose; keep the thread store.
+
+        Every invocation already runs in a fresh Codex process with a fresh
+        CODEX_HOME. What survives a real restart is the store (the session
+        database in production), so only process state is reset here: the
+        memoized runtime and the loop's MCP bridge.
+        """
+        from veadk.runtime import get_runtime
+        from veadk.runtime.codex import mcp_bridge
+
+        get_runtime.cache_clear()
+        with mcp_bridge._BRIDGES_LOCK:
+            bridges = list(mcp_bridge._BRIDGES.items())
+            mcp_bridge._BRIDGES.clear()
+        for _, bridge in bridges:
+            bridge.force_close()
+
+    def native_thread_id(self, session_id: str) -> str | None:
+        return self._saved_threads.get(session_id)
 
     def teardown(self) -> None:
         from veadk.runtime.codex import mcp_bridge
