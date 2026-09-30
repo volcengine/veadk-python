@@ -73,6 +73,12 @@ logger = get_logger(__name__)
 
 #: Default table name for :class:`DatabaseThreadStore`.
 DEFAULT_TABLE_NAME = "veadk_codex_threads"
+#: Format of a stored record (the database row / local file header). Every
+#: record is written with it; a record carrying a newer one was written by a
+#: newer VeADK (e.g. mid rolling upgrade) and is left alone rather than read
+#: or overwritten. Bump it, and teach ``load`` the old format, whenever the
+#: stored layout changes.
+SCHEMA_VERSION = 1
 # Same key width ADK uses for app/user/session ids in its session tables.
 _KEY_LENGTH = 128
 # gzip level: rollouts are highly repetitive JSON; 6 is the zlib sweet spot.
@@ -181,6 +187,19 @@ class ThreadStoreCorrupt(ThreadStoreError):
     """A stored rollout failed its integrity check on load."""
 
 
+class ThreadStoreIncompatible(ThreadStoreError):
+    """The stored record uses a newer :data:`SCHEMA_VERSION` than this code.
+
+    The record is intact, just not readable here. The caller should run the
+    turn without it and must not delete or overwrite it: the newer instance
+    that wrote it still needs it.
+    """
+
+
+class ThreadStoreSchemaError(ThreadStoreError):
+    """The existing table's columns do not match what this store needs."""
+
+
 class RolloutTooLarge(ThreadStoreError):
     """``save`` was given a rollout larger than :func:`rollout_size_limit`.
 
@@ -222,6 +241,14 @@ def _check_key(key: ThreadKey) -> None:
             raise ValueError(f"ThreadKey.{name} must be a non-empty string")
         if len(value) > _KEY_LENGTH:
             raise ValueError(f"ThreadKey.{name} longer than {_KEY_LENGTH} chars")
+
+
+def _check_schema_version(version: Any, where: str) -> None:
+    if int(version) > SCHEMA_VERSION:
+        raise ThreadStoreIncompatible(
+            f"{where} has schema version {version}; this VeADK reads up to "
+            f"{SCHEMA_VERSION}"
+        )
 
 
 def _compress(data: bytes) -> bytes:
@@ -497,6 +524,7 @@ class LocalDirThreadStore(CodexThreadStore):
                 payload = f.read()
         except FileNotFoundError:
             return None
+        _check_schema_version(header.get("schema_version", 1), path.name)
         try:
             data = gzip.decompress(payload)
         except (OSError, EOFError) as e:
@@ -540,6 +568,7 @@ class LocalDirThreadStore(CodexThreadStore):
                 )
             version = 1 if current is None else current.version + 1
             header = {
+                "schema_version": SCHEMA_VERSION,
                 "thread_id": thread_id,
                 "relpath": rollout.relpath,
                 "version": version,
@@ -635,6 +664,7 @@ def _build_table(table_name: str):
         Column("user_id", String(_KEY_LENGTH), primary_key=True),
         Column("session_id", String(_KEY_LENGTH), primary_key=True),
         Column("agent_name", String(_KEY_LENGTH), primary_key=True),
+        Column("schema_version", Integer, nullable=False),
         Column("thread_id", String(_KEY_LENGTH), nullable=False),
         Column("relpath", String(512), nullable=False),
         # BLOB on sqlite, BYTEA on postgresql; MySQL's plain BLOB caps at
@@ -678,6 +708,8 @@ class DatabaseThreadStore(CodexThreadStore):
         return self._engine
 
     async def _ensure_table(self) -> None:
+        from sqlalchemy import inspect
+
         if self._ready:
             return
         if self._ready_lock is None:
@@ -696,6 +728,20 @@ class DatabaseThreadStore(CodexThreadStore):
                     )
                 if not exists:
                     raise
+            async with self._engine.connect() as conn:
+                columns = await conn.run_sync(
+                    lambda c: {
+                        col["name"] for col in inspect(c).get_columns(self._table.name)
+                    }
+                )
+            missing = sorted(set(self._table.c.keys()) - columns)
+            if missing:
+                # Only a pre-release build of this store created such a table.
+                raise ThreadStoreSchemaError(
+                    f"table {self._table.name} lacks columns {missing}; it "
+                    "was created by an unreleased VeADK build, drop it and "
+                    "let the store recreate it"
+                )
             self._ready = True
 
     def _where(self, key: ThreadKey):
@@ -716,6 +762,7 @@ class DatabaseThreadStore(CodexThreadStore):
             row = (
                 await conn.execute(
                     select(
+                        t.c.schema_version,
                         t.c.thread_id,
                         t.c.relpath,
                         t.c.rollout_gz,
@@ -728,6 +775,7 @@ class DatabaseThreadStore(CodexThreadStore):
             ).first()
         if row is None:
             return None
+        _check_schema_version(row.schema_version, f"thread {row.thread_id}")
         try:
             data = await asyncio.to_thread(gzip.decompress, bytes(row.rollout_gz))
         except (OSError, EOFError) as e:
@@ -762,6 +810,7 @@ class DatabaseThreadStore(CodexThreadStore):
         await self._ensure_table()
         blob = await asyncio.to_thread(_compress, rollout.data)
         values = {
+            "schema_version": SCHEMA_VERSION,
             "thread_id": thread_id,
             "relpath": rollout.relpath,
             "rollout_gz": blob,
@@ -793,7 +842,12 @@ class DatabaseThreadStore(CodexThreadStore):
             async with self._engine.begin() as conn:
                 result = await conn.execute(
                     update(t)
-                    .where(self._where(key) & (t.c.version == expected_version))
+                    .where(
+                        self._where(key)
+                        & (t.c.version == expected_version)
+                        # Never overwrite a newer VeADK's record.
+                        & (t.c.schema_version <= SCHEMA_VERSION)
+                    )
                     .values(version=new_version, **values)
                 )
                 matched = result.rowcount

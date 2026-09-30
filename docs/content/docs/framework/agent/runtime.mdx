@@ -317,6 +317,7 @@ flowchart LR
 | 并发 | 同一进程内，同一 Session 的调用串行执行（`direct` + `resume`）。跨实例没有租约：两个实例并发运行同一 Session 时可能都会执行工具，后保存的 rollout 被拒绝，该回合在下一次恢复时依据 Session 对话记录交还给 thread。工具副作用不能重复执行时，应把同一 Session 在同一时刻只路由到一个实例。 |
 | `max_llm_calls` | `direct` 传输下为尽力而为：配额在每次模型调用完成后扣减，回合被中断前可能仍有一次在途请求发出。需要请求前的硬上限时使用 `model_transport="shim"`。 |
 | Rollout 大小 | 单个 thread 的 rollout 有大小上限（默认 32 MiB，`VEADK_CODEX_MAX_ROLLOUT_BYTES`），超出后不再保存，下一轮依据 Session 对话记录新开 thread。短期记忆使用 `local` 后端时，进程内 thread 存储按最近最少使用淘汰，上限见 [Codex 环境变量](#codex-环境变量)。 |
+| 滚动升级 | 数据库中的 thread 记录存放在 `veadk_codex_threads` 表中，每条记录带表结构版本号。旧版本实例遇到新版本写入的记录时，不读取也不覆盖，本轮新开 thread，并记录指标 `outcome=incompatible`。 |
 
 ### Codex 可观测性
 
@@ -335,7 +336,7 @@ runtime 通过进程的 OpenTelemetry MeterProvider 上报以下指标；未配�
 
 | 指标 | 类型 | 单位 | 属性 | 说明 |
 | :--- | :--- | :--- | :--- | :--- |
-| `veadk.codex.thread.resume` | Counter | 1 | `outcome`：`resumed`/`new_thread`/`instructions_changed`/`retried_then_resumed`/`fallback_after_error`/`store_error` | thread 恢复结果。 |
+| `veadk.codex.thread.resume` | Counter | 1 | `outcome`：`resumed`/`new_thread`/`instructions_changed`/`retried_then_resumed`/`fallback_after_error`/`store_error`/`incompatible` | thread 恢复结果。 |
 | `veadk.codex.thread.save` | Counter | 1 | `outcome`：`saved`/`conflict`/`failed`/`skipped`/`cancelled`/`too_large` | rollout 保存结果。 |
 | `veadk.codex.turn` | Counter | 1 | `status`：`completed`/`failed`/`cancelled`/`transferred`/`timeout`；`transport`：`direct`/`shim` | 回合数。 |
 | `veadk.codex.turn.duration` | Histogram | s | 同 `veadk.codex.turn` | 回合耗时。 |

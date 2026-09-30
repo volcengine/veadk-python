@@ -1625,6 +1625,54 @@ async def test_a_rollout_over_the_size_cap_drops_the_binding(monkeypatch) -> Non
 
 
 @pytest.mark.asyncio
+async def test_a_newer_schema_record_is_neither_resumed_nor_overwritten(
+    monkeypatch,
+) -> None:
+    """Mid rolling upgrade, an old instance meets a newer instance's record.
+
+    It answers on a new thread and leaves the record as it found it: deleting
+    it (the corrupt-record path) or saving over it would throw away the thread
+    the newer instances are resuming.
+    """
+    from veadk.runtime.codex.mcp_bridge import shutdown_bridge
+    from veadk.runtime.codex.thread_store import (
+        InMemoryThreadStore,
+        ThreadStoreIncompatible,
+    )
+
+    class _NewerSchemaStore(InMemoryThreadStore):
+        calls: list[str] = []
+
+        async def load(self, key: Any) -> Any:
+            type(self).calls.append("load")
+            raise ThreadStoreIncompatible("schema version 2")
+
+        async def save(self, *args: Any, **kwargs: Any) -> int:
+            type(self).calls.append("save")
+            return 1
+
+        async def delete(self, key: Any) -> None:
+            type(self).calls.append("delete")
+
+    send, backend, codex_class, _ = await _direct_session(
+        monkeypatch, (Round(text="answer", usage=(1, 1)),)
+    )
+    _use_thread_store(monkeypatch, _NewerSchemaStore())
+    try:
+        with _captured_runtime_logs() as records:
+            assert await send("hello") is None
+    finally:
+        await shutdown_bridge()
+
+    assert _NewerSchemaStore.calls == ["load"]
+    assert len(backend.calls) == 1
+    assert _starts_and_resumes(codex_class) == [(1, 0)]
+    messages = [r.getMessage() for r in records]
+    assert [m for m in messages if m.startswith("codex_thread_record_incompatible")]
+    assert not [m for m in messages if m.startswith("codex_thread_load_failed")]
+
+
+@pytest.mark.asyncio
 async def test_turn_outcomes_are_recorded_as_metrics(monkeypatch) -> None:
     """Resume, save and turn outcomes reach the metrics, with no ids."""
     from opentelemetry.sdk.metrics import MeterProvider

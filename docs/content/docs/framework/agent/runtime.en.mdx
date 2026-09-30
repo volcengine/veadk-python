@@ -349,6 +349,7 @@ flowchart LR
 | Concurrency | Within a process, invocations of one session are serialized (`direct` + `resume`). Across instances there is no lease: two instances running the same session concurrently may both execute tools; the later rollout save is rejected, and that turn is handed back to the thread from the session transcript on the next resume. Route one session to one instance at a time if tool side effects must not run twice. |
 | `max_llm_calls` | Best effort on the `direct` transport: the budget is charged after each model call, so one request already in flight may still be sent before the turn is interrupted. Use `model_transport="shim"` for a hard pre-request limit. |
 | Rollout size | A thread's rollout is capped (32 MiB by default, `VEADK_CODEX_MAX_ROLLOUT_BYTES`); past it the rollout is not saved and the next turn starts a new thread seeded from the session transcript. With the `local` short-term memory backend, the in-process thread store evicts least-recently-used threads; see [Codex environment variables](#codex-environment-variables) for its caps. |
+| Rolling upgrades | Database thread records live in the `veadk_codex_threads` table, and each record carries a schema version. An older instance that meets a record written by a newer one neither reads nor overwrites it: the turn runs on a new thread and is counted as `outcome=incompatible`. |
 
 ### Codex observability
 
@@ -367,7 +368,7 @@ The runtime emits the following metrics through the process's OpenTelemetry Mete
 
 | Metric | Type | Unit | Attributes | Description |
 | :--- | :--- | :--- | :--- | :--- |
-| `veadk.codex.thread.resume` | Counter | 1 | `outcome`: `resumed`/`new_thread`/`instructions_changed`/`retried_then_resumed`/`fallback_after_error`/`store_error` | Outcome of resuming a thread. |
+| `veadk.codex.thread.resume` | Counter | 1 | `outcome`: `resumed`/`new_thread`/`instructions_changed`/`retried_then_resumed`/`fallback_after_error`/`store_error`/`incompatible` | Outcome of resuming a thread. |
 | `veadk.codex.thread.save` | Counter | 1 | `outcome`: `saved`/`conflict`/`failed`/`skipped`/`cancelled`/`too_large` | Outcome of saving a rollout. |
 | `veadk.codex.turn` | Counter | 1 | `status`: `completed`/`failed`/`cancelled`/`transferred`/`timeout`; `transport`: `direct`/`shim` | Turns run. |
 | `veadk.codex.turn.duration` | Histogram | s | Same as `veadk.codex.turn` | Turn duration. |
