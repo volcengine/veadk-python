@@ -98,12 +98,18 @@ class ThreadRecord:
         version: Store version, starts at 1 and increases by 1 on every save.
         instruction_hash: :func:`instruction_hash` of the developer
             instructions the thread was started with.
+        covered_invocation_id: The last VeADK invocation the rollout
+            includes. A turn whose save was lost is missing from the rollout;
+            resuming from this point lets the runtime hand that turn back to
+            Codex from the session transcript. Empty for records saved
+            without it.
     """
 
     thread_id: str
     rollout: Rollout
     version: int
     instruction_hash: str
+    covered_invocation_id: str = ""
 
 
 class ThreadStoreError(Exception):
@@ -182,6 +188,7 @@ class CodexThreadStore(ABC):
         instruction_hash: str,
         *,
         expected_version: int | None,
+        covered_invocation_id: str = "",
     ) -> int:
         """Create or compare-and-set the record for ``key``; see class doc."""
 
@@ -216,6 +223,7 @@ class InMemoryThreadStore(CodexThreadStore):
         instruction_hash: str,
         *,
         expected_version: int | None,
+        covered_invocation_id: str = "",
     ) -> int:
         _check_key(key)
         _check_save_args(thread_id, rollout)
@@ -232,6 +240,7 @@ class InMemoryThreadStore(CodexThreadStore):
                 rollout=rollout,
                 version=version,
                 instruction_hash=instruction_hash,
+                covered_invocation_id=covered_invocation_id,
             )
             return version
 
@@ -272,11 +281,18 @@ class LocalDirThreadStore(CodexThreadStore):
         instruction_hash: str,
         *,
         expected_version: int | None,
+        covered_invocation_id: str = "",
     ) -> int:
         _check_key(key)
         _check_save_args(thread_id, rollout)
         return await asyncio.to_thread(
-            self._save_sync, key, thread_id, rollout, instruction_hash, expected_version
+            self._save_sync,
+            key,
+            thread_id,
+            rollout,
+            instruction_hash,
+            expected_version,
+            covered_invocation_id,
         )
 
     async def delete(self, key: ThreadKey) -> None:
@@ -304,6 +320,7 @@ class LocalDirThreadStore(CodexThreadStore):
             ),
             version=int(header["version"]),
             instruction_hash=header["instruction_hash"],
+            covered_invocation_id=str(header.get("covered_invocation_id") or ""),
         )
 
     def _load_sync(self, key: ThreadKey) -> ThreadRecord | None:
@@ -320,6 +337,7 @@ class LocalDirThreadStore(CodexThreadStore):
         rollout: Rollout,
         instruction_hash: str,
         expected_version: int | None,
+        covered_invocation_id: str = "",
     ) -> int:
         self._root.mkdir(parents=True, exist_ok=True, mode=0o700)
         path, _ = self._paths(key)
@@ -336,6 +354,7 @@ class LocalDirThreadStore(CodexThreadStore):
                 "relpath": rollout.relpath,
                 "version": version,
                 "instruction_hash": instruction_hash,
+                "covered_invocation_id": covered_invocation_id,
                 "rollout_sha256": _sha256(rollout.data),
                 "updated_at": _dt.datetime.now(_dt.timezone.utc).isoformat(),
             }
@@ -439,6 +458,7 @@ def _build_table(table_name: str):
         Column("rollout_sha256", String(64), nullable=False),
         Column("version", Integer, nullable=False),
         Column("instruction_hash", String(64), nullable=False),
+        Column("covered_invocation_id", String(_KEY_LENGTH), nullable=True),
         Column("updated_at", DateTime(timezone=True), nullable=False),
     )
     return metadata, table
@@ -512,6 +532,7 @@ class DatabaseThreadStore(CodexThreadStore):
                         t.c.rollout_sha256,
                         t.c.version,
                         t.c.instruction_hash,
+                        t.c.covered_invocation_id,
                     ).where(self._where(key))
                 )
             ).first()
@@ -530,6 +551,7 @@ class DatabaseThreadStore(CodexThreadStore):
             rollout=Rollout(thread_id=row.thread_id, relpath=row.relpath, data=data),
             version=int(row.version),
             instruction_hash=row.instruction_hash,
+            covered_invocation_id=str(row.covered_invocation_id or ""),
         )
 
     async def save(
@@ -540,6 +562,7 @@ class DatabaseThreadStore(CodexThreadStore):
         instruction_hash: str,
         *,
         expected_version: int | None,
+        covered_invocation_id: str = "",
     ) -> int:
         from sqlalchemy import insert, update
         from sqlalchemy.exc import IntegrityError
@@ -555,6 +578,7 @@ class DatabaseThreadStore(CodexThreadStore):
             "rollout_size": len(rollout.data),
             "rollout_sha256": _sha256(rollout.data),
             "instruction_hash": instruction_hash,
+            "covered_invocation_id": covered_invocation_id[:_KEY_LENGTH],
             "updated_at": _dt.datetime.now(_dt.timezone.utc),
         }
         t = self._table

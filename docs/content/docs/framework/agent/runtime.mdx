@@ -221,10 +221,10 @@ def load_orders(day: str) -> dict:
 | `reasoning_effort` | `"medium"` | 推理强度，可选 `minimal`/`low`/`medium`/`high`/`xhigh`。越高越慢、消耗 token 越多。 |
 | `personality` | `"pragmatic"` | Codex 自带的回复风格，可选 `none`/`friendly`/`pragmatic`。 |
 | `model_transport` | `"auto"` | Codex 如何访问模型：`direct` 让 Codex 直接调用支持 Responses API 的后端，并通过 runtime 为本轮启动的本地 MCP server 使用 Agent 的工具，工具循环由 Codex 驱动；`shim` 经由进程内 Responses→Chat 转换层，由转换层执行工具，适用于只支持 chat 的后端；`auto` 对火山方舟（`*.volces.com`）、BytePlus（`*.bytepluses.com`）与 `api.openai.com` 选 `direct`，其余选 `shim`；但 Agent 的 `model_extra_config` 含非空 `extra_body` 时，`auto` 仍选 `shim`，因为 `direct` 无法转发请求体。显式指定 `direct` 时 `extra_body` 不会被转发，并记录一条警告。 |
-| `turn_timeout_seconds` | `1800.0` | 单个 Codex 回合的时间上限（秒），到期后中断回合并抛出 `TimeoutError`；`None` 表示不限。同一 Session 的调用在一把 Session 级锁上排队，不设上限的回合会同时阻塞该 Session 之后的所有调用，因此默认给出 30 分钟上限。 |
+| `turn_timeout_seconds` | `1800.0` | 单个 Codex 回合的时间上限（秒），到期后中断回合并抛出 `TimeoutError`；`None` 表示不限。`direct` 传输且 `thread_mode="resume"` 时，同一 Session 的调用在一把 Session 级锁上排队，不设上限的回合会同时阻塞该 Session 之后的所有调用，因此默认给出 30 分钟上限；其余模式同一 Session 的调用可以并发执行。 |
 | `auto_compact_token_limit` | `None` | 历史 token 超过该值时由 Codex 自行压缩（Codex 的 `model_auto_compact_token_limit`），仅 `direct` 传输生效；`None` 沿用 Codex 默认值。 |
 | `thread_mode` | `"resume"` | `resume`：每个 Session 绑定一个 Codex thread，thread 的 rollout 随 Session 一起保存（短期记忆使用数据库时存进同一个库），下一轮在任意实例上恢复该 thread，Codex 保有自己的完整历史，不再注入对话记录；Agent 的 instruction 变化时会新开 thread 并用对话记录引导。`ephemeral`：每次调用新开 thread。仅 `direct` 传输生效，`shim` 始终为 `ephemeral`。 |
-| `max_tool_iterations` | `32` | 整个 Codex turn 内可执行的 ADK/MCP 工具调用上限（1–256），两种传输均生效：`shim` 由转换层计数；`direct` 由 runtime 统计本地 MCP server 在本轮收到的工具调用，超过上限即中断回合并抛出 `CodexToolIterationLimitError`。见下方行为变更说明。 |
+| `max_tool_iterations` | `32` | 整个 Codex turn 内可执行的 ADK/MCP 工具调用上限（1–256），两种传输均生效：`shim` 由转换层计数；`direct` 由 runtime 统计本地 MCP server 在本轮收到的工具调用，超过上限即中断回合并抛出 `CodexToolIterationLimitError`。注意 `direct` 按单次调用计数：模型在一次回复里并行发起的多个调用各计一次，因此同样的上限在 `direct` 下会比按轮计数的 `shim` 更早触发。见下方行为变更说明。 |
 | `tool_timeout_seconds` | `120.0` | 单个 ADK/MCP 工具调用的超时秒数；设为 `None` 表示不超时。 |
 | `reuse_workspace` | `False` | 仅在同时设置了 `workspace_root` 时生效，而且只值得在单租户场景下开启，见上方 [Workspace 生命周期](#workspace-生命周期)。否则两个字段都别设，让工具调用 `current_workspace()`，见 [Workspace 是数据面](#workspace-是数据面)。 |
 
