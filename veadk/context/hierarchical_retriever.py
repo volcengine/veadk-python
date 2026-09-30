@@ -113,11 +113,20 @@ class _QueryReuse:
     def dimension(self):
         return self.inner.dimension
 
+    @property
+    def batch_size(self):
+        return getattr(self.inner, "batch_size", 16)
+
     async def embed(self, texts):
+        # A passage identical to the question still needs passage preprocessing.
+        return await self.inner.embed(texts)
+
+    async def embed_query(self, texts):
         identity = (self.model, self.dimension)
         if texts == [self.query] and self.cached and self.cached[0] == identity:
             return [list(self.cached[1])]
-        vectors = await self.inner.embed(texts)
+        encode = getattr(self.inner, "embed_query", self.inner.embed)
+        vectors = await encode(texts)
         if (
             texts == [self.query]
             and len(vectors) == 1

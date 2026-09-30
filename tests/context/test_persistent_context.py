@@ -110,8 +110,18 @@ async def run(service, agent, question):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("resume_mode", ["auto", "off"])
 async def test_sqlite_reload_reuses_verified_summary_or_restores_originals(
-    tmp_path, resume_mode
+    tmp_path, resume_mode, monkeypatch
 ):
+    from veadk.context import defaults
+
+    async def no_additional_evidence(*args, **kwargs):
+        return []
+
+    # Isolate the persisted summary from optional evidence previews. Both BM25
+    # and semantic retrieval may legitimately quote an old invoice sentence.
+    monkeypatch.setattr(
+        defaults.DefaultContextRetriever, "rank_with_deadline", no_additional_evidence
+    )
     url = "sqlite+aiosqlite:///" + str(tmp_path / "sessions.sqlite")
     service = DatabaseSessionService(db_url=url)
     first_client = PersistenceClient()
@@ -142,7 +152,9 @@ async def test_sqlite_reload_reuses_verified_summary_or_restores_originals(
                 )
         originals = [e.content.model_dump(mode="json") for e in session.events]
         await run(
-            service, agent_for(first_client), "Explain the discrepancy; do not pay."
+            service,
+            agent_for(first_client, retrieval="lexical"),
+            "Explain the discrepancy; do not pay.",
         )
         saved = await service.get_session(**IDENTITY)
         cache = {k: v for k, v in saved.state.items() if k.startswith("veadk:context:")}
@@ -167,7 +179,7 @@ async def test_sqlite_reload_reuses_verified_summary_or_restores_originals(
         } == cache
         await run(
             resumed_service,
-            agent_for(resumed_client, resume_mode),
+            agent_for(resumed_client, resume_mode, retrieval="lexical"),
             "Restate the exact amount and the payment restriction.",
         )
         assert len(resumed_client.calls) == 1

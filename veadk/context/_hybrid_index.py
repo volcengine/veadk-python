@@ -335,13 +335,19 @@ class Store:
                 )
 
 
-def bm25_rank(chunks, query, limit=40):
+def bm25_rank(chunks, query, limit=40, *, deadline=None):
     terms = set(tokens(query))
-    docs = [Counter(tokens(c.embedding_text)) for c in chunks]
+    docs = []
+    for i, chunk in enumerate(chunks):
+        if deadline is not None and i % 32 == 0 and time.monotonic() >= deadline:
+            raise asyncio.TimeoutError
+        docs.append(Counter(tokens(chunk.embedding_text)))
     average = sum(sum(d.values()) for d in docs) / max(len(docs), 1)
     frequencies = Counter(term for doc in docs for term in doc)
     ranked = []
     for i, doc in enumerate(docs):
+        if deadline is not None and i % 32 == 0 and time.monotonic() >= deadline:
+            raise asyncio.TimeoutError
         length = sum(doc.values())
         score = 0.0
         for term in terms & doc.keys():
@@ -381,6 +387,9 @@ async def prepare(
         type(max_new_chunks) is not int or not 1 <= max_new_chunks <= 512
     ):
         raise ValueError("invalid_chunk_limit")
+    batch_size = getattr(embedder, "batch_size", EMBEDDING_BATCH_SIZE)
+    if type(batch_size) is not int or not 1 <= batch_size <= EMBEDDING_BATCH_SIZE:
+        raise ValueError("invalid_embedding_batch_size")
     model, dimension = embedder.model, embedder.dimension
     chunks = store.chunks(scope, source)
     missing = [c for c in chunks if store.vector(scope, c, model, dimension) is None]
@@ -401,8 +410,8 @@ async def prepare(
 
     allowance = len(missing) if max_new_chunks is None else max_new_chunks
     try:
-        for start in range(0, min(len(missing), allowance), EMBEDDING_BATCH_SIZE):
-            batch = missing[start : min(start + EMBEDDING_BATCH_SIZE, allowance)]
+        for start in range(0, min(len(missing), allowance), batch_size):
+            batch = missing[start : min(start + batch_size, allowance)]
             remaining_time = deadline - time.monotonic()
             if remaining_time <= 0:
                 raise asyncio.TimeoutError
@@ -461,7 +470,8 @@ async def search(
             # Partial indices must not silently bias ranking towards indexed chunks.
             if any(v is None for v in vectors):
                 raise EmbeddingUnavailable("incomplete_index")
-            query_vectors = await asyncio.wait_for(embedder.embed([focused]), timeout)
+            encode_query = getattr(embedder, "embed_query", embedder.embed)
+            query_vectors = await asyncio.wait_for(encode_query([focused]), timeout)
             if (embedder.model, embedder.dimension) != (model, dimension):
                 raise ValueError("embedding_version_changed")
             if len(query_vectors) != 1:

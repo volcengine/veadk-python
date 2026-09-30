@@ -220,6 +220,9 @@ async def test_sqlite_reload_can_retrieve_fact_omitted_from_history_summary(tmp_
             api_key="offline-test",
             llm_client=client,
             context_compression={
+                # Keep the fact omitted until the explicit read, independently
+                # of semantic previews that may already recover it for the LLM.
+                "retrieval": "lexical",
                 "context_window": 18000,
                 "output_reserve": 1000,
                 "trigger_ratio": 0.4,
