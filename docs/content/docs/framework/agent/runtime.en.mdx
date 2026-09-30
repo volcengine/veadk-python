@@ -241,7 +241,8 @@ Either way, a path that came from the *model* is untrusted input: resolve it aga
 | :--- | :--- | :--- |
 | `reasoning_effort` | `"medium"` | Reasoning budget: `minimal`/`low`/`medium`/`high`/`xhigh`. Higher is slower and uses more tokens. |
 | `personality` | `"pragmatic"` | Codex's own reply style: `none`/`friendly`/`pragmatic`. |
-| `max_tool_iterations` | `32` | Budget of bridged ADK/MCP tool round-trips the shim may run for the whole Codex turn (1–256). See the behavior change below. |
+| `model_transport` | `"auto"` | How Codex reaches the model. `direct`: Codex calls a Responses-capable backend itself and uses the agent's tools through a local MCP server the runtime runs for the turn, so Codex drives the tool loop. `shim`: an in-process Responses→Chat shim sits in between and executes the tools, for chat-only backends. `auto` picks `direct` for Volcengine Ark (`*.volces.com`), BytePlus (`*.bytepluses.com`) and `api.openai.com`, `shim` otherwise. |
+| `max_tool_iterations` | `32` | Budget of bridged ADK/MCP tool round-trips the shim may run for the whole Codex turn (1–256). Applies to the `shim` transport only. See the behavior change below. |
 | `tool_timeout_seconds` | `120.0` | Per-call timeout for a bridged ADK/MCP tool. `None` disables the timeout. |
 | `reuse_workspace` | `False` | Only meaningful alongside `workspace_root`, and only worth setting for a single tenant — see [Workspace lifetime](#workspace-lifetime) above. Leave both unset and let tools call `current_workspace()`; see [The workspace is the data plane](#the-workspace-is-the-data-plane). |
 
@@ -261,14 +262,14 @@ One consequence: **`personality` now actually takes effect.** It is rendered int
 Two corrections ride along on the same channel, because Codex's preserved system prompt describes a toolchain this bridge cannot fully deliver. The runtime appends a short **tool-availability note** to every turn's developer instructions:
 
 - `apply_patch` is not one of the tools on this run — the shim forwards only `function`-typed tools, and Codex's file-editing tool is not one — so files are created and edited with `exec_command` (for example a `cat > file <<'EOF'` heredoc).
-- `request_user_input` *is* advertised, but nothing can answer it: an ADK invocation has no interactive channel, so calling it ends the turn with the work undone. The model is told to decide with what it has and to say what was missing in its final message.
+- (`shim` transport only) `request_user_input` *is* advertised, but nothing can answer it: an ADK invocation has no interactive channel, so calling it ends the turn with the work undone. The model is told to decide with what it has and to say what was missing in its final message.
 
-You do not need to counter-instruct for either of these in your agent's `instruction`.
+The `direct` transport removes `request_user_input` (and `web_search`, multi-agent and other unused tools) from the thread config altogether, so its note carries only the first point. You do not need to counter-instruct for any of this in your agent's `instruction`.
 
 ### Codex environment variables
 
 <Callout type="warn">
-The four variables below **override** the Python `CodexRuntimeConfig` rather than acting as defaults for it. A hard-coded `sandbox="workspace_write"` in your code is still overridden by `VEADK_CODEX_SANDBOX=full_access` in the deployment environment. This precedence is the opposite of most settings and matters most where the platform injects environment variables (containers, FaaS).
+The five variables below **override** the Python `CodexRuntimeConfig` rather than acting as defaults for it. A hard-coded `sandbox="workspace_write"` in your code is still overridden by `VEADK_CODEX_SANDBOX=full_access` in the deployment environment. This precedence is the opposite of most settings and matters most where the platform injects environment variables (containers, FaaS).
 </Callout>
 
 | Variable | Overrides | Notes |
@@ -277,6 +278,7 @@ The four variables below **override** the Python `CodexRuntimeConfig` rather tha
 | `VEADK_CODEX_APPROVAL_MODE` | `approval_mode` | Same values as the field. |
 | `VEADK_CODEX_WORKSPACE_ROOT` | `workspace_root` | Absolute path to the workspace. |
 | `VEADK_CODEX_NETWORK_ACCESS` | `network_access` | `1`/`true`/`yes`/`on` enable it; anything else disables it. |
+| `VEADK_CODEX_MODEL_TRANSPORT` | `model_transport` | `auto`/`direct`/`shim`. |
 
 Four more variables tune the Responses→Chat shim. These are not part of the override rule above — they only tune the shim itself:
 
@@ -295,7 +297,7 @@ On top of that:
 
 - **A `call_llm` span.** ADK opens `call_llm` from its own LLM flow, which this runtime replaces, so the runtime opens the equivalent span itself and writes the prompt, the response and the token usage onto it at the end of the turn. VeADK's whole telemetry chain — the in-memory exporter's session index, trace export, portal metrics, and trace-based evaluation — therefore sees a Codex invocation at all. Mind the granularity: **one span per turn**, not one per inner model call.
 - **`usage_metadata`.** The turn's token usage is summed and attached to the single merged final event of that turn, rather than to each intermediate event, so downstream consumers that sum `usage_metadata` across events do not double-count.
-- **`RunConfig(max_llm_calls=...)` is enforced.** The shim charges the budget before every real backend model call. On exhaustion Codex sees a `429 llm_calls_limit` (not a 500, which it would retry — replaying every tool side effect of the turn), and once the turn ends the runtime re-raises `LlmCallsLimitExceededError` to the caller instead of returning whatever partial answer Codex salvaged.
+- **`RunConfig(max_llm_calls=...)` is enforced.** The shim charges the budget before every real backend model call. On exhaustion Codex sees a `429 llm_calls_limit` (not a 500, which it would retry — replaying every tool side effect of the turn), and once the turn ends the runtime re-raises `LlmCallsLimitExceededError` to the caller instead of returning whatever partial answer Codex salvaged. On the `direct` transport there is no shim, and Codex announces nothing before it sends a model request, so the runtime charges the budget after each model call instead: the call that crosses the limit completes, one more request may already be in flight and is aborted when the turn is interrupted, and no further call is made.
 
 ## Support matrix
 

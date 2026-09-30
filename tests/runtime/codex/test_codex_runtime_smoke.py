@@ -580,8 +580,12 @@ async def test_real_codex_binary_fails_turn_when_shim_is_unreachable() -> None:
         probe.bind(("127.0.0.1", 0))
         dead_port = probe.getsockname()[1]
 
+    from veadk.runtime.codex.model_provider import shim_route
+
     home = runtime_module._prepare_codex_home(
-        f"http://127.0.0.1:{dead_port}", "smoke-model", CodexRuntimeConfig()
+        shim_route(f"http://127.0.0.1:{dead_port}", ""),
+        "smoke-model",
+        CodexRuntimeConfig(),
     )
     workspace = tempfile.mkdtemp(prefix="veadk-codex-smoke-dead-shim-")
 

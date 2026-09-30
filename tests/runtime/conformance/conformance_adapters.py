@@ -240,14 +240,22 @@ class AdkAdapter(RuntimeAdapter):
 
 
 def _codex_request(kwargs: dict[str, Any], skills: Sequence[str]) -> ModelRequest:
-    tool_names = tuple(
-        str(tool.get("name"))
-        for tool in kwargs.get("tools") or []
-        if isinstance(tool, dict) and tool.get("type") == "function"
-    )
+    tool_names: list[str] = []
+    for tool in kwargs.get("tools") or []:
+        if not isinstance(tool, dict):
+            continue
+        if tool.get("type") == "function":
+            tool_names.append(str(tool.get("name")))
+        elif tool.get("type") == "namespace":
+            # The direct transport's MCP bridge tools arrive namespaced.
+            tool_names.extend(
+                str(inner.get("name"))
+                for inner in tool.get("tools") or []
+                if isinstance(inner, dict) and inner.get("type") == "function"
+            )
     chunks = [str(kwargs.get("instructions") or ""), _dump(kwargs.get("input"))]
     chunks.extend(skills)
-    return ModelRequest(text="\n".join(chunks), tool_names=tool_names)
+    return ModelRequest(text="\n".join(chunks), tool_names=tuple(tool_names))
 
 
 class CodexAdapter(RuntimeAdapter):
@@ -258,6 +266,8 @@ class CodexAdapter(RuntimeAdapter):
         {Capability.APPROVALS, Capability.MCP_TOOLS, Capability.SKILLS}
     )
     streams_partials = True
+    #: ``CodexRuntimeConfig.model_transport`` the agents run with.
+    transport = "shim"
 
     def __init__(self, monkeypatch: Any, tmp_path: Any) -> None:
         super().__init__(monkeypatch, tmp_path)
@@ -291,7 +301,10 @@ class CodexAdapter(RuntimeAdapter):
         adapter = self
 
         async def route(**kwargs: Any) -> Any:
+            # The shim folds developer instructions into `instructions`; the
+            # direct transport sends them as a developer message in `input`.
             instructions = str(kwargs.get("instructions") or "")
+            instructions += _dump(kwargs.get("input"))
             key = _key_from(instructions, adapter._aresponses)
             if key is None:
                 raise AssertionError(
@@ -305,7 +318,7 @@ class CodexAdapter(RuntimeAdapter):
             except HangForever:
                 await _park(adapter.hang_probe(key))
 
-        class _SkillSnoopingCodex(fake_codex_sdk.ShimDrivingCodex):
+        class _SkillSnoopingCodex(self._fake_codex_class()):  # type: ignore[misc]
             """Records the skills Codex would discover under ``CODEX_HOME``."""
 
             async def thread_start(self, **kwargs: Any) -> Any:
@@ -375,6 +388,7 @@ class CodexAdapter(RuntimeAdapter):
             model_api_key=_API_KEY,
             runtime="codex",
             tools=list(tools),
+            codex_runtime_config={"model_transport": self.transport},
             **agent_kwargs,
         )
         return ScriptedAgent(key=key, agent=agent, plan=rounds)
@@ -398,6 +412,69 @@ class CodexAdapter(RuntimeAdapter):
         from veadk.runtime.codex.runtime import CodexRuntime
 
         return CodexRuntime, "run_async"
+
+    def _fake_codex_class(self) -> type:
+        return fake_codex_sdk.ShimDrivingCodex
+
+
+#: `McpBridge` coroutines that run for the bridge's whole lifetime.
+_BRIDGE_SERVICE_COROUTINES = frozenset({"_serve", "_run_manager"})
+
+
+class CodexDirectAdapter(CodexAdapter):
+    """The Codex runtime on the direct transport: no shim, ADK tools over MCP.
+
+    The fake app-server calls the scripted model itself and reaches the
+    agent's tools through the runtime's real MCP bridge, so every scenario
+    exercises the bridge, the per-turn token and the event de-duplication.
+    """
+
+    name = "codex-direct"
+    transport = "direct"
+
+    def teardown(self) -> None:
+        from veadk.runtime.codex import mcp_bridge
+
+        # One bridge per event loop; the test's loop is gone by now, so close
+        # its bridge here rather than leaving it to the next `get_bridge`.
+        with mcp_bridge._BRIDGES_LOCK:
+            bridges = list(mcp_bridge._BRIDGES.items())
+            for loop, _ in bridges:
+                if loop.is_closed():
+                    mcp_bridge._BRIDGES.pop(loop, None)
+        for loop, bridge in bridges:
+            if loop.is_closed():
+                bridge.force_close()
+        super().teardown()
+
+    def leaks(self) -> list[str]:
+        from veadk.runtime.codex import mcp_bridge
+
+        problems = super().leaks()
+        for bridge in list(mcp_bridge._BRIDGES.values()):
+            if bridge._turns:
+                problems.append(
+                    f"MCP bridge still holds {len(bridge._turns)} registered "
+                    "turn(s): their bearer tokens and ADK tool executors outlive "
+                    "the invocation"
+                )
+        return problems
+
+    def is_service_task(self, task: "asyncio.Task[Any]") -> bool:
+        # The bridge is started lazily by the first turn and then serves every
+        # later turn on this loop; its server and session-manager tasks are
+        # meant to outlive any one turn.
+        # Only the server loop and the MCP session manager: a per-call task the
+        # bridge spawns for a tool must still count as a leak.
+        code = getattr(task.get_coro(), "cr_code", None)
+        return (
+            code is not None
+            and code.co_filename.endswith("mcp_bridge.py")
+            and code.co_name in _BRIDGE_SERVICE_COROUTINES
+        )
+
+    def _fake_codex_class(self) -> type:
+        return fake_codex_sdk.DirectDrivingCodex
 
 
 # -------------------------------------------------------------------- piagent
@@ -582,5 +659,6 @@ class PiAgentAdapter(RuntimeAdapter):
 ADAPTERS: dict[str, type[RuntimeAdapter]] = {
     AdkAdapter.name: AdkAdapter,
     CodexAdapter.name: CodexAdapter,
+    CodexDirectAdapter.name: CodexDirectAdapter,
     PiAgentAdapter.name: PiAgentAdapter,
 }

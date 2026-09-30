@@ -993,3 +993,113 @@ async def test_failed_interrupt_does_not_swallow_cancellation(monkeypatch) -> No
     assert isinstance(error, asyncio.CancelledError), error
     assert probe.interrupts == 1
     _assert_turn_released(probe)
+
+
+# ------------------------------------------------------------- direct transport
+
+
+_DIRECT = {"codex_runtime_config": {"model_transport": "direct"}}
+
+
+async def _run_direct_turn(monkeypatch, **kwargs: Any):
+    """``_run_turn`` on the direct transport: no shim, ADK tools over MCP."""
+    from veadk.runtime.codex.mcp_bridge import shutdown_bridge
+
+    agent_kwargs = {**_DIRECT, **(kwargs.pop("agent_kwargs", None) or {})}
+    try:
+        return await _run_turn(
+            monkeypatch,
+            agent_kwargs=agent_kwargs,
+            codex_class=fake_codex_sdk.DirectDrivingCodex,
+            **kwargs,
+        )
+    finally:
+        await shutdown_bridge()
+
+
+@pytest.mark.asyncio
+async def test_direct_transport_enforces_max_llm_calls(monkeypatch) -> None:
+    """Without the shim nothing charges the budget per model call.
+
+    The shim charged ``max_llm_calls`` before every backend call. On the
+    direct transport Codex calls the model itself, so the runtime charges on
+    each usage update instead and interrupts the turn once the call that
+    crossed the limit has finished. Without that, ``max_llm_calls`` would stop
+    working for every direct-transport agent and a looping model would run
+    until the wall clock stopped it.
+    """
+    _events, _session, backend, error = await _run_direct_turn(
+        monkeypatch,
+        plan=(
+            Round(tool_calls=(("record_fact", {"fact": "one"}),), usage=(1, 1)),
+            Round(tool_calls=(("record_fact", {"fact": "two"}),), usage=(1, 1)),
+            Round(tool_calls=(("record_fact", {"fact": "three"}),), usage=(1, 1)),
+            Round(text="never reached", usage=(1, 1)),
+        ),
+        agent_kwargs={"tools": [record_fact]},
+        run_config=RunConfig(max_llm_calls=1),
+    )
+
+    assert isinstance(error, LlmCallsLimitExceededError), (
+        f"the budget did not stop the direct turn; the caller saw {error!r}"
+    )
+    # Charged after each call, because Codex announces nothing before it sends
+    # a model request: the call that crossed the limit completes, and at most
+    # one more request may already be in flight when the interrupt lands (it
+    # is aborted). Nothing after that -- the final round is never served.
+    assert 2 <= len(backend.calls) <= 3, [call.tool_names for call in backend.calls]
+
+
+_SENSITIVE_RUNS: list[str] = []
+
+
+def delete_records(table: str) -> dict:
+    """Delete every record in a table."""
+    _SENSITIVE_RUNS.append(table)
+    return {"deleted": table}
+
+
+@pytest.mark.asyncio
+async def test_direct_transport_stops_the_turn_when_a_tool_needs_confirmation(
+    monkeypatch,
+) -> None:
+    """A tool waiting on the user must end the turn, not let the model go on.
+
+    The bridge answers Codex with a placeholder ("waiting for confirmation"),
+    and Codex would happily keep the turn going on it. The runtime has to
+    interrupt the turn so the user sees the ADK confirmation request as the
+    turn's outcome, and the tool must not have run.
+    """
+    from google.adk.tools.function_tool import FunctionTool
+
+    _SENSITIVE_RUNS.clear()
+    events, _session, _backend, error = await _run_direct_turn(
+        monkeypatch,
+        plan=(
+            Round(tool_calls=(("delete_records", {"table": "users"}),), usage=(1, 1)),
+            Round(text="Deleted everything, done.", usage=(1, 1)),
+        ),
+        agent_kwargs={
+            "tools": [FunctionTool(delete_records, require_confirmation=True)]
+        },
+    )
+
+    assert error is None, error
+    assert _SENSITIVE_RUNS == [], "the tool ran before the user confirmed it"
+    calls = [
+        part.function_call.name
+        for event in events
+        for part in (event.content.parts if event.content else [])
+        if part.function_call
+    ]
+    assert "adk_request_confirmation" in calls, calls
+    answers = [
+        part.text
+        for event in events
+        if event.is_final_response() and event.content
+        for part in event.content.parts or []
+        if part.text
+    ]
+    assert "Deleted everything, done." not in answers, (
+        "the model carried on past a tool that was waiting for confirmation"
+    )

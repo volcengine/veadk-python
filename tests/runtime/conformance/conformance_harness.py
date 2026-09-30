@@ -240,6 +240,15 @@ class RuntimeAdapter(ABC):
     def leaks(self) -> list[str]:
         """Per-turn resources still held after every turn has ended."""
 
+    def is_service_task(self, task: "asyncio.Task[Any]") -> bool:
+        """Whether ``task`` is a process-lifetime service, not per-turn work.
+
+        A runtime may lazily start a long-lived server during its first turn
+        (the Codex MCP bridge does); that server outliving the turn is by
+        design, so the leak checks skip it.
+        """
+        return False
+
     @abstractmethod
     def runtime_entrypoint(self) -> tuple[Any, str]:
         """``(owner, attribute)`` of the async generator that *is* the runtime.

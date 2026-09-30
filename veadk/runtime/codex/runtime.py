@@ -25,8 +25,12 @@ Key guarantees (mirroring the ``cc`` runtime):
 - Codex is isolated from the host's ``~/.codex`` via a dedicated ``CODEX_HOME`` with
   a generated ``config.toml``; the backend credential is injected through the
   provider's ``env_key`` env var. A wrong key fails loudly.
-- Codex only speaks the Responses API, so requests are routed through an
-  in-process Responses→chat shim (see :mod:`veadk.runtime.codex.proxy`).
+- Codex only speaks the Responses API. A Responses-capable backend is called
+  directly, with the agent's ADK tools served to Codex over a per-turn MCP
+  bridge (:mod:`veadk.runtime.codex.mcp_bridge`) so Codex owns the tool loop;
+  a chat-only backend is reached through an in-process Responses→chat shim
+  that runs the tools itself (:mod:`veadk.runtime.codex.proxy`). See
+  :mod:`veadk.runtime.codex.model_provider` for how the transport is chosen.
 
 Note: this requires the ``openai-codex`` SDK (``pip install openai-codex``),
 which bundles the Codex CLI binary via its ``openai-codex-cli-bin`` dependency.
@@ -66,6 +70,12 @@ from veadk.runtime.agent_transfer import transfer_agent_name
 from veadk.runtime.codex.config import CodexRuntimeConfig
 from veadk.runtime.codex.config import codex_subprocess_env
 from veadk.runtime.codex.config import toml_string
+from veadk.runtime.codex.mcp_bridge import McpBridge
+from veadk.runtime.codex.mcp_bridge import get_bridge
+from veadk.runtime.codex.model_provider import CodexModelRoute
+from veadk.runtime.codex.model_provider import direct_route
+from veadk.runtime.codex.model_provider import resolve_transport
+from veadk.runtime.codex.model_provider import shim_route
 from veadk.runtime.codex.proxy import get_shim
 from veadk.runtime.codex.skills import sync_skills_to_codex_home
 from veadk.runtime.codex.tools_bridge import (
@@ -81,6 +91,7 @@ from veadk.runtime.codex.translate import (
     build_prompt_from_llm_request,
     build_turn_usage_metadata,
     is_codex_final_text_event,
+    is_mcp_item_for_server,
     notification_to_events,
 )
 from veadk.runtime.codex.workspace import (
@@ -114,6 +125,8 @@ logger = get_logger(__name__)
 
 _PROVIDER_ID = "veadk"
 _KEY_ENV = "VEADK_CODEX_API_KEY"
+# Carries the MCP bridge's per-turn bearer token into the Codex subprocess.
+_MCP_TOKEN_ENV = "VEADK_CODEX_MCP_TOKEN"
 
 
 class _QueueSentinel(enum.Enum):
@@ -217,6 +230,13 @@ _TOOL_AVAILABILITY_NOTE = (
     "ends your turn with the work undone. Decide with what you have, and say "
     "what was missing in your final message."
 )
+# The direct transport's thread config drops `request_user_input` altogether
+# (see `lean_codex_config`), so only the `apply_patch` line still applies.
+_DIRECT_TOOL_AVAILABILITY_NOTE = (
+    "Tools available on this run:\n"
+    "- `apply_patch` is not one of them. Create and edit files with "
+    "`exec_command` instead (for example a `cat > file <<'EOF'` heredoc)."
+)
 
 
 class CodexRuntime(BaseRuntime):
@@ -237,11 +257,23 @@ class CodexRuntime(BaseRuntime):
                 "(the chat endpoint Codex is bridged onto)."
             )
 
-        shim = await get_shim(api_base, api_key)
-        shim_url = shim.url or ""
+        # "direct": Codex calls a Responses-capable backend itself and reaches
+        # the agent's ADK tools through the MCP bridge, so Codex owns the tool
+        # loop. "shim": the in-process Responses->chat shim sits in between and
+        # runs the ADK tools itself, for backends that only speak chat.
+        transport = resolve_transport(runtime_config, api_base)
+        shim = await get_shim(api_base, api_key) if transport == "shim" else None
+        bridge = await get_bridge() if transport == "direct" else None
+        route: CodexModelRoute = (
+            shim_route(shim.url or "", "")
+            if shim is not None
+            else direct_route(
+                api_base, api_key, extra_headers=_model_extra_headers(agent)
+            )
+        )
         workspace = _prepare_workspace(runtime_config, ctx)
         await _maybe_reap_workspaces(runtime_config)
-        codex_home = _prepare_codex_home(shim_url, model, runtime_config)
+        codex_home = _prepare_codex_home(route, model, runtime_config)
         # Expose the agent's skills to Codex by materializing them under
         # `$CODEX_HOME/skills/`, where Codex's native skill system discovers
         # them. Best-effort: a skill failure must not abort the turn.
@@ -261,7 +293,18 @@ class CodexRuntime(BaseRuntime):
         )
         use_adk_transfer_scheduler = _uses_adk_transfer_scheduler(ctx)
         turn_token: str | None = None
+        bridge_token: str | None = None
+        # The direct transport has no shim to charge `max_llm_calls` per model
+        # call and record the budget error; the stream pump does it instead.
+        direct_turn_error: BaseException | None = None
         run_started_at = time.monotonic()
+
+        def _turn_error() -> BaseException | None:
+            """The error that aborted this turn outside the event stream."""
+            if shim is not None:
+                return shim.turn_error(turn_token)
+            return direct_turn_error
+
         run_status = "failed"
 
         async def _emit_tool_event(event: "Event") -> None:
@@ -326,8 +369,10 @@ class CodexRuntime(BaseRuntime):
             if cleanup_done:
                 return
             cleanup_done = True
-            if turn_token is not None:
+            if shim is not None and turn_token is not None:
                 shim.unregister_turn(turn_token)
+            if bridge is not None and bridge_token is not None:
+                bridge.unregister_turn(bridge_token)
             await close_toolsets(tool_bundle.opened_toolsets)
             # `workspace` is deliberately kept: it is session-scoped and the
             # next invocation of this session must see the files this turn
@@ -406,20 +451,31 @@ class CodexRuntime(BaseRuntime):
                     runtime_call.llm_request,
                     transfer_targets,
                 )
-            turn_token = shim.register_turn(
-                tool_bundle.specs,
-                # Bound here rather than by a ContextVar set for the turn: the
-                # shim runs executors on a task descended from its uvicorn
-                # server task, which snapshotted its context when the *first*
-                # invocation in the process started the shim, so an ambient
-                # value would be that invocation's - a silent cross-tenant
-                # leak. See `veadk.runtime.codex.workspace`.
-                bind_workspace_to_executors(tool_bundle.executors, workspace),
-                max_tool_iterations=runtime_config.max_tool_iterations,
-                invocation_id=ctx.invocation_id,
-                model_extra_config=agent.model_extra_config,
-                on_model_call=lambda: _charge_llm_call(ctx),
+            # Bound here rather than by a ContextVar set for the turn: the shim
+            # and the MCP bridge both run executors on a task descended from
+            # their uvicorn server task, which snapshotted its context when the
+            # *first* invocation in the process started it, so an ambient value
+            # would be that invocation's - a silent cross-tenant leak. See
+            # `veadk.runtime.codex.workspace`.
+            bound_executors = bind_workspace_to_executors(
+                tool_bundle.executors, workspace
             )
+            if shim is not None:
+                turn_token = shim.register_turn(
+                    tool_bundle.specs,
+                    bound_executors,
+                    max_tool_iterations=runtime_config.max_tool_iterations,
+                    invocation_id=ctx.invocation_id,
+                    model_extra_config=agent.model_extra_config,
+                    on_model_call=lambda: _charge_llm_call(ctx),
+                )
+            elif bridge is not None and tool_bundle.specs:
+                bridge_token = bridge.register_turn(
+                    tool_bundle.specs,
+                    bound_executors,
+                    invocation_id=ctx.invocation_id,
+                    otel_context=_current_otel_context(),
+                )
             # Keep privileged instructions out of the user transcript. The SDK
             # exposes a native developer-instruction channel for them.
             #
@@ -442,7 +498,9 @@ class CodexRuntime(BaseRuntime):
                     system_instruction_to_text(
                         runtime_call.llm_request.config.system_instruction
                     ).strip(),
-                    _TOOL_AVAILABILITY_NOTE,
+                    _TOOL_AVAILABILITY_NOTE
+                    if shim is not None
+                    else _DIRECT_TOOL_AVAILABILITY_NOTE,
                 )
                 if block
             )
@@ -455,19 +513,27 @@ class CodexRuntime(BaseRuntime):
             # time if the summarizer asked for one. The tag rides in the prompt
             # text rather than a separate input item precisely because Codex
             # preserves user-message text verbatim across compaction and
-            # reordering, where a side-channel item would be dropped.
+            # reordering, where a side-channel item would be dropped. The
+            # direct transport needs no tag: ADK tools reach Codex as its own
+            # MCP tools, so a compaction pass has nothing of ours to replay.
             input_items = _build_codex_input(
                 prompt,
                 runtime_call.llm_request,
                 workspace,
-                turn_marker=shim.turn_marker(turn_token),
+                turn_marker=(
+                    shim.turn_marker(turn_token)
+                    if shim is not None and turn_token is not None
+                    else ""
+                ),
             )
             logger.info(
                 "codex_runtime_start invocation_id=%s agent=%s model=%s "
-                "sandbox=%s approval_mode=%s network_access=%s tool_count=%d",
+                "transport=%s sandbox=%s approval_mode=%s network_access=%s "
+                "tool_count=%d",
                 ctx.invocation_id,
                 agent.name,
                 model,
+                transport,
                 runtime_config.sandbox,
                 runtime_config.approval_mode,
                 runtime_config.network_access,
@@ -494,11 +560,26 @@ class CodexRuntime(BaseRuntime):
                     runtime_config.approval_mode,
                 )
             # CodexConfig.env is copied into only this subprocess. Never mutate
-            # process-wide CODEX_HOME or credential variables.
-            sdk_config = CodexConfig(
-                cwd=workspace,
-                env=codex_subprocess_env(codex_home, turn_token),
-            )
+            # process-wide CODEX_HOME or credential variables. The route's own
+            # credentials go in *after* the masking, which would otherwise
+            # blank the direct key along with the host's.
+            # The shim route was built before its turn token existed, so its
+            # env is not used: `codex_subprocess_env` sets the token itself.
+            subprocess_env = codex_subprocess_env(codex_home, turn_token or "")
+            thread_config: dict[str, Any] | None = None
+            if bridge is not None:
+                subprocess_env.update(route.env)
+                direct_config = route.thread_config()
+                if bridge_token is not None:
+                    subprocess_env[_MCP_TOKEN_ENV] = bridge_token
+                    direct_config["mcp_servers"] = {
+                        McpBridge.SERVER_NAME: bridge.codex_server_config(
+                            bearer_token_env_var=_MCP_TOKEN_ENV,
+                            tool_timeout_seconds=runtime_config.tool_timeout_seconds,
+                        )
+                    }
+                thread_config = direct_config
+            sdk_config = CodexConfig(cwd=workspace, env=subprocess_env)
         except BaseException as e:
             logger.error(
                 "codex_runtime_setup_failed invocation_id=%s stage=input error_type=%s",
@@ -523,13 +604,14 @@ class CodexRuntime(BaseRuntime):
             async with AsyncCodex(config=sdk_config) as codex:
                 thread = await codex.thread_start(
                     model=model,
-                    model_provider=_PROVIDER_ID,
+                    model_provider=route.provider_id,
                     developer_instructions=developer_instructions or None,
                     cwd=workspace,
                     ephemeral=True,
                     approval_mode=_approval_mode(runtime_config),
                     sandbox=_sandbox(runtime_config),
                     personality=runtime_config.personality,
+                    **({"config": thread_config} if thread_config else {}),
                 )
                 turn = await thread.turn(
                     input_items,
@@ -545,7 +627,14 @@ class CodexRuntime(BaseRuntime):
                 latest_token_usage: dict[str, Any] = {}
 
                 async def _pump_codex() -> None:
+                    nonlocal direct_turn_error
                     active_tool_items: set[str] = set()
+                    # MCP items for the bridge's own server. The bridge's
+                    # executors already emit the ADK function_call/response
+                    # events (with callbacks and state deltas applied), so
+                    # Codex's mirror of the same call would show every ADK tool
+                    # call twice.
+                    bridged_items: set[str] = set()
                     try:
                         # No turn-id filtering here: `AsyncTurnHandle.stream()`
                         # reads a per-turn queue that `MessageRouter` already
@@ -556,6 +645,10 @@ class CodexRuntime(BaseRuntime):
                         # accident of the attribute being absent.
                         async for note in stream:
                             payload = note.payload
+                            if bridge is not None and _is_bridged_mcp_item(
+                                payload, bridged_items
+                            ):
+                                continue
                             for event in notification_to_events(
                                 payload,
                                 agent.name,
@@ -577,6 +670,23 @@ class CodexRuntime(BaseRuntime):
                                         ctx.invocation_id,
                                         usage,
                                     )
+                                    # One usage update per finished model
+                                    # call. The shim charged the budget before
+                                    # each call; here the call has already
+                                    # happened, so the turn is stopped as soon
+                                    # as the call that crossed the limit ends.
+                                    if bridge is not None and direct_turn_error is None:
+                                        try:
+                                            _charge_llm_call(ctx)
+                                        except Exception as e:  # noqa: BLE001
+                                            direct_turn_error = e
+                                            logger.warning(
+                                                "codex_turn_aborted "
+                                                "invocation_id=%s error_type=%s",
+                                                ctx.invocation_id,
+                                                type(e).__name__,
+                                            )
+                                            await _interrupt_quietly(turn, ctx)
                                 await event_queue.put(event)
                     except BaseException as e:
                         await event_queue.put(e)
@@ -597,6 +707,7 @@ class CodexRuntime(BaseRuntime):
                 final_text_events: list[Event] = []
                 transfer_requested = False
                 deferred_transfer_event: Event | None = None
+                bridge_interrupted = False
                 while True:
                     queued = await event_queue.get()
                     if queued is _QUEUE_DONE:
@@ -604,6 +715,20 @@ class CodexRuntime(BaseRuntime):
                     if isinstance(queued, BaseException):
                         raise queued
                     event = queued
+                    # A bridged tool that needs the user (credential or
+                    # confirmation) or handed control to another agent has
+                    # already emitted its ADK request event. Codex would keep
+                    # the turn going on the placeholder result, so stop it
+                    # here; the next invocation resumes the call the usual way.
+                    if (
+                        bridge is not None
+                        and bridge_token is not None
+                        and not bridge_interrupted
+                    ):
+                        state = bridge.turn_state(bridge_token)
+                        if state is not None and state.interrupts:
+                            bridge_interrupted = True
+                            await _interrupt_quietly(turn, ctx)
                     transfer_target = transfer_agent_name(event)
                     if transfer_target and use_adk_transfer_scheduler:
                         transfer_requested = True
@@ -654,7 +779,7 @@ class CodexRuntime(BaseRuntime):
                 # relayed to Codex as a 429 and recorded rather than propagated.
                 # Re-raise it here so Runner's normal handling still applies,
                 # instead of returning whatever partial answer Codex salvaged.
-                shim_error = shim.turn_error(turn_token)
+                shim_error = _turn_error()
                 if shim_error is not None:
                     raise shim_error
 
@@ -718,12 +843,12 @@ class CodexRuntime(BaseRuntime):
             # `CancelledError` must reach the awaiting task unchanged or the
             # cancellation is swallowed and asyncio's contract is broken; the
             # budget error is logged instead so the cause is still visible.
-            if shim.turn_error(turn_token) is not None:
+            if _turn_error() is not None:
                 logger.warning(
                     "codex_shim_turn_error_dropped_on_cancel invocation_id=%s "
                     "error_type=%s",
                     ctx.invocation_id,
-                    type(shim.turn_error(turn_token)).__name__,
+                    type(_turn_error()).__name__,
                 )
             if turn is not None:
                 try:
@@ -746,7 +871,7 @@ class CodexRuntime(BaseRuntime):
             # the whole `max_llm_calls` feature with it and handing the
             # `on_model_error` callbacks the wrong exception. The shim error is
             # the *cause* and wins; the transport failure is chained onto it.
-            shim_error = shim.turn_error(turn_token)
+            shim_error = _turn_error()
             if shim_error is not None and shim_error is not e:
                 logger.warning(
                     "codex_shim_turn_error_preferred invocation_id=%s "
@@ -823,12 +948,14 @@ class CodexRuntime(BaseRuntime):
 
 
 def _prepare_codex_home(
-    shim_url: str, model: str, runtime_config: CodexRuntimeConfig
+    route: CodexModelRoute, model: str, runtime_config: CodexRuntimeConfig
 ) -> str:
     """Create an invocation-isolated CODEX_HOME with a config.toml.
 
-    The config points Codex at the local Responses shim using a dedicated
-    ``veadk`` provider, so the run never touches the host's ``~/.codex``.
+    The config points Codex at the route's provider -- the local Responses
+    shim, or the backend itself on the direct transport -- so the run never
+    touches the host's ``~/.codex``. Credentials are never written here: the
+    provider names the env var that carries them.
     """
     home = tempfile.mkdtemp(prefix="veadk-codex-")
     os.chmod(home, 0o700)
@@ -840,9 +967,13 @@ def _prepare_codex_home(
         "workspace_write": "workspace-write",
         "full_access": "danger-full-access",
     }[runtime_config.sandbox]
+    provider_block = "".join(
+        f"{key} = {_toml_value(value)}\n"
+        for key, value in route.provider_config.items()
+    )
     config = (
         f"model = {toml_string(model)}\n"
-        f"model_provider = {toml_string(_PROVIDER_ID)}\n"
+        f"model_provider = {toml_string(route.provider_id)}\n"
         f"review_model = {toml_string(model)}\n"
         f"approval_policy = {toml_string(approval_policy)}\n"
         f"sandbox_mode = {toml_string(sandbox_mode)}\n"
@@ -856,11 +987,8 @@ def _prepare_codex_home(
         # (`json: unknown field "summary"`). "none" makes Codex omit the field.
         f'model_reasoning_summary = "none"\n'
         f"personality = {toml_string(runtime_config.personality)}\n\n"
-        f"[model_providers.{_PROVIDER_ID}]\n"
-        f"name = {toml_string(_PROVIDER_ID)}\n"
-        f"base_url = {toml_string(f'{shim_url}/v1')}\n"
-        f"env_key = {toml_string(_KEY_ENV)}\n"
-        f'wire_api = "responses"\n\n'
+        f"[model_providers.{route.provider_id}]\n"
+        f"{provider_block}\n"
         f"[sandbox_workspace_write]\n"
         f"network_access = {str(runtime_config.network_access).lower()}\n\n"
         f"[features]\n"
@@ -877,6 +1005,58 @@ def _prepare_codex_home(
         f.write(config)
 
     return home
+
+
+def _toml_value(value: Any) -> str:
+    """Encode a provider-config value (scalar or flat table) as inline TOML."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, dict):
+        pairs = ", ".join(
+            f"{toml_string(str(k))} = {_toml_value(v)}" for k, v in value.items()
+        )
+        return "{ " + pairs + " }"
+    return toml_string(str(value))
+
+
+def _model_extra_headers(agent: "Agent") -> dict[str, str] | None:
+    """The agent's extra model headers, for the direct transport's provider.
+
+    The shim forwards ``model_extra_config`` headers (Ark attribution and
+    encryption defaults) on every backend call; the direct transport hands the
+    same headers to Codex's provider instead. ``extra_body`` has no provider
+    equivalent and is not forwarded on this transport.
+    """
+    from veadk.runtime.codex.proxy import _split_model_extra_config
+
+    headers, _ = _split_model_extra_config(agent.model_extra_config)
+    return headers or None
+
+
+def _current_otel_context() -> Any:
+    """The caller's OTel context, re-attached around bridged tool calls."""
+    try:
+        from opentelemetry import context as otel_context_api
+    except ImportError:  # OpenTelemetry is optional.
+        return None
+    return otel_context_api.get_current()
+
+
+async def _interrupt_quietly(turn: Any, ctx: "InvocationContext") -> None:
+    """Ask Codex to stop the turn; a failed request is logged, not raised."""
+    if turn is None:
+        return
+    try:
+        await turn.interrupt()
+    except Exception:  # noqa: BLE001 - the turn may already be over
+        logger.warning("codex_interrupt_failed invocation_id=%s", ctx.invocation_id)
+
+
+def _is_bridged_mcp_item(payload: Any, bridged_items: set[str]) -> bool:
+    """Whether a notification is Codex's mirror of an MCP-bridge tool call."""
+    return is_mcp_item_for_server(payload, McpBridge.SERVER_NAME, bridged_items)
 
 
 def _prepare_workspace(
