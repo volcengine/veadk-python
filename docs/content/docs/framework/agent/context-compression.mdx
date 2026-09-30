@@ -23,6 +23,9 @@ runner = Runner(agent=agent, app_name="my_app", user_id="user")
 不会用摘要覆盖数据库原文。已显式配置的 Session 后端保持有效；内存后端不保证重启恢复。
 SQLite 适合本地或单实例持久卷，多实例应使用共享数据库 Session 后端。
 
+完整多轮示例和三种开关用法见仓库文档 `docs/context-compression-developer-guide.zh.md`；
+JSON 字段与维护方法见 `docs/context-compression-capacity-config.zh.md`。
+
 ## 配置输入上限和阈值
 
 ```python
@@ -60,9 +63,15 @@ Studio 两种创建界面的模型设置均提供开关和上述阈值，比例�
 
 ## 模型容量从哪里来
 
-容量数据维护在 `veadk/context/model_capacity.py`，每个版本记录总窗口、最大输入、
+容量数据维护在 `veadk/context/model_capacities.json`，每个版本记录总窗口、最大输入、
 最大输出、官方来源和核实日期。当前覆盖方舟 Seed / DeepSeek / GLM、OpenAI、Claude、Gemini，
 按明确的 provider 和模型 ID 匹配；例如 Seed 2.1 Pro `260628` 为 256,000，`260915` 为 1,024,000。
+
+新增或更新容量只需修改 JSON 的 `models` 条目，不需要改 Python 模型分支。
+文件采用 `schema_version: 1`，每项完整填写容量、输出规划、协议开关、别名和来源；
+`model_capacity.py` 只负责读取、校验和查询。数据随 SDK 安装包交付，加载不依赖工作目录，
+不会联网下载或自动读取项目同名文件；修改后需重新构建/安装并重启应用。
+缺失文件、重复名称、无效类型或不合理容量会明确报配置错误，不静默退回猜测值。
 
 当前没有实时查询方舟容量：公开版本配置接口尚未定义完整的输入、输出及共享窗口契约。
 SDK 优先查经核实的内置表，再查随 LiteLLM 安装的本地精确条目，不下载目录或按模型家族猜容量。
@@ -93,19 +102,34 @@ Gemini 只公布输入/输出上限时，保守地将输入上限也作为共享
 
 ## 检索与开销
 
-默认按当前问题用关键词与 embedding 混合选择原文证据，检索索引保存在
-`.adk/context-index.sqlite3`，无需手工绑定检索器或预索引。短输入不会打开索引或调用 embedding。
-首次压缩按需建立索引，后续复用已完成的向量；大材料自动使用分层索引。
+未显式配置 `MODEL_EMBEDDING_API_KEY` 时，默认用纯 Python BM25 选择原文证据：
+英文按词、中文按字符二元组匹配，不携带模型权重、不下载模型，也不启动推理进程。
+默认词法路径按需计算，不创建向量索引；短输入不会触发检索。
 
-Ark Agent 使用同一官方端点的已有访问配置。可以通过现有 `MODEL_EMBEDDING_NAME`、
-`MODEL_EMBEDDING_DIM`、`MODEL_EMBEDDING_API_BASE`、`MODEL_EMBEDDING_API_KEY` 配置 embedding。
-其他服务或代理端点的密钥不会自动转给 Ark，需要显式提供 embedding 访问配置。
-检索共享 5 秒截止时间；默认每次 Agent 调用最多 64 次 embedding 请求、4 路并发、不自动重试。
-未配置、超时、部分索引或服务异常时使用本地证据选择，原文仍可回查。embedding 和必要摘要另计调用费用。
+```python
+from veadk import Agent
 
-可设置 `retrieval="lexical"` 只使用本地证据选择，或修改 `index_path` 和 `embedding_max_calls`。
-这些字段放在 `context_compression` 字典中。已有 `use_context_retriever(...)` 自定义绑定优先，
-由调用者负责关闭；默认检索器由 SDK 在每次调用结束时关闭，不残留后台请求。
+agent = Agent(name="assistant")  # 无在线 embedding 配置：默认无模型 BM25
+agent = Agent(name="assistant", context_compression={"retrieval": "lexical"})
+```
+
+`lexical` 强制不使用 embedding，即使环境中已有在线 embedding 配置。
+`auto` 下只有显式 `MODEL_EMBEDDING_API_KEY` 才会启用在线混合检索；模型、维度和地址
+通过 `MODEL_EMBEDDING_NAME`、`MODEL_EMBEDDING_DIM`、`MODEL_EMBEDDING_API_BASE` 配置。
+不会自动复用 Agent 的模型密钥，也不会因 Studio 自动填入模型名就调用 embedding。
+
+在线路径按需把可重建的向量索引保存在 `.adk/context-index.sqlite3`，后续复用；
+大材料自动使用分层索引。检索共享 5 秒预算，单来源最多 2 MB、查询最多 8 KiB；
+无模型路径覆盖完整来源的分段并检查截止时间，失败或预算不足时回退原有证据选择。
+在线默认每次调用最多 64 条 embedding 请求、4 路并发。
+
+BM25 适合关键词、日志和编号检索，同义改写和跨语言语义检索弱于 embedding，
+不能把之前混合检索的质量分数直接当作此默认路径的成绩。
+`veadk_read_context` 的 `search` 保留原文词法命中语义；原始 Session、来源引用和按需回查不变。
+本功能只影响上下文证据检索，不替换知识库或长期记忆配置。摘要仍由 LLM 生成。
+
+已有 `use_context_retriever(...)` 自定义绑定优先，由调用者负责关闭；
+SDK 默认检索器会在每次调用结束时释放其拥有的资源。
 
 ## 关闭和能力状态
 

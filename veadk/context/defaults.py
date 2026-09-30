@@ -26,7 +26,6 @@ import inspect
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
-from urllib.parse import urlsplit
 
 from veadk.utils.logger import get_logger
 
@@ -99,51 +98,8 @@ class ArkContextEmbedding:
             self._api_key = ""
 
 
-def _implicit_ark_access(agent, embedding_base):
-    """Trust the actual standard transport, not Agent's default metadata."""
-    from google.adk.models.lite_llm import LiteLLMClient
-
-    from veadk.context.client import BudgetedLiteLLMClient
-    from veadk.models.ark_llm import ArkLlm, ArkLlmClient
-    from veadk.models.retrying_lite_llm import RetryingLiteLlm
-
-    model = getattr(agent, "model", None)
-    if type(model) is RetryingLiteLlm:
-        client = model.llm_client
-        if isinstance(client, BudgetedLiteLLMClient):
-            client = client.delegate
-        if type(client) is not LiteLLMClient:
-            return None
-    elif type(model) is ArkLlm:
-        if type(model.llm_client) is not ArkLlmClient:
-            return None
-    else:
-        return None
-    transport = model._additional_args
-    base = transport.get("api_base")
-    key = transport.get("api_key")
-    if not isinstance(base, str) or not isinstance(key, str) or not key:
-        return None
-    source, target = urlsplit(base), urlsplit(embedding_base)
-    official_hosts = {"ark.cn-beijing.volces.com", "ark.ap-southeast.bytepluses.com"}
-    if (
-        source.scheme != "https"
-        or target.scheme != "https"
-        or source.hostname not in official_hosts
-        or source.netloc != target.netloc
-        or source.username is not None
-        or target.username is not None
-    ):
-        return None
-    return key
-
-
 def create_embedder(agent, config):
-    """Reuse configured Ark access without discovering credentials or resources.
-
-    Other providers require an explicit embedding key. In particular, never
-    send an OpenAI/proxy credential to the default Ark embedding endpoint.
-    """
+    """Online embedding requires explicit configuration; no model is bundled."""
     from veadk.consts import (
         DEFAULT_MODEL_EMBEDDING_API_BASE,
         DEFAULT_MODEL_EMBEDDING_DIM,
@@ -154,8 +110,6 @@ def create_embedder(agent, config):
         return None
     base = os.getenv("MODEL_EMBEDDING_API_BASE") or DEFAULT_MODEL_EMBEDDING_API_BASE
     key = os.getenv("MODEL_EMBEDDING_API_KEY")
-    if not key:
-        key = _implicit_ark_access(agent, base)
     if not key:
         return None
     model = os.getenv("MODEL_EMBEDDING_NAME") or DEFAULT_MODEL_EMBEDDING_NAME
@@ -203,12 +157,19 @@ class DefaultContextRetriever:
     async def rank_with_deadline(self, *args, deadline):
         self._initialize()
         if self._ranker is None:
-            # An empty ranking selects the existing local evidence algorithm.
-            return []
+            from .lexical_retriever import rank_lexical
+
+            self.last_status = "bm25"
+            return await rank_lexical(*args, deadline=deadline)
         try:
             return await self._ranker.rank_with_deadline(*args, deadline=deadline)
         finally:
             self.last_status = self._ranker.last_status
+
+    async def rank_search_with_deadline(self, *args, deadline):
+        # Explicit source lookup retains lexical hit/miss semantics. Nearest
+        # neighbours are useful for previews, but cannot prove a search hit.
+        return []
 
     async def close(self):
         try:

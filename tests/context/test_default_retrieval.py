@@ -101,6 +101,39 @@ async def test_default_manager_selects_evidence_without_manual_binding(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("query,found", [("INV-418", True), ("missing-9876", False)])
+async def test_default_source_search_does_not_treat_similarity_as_a_hit(
+    monkeypatch, query, found
+):
+    from test_retrieval import read, source
+
+    semantic_calls = []
+
+    async def neighbours(self, identity, reference, text, query, *, deadline):
+        semantic_calls.append(query)
+        return [(0, 128)]  # A valid, unrelated nearest neighbour always exists.
+
+    monkeypatch.setattr(
+        defaults.DefaultContextRetriever, "rank_with_deadline", neighbours
+    )
+    request, scope, policy, reference = source()
+    original = scope.session.model_dump()
+    async with defaults.invocation_retriever(agent(), policy) as retriever:
+        scope.evidence_retriever = retriever
+        result = await read(request, scope, reference, operation="search", query=query)
+        assert result["found"] is found
+        if found:
+            assert "INV-418 = 187.25 CNY" in "".join(
+                match["text"] for match in result["matches"]
+            )
+        else:
+            assert result["matches"] == []
+        assert semantic_calls == []
+        assert retriever._initialized is False
+        assert scope.session.model_dump() == original
+
+
+@pytest.mark.asyncio
 async def test_explicit_override_is_borrowed_and_not_closed():
     custom = SimpleNamespace()
     with use_context_retriever(custom):
@@ -186,15 +219,14 @@ def test_no_implicit_transfer_of_another_provider_key(provider, base, monkeypatc
     assert defaults.create_embedder(owner, ContextCompressionConfig()) is None
 
 
-def test_standard_ark_compatible_agent_configures_default_embedding(monkeypatch):
+def test_standard_ark_compatible_agent_has_no_implicit_embedding(monkeypatch):
     from veadk import Agent
 
     for name in ("MODEL_EMBEDDING_API_KEY", "MODEL_EMBEDDING_API_BASE"):
         monkeypatch.delenv(name, raising=False)
     owner = Agent(name="ordinary_agent", model_api_key="offline-test")
     embedding = defaults.create_embedder(owner, owner.context_compression)
-    assert isinstance(embedding, defaults.ArkContextEmbedding)
-    assert embedding._client is None  # Construction must not open network clients.
+    assert embedding is None
 
 
 @pytest.mark.asyncio
@@ -335,7 +367,9 @@ def test_explicit_transport_overrides_default_agent_endpoint(
 
 
 @pytest.mark.parametrize("model_type", ["chat", "responses"])
-def test_official_transport_uses_its_own_key(model_type, monkeypatch):
+def test_official_transport_does_not_implicitly_enable_online_embedding(
+    model_type, monkeypatch
+):
     from veadk import Agent
     from veadk.models.ark_llm import ArkLlm
     from veadk.models.retrying_lite_llm import RetryingLiteLlm
@@ -350,7 +384,7 @@ def test_official_transport_uses_its_own_key(model_type, monkeypatch):
     )
     owner = Agent(name="explicit_transport", model=model, model_api_key="offline-outer")
     embedding = defaults.create_embedder(owner, owner.context_compression)
-    assert embedding is not None and embedding._api_key == "offline-transport"
+    assert embedding is None
 
 
 def test_explicit_embedding_key_configures_other_provider(monkeypatch):

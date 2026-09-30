@@ -32,12 +32,20 @@ provider token usage. Irreducible protected input fails before an oversized requ
 media requires a suitable `media_token_reserve` when its size cannot be estimated.
 Output reserve plans space; it does not by itself cap generated output.
 
-Reviewed capacities live in `veadk/context/model_capacity.py`, with provider/model
+Reviewed capacities live in `veadk/context/model_capacities.json`, with provider/model
 IDs, context/input/output ceilings, source URLs and verification dates. The SDK
 checks this table first, then exact entries in the installed LiteLLM local catalogue.
 It makes no capacity API calls or runtime downloads and never guesses by model family.
 Ark's public model-version metadata does not yet establish the full capacity contract.
 An explicit window may reduce, but cannot exceed, a known smaller model limit.
+
+Maintain model entries in the JSON file (`schema_version: 1`); Python only loads,
+validates and looks up the data. Each entry explicitly includes capacities,
+output planning, protocol flags, aliases and provenance. The file ships inside
+the SDK package and loads independently of the working directory, without network
+access or project-local overrides. Rebuild/reinstall and restart after changes.
+Missing files, duplicate names, invalid types or inconsistent limits raise a clear
+configuration error instead of silently falling back to guessed capacities.
 
 If neither local table covers the model, supply a verified `context_window` and an
 output budget. Otherwise `ContextBudgetError` with `model_capacity_required` is raised
@@ -56,18 +64,38 @@ Both Studio creation views expose these controls in model settings, with percent
 for ratios. Drafts, nested LLM Agents, YAML and generated Python preserve the policy.
 Explicit `mode: "off"` remains off. Regenerate a project after changing its policy.
 
-The SDK automatically binds a lazy hybrid retriever and indexes eligible sources
-under pressure. Its disposable index lives at `.adk/context-index.sqlite3`. Ark Agents
-reuse existing access only for the same official endpoint. Existing `MODEL_EMBEDDING_*`
-settings configure model, dimension, base URL and key; other providers need explicit
-embedding access. The default permits 64 embedding requests per Agent invocation,
-4 concurrent requests, no retries, and a shared 5-second retrieval deadline. Unavailable
-services or partial indexing use local evidence selection. Originals remain readable.
-Embedding and occasional summaries add API usage. Short input opens no index or client.
+Without an explicit `MODEL_EMBEDDING_API_KEY`, the SDK uses pure-Python BM25 to
+select verbatim evidence: English words and Chinese character bigrams, with no
+bundled weights, model downloads, inference process or vector index. Retrieval is
+lazy and is not started for short input.
 
-Set `retrieval: "lexical"` to avoid embedding, or configure `index_path` and
-`embedding_max_calls` in the policy. Explicit `use_context_retriever(...)` bindings
-remain caller-owned; the default retriever closes after each invocation.
+```python
+from veadk import Agent
+
+agent = Agent(name="assistant")  # No online embedding configuration: model-free BM25
+agent = Agent(name="assistant", context_compression={"retrieval": "lexical"})
+```
+
+`lexical` forces model-free retrieval even when an online embedding key is set.
+In `auto`, only an explicit `MODEL_EMBEDDING_API_KEY` enables online hybrid retrieval;
+use `MODEL_EMBEDDING_NAME`, `MODEL_EMBEDDING_DIM` and `MODEL_EMBEDDING_API_BASE` to
+configure it. The Agent's model key is not reused implicitly. Studio's default
+model-name fields do not enable an online embedding call.
+
+The online path lazily stores a disposable vector index at `.adk/context-index.sqlite3`,
+reuses complete vectors, and uses hierarchical indexing for large sources. Retrieval
+shares a 5-second budget, with at most 2 MB per source and 8 KiB per query. The
+model-free path covers all source chunks and checks the deadline; failures or
+exhausted budgets retain existing evidence selection. Online calls allow 64 text
+requests per invocation with concurrency 4.
+
+BM25 works well for keywords, logs and identifiers but has weaker paraphrase and
+cross-language matching than embeddings. Earlier hybrid-retrieval scores do not
+establish this default's quality. The source reader's `search` keeps lexical hit/miss
+semantics, and original Session records, references and on-demand lookup remain intact.
+Summarization still uses its LLM; this setting does not replace knowledge-base or
+long-term-memory embeddings. Explicit `use_context_retriever(...)` bindings remain
+caller-owned and take precedence.
 
 Use `context_compression=False` to disable transformations. Capacity admission still
 applies, including rejection of unknown capacities. Inspect `agent.context_compression_status` for capacity gaps or unsupported

@@ -57,7 +57,7 @@ def begin_retrieval(scope):
     scope.evidence_retrieval_deadline = time.monotonic() + RETRIEVAL_TIMEOUT
 
 
-async def _rank(scope, source, text, query):
+async def _rank(scope, source, text, query, *, original_search=False):
     if scope.evidence_retriever is None:
         return None
     if len(text.encode()) > MAX_SOURCE_BYTES or len(query.encode()) > 8192:
@@ -75,6 +75,12 @@ async def _rank(scope, source, text, query):
     try:
         args = (identity(scope), handle(scope, source), text, query)
         bounded = getattr(scope.evidence_retriever, "rank_with_deadline", None)
+        if original_search:
+            search_ranker = getattr(
+                scope.evidence_retriever, "rank_search_with_deadline", None
+            )
+            if callable(search_ranker):
+                bounded = search_ranker
         # Keep the outer/shared deadline unchanged. The ranker's own deadline
         # leaves time for cancellation cleanup, lexical fallback and validation.
         call = (
@@ -193,7 +199,7 @@ def prepared_preview(scope, source, text, query, maximum):
 
 
 async def search_original(scope, source, text, query, maximum):
-    ranked = await _rank(scope, source, text, query)
+    ranked = await _rank(scope, source, text, query, original_search=True)
     matches = _matches(text, ranked, maximum, preview=False) if ranked else []
     if not matches:
         return None

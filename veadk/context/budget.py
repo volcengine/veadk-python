@@ -41,7 +41,7 @@ class ContextBudgetError(ValueError):
         self.budget = budget
         guidance = (
             "Model capacity is unknown. Use a reviewed provider/model ID from "
-            "veadk.context.model_capacity, or set "
+            "veadk/context/model_capacities.json, or set "
             'Agent(context_compression={"context_window": <verified total tokens>, '
             '"output_reserve": <reserved output tokens>}). '
             "For ep-* or private deployments, verify the deployment's limits; "
