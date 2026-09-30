@@ -14,7 +14,7 @@
 
 """OpenAI Codex runtime for VeADK.
 
-Drives an agent invocation through the Codex SDK (``codex_app_server``) instead
+Drives an agent invocation through the Codex SDK (``openai_codex``) instead
 of ADK's built-in LLM flow, while the surrounding ``Runner`` keeps owning
 session, memory and tracing.
 
@@ -55,10 +55,6 @@ from openai_codex import (  # type: ignore[import-not-found]
     MentionInput,
     Sandbox,
     TextInput,
-)
-from openai_codex.generated.v2_all import (  # type: ignore[import-not-found]
-    Personality,
-    ReasoningEffort,
 )
 
 from veadk.runtime.base_runtime import BaseRuntime
@@ -533,14 +529,14 @@ class CodexRuntime(BaseRuntime):
                     ephemeral=True,
                     approval_mode=_approval_mode(runtime_config),
                     sandbox=_sandbox(runtime_config),
-                    personality=Personality(runtime_config.personality),
+                    personality=runtime_config.personality,
                 )
                 turn = await thread.turn(
                     input_items,
                     cwd=workspace,
                     approval_mode=_approval_mode(runtime_config),
                     sandbox=_sandbox(runtime_config),
-                    effort=ReasoningEffort(runtime_config.reasoning_effort),
+                    effort=runtime_config.reasoning_effort,
                 )
                 stream = turn.stream()
                 # Latest `ThreadTokenUsageUpdatedNotification` payload. The
@@ -855,6 +851,10 @@ def _prepare_codex_home(
         # binary) and `store: false` is now unconditional in Codex's client,
         # so writing it here only produced a silently ignored key.
         f"model_reasoning_effort = {toml_string(runtime_config.reasoning_effort)}\n"
+        # Since CLI 0.159 Codex sends `reasoning.summary = "auto"` by default,
+        # and Ark's Responses API rejects the whole request over it
+        # (`json: unknown field "summary"`). "none" makes Codex omit the field.
+        f'model_reasoning_summary = "none"\n'
         f"personality = {toml_string(runtime_config.personality)}\n\n"
         f"[model_providers.{_PROVIDER_ID}]\n"
         f"name = {toml_string(_PROVIDER_ID)}\n"
@@ -862,7 +862,16 @@ def _prepare_codex_home(
         f"env_key = {toml_string(_KEY_ENV)}\n"
         f'wire_api = "responses"\n\n'
         f"[sandbox_workspace_write]\n"
-        f"network_access = {str(runtime_config.network_access).lower()}\n"
+        f"network_access = {str(runtime_config.network_access).lower()}\n\n"
+        f"[features]\n"
+        # On by default since CLI 0.159: an unreachable backend is retried
+        # forever instead of failing the turn after a few attempts. This
+        # runtime has no turn-level timeout, so a dead shim would hang the
+        # invocation instead of surfacing an error.
+        f"unbounded_connection_retries = false\n"
+        # Goals need a persisted thread, but every thread here is ephemeral.
+        # Left on, Codex still advertises the goal tools to the backend model.
+        f"goals = false\n"
     )
     with open(os.path.join(home, "config.toml"), "w", encoding="utf-8") as f:
         f.write(config)

@@ -331,3 +331,36 @@ def test_session_workspaces_are_stable_and_isolated(tmp_path) -> None:
     )
     shared = _prepare_workspace(shared_config, context("session-c"))
     assert shared == str(tmp_path / "shared")
+
+
+def test_codex_home_pins_settings_the_pinned_cli_would_break(tmp_path) -> None:
+    try:
+        import tomllib
+    except ModuleNotFoundError:  # Python 3.10: pytest depends on tomli there.
+        import tomli as tomllib
+
+    from veadk.runtime.codex.runtime import _prepare_codex_home
+
+    home = _prepare_codex_home(
+        "http://127.0.0.1:9", "model-x", CodexRuntimeConfig(network_access=True)
+    )
+    try:
+        with open(f"{home}/config.toml", "rb") as f:
+            config = tomllib.load(f)
+    finally:
+        import shutil
+
+        shutil.rmtree(home, ignore_errors=True)
+
+    # Both default to on in the pinned CLI. Unbounded retries would turn an
+    # unreachable shim into a hung invocation (this runtime has no turn
+    # timeout), and goals advertise tools that need a persisted thread.
+    assert config["features"] == {
+        "unbounded_connection_retries": False,
+        "goals": False,
+    }
+    # The CLI otherwise sends `reasoning.summary = "auto"`, which Ark's
+    # Responses API rejects outright (`json: unknown field "summary"`).
+    assert config["model_reasoning_summary"] == "none"
+    assert config["model_providers"]["veadk"]["wire_api"] == "responses"
+    assert config["sandbox_workspace_write"]["network_access"] is True

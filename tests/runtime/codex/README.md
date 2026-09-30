@@ -20,7 +20,7 @@ run therefore does **not** mean the SDK contract holds.
 To run them locally:
 
 ```bash
-uv sync --all-extras     # or: pip install 'openai-codex==0.1.0b3'
+uv sync --all-extras     # or: pip install 'openai-codex==0.159.2'
 PYTHONPYCACHEPREFIX=/private/tmp/veadk-pycache \
   .venv/bin/python -m pytest tests/runtime/codex/test_codex_sdk_protocol.py -v
 ```

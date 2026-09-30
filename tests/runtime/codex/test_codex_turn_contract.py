@@ -782,3 +782,214 @@ def test_importing_the_runtime_creates_no_workspace_root(tmp_path) -> None:
         "importing the module created "
         f"{[p.name for p in private_tmp.iterdir()]} in $TMPDIR"
     )
+
+
+# ------------------------------------------------------------------ cancellation
+
+
+class _CancelProbe:
+    """What the runtime did to the in-flight turn when its task was cancelled."""
+
+    def __init__(self, *, interrupt_error: BaseException | None = None) -> None:
+        self.stream_started = asyncio.Event()
+        self.interrupts = 0
+        self.interrupt_error = interrupt_error
+        self.shims: list[Any] = []
+        self.runtime_exit: BaseException | None = None
+
+
+def _record_runtime_exit(monkeypatch, probe: _CancelProbe) -> None:
+    """Record how ``CodexRuntime.run_async`` itself ended.
+
+    The error ``_run_turn`` reports is not enough: once its task is cancelled,
+    ADK's Runner raises ``CancelledError`` again on its own, so a runtime that
+    swallowed the cancellation would still look correct from outside.
+    """
+    fake_codex_sdk.install_openai_codex_stub()
+    from veadk.runtime.codex.runtime import CodexRuntime
+
+    original = CodexRuntime.run_async
+
+    async def recording(self, agent, ctx):
+        try:
+            async for event in original(self, agent, ctx):
+                yield event
+        except BaseException as e:  # noqa: BLE001 - recorded, then re-raised
+            probe.runtime_exit = e
+            raise
+
+    monkeypatch.setattr(CodexRuntime, "run_async", recording)
+
+
+def _probing_codex(probe: _CancelProbe, *, hang_before_backend: bool) -> type:
+    """A ``ShimDrivingCodex`` whose turn records interrupts.
+
+    With ``hang_before_backend`` the stream never reaches the shim, modelling a
+    turn stuck waiting on the model; otherwise it drives the shim normally.
+    """
+
+    class _Codex(fake_codex_sdk.ShimDrivingCodex):
+        async def thread_start(self, **kwargs: Any) -> Any:
+            inner = await super().thread_start(**kwargs)
+            return _ProbeThread(inner, probe, hang_before_backend)
+
+    return _Codex
+
+
+class _ProbeThread:
+    def __init__(self, inner: Any, probe: _CancelProbe, hang: bool) -> None:
+        self._inner = inner
+        self._probe = probe
+        self._hang = hang
+
+    async def turn(self, input_items: Any, **kwargs: Any) -> Any:
+        inner = await self._inner.turn(input_items, **kwargs)
+        return _ProbeTurn(inner, self._probe, self._hang)
+
+
+class _ProbeTurn:
+    def __init__(self, inner: Any, probe: _CancelProbe, hang: bool) -> None:
+        self._inner = inner
+        self._probe = probe
+        self._hang = hang
+        self.id = inner.id
+
+    async def interrupt(self) -> None:
+        self._probe.interrupts += 1
+        if self._probe.interrupt_error is not None:
+            raise self._probe.interrupt_error
+
+    def stream(self) -> Any:
+        probe = self._probe
+        # `_run_turn` clears the registry on the way out; keep the shim so the
+        # test can check its turn table after the cancelled run.
+        probe.shims.extend(fake_codex_sdk.SHIM_REGISTRY.values())
+
+        async def _gen():
+            probe.stream_started.set()
+            if self._hang:
+                await asyncio.Event().wait()
+            async for note in self._inner.stream():
+                yield note
+
+        return _gen()
+
+
+async def _cancel_when(started: asyncio.Event, run: Any) -> Any:
+    """Run ``_run_turn`` as a task, cancel it once ``started`` fires."""
+    task = asyncio.create_task(run)
+    await asyncio.wait_for(started.wait(), timeout=10)
+    task.cancel()
+    return await asyncio.wait_for(task, timeout=10)
+
+
+def _assert_turn_released(probe: _CancelProbe) -> None:
+    assert isinstance(probe.runtime_exit, asyncio.CancelledError), (
+        "the runtime did not re-raise CancelledError; it ended with "
+        f"{probe.runtime_exit!r}"
+    )
+    assert probe.shims, "the turn never reached the shim registry"
+    for shim in probe.shims:
+        assert not shim._turns, (
+            "a cancelled turn stayed registered on the shim: its token and "
+            "executors would outlive the invocation"
+        )
+
+
+@pytest.mark.asyncio
+async def test_cancel_while_waiting_on_model_interrupts_codex_and_reraises(
+    monkeypatch,
+) -> None:
+    """A cancelled invocation must stop the Codex turn, not orphan it.
+
+    The runtime only learns about the cancellation at its own ``await``; the
+    Codex turn keeps running in the app-server unless the runtime interrupts it.
+    ``CancelledError`` must then reach the caller unchanged, or asyncio's
+    cancellation contract is broken and the Runner treats the run as finished.
+    """
+    probe = _CancelProbe()
+    _record_runtime_exit(monkeypatch, probe)
+    _events, _session, backend, error = await _cancel_when(
+        probe.stream_started,
+        _run_turn(
+            monkeypatch,
+            plan=(Round(text="never sent", usage=(1, 1)),),
+            codex_class=_probing_codex(probe, hang_before_backend=True),
+        ),
+    )
+
+    assert isinstance(error, asyncio.CancelledError), error
+    assert probe.interrupts == 1
+    assert not backend.calls
+    _assert_turn_released(probe)
+
+
+_SLOW_TOOL: dict[str, Any] = {}
+
+
+async def slow_lookup(query: str) -> dict:
+    """Look something up slowly."""
+    _SLOW_TOOL["started"].set()
+    _SLOW_TOOL["runs"] += 1
+    try:
+        await asyncio.Event().wait()
+    except asyncio.CancelledError:
+        _SLOW_TOOL["cancelled"] = True
+        raise
+    return {"result": query}
+
+
+@pytest.mark.asyncio
+async def test_cancel_during_tool_execution_cancels_tool_and_interrupts(
+    monkeypatch,
+) -> None:
+    """Cancelling mid-tool must cancel the tool itself, then interrupt Codex.
+
+    The tool runs on the shim's request path, not on the caller's task, so the
+    cancellation has to be carried there explicitly. A tool left running would
+    keep doing side effects for an invocation that no longer exists.
+    """
+    _SLOW_TOOL.update(started=asyncio.Event(), runs=0, cancelled=False)
+    probe = _CancelProbe()
+    _record_runtime_exit(monkeypatch, probe)
+    _events, _session, _backend, error = await _cancel_when(
+        _SLOW_TOOL["started"],
+        _run_turn(
+            monkeypatch,
+            plan=(
+                Round(tool_calls=(("slow_lookup", {"query": "q"}),), usage=(0, 0)),
+                Round(text="never reached", usage=(1, 1)),
+            ),
+            agent_kwargs={"tools": [slow_lookup]},
+            codex_class=_probing_codex(probe, hang_before_backend=False),
+        ),
+    )
+
+    assert isinstance(error, asyncio.CancelledError), error
+    assert _SLOW_TOOL["runs"] == 1
+    assert _SLOW_TOOL["cancelled"], "the tool kept running after cancellation"
+    assert probe.interrupts == 1
+    _assert_turn_released(probe)
+
+
+@pytest.mark.asyncio
+async def test_failed_interrupt_does_not_swallow_cancellation(monkeypatch) -> None:
+    """An interrupt that fails (e.g. the app-server is already gone) is logged.
+
+    It must not replace the ``CancelledError``: the caller asked to cancel, and
+    a transport error surfacing instead would read as a model failure.
+    """
+    probe = _CancelProbe(interrupt_error=RuntimeError("app-server gone"))
+    _record_runtime_exit(monkeypatch, probe)
+    _events, _session, _backend, error = await _cancel_when(
+        probe.stream_started,
+        _run_turn(
+            monkeypatch,
+            plan=(Round(text="never sent", usage=(1, 1)),),
+            codex_class=_probing_codex(probe, hang_before_backend=True),
+        ),
+    )
+
+    assert isinstance(error, asyncio.CancelledError), error
+    assert probe.interrupts == 1
+    _assert_turn_released(probe)

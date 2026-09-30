@@ -545,3 +545,76 @@ def _tool_names(requests: list[dict[str, Any]]) -> list[str]:
             if isinstance(tool, dict)
         }
     )
+
+
+@pytest.mark.codex_smoke
+@pytest.mark.asyncio
+async def test_real_codex_binary_fails_turn_when_shim_is_unreachable() -> None:
+    """An unreachable shim must fail the turn, not hang it.
+
+    Since CLI 0.159 Codex retries an unreachable model provider forever by
+    default (`unbounded_connection_retries`), and this runtime has no
+    turn-level timeout, so a shim that died mid-invocation would hang the
+    caller. The generated ``config.toml`` turns that off; this drives the real
+    binary against a port nothing listens on and requires a failed
+    ``turn/completed`` within a bounded time.
+    """
+    if os.getenv("CODEX_RUN_SMOKE") != "1":
+        pytest.skip(
+            "set CODEX_RUN_SMOKE=1 to spawn the real Codex binary "
+            "(no model is called; the backend is unreachable on purpose)"
+        )
+    reason = _skip_reason()
+    if reason is not None:
+        pytest.skip(reason)
+
+    import socket
+
+    from openai_codex import AsyncCodex, CodexConfig
+
+    from veadk.runtime.codex import runtime as runtime_module
+    from veadk.runtime.codex.config import CodexRuntimeConfig, codex_subprocess_env
+
+    # Reserve a port, then release it: nothing listens there during the turn.
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        dead_port = probe.getsockname()[1]
+
+    home = runtime_module._prepare_codex_home(
+        f"http://127.0.0.1:{dead_port}", "smoke-model", CodexRuntimeConfig()
+    )
+    workspace = tempfile.mkdtemp(prefix="veadk-codex-smoke-dead-shim-")
+
+    async def _turn_status() -> str:
+        config = CodexConfig(
+            cwd=workspace, env=codex_subprocess_env(home, "smoke-token")
+        )
+        async with AsyncCodex(config=config) as codex:
+            thread = await codex.thread_start(
+                model="smoke-model",
+                model_provider=runtime_module._PROVIDER_ID,
+                cwd=workspace,
+                ephemeral=True,
+            )
+            turn = await thread.turn("hello")
+            status = None
+            async for note in turn.stream():
+                if note.method == "turn/completed":
+                    status = note.payload.turn.status
+            return getattr(status, "value", status)
+
+    started = time.monotonic()
+    try:
+        status = await asyncio.wait_for(_turn_status(), _RUN_TIMEOUT_SECONDS * 2)
+    except asyncio.TimeoutError:
+        pytest.fail(
+            "the turn never completed against an unreachable shim: Codex is "
+            "retrying the connection forever (is `unbounded_connection_retries` "
+            "still disabled in the generated config.toml?)"
+        )
+    finally:
+        shutil.rmtree(home, ignore_errors=True)
+        shutil.rmtree(workspace, ignore_errors=True)
+
+    assert status == "failed", status
+    assert time.monotonic() - started < _RUN_TIMEOUT_SECONDS * 2
