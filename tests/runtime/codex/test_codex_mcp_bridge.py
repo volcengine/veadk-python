@@ -351,6 +351,108 @@ async def test_unregister_invalidates_the_token(bridge: McpBridge) -> None:
     assert resp.status_code == 401
 
 
+def _recording_echo(seen: list[dict[str, Any]]):
+    async def run(args: dict[str, Any], call_id: str) -> str:
+        seen.append(args)
+        return await _echo(args, call_id)
+
+    return run
+
+
+@pytest.mark.asyncio
+async def test_oversized_body_is_rejected_before_any_tool_runs(
+    bridge: McpBridge, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A body over the cap gets 413 and never reaches an executor.
+
+    The bridge buffers each request to inspect it, so without the cap one
+    authenticated caller could make the host process hold an arbitrarily large
+    body in memory. The cap is lowered here only so the test does not push
+    8 MiB through loopback; the check is the same code path.
+    """
+    limit = 4096
+    monkeypatch.setattr(mcp_bridge, "_MAX_BODY_BYTES", limit)
+    seen: list[dict[str, Any]] = []
+    token = bridge.register_turn([_spec("echo")], {"echo": _recording_echo(seen)})
+    async with httpx.AsyncClient(timeout=30) as http:
+        small = await http.post(
+            bridge.url,
+            json=_tools_call(1, "echo", {"text": "ok"}, "call_small"),
+            headers=_rpc_headers(token),
+        )
+        assert small.status_code == 200, small.text
+        assert seen == [{"text": "ok"}]
+
+        big = _tools_call(2, "echo", {"text": "x" * (4 * limit)}, "call_big")
+        resp = await http.post(bridge.url, json=big, headers=_rpc_headers(token))
+    assert resp.status_code == 413
+    assert seen == [{"text": "ok"}], "the oversized call reached the executor"
+    assert bridge.turn_state(token).calls == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["/", "/mcpx", "/mcp/tools", "/other"])
+async def test_paths_other_than_mcp_are_not_found(bridge: McpBridge, path: str) -> None:
+    """Only ``/mcp`` is served; any other path is 404 even with a valid token.
+
+    The bridge is a bare ASGI callable, not a router: without the path check
+    every URL on the loopback port would be a second, unadvertised MCP
+    endpoint.
+    """
+    seen: list[dict[str, Any]] = []
+    token = bridge.register_turn([_spec("echo")], {"echo": _recording_echo(seen)})
+    url = str(httpx.URL(bridge.url).copy_with(path=path))
+    async with httpx.AsyncClient(timeout=30) as http:
+        resp = await http.post(
+            url,
+            json=_tools_call(1, "echo", {"text": "x"}, "call_path"),
+            headers=_rpc_headers(token),
+        )
+    assert resp.status_code == 404
+    assert seen == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("header", "value", "status"),
+    [
+        ("Host", "evil.example.com", 421),
+        ("Host", "attacker.test:{port}", 421),
+        ("Origin", "http://evil.example.com", 403),
+        ("Origin", "http://attacker.test:{port}", 403),
+    ],
+)
+async def test_non_loopback_host_or_origin_is_rejected(
+    bridge: McpBridge, header: str, value: str, status: int
+) -> None:
+    """DNS-rebinding protection: only loopback Host/Origin are served.
+
+    A web page on an attacker's domain that re-resolves to 127.0.0.1 can make
+    the user's browser send requests to the bridge's port. The bearer token
+    stops those in practice, but the bridge must not rely on it alone: a
+    request whose Host or Origin is not loopback is refused before any tool
+    runs. The loopback request first shows the headers themselves are fine.
+    """
+    seen: list[dict[str, Any]] = []
+    token = bridge.register_turn([_spec("echo")], {"echo": _recording_echo(seen)})
+    port = httpx.URL(bridge.url).port
+    loopback = f"http://localhost:{port}" if header == "Origin" else f"localhost:{port}"
+    async with httpx.AsyncClient(timeout=30) as http:
+        ok = await http.post(
+            bridge.url,
+            json=_tools_call(1, "echo", {"text": "loopback"}, "call_ok"),
+            headers={**_rpc_headers(token), header: loopback},
+        )
+        assert ok.status_code == 200, ok.text
+        resp = await http.post(
+            bridge.url,
+            json=_tools_call(2, "echo", {"text": "rebound"}, "call_evil"),
+            headers={**_rpc_headers(token), header: value.format(port=port)},
+        )
+    assert resp.status_code == status, resp.text
+    assert seen == [{"text": "loopback"}], "a non-loopback request ran a tool"
+
+
 @pytest.mark.asyncio
 async def test_stop_with_a_call_in_flight_cancels_it_and_a_new_bridge_works() -> None:
     bridge = await get_bridge()

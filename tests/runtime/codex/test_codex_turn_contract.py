@@ -29,6 +29,7 @@ paired positive for the compaction-isolation tests: whatever marks a request as
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import contextvars
 import shutil
@@ -1356,3 +1357,144 @@ async def test_auto_transport_keeps_the_shim_for_extra_body(
     assert "transport=shim" in messages
     # The shim forwarded the body to the backend.
     assert backend.calls, "the turn never reached the backend"
+
+
+# ------------------------------------------ direct transport: cross-instance save
+
+
+@contextlib.contextmanager
+def _captured_runtime_logs():
+    """Records from the codex runtime's logger (it does not propagate)."""
+    import logging
+
+    records: list[logging.LogRecord] = []
+
+    class _Collect(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            records.append(record)
+
+    handler = _Collect(level=logging.DEBUG)
+    runtime_logger = logging.getLogger("veadk.runtime.codex.runtime")
+    previous = runtime_logger.level
+    runtime_logger.addHandler(handler)
+    runtime_logger.setLevel(logging.DEBUG)
+    try:
+        yield records
+    finally:
+        runtime_logger.removeHandler(handler)
+        runtime_logger.setLevel(previous)
+
+
+def _use_thread_store(monkeypatch, store) -> None:
+    from veadk.runtime.codex import runtime as runtime_module
+
+    monkeypatch.setattr(runtime_module, "select_thread_store", lambda _svc: store)
+
+
+@pytest.mark.asyncio
+async def test_losing_a_save_race_does_not_fail_the_invocation(monkeypatch) -> None:
+    """Another instance saving the session's thread first is not a user error.
+
+    With two instances serving one session, the later writer's save conflicts
+    by design (its turn is dropped from the thread rather than overwriting the
+    other's). The user already has this turn's answer, so the conflict must be
+    logged and swallowed -- raising it would turn a completed turn into a
+    failed invocation, and a retry would run the turn twice.
+    """
+    from veadk.runtime.codex.mcp_bridge import shutdown_bridge
+    from veadk.runtime.codex.thread_store import (
+        InMemoryThreadStore,
+        ThreadStoreConflict,
+    )
+
+    class _AlwaysBeatenStore(InMemoryThreadStore):
+        saves = 0
+
+        async def save(self, *args: Any, **kwargs: Any) -> int:
+            type(self).saves += 1
+            raise ThreadStoreConflict("another instance saved first")
+
+    send, backend, _, _ = await _direct_session(
+        monkeypatch,
+        (Round(text="first answer", usage=(1, 1)), Round(text="second", usage=(1, 1))),
+    )
+    _use_thread_store(monkeypatch, _AlwaysBeatenStore())
+    try:
+        with _captured_runtime_logs() as records:
+            assert await send("hello") is None
+            assert await send("again") is None
+    finally:
+        await shutdown_bridge()
+
+    assert _AlwaysBeatenStore.saves == 2, "the runtime never tried to save"
+    assert len(backend.calls) == 2
+    messages = [r.getMessage() for r in records]
+    conflicts = [m for m in messages if m.startswith("codex_thread_save_conflict")]
+    assert len(conflicts) == 2, messages
+    assert not [m for m in messages if m.startswith("codex_thread_save_failed")]
+
+
+@pytest.mark.asyncio
+async def test_next_turn_resumes_from_another_writers_record(monkeypatch) -> None:
+    """A turn resumes the thread as last saved, by whichever instance saved it.
+
+    Between two turns served here, another instance may have run a turn of the
+    same session and saved a newer version. The next turn must load that
+    record -- its history included -- and save on top of *its* version; using
+    a version remembered from this instance's previous turn would conflict and
+    drop the new turn, and resuming stale history would lose the other one.
+    """
+    from veadk.runtime.codex.mcp_bridge import shutdown_bridge
+    from veadk.runtime.codex.rollout_io import Rollout
+    from veadk.runtime.codex.thread_store import InMemoryThreadStore
+
+    store = InMemoryThreadStore()
+    send, backend, codex_class, _ = await _direct_session(
+        monkeypatch,
+        (Round(text="first answer", usage=(1, 1)), Round(text="second", usage=(1, 1))),
+    )
+    _use_thread_store(monkeypatch, store)
+    other_marker = f"MANGO-{uuid.uuid4().hex[:8]}"
+    try:
+        with _captured_runtime_logs() as records:
+            assert await send("remember the word PAPAYA") is None
+            [(key, first)] = list(store._records.items())
+            assert first.version == 1
+
+            # The other instance's turn: the same thread, one more user message.
+            item = {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": other_marker}],
+            }
+            line = json.dumps({"type": "response_item", "payload": item}) + "\n"
+            theirs = Rollout(
+                thread_id=first.thread_id,
+                relpath=first.rollout.relpath,
+                data=first.rollout.data + line.encode("utf-8"),
+            )
+            assert (
+                await store.save(
+                    key,
+                    first.thread_id,
+                    theirs,
+                    first.instruction_hash,
+                    expected_version=1,
+                )
+                == 2
+            )
+
+            assert await send("which word?") is None
+    finally:
+        await shutdown_bridge()
+
+    assert _starts_and_resumes(codex_class) == [(1, 0), (0, 1)]
+    resumed = json.dumps(backend.raw_requests[-1], default=str)
+    assert other_marker in resumed, "the turn resumed without the other writer's turn"
+    assert "PAPAYA" in resumed
+    final = store._records[key]
+    assert final.version == 3, "this turn's save did not land on the newer version"
+    assert other_marker.encode() in final.rollout.data
+    assert not [
+        r for r in records if r.getMessage().startswith("codex_thread_save_conflict")
+    ]

@@ -31,10 +31,11 @@ Required
 Capability-gated
     Run only when the adapter declares the capability (see
     ``conformance_harness.Capability``), otherwise skipped with a reason naming
-    it. ``resume_across_restart``, ``steer``, ``turn_timeout`` and
-    ``compaction`` are declared by no runtime yet: their scenarios are written
-    against adapter hooks that raise ``NotImplementedError`` today, so the PR
-    that implements one adds the hook and flips the capability on.
+    it. ``codex-direct`` (Codex on the direct transport) declares
+    ``resume_across_restart``, ``steer`` and ``compaction``; both Codex
+    adapters declare ``turn_timeout``. The scenarios call adapter hooks that
+    raise ``NotImplementedError`` by default, so a runtime that gains one of
+    these adds the hook and flips the capability on in its adapter.
 
 Adding a runtime: write a ``RuntimeAdapter`` subclass, register it in
 ``ADAPTERS``, declare its capabilities. Nothing in this file changes.
@@ -995,24 +996,52 @@ async def test_compaction_preserves_turn_contract(harness: ConformanceHarness) -
     Compaction replaces history with a summary; the contract is that later
     turns carry that summary (not nothing, and not the full transcript), and
     that the compaction pass itself never receives the agent's ADK tools.
+
+    The agent has a tool so both halves of the tool assertion can bite: the
+    agent's own turns must advertise it (otherwise "no tools on the
+    compaction request" is satisfied by never advertising anything), and the
+    compaction request must not -- a model offered tools there can call them
+    in the middle of summarizing, running a side effect nobody asked for.
     """
     adapter = harness.adapter
     adapter.require(Capability.COMPACTION)
+    log = _ToolLog()
     remembered = marker("COMPACT-ME")
+    answer_1 = marker("A1")
     summary = marker("SUMMARY")
     scripted = adapter.build(
         [
-            Round(text=marker("A1"), usage=(1, 1)),
+            Round(text=answer_1, usage=(1, 1)),
             Round(text=summary, usage=(1, 1)),
             Round(text=marker("A2"), usage=(1, 1)),
         ],
+        tools=[_lookup_tool(log, marker("CODE"))],
         **adapter.compaction_kwargs(),
     )
     session_id = await harness.new_session()
 
-    await harness.run_turn(scripted, session_id, remembered)
+    first = await harness.run_turn(scripted, session_id, remembered)
     turn = await harness.run_turn(scripted, session_id, "and now?")
 
+    assert first.error is None, first.error
     assert turn.error is None, turn.error
-    last = adapter.requests()[-1].text
+    requests = adapter.requests()
+    assert len(requests) == 3, [r.tool_names for r in requests]
+    # The plan serves rounds in order, so the request answered with the
+    # summary (the second model call) is the compaction pass.
+    agent_turn_1, compaction, agent_turn_2 = requests
+    assert "lookup_code" in agent_turn_1.tool_names, agent_turn_1.tool_names
+    assert "lookup_code" in agent_turn_2.tool_names, agent_turn_2.tool_names
+    assert compaction.tool_names == (), (
+        f"the compaction request advertised tools: {compaction.tool_names}"
+    )
+    assert remembered in compaction.text, "the compaction pass never saw turn 1"
+    last = agent_turn_2.text
     assert summary in last, "the next turn lost the compaction summary"
+    # Compaction drops the assistant's replies; seeing turn 1's answer again
+    # means the full transcript came back alongside the summary.
+    assert answer_1 not in last, (
+        "the next turn still carries turn 1's answer: the history was replayed, "
+        "not compacted"
+    )
+    assert log.calls == []
