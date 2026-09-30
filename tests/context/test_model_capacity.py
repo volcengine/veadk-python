@@ -189,7 +189,7 @@ def test_reviewed_table_has_complete_valid_provenance_and_budgets():
                 assert get_model_capacity(name)["provider"] == row.provider
                 budget = resolve_budget(name, ContextCompressionConfig())
                 assert budget and 0 < budget.available <= row.max_input_tokens
-            if row.provider == "volcengine":
+            if row.openai_transport:
                 assert get_model_capacity("openai/" + alias)["model_id"] == row.model_id
         copy = get_model_capacity(row.model_id)
         copy["context_window"] = 1
