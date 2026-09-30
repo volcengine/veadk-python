@@ -94,7 +94,7 @@ const ARK = "https://ark.cn-beijing.volces.com/api/v3/";
 /** Base model env — always needed for the agent to run. */
 export const MODEL_ENV: EnvVar[] = [
   localizedEnvVar(
-    { key: "MODEL_AGENT_NAME", required: false, placeholder: "doubao-seed-1-6-250615" },
+    { key: "MODEL_AGENT_NAME", required: false, placeholder: "doubao-seed-2-0-lite-260428" },
     { comment: "traditional.catalog.env.modelAgentName.comment" },
   ),
   { key: "MODEL_AGENT_PROVIDER", required: false, placeholder: "openai" },

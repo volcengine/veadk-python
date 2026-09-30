@@ -55,7 +55,7 @@ min(用户输入上限, 模型最大输入, 总窗口 - 输出预留 - 安全余
 
 这里不能承诺“所有型号、所有地区、所有私有部署全覆盖”。本轮没有拿到新 Claude 页面正文，保留原先四条及其 9 月 28 日核实日期，没有补猜测数字；Kimi K2.6/2.7、其他聚合平台同名部署尚未补齐完整容量证据。BytePlus 表仅新增有独立 ID 的 Seed 型号，共用名称的跨平台条目需要单独核实接口与部署限制。
 
-型号存在容量记录，不代表账号已开通或服务仍上架。Gemini 2.5 当前仅对历史使用者开放；旧 Seed 1.6/1.8、DeepSeek V3.2 等已进入官方下线名单。本轮将**新生成项目**的旧 Seed 1.6 默认值改为官方建议迁移目标 `doubao-seed-2-0-lite-260428`；Studio 默认模型及已有项目配置保持原值。`deepseek-v4-pro-260425` 官方标为即将下线，建议新项目选已核实的新版本。
+型号存在容量记录，不代表账号已开通或服务仍上架。Gemini 2.5 当前仅对历史使用者开放；旧 Seed 1.6/1.8、DeepSeek V3.2 等已进入官方下线名单。本轮将**新生成项目**的旧 Seed 1.6 默认值改为官方建议迁移目标 `doubao-seed-2-0-lite-260428`；前端占位值与实际生成的 `.env.example` 已同步；Studio 助手默认模型及已有项目配置保持原值。`deepseek-v4-pro-260425` 官方标为即将下线，建议新项目选已核实的新版本。
 
 查不到配置且 LiteLLM 本地目录也没有精确条目时，发送前报 `model_capacity_required`。私有接入点需由开发者提供核实后的 `context_window`、`input_limit` 和 `output_reserve`，不默认猜 32K/128K。型号、来源、核实日期与传输别名随 SDK 版本维护；更新配置后须构建新包并重启进程。此表是容量防护，不是模型服务可用性探测。
 
@@ -63,9 +63,9 @@ min(用户输入上限, 模型最大输入, 总窗口 - 输出预留 - 安全余
 
 ## 验证
 
-修改前，5 条离线回归稳定失败：三个 OpenAI 最大输入配置和两种云服务商的生成默认覆盖。新增测试位于 `tests/context/test_model_capacity_coverage.py`，已由 `tests/run_context_compression_gate.py` 的目录入口纳入强制门禁。新增依赖 0；本轮真实模型调用 0。
+修改前，5 条离线回归稳定失败：三个 OpenAI 最大输入配置和两种云服务商的生成默认覆盖。新增测试位于 `tests/context/test_model_capacity_coverage.py`，已由 `tests/run_context_compression_gate.py` 的目录入口纳入强制门禁。实际生成环境及前端默认型号也有离线回归，分别纳入 Python 强制入口和前端 `contextCompression` 门禁。新增依赖 0；本轮真实模型调用 0。
 
-本轮在 5663 测试账号的 Devbox 隔离目录验证：Python 3.10 / ADK 1.34.0 与 Python 3.12 / ADK 2.2.0 的完整门禁各 **1,310 项通过、5 项跳过**；容量定向回归各 116 项通过。pre-commit、wheel/sdist 打包、安装后读取全部配置及创建开启/关闭压缩 Agent 均通过；安装后验证禁用网络。
+本轮在 5663 测试账号的 Devbox 隔离目录验证：Python 3.10 / ADK 1.34.0 与 Python 3.12 / ADK 2.2.0 的完整门禁各 **1,312 项通过、5 项跳过**；容量定向回归各 118 项通过。前端全量 **1,246 项通过**，生产构建、Ruff、Pyright、pre-commit 通过。wheel/sdist 打包、安装后读取全部配置及创建开启/关闭压缩 Agent 均通过；安装后验证禁用网络。
 
 远端 CI 以 [PR #1152 当前提交](https://github.com/volcengine/veadk-python/pull/1152) 的检查为准，以上离线结果不替代远端检查或业务质量评测。
 

@@ -151,7 +151,7 @@ BM25 按匹配词的区分度、出现次数和片段长度排序，适合日志
 | veadk/runner.py、veadk/memory/ | Session 与 SQLite 持久化 |
 | tests/context/ | 压缩、预算、检索和原文回查回归 |
 
-容量扩展新增了最大输入限制、默认生成型号及兼容接口别名的离线回归，已纳入强制门禁。5663 Devbox 上 Python 3.10 / ADK 1.34.0 与 Python 3.12 / ADK 2.2.0 的完整门禁各 1,310 项通过、5 项跳过，容量定向回归各 116 项通过；pre-commit、打包与安装验证通过，详见[模型覆盖说明](context-compression-model-coverage.zh.md)。本文示例已对照公开 API 核对并完成语法静态检查，本轮未调用真实模型。
+容量扩展新增了最大输入限制、默认生成型号及兼容接口别名的离线回归，已纳入强制门禁。5663 Devbox 上 Python 3.10 / ADK 1.34.0 与 Python 3.12 / ADK 2.2.0 的完整门禁各 1,312 项通过、5 项跳过，容量定向回归各 118 项通过；前端全量 1,246 项、生产构建、Ruff、Pyright、pre-commit、打包与安装验证通过，详见[模型覆盖说明](context-compression-model-coverage.zh.md)。本文示例已对照公开 API 核对并完成语法静态检查，本轮未调用真实模型。
 
 SQLite 超时恢复回归分别验证预算、真实取消、已完成批次持久化及恢复仅补缺失片段；两个 Python 版本下加入 500ms 异步停顿均通过。生产超时参数未变。
 

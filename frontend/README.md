@@ -12,6 +12,8 @@ See [deployment and operation](service/studio_release_notifier/README.md).
 
 ## Features
 
+- **Generated model default**: New Volcengine projects use `doubao-seed-2-0-lite-260428`, including the form placeholder and generated `.env.example`. Its capacity is reviewed in `veadk/context/model_capacities.json`; existing project selections remain unchanged.
+
 - **Ark API Keys**: Each page load reads the current API Key list directly from
   the cloud provider. Enabled, disabled, all-permission and custom-permission
   keys are listed with their status and permission scope beneath the name.
