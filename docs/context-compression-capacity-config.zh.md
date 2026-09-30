@@ -79,6 +79,6 @@ agent = Agent(name="assistant")
 
 当前手工表包含 76 个型号、9 个服务商和 21 个别名，详见[覆盖表与官方依据](context-compression-model-coverage.zh.md)。它还会使用 LiteLLM 本地目录作为后备，不等同于 SDK 总共只支持这些型号。
 
-新增容量与传输别名回归已纳入 `tests/context/` 强制入口。5663 Devbox 上 Python 3.10 / ADK 1.34.0、Python 3.12 / ADK 2.2.0 的完整门禁各 1,310 项通过、5 项跳过；容量定向回归各 116 项通过。pre-commit、wheel/sdist 打包及安装后读取验证通过。远端 CI 以 PR #1152 当前 SHA 为准。新增依赖 0，本轮真实模型调用 0。
+新增容量与传输别名回归已纳入 `tests/context/` 强制入口。5663 Devbox 上 Python 3.10 / ADK 1.34.0、Python 3.12 / ADK 2.2.0 的完整门禁各 1,312 项通过、5 项跳过；容量定向回归各 118 项通过。前端全量 1,246 项及生产构建、Ruff、Pyright、pre-commit 通过；wheel/sdist 打包及安装后读取验证通过。远端 CI 以 PR #1152 当前 SHA 为准。新增依赖 0，本轮真实模型调用 0。
 
 开发者接入示例见[上下文压缩开发者入门与使用示例](context-compression-developer-guide.zh.md)。

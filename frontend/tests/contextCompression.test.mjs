@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -72,3 +72,11 @@ for (const policy of [
     assert.throws(() => normalizeDraft({ contextCompression: { mode: "auto", ...policy } }), /contextCompression/);
   });
 }
+
+
+test("generated model placeholder has a reviewed capacity", async () => {
+  const { MODEL_ENV } = await load("../src/create/veadkCatalog.ts");
+  const model = MODEL_ENV.find((item) => item.key === "MODEL_AGENT_NAME").placeholder;
+  const config = JSON.parse(readFileSync(new URL("../../veadk/context/model_capacities.json", import.meta.url), "utf8"));
+  assert.ok(config.models.some((row) => row.model_id === model), `Missing capacity: ${model}`);
+});

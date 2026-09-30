@@ -1,5 +1,16 @@
 # Copyright (c) 2025 Beijing Volcano Engine Technology Co., Ltd. and/or its affiliates.
-# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 """Reviewed input ceilings and SDK/Studio defaults must work without a catalog."""
 
@@ -14,6 +25,7 @@ from veadk.context.model_capacity import get_model_capacity
 def test_shared_window_does_not_override_official_input_ceiling(model):
     config = ContextCompressionConfig(context_window=2_000_000, input_limit=2_000_000)
     budget = resolve_budget("openai/" + model, config, max_output=4096)
+    assert budget is not None
     assert budget.window == 1_050_000
     assert budget.available == 922_000
     with pytest.raises(ContextBudgetError, match="input_too_large"):
@@ -73,5 +85,30 @@ def test_reviewed_native_and_openai_transport_use_same_capacity(
 
 def test_kimi_default_generation_limit_is_reserved_before_sending():
     budget = resolve_budget("openai/kimi-k3", ContextCompressionConfig())
+    assert budget is not None
     assert budget.output == 131_072
     assert budget.available < 1_000_000 - 131_072
+
+
+@pytest.mark.parametrize("provider", ["volcengine", "byteplus"])
+def test_generated_environment_default_has_reviewed_budget(monkeypatch, provider):
+    from veadk.cli.generated_agent_codegen import (
+        AgentDraft,
+        generate_project_from_draft,
+    )
+
+    monkeypatch.setattr("veadk.context.budget._catalogue", lambda: {})
+    project = generate_project_from_draft(
+        AgentDraft(name="capacity", cloudProvider=provider)
+    )
+    env = next(file.content for file in project.files if file.path == ".env.example")
+    model = next(
+        line.partition("=")[2]
+        for line in env.splitlines()
+        if line.startswith("MODEL_AGENT_NAME=")
+    )
+    assert get_model_capacity(model), (
+        "Generated project needs a reviewed model capacity"
+    )
+    budget = resolve_budget("openai/" + model, ContextCompressionConfig())
+    assert budget and budget.available > 0
