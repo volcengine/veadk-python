@@ -1,5 +1,8 @@
 # 模型上下文容量配置说明
 
+当前支持 `google-adk>=1.34.0,<2.3.0`，默认安装由依赖解析器选择兼容版本；CI 固定验证 1.34.0、2.1.0、2.2.0 的 Python 3.10 / 3.12 组合。**ADK 2.3 及以上（含 2.9.2）暂不支持**：它们要求 OpenTelemetry ≥1.39，而 AgentKit SDK 0.8.x 要求 ≤1.37。请勿使用 `--no-deps` 强行安装；开启、关闭上下文压缩均遵守此 SDK 依赖范围。
+
+
 日期：2026-09-30。对应开发分支 `feat/default-context-compression`，尚未正式发布。
 
 各模型的容量已从 Python 代码迁移到 **`veadk/context/model_capacities.json`**。维护模型窗口时修改配置文件即可；`model_capacity.py` 只保留数据结构、加载、校验和查询逻辑。
@@ -77,11 +80,11 @@ agent = Agent(name="assistant")
 | 验证项 | 结果 |
 | --- | --- |
 | 配置与预算定向回归 | 153 项通过 |
-| 完整强制门禁 | 1,285 passed、5 skipped、0 failures/errors；Python 3.11 / google-adk 2.2.0 |
+| 完整强制门禁 | 1,293 passed、5 skipped、0 failures/errors；Python 3.12 / google-adk 2.2.0 |
 | 新增配置回归 | 覆盖类型/范围/重复名称、缺失与损坏文件、工作目录独立及错误信息；已纳入 `tests/context/` 强制入口 |
 | 实际包构建 | wheel 和 sdist 都包含与源码字节一致的 JSON |
 | 安装后验证 | 从实际安装的 wheel 读取全部 25 条配置，与迁移前一致；不受工作目录同名文件影响，普通 Agent 创建通过 |
 
-执行全部在隔离 Devbox 目录，真实 LLM 调用 0、客户 Runtime 操作 0、新增依赖 0。其他 Python/ADK CI 矩阵和完整 Studio 发行流程未重跑；当前尚未正式发布。
+执行全部在隔离 Devbox 目录，真实 LLM 调用 0、客户 Runtime 操作 0、新增依赖 0。Python 3.10 / 3.12 的发布与依赖回归各 10 项通过，新虚拟环境安装及依赖一致性检查通过。远端 CI 以 [PR #1152](https://github.com/volcengine/veadk-python/pull/1152) 当前提交为准；尚未正式发布。
 
 开发者接入示例见[上下文压缩开发者入门与使用示例](context-compression-developer-guide.zh.md)。

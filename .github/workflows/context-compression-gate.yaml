@@ -26,6 +26,7 @@ on:
       - 'tests/models/**'
       - 'tests/run_context_compression_gate.py'
       - 'tests/test_context_release_gate.py'
+      - 'tests/fixtures/adk_dependency_metadata.json'
       - 'tests/test_ci_failure_summary.py'
       - '.github/scripts/report_pytest_failures.py'
       - '.github/workflows/context-compression-gate.yaml'
@@ -62,7 +63,10 @@ jobs:
       fail-fast: false
       matrix:
         python: ['3.10', '3.12']
-        adk: ['1.34.0', '2.1.0', '2.2.0', '2.9.2']
+        # Keep installable targets aligned with pyproject.toml. ADK >=2.3
+        # conflicts with AgentKit 0.8.x's OTel cap; rejection is regression
+        # tested in test_context_release_gate.py, not claimed as support.
+        adk: ['1.34.0', '2.1.0', '2.2.0']
     steps:
       - uses: actions/checkout@v4
         with:
