@@ -308,6 +308,7 @@ def test_reference_template_does_not_copy_agent_or_bot_credentials():
     reference = {
         **template(),
         "RuntimeId": "r-reference",
+        "Command": "bash run.sh",
         "NetworkConfigurations": [
             {"NetworkType": "public", "Endpoint": "https://public"},
             {
@@ -325,9 +326,12 @@ def test_reference_template_does_not_copy_agent_or_bot_credentials():
             "AGENTKIT_RUNTIME_ID",
             "A2A_PUBLIC_URL",
             "SKILL_SPACE_ID",
+            "MPA_WORKLOAD_POOL_NAME",
+            "MPA_WORKLOAD_IDENTITY_NAME",
         ]
     ]
     result = template_from_runtime(reference, "another-agent")
+    assert result["Command"] == "bash run.sh"
     assert env_map(result)["MPA_AGENT_ID"] == "another-agent"
     assert "reference-secret" not in str(result)
     assert result["NetworkConfiguration"]["EnablePrivateNetwork"]
@@ -516,6 +520,7 @@ def test_reference_without_private_network_uses_account_bootstrap():
         "new-agent",
     )
     assert "NetworkConfiguration" not in result
+    assert "Command" not in result
 
 
 def test_concurrent_agents_share_one_network_and_have_distinct_runtimes():
@@ -608,6 +613,22 @@ def test_new_runtime_name_is_agent_id_even_with_named_template():
         result = await svc.deploy(source)
         assert cloud.creates[0]["Name"] == "agent-one"
         assert result["runtime_name"] == "agent-one"
+
+    asyncio.run(run())
+
+
+def test_new_runtime_attaches_tool_during_initial_creation():
+    async def run():
+        svc, _, cloud, _ = deployer()
+        payload = template()
+        payload["ToolId"] = "t-tos-worker"
+
+        result = await svc.deploy(payload)
+
+        assert cloud.creates[0]["ToolId"] == "t-tos-worker"
+        assert cloud.updates[0]["ToolId"] == "t-tos-worker"
+        assert cloud.updates[0]["ReleaseEnable"] is True
+        assert cloud.runtimes[result["runtime_id"]]["ToolId"] == "t-tos-worker"
 
     asyncio.run(run())
 

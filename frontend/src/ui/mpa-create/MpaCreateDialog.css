@@ -47,6 +47,28 @@
   color: var(--studio-text-primary);
   font-weight: 600;
 }
+.mpa-create-steps button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.mpa-create-steps button:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+.mpa-create-steps button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
 .mpa-create-steps li span {
   display: inline-grid;
   place-items: center;
@@ -114,6 +136,21 @@
   margin-bottom: 0;
   line-height: 1.8;
   color: var(--studio-text-secondary);
+}
+.mpa-create-tos {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 4px 0 0;
+  padding: 16px;
+  border: 1px solid var(--studio-border-default);
+  border-radius: 10px;
+}
+.mpa-create-tos legend {
+  padding: 0 6px;
+  color: var(--studio-text-primary);
+  font-size: 14px;
+  font-weight: 600;
 }
 .mpa-create-actions {
   display: flex;

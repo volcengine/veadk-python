@@ -75,6 +75,8 @@ class MpaProvisionParams:
     feishu_app_id: str = ""
     feishu_app_secret: str = ""
     selectable_models: tuple[str, ...] = ()
+    tos_mount_enabled: bool = False
+    tos_bucket: str = ""
     extra_env: dict[str, str] = field(default_factory=dict)
 
 
@@ -185,9 +187,9 @@ def build_runtime_env(
         "SCHEDULED_TASK_BACKEND": "postgresql",
         # Resolve the configured UserPool before accepting user-facing traffic.
         "IDENTITY_STARTUP_ENABLED": "true",
-        # Advertise A2A to Studio's Runtime-key discovery probe. REST endpoints
-        # require a user JWT; bypassing that gate incorrectly advertises ADK.
-        "DISABLE_JWT_AUTH": "false",
+        # Studio uses outer gateway key auth and trusted user identity headers,
+        # not the legacy REST JWT gate. Explicit extra_env can restore that gate.
+        "DISABLE_JWT_AUTH": "true",
         "ENABLE_A2A": "true",
         "MPA_LAZY_LOGIN": "false",
         # VeADK uses external resources and only retains CLAW_SPACE_ID as a
@@ -233,6 +235,10 @@ def build_runtime_env(
 
     if params.skill_space_id:
         env["SKILL_SPACE_ID"] = params.skill_space_id
+
+    if params.tos_mount_enabled:
+        env["MPA_CODEX_WORKER_TOS_MOUNT_ENABLED"] = "true"
+        env["MPA_CODEX_WORKER_TOS_BUCKET"] = params.tos_bucket
 
     if params.openviking_url:
         env["OPENVIKING_URL"] = params.openviking_url

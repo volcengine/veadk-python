@@ -53,7 +53,11 @@ from veadk.integrations.mpa.mpa_provision import (
 )
 from veadk.integrations.mpa.mpa_runtime import provision_runtime
 from veadk.integrations.mpa.mpa_skill_space import ensure_skill_space
-from veadk.integrations.mpa.mpa_tool import ensure_codex_worker_tool
+from veadk.integrations.mpa.mpa_tool import (
+    MpaToolError,
+    ensure_codex_worker_tool,
+    tos_mount_enabled,
+)
 from veadk.integrations.mpa.mpa_verify import VerificationResult, verify_instance
 from veadk.cli.cli_mpa_control import control
 
@@ -431,6 +435,9 @@ def _load_config_default_map(
     default="IDRoleForArkClawShareAgent",
     help="Execution role for the created Codex worker Tool.",
 )
+@click.option("--tos-access-key", default="", help="TOS access key for Tool mount.")
+@click.option("--tos-secret-key", default="", help="TOS secret key for Tool mount.")
+@click.option("--tos-bucket", default="", help="TOS bucket mounted at /data/output.")
 @click.option("--agentkit-tool-region", default="cn-beijing")
 @click.option("--skill-space-id", default="")
 @click.option(
@@ -515,6 +522,9 @@ def create(
     tool_name: str,
     tool_reference_id: str,
     tool_role_name: str,
+    tos_access_key: str,
+    tos_secret_key: str,
+    tos_bucket: str,
     agentkit_tool_region: str,
     skill_space_id: str,
     skill_space_name: str,
@@ -566,6 +576,19 @@ def create(
             "can be created (or --agentkit-tool-id as an explicit override)."
         )
 
+    try:
+        has_tos_mount = tos_mount_enabled(
+            tos_access_key=tos_access_key,
+            tos_secret_key=tos_secret_key,
+            tos_bucket=tos_bucket,
+        )
+    except MpaToolError as exc:
+        raise click.UsageError(str(exc)) from None
+    if has_tos_mount and agentkit_tool_id:
+        raise click.UsageError(
+            "TOS mount settings require Tool creation; remove --agentkit-tool-id"
+        )
+
     params = MpaProvisionParams(
         image=image,
         registry_name=registry_name,
@@ -597,6 +620,8 @@ def create(
         openviking_api_key=openviking_api_key,
         feishu_app_id=feishu_app_id,
         feishu_app_secret=feishu_app_secret,
+        tos_mount_enabled=has_tos_mount,
+        tos_bucket=tos_bucket.strip(),
     )
 
     space_id = derive_claw_space_id(params.claw_space_id, account_id=params.account_id)
@@ -627,6 +652,8 @@ def create(
                 f"  tool               : create '{resolved_tool_name}' "
                 f"from {tool_image}"
             )
+            if has_tos_mount:
+                click.echo("  tool TOS mount     : enabled at /data/output")
         else:
             click.echo("  tool               : none (sandbox delegation disabled)")
         click.echo("  runtime env (masked):")
@@ -678,6 +705,10 @@ def create(
             image=tool_image,
             reference_tool_id=tool_reference_id,
             role_name=tool_role_name,
+            region=agentkit_tool_region,
+            tos_access_key=tos_access_key,
+            tos_secret_key=tos_secret_key,
+            tos_bucket=tos_bucket,
         )
         click.echo(f"Tool id: {tool_id}")
     if tool_id:

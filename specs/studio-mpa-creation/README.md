@@ -4,7 +4,7 @@
 
 - Component ID: `studio-mpa-creation`
 - Status: active
-- Revised: 2026-09-24
+- Revised: 2026-09-30
 - Design and evidence: [Studio MPA creation](../../prd-spec/features/mpa-agent-oneclick-provision/2026-09-20-studio-mpa-creation.md)
 - Owned code: `veadk/integrations/mpa/managed/`, `frontend/server/mpa_creation.py`, `frontend/src/adk/mpaCreation.ts`, `frontend/src/ui/mpa-create/`; CLI and directory integration.
 - Tests: `tests/integrations/mpa_managed/`, `frontend/tests/mpaCreation.test.tsx`.
@@ -32,6 +32,19 @@ VeADK owns managed YAML parsing, cloud/database orchestration, authorized durabl
 - **CON-9 — UI:** The MPA filter on Volcengine shows a create card with agent-management permission, including empty lists. The dialog displays fixed region, the existing generated `mi-[0-9a-f]{24}` ID as read-only, description and resource plan. Three steps cover basics, automatic PostgreSQL preparation and OpenViking; only step three submits. Persist request identity before POST; lock submitted inputs to make lost-response retry safe. Abort polling on unmount, ignore late responses, preserve server work and recover from session storage on reopen. A confirmed failed or cancelled task offers both same-ID retry and an explicit new-agent action. The latter replaces only the browser draft with fresh request/agent IDs and defaults; it does not delete or mutate the old server task or resources. Running and uncertain-submission states cannot start a different identity from this dialog. Refresh the original region after success. Reuse localized BaseUI/Studio components, keyboard/IME behavior and semantic theme tokens. `ModalLayout.footer` is an optional React node: omitted preserves existing actions, `null` omits the footer; existing callers are unchanged. See [terminal-task new-agent fix](../../prd-spec/bugfixes/studio-mpa-creation/2026-09-24-start-another-agent-after-failure.md).
 
 ## HTTP contract
+
+CON-9 navigation correction (2026-09-30): step headings are keyboard-accessible
+buttons. Earlier steps and Previous remain available after restoring a submitted
+draft; submitted fields stay locked and retry keeps the same identity. Forward
+navigation validates image references and the PG target. Busy actions disable
+navigation. See [navigation fix](../../prd-spec/bugfixes/mpa-create-navigation/2026-09-30-recover-step-navigation.md).
+
+CON-9 explicit-new-request amendment (2026-09-30, implemented): any submitted draft
+offers New Agent, including running/uncertain/unavailable tasks. This explicitly
+replaces the browser recovery draft with fresh identity and editable defaults,
+without cancelling or modifying the old cloud task. Pending UI actions and config
+loads disable it; server admission limits remain unchanged. This supersedes the
+terminal-only restriction above. See [design](../../prd-spec/bugfixes/mpa-create-navigation/2026-09-30-explicit-new-request.md).
 
 | Method and path | Response |
 | --- | --- |
@@ -69,7 +82,7 @@ CON-9 creation images: the dialog has editable MPA/Worker image inputs initializ
 
 CON-10 — worker recovery/diagnostics: transient Worker operations have at most 4 attempts with 1/2/4-second waits, within a default 600-second stage budget and the task deadline. Create retries retain the same payload/ClientToken; recognized not-found is recoverable only for a registered managed worker. Permanent/unknown errors and ownership conflicts fail immediately. Safe enum-only diagnostics are logged and stored in `task_diagnostics` (latest 100 per task, retained across retries); raw exception data is never persisted. Task HTTP fields and error codes are unchanged. See [approved design](../../prd-spec/bugfixes/mpa-worker-retry/2026-09-20-worker-retry.md).
 
-CON-10 metadata visibility: distinguish absent initialization metadata from explicit conflicts. A managed Worker with persisted ID/token/hash may wait for missing ID/project/ownership tags only in Creating/Pending/Starting/Initializing/Provisioning or absent status, up to 4 incomplete observations with 5/10/20-second waits. Ready with missing metadata, present conflicts, terminal/unknown states and workers without managed creation intent fail immediately. Fixed field diagnostics never include values. See [visibility fix](../../prd-spec/bugfixes/mpa-worker-retry/2026-09-20-worker-metadata-visibility.md).
+CON-10 metadata visibility: distinguish absent initialization metadata from explicit conflicts. A managed Worker with persisted ID/token/hash may wait for missing ID/project/ownership tags only in Creating/Pending/Starting/Initializing/Provisioning or absent status, polling every 5 seconds within the existing Worker/task deadline, without an independent observation limit. Ready with missing metadata, present conflicts, terminal/unknown states and workers without managed creation intent fail immediately. Fixed field diagnostics never include values; metadata attempts saturate at 4 to preserve the diagnostic protocol. Worker API error retry limits remain unchanged. See [deadline correction and verification limits](../../prd-spec/bugfixes/mpa-worker-retry/2026-09-30-worker-metadata-deadline.md).
 
 ## Proposed automatic PG granularity (not implemented)
 

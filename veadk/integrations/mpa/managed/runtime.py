@@ -201,6 +201,7 @@ def template_from_runtime(runtime, agent_id):
     fields = (
         "ArtifactType",
         "ArtifactUrl",
+        "Command",
         "RoleName",
         "CpuMilli",
         "MemoryMb",
@@ -238,6 +239,8 @@ def template_from_runtime(runtime, agent_id):
         "FEISHU_APP_ID",
         "FEISHU_APP_SECRET",
         "SKILL_SPACE_ID",
+        "MPA_WORKLOAD_POOL_NAME",
+        "MPA_WORKLOAD_IDENTITY_NAME",
     }
     env = {k: v for k, v in env_map(runtime).items() if k not in excluded}
     env["MPA_AGENT_ID"] = agent_id
@@ -578,6 +581,7 @@ class AgentRuntimeDeployer:
             "MaxConcurrency",
             "Description",
             "ApmplusEnable",
+            "ToolId",
             "Tags",
         )
         update = {k: desired[k] for k in update_fields if k in desired}

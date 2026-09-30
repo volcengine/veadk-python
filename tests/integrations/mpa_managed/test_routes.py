@@ -148,6 +148,8 @@ def test_creation_request_rejects_invalid_dependency_fields():
             "openvikingResourceId": "ov-test",
         },
         {"openvikingApiKey": "test-key"},
+        {"tosAccessKey": "ak-only"},
+        {"tosAccessKey": "ak", "tosSecretKey": "sk"},
     ):
         import pytest
         from pydantic import ValidationError

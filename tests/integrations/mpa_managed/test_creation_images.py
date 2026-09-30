@@ -52,6 +52,31 @@ def test_configured_images_and_request_overrides(tmp_path, monkeypatch):
     assert unchanged.managed == profile.managed
 
 
+def test_creation_tos_override_requires_new_worker(tmp_path, monkeypatch):
+    from veadk.integrations.mpa.managed.config import (
+        ConfigurationError,
+        with_creation_images,
+        with_creation_tos,
+    )
+
+    profile = load_profile(profile_file(tmp_path, monkeypatch))
+    tos = {
+        "tosAccessKey": "tos-ak",
+        "tosSecretKey": "tos-sk",
+        "tosBucket": "session-output",
+    }
+    with pytest.raises(ConfigurationError):
+        with_creation_tos(profile, tos)
+
+    selected = with_creation_tos(
+        with_creation_images(profile, {"workerImage": "worker:v2"}), tos
+    )
+    assert selected.managed.worker.tos_access_key == "tos-ak"
+    assert selected.managed.worker.tos_secret_key == "tos-sk"
+    assert selected.managed.worker.tos_bucket == "session-output"
+    assert profile.managed.worker.tos_mount_enabled is False
+
+
 @pytest.mark.parametrize(
     "image",
     [
@@ -111,6 +136,9 @@ def test_authorized_config_returns_defaults_and_task_freezes_them(
         "region": "cn-beijing",
         "runtimeImage": "",
         "workerImage": "registry.example/worker:custom",
+        "tosAccessKey": "sensitive-ak",
+        "tosSecretKey": "sensitive-sk",
+        "tosBucket": "session-output",
     }
     with TestClient(app) as client:
         config = client.get("/web/mpa-creation/config?region=cn-beijing").json()
@@ -123,6 +151,11 @@ def test_authorized_config_returns_defaults_and_task_freezes_them(
             "runtimeImage": config["runtimeImage"],
             "workerImage": "registry.example/worker:custom",
         }
+        assert "sensitive-ak" not in response.text
+        assert "sensitive-sk" not in response.text
+        database = service.path.read_bytes().decode(errors="ignore")
+        assert "sensitive-ak" not in database
+        assert "sensitive-sk" not in database
         rejected = client.post(
             "/web/mpa-creation/tasks",
             json={**payload, "workerImage": "https://repo?token=private"},

@@ -165,6 +165,22 @@ def test_env_uses_public_endpoint_for_codex_worker_preference() -> None:
     assert env["MPA_CODEX_WORKER_ALLOW_PUBLIC_FALLBACK"] == "true"
 
 
+def test_env_enables_tos_mount_without_exposing_credentials() -> None:
+    env = build_runtime_env(
+        _params(tos_mount_enabled=True, tos_bucket="mpa-output"),
+        public_endpoint="https://app.example.com",
+    )
+
+    assert env["MPA_CODEX_WORKER_TOS_MOUNT_ENABLED"] == "true"
+    assert env["MPA_CODEX_WORKER_TOS_BUCKET"] == "mpa-output"
+    assert not any("TOS_ACCESS" in key or "TOS_SECRET" in key for key in env)
+
+
+def test_env_omits_tos_mount_flag_when_disabled() -> None:
+    env = build_runtime_env(_params(), public_endpoint="https://app.example.com")
+    assert "MPA_CODEX_WORKER_TOS_MOUNT_ENABLED" not in env
+
+
 def test_env_advertises_default_and_additional_selectable_models() -> None:
     env = build_runtime_env(
         _params(selectable_models=("doubao-seed", "doubao-alt")),
@@ -219,19 +235,19 @@ def test_mask_secret_hides_middle() -> None:
     assert "CODEX_MCP_RUNTIME_API_KEY" in SECRET_ENV_KEYS
 
 
-def test_runtime_a2a_default_and_explicit_override() -> None:
+def test_runtime_jwt_bypass_default_and_explicit_override() -> None:
     env = build_runtime_env(_params(), public_endpoint="https://runtime.example.com")
-    assert env["DISABLE_JWT_AUTH"] == "false"
+    assert env["DISABLE_JWT_AUTH"] == "true"
     assert env["ENABLE_A2A"] == "true"
     assert env["A2A_TIP_VERIFY_ENABLED"] == "false"
     assert "MPA_AGENTKIT_MODE" not in env
-    overrides = {"DISABLE_JWT_AUTH": "true", "ENABLE_A2A": "false"}
+    overrides = {"DISABLE_JWT_AUTH": "false", "ENABLE_A2A": "false"}
     env = build_runtime_env(
         _params(extra_env=overrides), public_endpoint="https://runtime.example.com"
     )
-    assert env["DISABLE_JWT_AUTH"] == "true"
+    assert env["DISABLE_JWT_AUTH"] == "false"
     assert env["ENABLE_A2A"] == "false"
-    assert overrides == {"DISABLE_JWT_AUTH": "true", "ENABLE_A2A": "false"}
+    assert overrides == {"DISABLE_JWT_AUTH": "false", "ENABLE_A2A": "false"}
 
 
 def test_database_instrumentation_default_and_explicit_override() -> None:

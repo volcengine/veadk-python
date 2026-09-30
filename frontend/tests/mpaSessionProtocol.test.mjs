@@ -24,20 +24,33 @@ globalThis.window = {
 const appPath = fileURLToPath(new URL("../src/App.tsx", import.meta.url));
 const app = ts.createSourceFile(appPath, readFileSync(appPath, "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 let preflight;
+let artifactCondition;
 function visit(node) {
   if (ts.isFunctionDeclaration(node) && node.name?.text === "resolveMpaRunConfig") {
     preflight = node.getText(app);
+  }
+  if (ts.isJsxElement(node) && node.openingElement.attributes.properties.some(
+    attribute => ts.isJsxAttribute(attribute) && attribute.name.getText(app) === "className"
+      && attribute.initializer?.getText(app) === '"runtime-artifact-entry"',
+  )) {
+    assert.ok(ts.isParenthesizedExpression(node.parent));
+    assert.ok(ts.isBinaryExpression(node.parent.parent));
+    artifactCondition = node.parent.parent.left.getText(app);
   }
   ts.forEachChild(node, visit);
 }
 visit(app);
 assert.ok(preflight);
+assert.ok(artifactCondition);
 const bundled = await build({
   stdin: {
     contents: `
       export * from './client';
       export { registerConnections, remoteAppId } from './connections';
-      import { isMpaRuntimeApp } from './client';
+      import { isMpaRuntimeApp, isMpaA2aRuntimeApp } from './client';
+      export function showRuntimeArtifacts(appName, sandboxSession = false, currentRuntime = {}, sessionId = 's-test') {
+        return Boolean(${artifactCondition});
+      }
       export function chatPreflight(appName, currentConn, getMpaSessionExecutionConfig) {
         const currentRuntimeAppName = currentConn?.apps[0];
         const cloudProvider = 'volcengine';
@@ -64,6 +77,33 @@ function setup(t, conn = connection()) {
 const pathname = (url) => new URL(String(url), "http://localhost").pathname;
 const sse = () => new Response('data: {"id":"answer","author":"agent","content":{"parts":[{"text":"OK"}]},"turnComplete":true}\n\ndata: [DONE]\n\n', {
   headers: { "Content-Type": "text/event-stream" },
+});
+
+for (const appName of ["default", "a2a-default"]) {
+  for (const metadata of [{ agentCategory: "mpa" }, { mpaInstanceId: "mi-test" }]) {
+    test(`MPA ${appName} does not mount session artifacts: ${Object.keys(metadata)}`, t => {
+      const id = setup(t, connection(appName, metadata));
+      assert.equal(api.showRuntimeArtifacts(id), false);
+    });
+  }
+  for (const metadata of [{ agentCategory: "general" }, {}]) {
+    test(`general ${appName} retains session artifacts: ${Object.keys(metadata)}`, t => {
+      const id = setup(t, connection(appName, metadata));
+      assert.equal(api.showRuntimeArtifacts(id), true);
+      assert.equal(api.showRuntimeArtifacts(id, true), false);
+      assert.equal(api.showRuntimeArtifacts(id, false, null), false);
+      assert.equal(api.showRuntimeArtifacts(id, false, {}, ""), false);
+    });
+  }
+}
+
+test("session artifact visibility follows general-to-MPA-to-general selection", t => {
+  const id = setup(t, connection("a2a-default", { agentCategory: "general" }));
+  assert.equal(api.showRuntimeArtifacts(id), true);
+  api.registerConnections([connection("a2a-default", { agentCategory: "mpa" })]);
+  assert.equal(api.showRuntimeArtifacts(id), false);
+  api.registerConnections([connection("a2a-default", { agentCategory: "general" })]);
+  assert.equal(api.showRuntimeArtifacts(id), true);
 });
 
 for (const metadata of [{ agentCategory: "mpa" }, { mpaInstanceId: "mi-test" }, { agentCategory: "mpa", mpaInstanceId: "mi-test" }]) {

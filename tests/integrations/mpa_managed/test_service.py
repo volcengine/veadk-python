@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import asyncio
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -66,6 +67,8 @@ def test_network_gateway_worker_precede_runtime(
         )
         profile.managed.runtime.image = image
         profile.managed.runtime.env.update(
+            MPA_WORKLOAD_POOL_NAME="",
+            MPA_WORKLOAD_IDENTITY_NAME="",
             OPENVIKING_URL="https://old.example.test/openviking",
             OPENVIKING_RESOURCE_ID="ov-old",
             OPENVIKING_API_KEY="old-key",
@@ -131,6 +134,28 @@ def test_network_gateway_worker_precede_runtime(
         monkeypatch.setattr(service, "AgentDeploymentRegistry", lambda url: entry)
         databases = Databases()
         monkeypatch.setattr(service, "AgentDatabaseProvisioner", lambda **kw: databases)
+        cloud._credentials = lambda: SimpleNamespace(
+            access_key_id="ak", secret_access_key="sk", session_token="token"
+        )
+        monkeypatch.setattr(
+            service, "IdentityClient", lambda **kw: SimpleNamespace(), raising=False
+        )
+
+        def ensure_identity(client, agent_id):
+            assert agent_id == "mi-123456789abc"
+            if not events:
+                events.append("identity")
+            return SimpleNamespace(
+                workload_pool_name="agentkit-studio-workload",
+                workload_identity_name=f"{agent_id}-studio",
+            )
+
+        monkeypatch.setattr(
+            service,
+            "ensure_studio_workload_identity",
+            ensure_identity,
+            raising=False,
+        )
 
         class Gateway:
             def __init__(self, **kw):
@@ -139,11 +164,12 @@ def test_network_gateway_worker_precede_runtime(
             async def ensure(self, **kw):
                 assert not entry.mutex.locked()
                 assert entry.network.row.get("vpc_id")
+                assert events == ["identity"]
                 events.append("gateway")
                 return {"gateway_id": "gw-one"}
 
         async def worker(*a, **kw):
-            assert events == ["gateway"]
+            assert events == ["identity", "gateway"]
             events.append("worker")
             return "t-one"
 
@@ -152,7 +178,7 @@ def test_network_gateway_worker_precede_runtime(
         cloud_create = cloud.create
 
         async def create(request):
-            assert events == ["gateway", "worker"]
+            assert events == ["identity", "gateway", "worker"]
             assert request["ToolId"] == "t-one"
             runtime_tags = {
                 item["Key"]: item["Value"] for item in request.get("Tags", [])
@@ -204,11 +230,14 @@ def test_network_gateway_worker_precede_runtime(
             assert env["IDENTITY_CALLBACK_URL"] == (
                 "https://studio.example.com/oauth/callback"
             )
+            assert env["MPA_WORKLOAD_POOL_NAME"] == "agentkit-studio-workload"
+            assert env["MPA_WORKLOAD_IDENTITY_NAME"] == "mi-123456789abc-studio"
             if image:
                 assert request["ArtifactType"] == "image"
             if source == "flat":
+                assert request["Command"] == "bash run.sh"
                 runtime_env = service.env_map(request)
-                assert runtime_env["DISABLE_JWT_AUTH"] == "false"
+                assert runtime_env["DISABLE_JWT_AUTH"] == "true"
                 assert runtime_env["ENABLE_A2A"] == "true"
                 assert runtime_env["A2A_TIP_VERIFY_ENABLED"] == "false"
                 assert (
@@ -229,6 +258,7 @@ def test_network_gateway_worker_precede_runtime(
         )
         assert result["runtime_id"] == "r-agent"
         assert result["gateway_id"] == "gw-one"
+        assert cloud.runtimes[result["runtime_id"]]["ToolId"] == "t-one"
         if split_workspaces:
             assert entry.row["admin_workspace_id"] == "ws-admin"
             assert entry.row["business_workspace_id"] == "ws-business"
@@ -309,7 +339,7 @@ def test_two_agents_use_one_business_workspace_and_one_management_registry(
     urls = []
 
     async def run():
-        for agent_id in ("mi-one", "mi-two"):
+        for agent_id in ("mi-000000000001", "mi-000000000002"):
             registry = Registry()
             cloud = Cloud(registry)
             monkeypatch.setattr(service, "RuntimeCloud", lambda **kw: cloud)
@@ -331,6 +361,16 @@ def test_two_agents_use_one_business_workspace_and_one_management_registry(
             monkeypatch.setattr(service, "SharedAPIGService", lambda **kw: gateway)
             monkeypatch.setattr(
                 service, "ensure_worker", AsyncMock(return_value="t-one")
+            )
+            monkeypatch.setattr(
+                service,
+                "ensure_workload_identity",
+                AsyncMock(
+                    return_value=SimpleNamespace(
+                        workload_pool_name="agentkit-studio-workload",
+                        workload_identity_name=f"{agent_id}-studio",
+                    )
+                ),
             )
             await service.provision(profile, agent_id=agent_id, owner="user")
             environments.append(service.env_map(cloud.creates[0]))
@@ -367,8 +407,18 @@ def test_database_preflight_failure_prevents_network_and_gateway_mutations(monke
         monkeypatch.setattr(service, "RuntimeCloud", lambda **kw: cloud)
         monkeypatch.setattr(service, "AgentDeploymentRegistry", lambda *a: registry)
         monkeypatch.setattr(service, "AgentDatabaseProvisioner", lambda **kw: databases)
+        monkeypatch.setattr(
+            service,
+            "ensure_workload_identity",
+            AsyncMock(
+                return_value=SimpleNamespace(
+                    workload_pool_name="agentkit-studio-workload",
+                    workload_identity_name="mi-123456789abc-studio",
+                )
+            ),
+        )
         with pytest.raises(DeploymentError, match="CREATEDB"):
-            await service.provision(profile, agent_id="agent", owner="user")
+            await service.provision(profile, agent_id="mi-123456789abc", owner="user")
         registry.initialize.assert_not_called()
         cloud.create.assert_not_called()
         databases.close.assert_awaited_once()
@@ -376,11 +426,63 @@ def test_database_preflight_failure_prevents_network_and_gateway_mutations(monke
     asyncio.run(run())
 
 
+def test_workload_identity_conflict_fails_before_credentials(monkeypatch):
+    profile = Profile(
+        region="cn-beijing",
+        values={},
+        template=template(),
+        admin_url="fake",
+        shared_url="shared",
+        managed=Managed(
+            version=1,
+            runtime=Runtime(env={"MPA_WORKLOAD_IDENTITY_NAME": "mi-other-studio"}),
+            worker=Worker(existing_id="t-one"),
+        ),
+    )
+    cloud = AsyncMock()
+
+    with pytest.raises(DeploymentError, match="MPA_WORKLOAD_IDENTITY_NAME"):
+        asyncio.run(service.ensure_workload_identity(profile, cloud, "mi-123456789abc"))
+
+    cloud._credentials.assert_not_called()
+
+
+def test_workload_identity_error_is_a_deployment_error(monkeypatch):
+    from veadk.integrations.mpa.mpa_identity import MpaIdentityError
+
+    profile = Profile(
+        region="cn-beijing",
+        values={},
+        template=template(),
+        admin_url="fake",
+        shared_url="shared",
+        managed=Managed(
+            version=1,
+            runtime=Runtime(),
+            worker=Worker(existing_id="t-one"),
+        ),
+    )
+    cloud = SimpleNamespace(
+        _credentials=lambda: SimpleNamespace(
+            access_key_id="ak", secret_access_key="sk", session_token="token"
+        )
+    )
+    monkeypatch.setattr(service, "IdentityClient", lambda **kw: SimpleNamespace())
+
+    def fail(*args):
+        raise MpaIdentityError("requires id:GetWorkloadPool")
+
+    monkeypatch.setattr(service, "ensure_studio_workload_identity", fail)
+    with pytest.raises(DeploymentError, match="id:GetWorkloadPool"):
+        asyncio.run(service.ensure_workload_identity(profile, cloud, "mi-123456789abc"))
+
+
 def test_runtime_settings_override_source_without_losing_other_environment():
     from veadk.integrations.mpa.managed.config import Runtime
 
     source = template()
     source["ApmplusEnable"] = True
+    source["Envs"].append({"Key": "DISABLE_JWT_AUTH", "Value": "true"})
     options = Runtime.model_validate(
         {
             "image": "registry.example/pinned:v1",
@@ -392,7 +494,11 @@ def test_runtime_settings_override_source_without_losing_other_environment():
             "max-concurrency": 20,
             "apmplus-enable": False,
             "project-name": "project",
-            "env": {"MODEL_AGENT_NAME": "explicit-model", "PGHOST": "explicit-db"},
+            "env": {
+                "MODEL_AGENT_NAME": "explicit-model",
+                "PGHOST": "explicit-db",
+                "DISABLE_JWT_AUTH": "false",
+            },
         }
     )
     service.apply_runtime_settings(source, options)
@@ -426,6 +532,7 @@ def test_runtime_settings_override_source_without_losing_other_environment():
     assert env["MODEL_AGENT_NAME"] == "explicit-model"
     assert env["PGHOST"] == "explicit-db"
     assert env["PGUSER"] == "app"
+    assert env["DISABLE_JWT_AUTH"] == "false"
 
 
 def test_managed_identity_settings_override_template_and_require_complete_pair():
@@ -457,9 +564,33 @@ def test_omitted_runtime_settings_preserve_source():
     from veadk.integrations.mpa.managed.config import Runtime
 
     source = template()
+    source["Envs"].append({"Key": "DISABLE_JWT_AUTH", "Value": "false"})
     original = copy.deepcopy(source)
     service.apply_runtime_settings(source, Runtime())
     assert source == original
+
+
+def test_tos_runtime_env_is_owned_and_contains_no_credentials():
+    env = {
+        "MPA_CODEX_WORKER_TOS_MOUNT_ENABLED": "stale",
+        "MPA_CODEX_WORKER_TOS_BUCKET": "stale",
+    }
+    service.apply_tos_runtime_env(env, Worker(existing_id="t-one"))
+    assert env == {}
+
+    service.apply_tos_runtime_env(
+        env,
+        Worker(
+            image="worker:v1",
+            tos_access_key="private-ak",
+            tos_secret_key="private-sk",
+            tos_bucket="mpa-output",
+        ),
+    )
+    assert env == {
+        "MPA_CODEX_WORKER_TOS_MOUNT_ENABLED": "true",
+        "MPA_CODEX_WORKER_TOS_BUCKET": "mpa-output",
+    }
 
 
 @pytest.mark.parametrize(

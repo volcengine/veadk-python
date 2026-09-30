@@ -7167,7 +7167,7 @@ export default function App() {
           <div
             className={`composer-slot${sandboxSession ? " sandbox-composer-wrap" : ""}`}
           >
-            {!sandboxSession && currentRuntime && sessionId && (
+            {!sandboxSession && currentRuntime && sessionId && !isMpaRuntimeApp(appName) && !isMpaA2aRuntimeApp(appName) && (
               <div className="runtime-artifact-entry" data-share-image-exclude="true">
                 <RuntimeArtifacts key={`${userId}:${currentRuntime.runtimeId}:${currentRuntime.region}:${currentRuntimeAppName || appName}:${sessionId}`} scope={{
                   runtimeId: currentRuntime.runtimeId,

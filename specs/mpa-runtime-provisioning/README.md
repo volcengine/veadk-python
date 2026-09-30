@@ -2,11 +2,16 @@
 
 - **Component ID:** `mpa-runtime-provisioning`
 - **Status:** Draft; proposed changes are governed by the related PRD
-- **Revision:** 2026-09-20
+- **Revision:** 2026-09-30
 - **Chinese version:** [README.zh.md](README.zh.md)
 - **Related PRD:** [MPA Runtime Integration Hardening](../../prd-spec/bugfixes/mpa-runtime-integration/2026-09-12-mpa-runtime-integration-hardening.md)
 - **Related PRD:** [MPA Studio Workload Identity Provisioning](../../prd-spec/features/mpa-studio-workload-identity/2026-09-20-mpa-studio-workload-identity.md)
-- **Owned code:** `veadk/cli/cli_mpa.py`, `veadk/integrations/mpa/mpa_provision.py`, `veadk/integrations/mpa/mpa_runtime.py`
+- **Related PRD:** [Managed Workload Identity ensure](../../prd-spec/bugfixes/mpa-managed-workload-identity/2026-09-29-ensure-managed-workload-identity.md)
+- **Related PRD:** [Fresh managed Runtime command](../../prd-spec/bugfixes/mpa-runtime-fresh-command/2026-09-29-set-fresh-runtime-command.md)
+- **Related PRD:** [MPA per-session TOS output mount](../../prd-spec/features/mpa-agent-oneclick-provision/2026-09-23-mpa-tos-output-mount.md)
+- **Related PRD:** [Initial Runtime Tool attachment](../../prd-spec/bugfixes/mpa-runtime-initial-tool/2026-09-29-runtime-initial-tool-attachment.md)
+- **Related PRD:** [Reference Runtime command preservation](../../prd-spec/bugfixes/mpa-runtime-reference-command/2026-09-29-preserve-runtime-command.md)
+- **Owned code:** `veadk/cli/cli_mpa.py`, `veadk/integrations/mpa/mpa_provision.py`, `veadk/integrations/mpa/mpa_runtime.py`, `veadk/integrations/mpa/mpa_tool.py`, `veadk/integrations/mpa/managed/worker.py`
 
 ## Responsibility
 
@@ -27,13 +32,21 @@ This component converts `veadk mpa create` inputs into one recoverable AgentKit 
 - `CON-4`: Phase one writes placeholders before startup; phase two overwrites them only with non-empty authoritative Runtime values. A phase-two deployment failure is reported as failure, not partial success.
 - `CON-5`: Explicit caller `extra_env` remains last-wins, including an intentional override of VeADK profile defaults.
 - `CON-6`: AgentKit Runtime create and convergent update persist `veadk:agent-type=mpa` as the stable Studio classification tag. Untagged Runtime resources remain outside the MPA filter until an explicit tag repair is performed.
-- `CON-7`: Before other provisioning mutations, the CLI creates or reuses the account-and-region scoped pool `agentkit-studio-workload` and identity `{MPA_AGENT_ID}-studio`, then injects them as `MPA_WORKLOAD_POOL_NAME` and `MPA_WORKLOAD_IDENTITY_NAME`.
+- `CON-7`: Before other provisioning mutations, both `veadk mpa create` and managed Studio provisioning create or reuse the account-and-region scoped pool `agentkit-studio-workload` and identity `{MPA_AGENT_ID}-studio`, then inject them as `MPA_WORKLOAD_POOL_NAME` and `MPA_WORKLOAD_IDENTITY_NAME`. Managed reference/template values cannot supply another agent's identity; empty explicit values are treated as unspecified and conflicting non-empty values fail before mutation.
 - `CON-8`: `veadk mpa create` continues to generate `mi-[0-9a-z]{12}` ids. Explicit ids accept that form and the existing Studio `mi-[0-9a-z]{24}` form for flat managed provisioning. The base id remains the Runtime and metadata identity; only the workload identity receives the `-studio` suffix.
 - `CON-9`: Workload get-or-create is exact-name idempotent. Concurrent create conflicts are followed by a read. Other Identity errors fail before Tool, database, or Runtime mutations. Created identity resources are retained for retry.
 
 ## State, security, and compatibility
 
 The lifecycle is `prepared -> resource-created -> ready -> environment-finalized -> metadata-finalized -> verified`. Reuse-by-name converges the existing Runtime through `UpdateRuntime(ReleaseEnable=True)` and waits for a newer ready version. Secrets remain process/control-plane data and must be redacted from CLI output, documents, logs, and test fixtures. Native mpa-agent deployments retain their own defaults because the opt-out switches are injected by this component rather than changing native defaults.
+
+When `managed.from-runtime` selects a reference Runtime, provisioning preserves
+its explicit container `Command` together with the existing infrastructure
+allowlist. It does not invent a command when the reference omits one; agent
+identity, credentials, endpoints, Tool binding, and finalization values remain
+new-deployment-owned.
+The MPA-only fresh managed template uses the standard `bash run.sh` command;
+explicit JSON templates remain authoritative.
 
 ## Failure and observability
 
@@ -48,7 +61,7 @@ Missing endpoint, key, Runtime ID, or APIG ID blocks metadata finalization. Runt
 | `CON-7`, `CON-9` | `uv run --extra dev pytest tests/integrations/test_mpa_identity.py tests/cli/test_cli_mpa.py` |
 | End-to-end | Create/reuse an isolated Runtime, inspect metadata without printing keys, invoke A2A and built-in MCP, and observe two MCP-cache intervals |
 
-VeADK MPA provisioning defaults to ENABLE_A2A=true and DISABLE_JWT_AUTH=false. Without an ADK user JWT, a compatible MPA Runtime returns 404 from /list-apps so Studio discovers its A2A card and selects a2a-default. A2A_TIP_VERIFY_ENABLED=false retains the existing gateway key-auth integration. Explicit extra_env values remain last-wins. Managed flat creation uses these defaults; referenced Runtime/template environments are preserved. Existing Runtimes require an explicit update. General agents are unchanged.
+VeADK MPA provisioning defaults to `ENABLE_A2A=true` and `DISABLE_JWT_AUTH=true`, as requested in [Studio key-auth defaults](../../prd-spec/bugfixes/mpa-default-jwt/2026-09-30-studio-key-auth-default.md). The inner legacy REST JWT gate is bypassed, including its admin checks and header-based identity paths; trusted Studio/gateway callers must control identity headers. Outer gateway key-auth and `A2A_TIP_VERIFY_ENABLED=false` are unchanged. With a compatible MPA image, `/list-apps` may advertise ADK instead of forcing A2A discovery; transport compatibility and old-session migration are not guaranteed by this default. Explicit `extra_env` values remain last-wins, including `DISABLE_JWT_AUTH=false`. Managed flat creation uses these defaults; referenced Runtime/template environments are preserved. Existing Runtimes require an explicit update and release. `MPA_AGENTKIT_MODE` is not enabled. General agents are unchanged.
 
 MPA provisioning defaults `OTEL_PYTHON_DISABLED_INSTRUMENTATIONS` to `sqlalchemy,asyncpg,psycopg,psycopg2,dbapi`, suppressing database auto-instrumentation while preserving business tracing. Explicit `extra_env` overrides win, including an empty string to re-enable instrumentation. This applies to newly provisioned or explicitly redeployed resources, not existing running instances.
 
@@ -72,7 +85,34 @@ These guarantees apply to both Studio and CLI through shared orchestration. The 
 Verification maps `CON-7` through `CON-12` to PRD `AC-1`, `AC-2`, `AC-9`, `AC-10`: fresh bootstrap with legacy endpoints blocked; missing/finalization failure and restart; unsafe overrides; credential rotation/retry; compatible rollback; active/shared-resource deletion. Reuse existing provisioning regression targets above and add failing tests for the new profile. All proposed runtime/live results are `not_run`.
 
 2026-09-15: profile drafted for functional migration without historical data import; implementation and live evidence pending.
-
 ### Automatic PG preparation
 
 Managed provisioning supports `managed.postgres.mode: auto`. It verifies deployment STS identity before AIDAP calls, prepares the two shared Workspaces and management database before network/APIG/Runtime provisioning, and overrides inherited PG host/port/user/password/TLS values with the resolved business connection. Agent database names and the existing account/region network/APIG sharing contract are unchanged. The bootstrap state, migration guards and API behavior are owned by [Studio creation CON-13](../studio-mpa-creation/README.md#con-13-automatic-shared-postgresql-workspaces). Automatic mode is opt-in; manual/legacy profiles are preserved.
+
+## Per-session TOS output mount extension
+
+When the private MPA YAML supplies the complete `tos-access-key`,
+`tos-secret-key`, and `tos-bucket` tuple, a newly created worker Tool MUST carry
+an access-key TOS mount with `/sandbox-session/default/default` as its base and
+`/data/output` as its read-write local path. Credentials MUST remain in the
+Tool request. The Runtime receives `MPA_CODEX_WORKER_TOS_MOUNT_ENABLED=true`
+and the non-secret bucket name, but never AK/SK.
+The Studio creation page may submit a complete tuple for one creation and
+override the YAML defaults. AK/SK pass only in memory through child-process
+stdin and MUST NOT enter sessionStorage, task SQLite, or task responses. Partial
+input MUST be rejected. A profile using an existing Worker must first select a
+new Worker image for the creation.
+
+For a newly managed Runtime, the initial `CreateRuntime` request MUST include
+the `ToolId` of the already prepared worker Tool. The final convergent update
+retains the same `ToolId` while publishing authoritative endpoint/key
+environment values. Delaying the first Tool attachment until after Runtime
+creation is unsupported because the control plane may fail the unbound Runtime
+before it reaches `Ready`.
+
+For every newly created Sandbox Session, mpa-agent MUST set
+`CreateSessionRequest.TosMountPoints` using AgentKit's
+canonical per-session path:
+`/sandbox-session/tool-{tool_id}/session-{session_id}/`. It MUST fail closed if
+the Runtime flag is enabled but the bucket is absent. Existing
+Sessions and externally supplied Tools are not mutated.

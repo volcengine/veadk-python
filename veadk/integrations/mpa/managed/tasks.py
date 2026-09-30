@@ -177,6 +177,7 @@ class CreationTasks:
         images=None,
         secrets=None,
         studio_runtime_owner=None,
+        tos=None,
     ):
         if "openvikingApiKey" in payload:
             raise TaskError("Secrets must not be included in stored task inputs")
@@ -242,6 +243,7 @@ class CreationTasks:
                 timeout,
                 secrets,
                 studio_runtime_owner,
+                tos or {},
             )
         )
         self.running[task_id] = task
@@ -257,6 +259,7 @@ class CreationTasks:
         timeout,
         secrets,
         studio_runtime_owner,
+        tos,
     ):
         process = None
         succeeded = None
@@ -281,6 +284,7 @@ class CreationTasks:
                 "owner": owner,
                 "region": payload["region"],
                 "images": self.get(owner, task_id)["images"],
+                "tos": tos,
                 "resources": {
                     key: payload[key]
                     for key in (

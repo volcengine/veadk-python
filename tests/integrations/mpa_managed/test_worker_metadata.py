@@ -74,7 +74,7 @@ def test_initial_metadata_is_waited_for_without_recreating(monkeypatch, status):
         with diagnostics.diagnostic_scope(events.append):
             assert await ensure(Registry(), cloud) == "t-test"
         cloud.create.assert_awaited_once()
-        assert [c.args[0] for c in sleep.call_args_list] == [5, 10]
+        assert [c.args[0] for c in sleep.call_args_list] == [5, 5]
         assert {e["operation"] for e in events} == {
             "worker_id",
             "worker_project",
@@ -173,27 +173,31 @@ def test_absent_creation_proof_never_grants_grace(monkeypatch, missing):
     asyncio.run(run())
 
 
-def test_metadata_exhaustion_is_bounded_and_retains_binding(monkeypatch):
+@pytest.mark.parametrize("observations", [4, 30, 200])
+def test_delayed_metadata_reaches_ready_without_recreating(monkeypatch, observations):
     async def run():
         sleep = AsyncMock()
         monkeypatch.setattr(diagnostics.asyncio, "sleep", sleep)
         cloud = AsyncMock()
-        cloud.get.return_value = {
+        partial = {
             "ToolId": "t-test",
             "Status": "Creating",
             "ProjectName": "default",
         }
+        cloud.get.side_effect = [partial] * observations + [complete()]
         registry = intent()
         events = []
-        with (
-            diagnostics.diagnostic_scope(events.append),
-            pytest.raises(DeploymentError),
-        ):
-            await ensure(registry, cloud)
-        assert cloud.get.await_count == 4
-        assert [c.args[0] for c in sleep.call_args_list] == [5, 10, 20]
-        assert (
-            events[-1]["category"] == "metadata_missing" and events[-1]["attempt"] == 4
+        with diagnostics.diagnostic_scope(events.append):
+            assert await ensure(registry, cloud) == "t-test"
+        assert cloud.get.await_count == observations + 1
+        assert [c.args[0] for c in sleep.call_args_list] == [5] * observations
+        assert len(events) == observations * 2
+        assert all(
+            e["category"] == "metadata_pending" and e["outcome"] == "retrying"
+            for e in events
+        )
+        assert [e["attempt"] for e in events[::2]] == [1, 2, 3] + [4] * (
+            observations - 3
         )
         assert registry.row["worker_id"] == "t-test"
         cloud.create.assert_not_called()
@@ -205,23 +209,30 @@ def test_metadata_exhaustion_is_bounded_and_retains_binding(monkeypatch):
 def test_metadata_wait_obeys_cancel_and_stage_deadline(monkeypatch, cancel):
     async def run():
         waiting = asyncio.Event()
+        sleeps = []
 
-        async def sleep(_):
+        async def sleep(delay):
+            sleeps.append(delay)
+            if len(sleeps) < 6:
+                return
             waiting.set()
             await asyncio.Future()
 
         monkeypatch.setattr(diagnostics.asyncio, "sleep", sleep)
         cloud = AsyncMock()
         cloud.get.return_value = {"Status": "Creating"}
+        registry = intent()
         task = asyncio.create_task(
-            ensure(intent(), cloud, timeout=10 if cancel else 0.02)
+            ensure(registry, cloud, timeout=10 if cancel else 0.02)
         )
         await asyncio.wait_for(waiting.wait(), 1)
         if cancel:
             task.cancel()
         with pytest.raises(asyncio.CancelledError if cancel else TimeoutError):
             await task
-        cloud.get.assert_awaited_once()
+        assert cloud.get.await_count == 6
+        assert sleeps == [5] * 6
+        assert registry.row["worker_id"] == "t-test"
         cloud.create.assert_not_called()
 
     asyncio.run(run())
@@ -247,18 +258,17 @@ def test_existing_worker_retains_omitted_default_project_compatibility():
     asyncio.run(run())
 
 
-def test_metadata_budget_is_not_reset_by_complete_starting_response(monkeypatch):
+def test_metadata_wait_continues_across_complete_starting_responses(monkeypatch):
     async def run():
         sleep = AsyncMock()
         monkeypatch.setattr(diagnostics.asyncio, "sleep", sleep)
         partial = {**complete(), "Status": "Starting", "Tags": []}
         full = {**complete(), "Status": "Starting"}
         cloud = AsyncMock()
-        cloud.get.side_effect = [partial, full, partial, full, partial, full, partial]
-        with pytest.raises(DeploymentError):
-            await ensure(intent(), cloud)
-        assert cloud.get.await_count == 7
-        assert [c.args[0] for c in sleep.call_args_list] == [5, 5, 10, 5, 20, 5]
+        cloud.get.side_effect = [partial, full] * 6 + [complete()]
+        assert await ensure(intent(), cloud) == "t-test"
+        assert cloud.get.await_count == 13
+        assert [c.args[0] for c in sleep.call_args_list] == [5] * 12
         cloud.create.assert_not_called()
 
     asyncio.run(run())

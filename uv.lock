@@ -5893,7 +5893,7 @@ requires-dist = [
     { name = "a2a-sdk", specifier = ">=0.3.7,<1.0.0" },
     { name = "a2ui-agent-sdk", marker = "extra == 'a2ui'", specifier = ">=0.2.1" },
     { name = "agent-pilot-sdk", specifier = "==0.1.2" },
-    { name = "agentkit-sdk-python", specifier = ">=0.8.0" },
+    { name = "agentkit-sdk-python", specifier = ">=0.8.5" },
     { name = "agentkit-sdk-python", marker = "extra == 'harness-sidecar'", specifier = ">=0.8.1,<0.9.0" },
     { name = "aiomysql", specifier = "==0.3.2" },
     { name = "anthropic", marker = "extra == 'sandbox'", specifier = ">=0.40.0" },

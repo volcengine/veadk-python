@@ -23,6 +23,7 @@ import uuid
 
 from .database import DeploymentError, agent_suffix
 from .diagnostics import report, retry_worker
+from ..mpa_tool import build_tos_mount_config
 
 
 class WorkerCloud:
@@ -120,6 +121,14 @@ async def _ensure_worker(entry, cloud, options, *, account, region, agent_id, pr
     suffix = agent_suffix(account, region, agent_id)
     owned = {"managed_by": "mpa-deployment", "mpa_agent_key": suffix}
     tool_id = record.get("worker_id") or options.existing_id
+    expected_tos = None
+    if options.tos_mount_enabled:
+        expected_tos = build_tos_mount_config(
+            tos_access_key=options.tos_access_key,
+            tos_secret_key=options.tos_secret_key,
+            tos_bucket=options.tos_bucket,
+            region=region,
+        ).model_dump(by_alias=True, exclude_none=True, mode="json")
     if (
         record.get("worker_id")
         and options.existing_id
@@ -168,6 +177,8 @@ async def _ensure_worker(entry, cloud, options, *, account, region, agent_id, pr
             "Tags": [{"Key": k, "Value": v} for k, v in owned.items()],
             "Envs": [{"Key": k, "Value": v} for k, v in sorted(env.items())],
         }
+        if expected_tos:
+            request["TosMountConfig"] = expected_tos
         digest = hashlib.sha256(
             json.dumps(request, sort_keys=True).encode()
         ).hexdigest()
@@ -214,6 +225,7 @@ async def _ensure_worker(entry, cloud, options, *, account, region, agent_id, pr
             owned=owned,
             agent_id=agent_id,
             managed=bool(record.get("worker_managed")),
+            expected_tos=expected_tos,
         )
         status = tool.get("Status")
         if status in {"Failed", "Error", "Deleted", "Deleting"}:
@@ -222,25 +234,20 @@ async def _ensure_worker(entry, cloud, options, *, account, region, agent_id, pr
                 "Worker is not ready; inspect it and retry the same agent"
             )
         if missing:
-            incomplete_observations += 1
-            retrying = (
-                incomplete_observations < 4
-                and status
-                in {
-                    None,
-                    "",
-                    "Creating",
-                    "Pending",
-                    "Starting",
-                    "Initializing",
-                    "Provisioning",
-                }
-                and bool(
-                    record.get("worker_managed")
-                    and record.get("worker_id")
-                    and record.get("worker_token")
-                    and record.get("worker_hash")
-                )
+            incomplete_observations = min(incomplete_observations + 1, 4)
+            retrying = status in {
+                None,
+                "",
+                "Creating",
+                "Pending",
+                "Starting",
+                "Initializing",
+                "Provisioning",
+            } and bool(
+                record.get("worker_managed")
+                and record.get("worker_id")
+                and record.get("worker_token")
+                and record.get("worker_hash")
             )
             for operation in missing:
                 report(
@@ -251,7 +258,7 @@ async def _ensure_worker(entry, cloud, options, *, account, region, agent_id, pr
                 )
             if not retrying:
                 raise DeploymentError("Worker ownership metadata is incomplete")
-            await asyncio.sleep(5 * 2 ** (incomplete_observations - 1))
+            await asyncio.sleep(5)
             continue
         if status == "Ready":
             record.update(worker_id=tool_id)
@@ -260,10 +267,21 @@ async def _ensure_worker(entry, cloud, options, *, account, region, agent_id, pr
         await asyncio.sleep(5)
 
 
-def _missing_worker_metadata(tool, *, tool_id, project, owned, agent_id, managed):
+def _missing_worker_metadata(
+    tool, *, tool_id, project, owned, agent_id, managed, expected_tos=None
+):
     """Reject any present conflict before considering incomplete metadata."""
     tags = {t["Key"]: t.get("Value") for t in tool.get("Tags") or []}
     env = {t["Key"]: t.get("Value") for t in tool.get("Envs") or []}
+    if expected_tos:
+        actual = tool.get("TosMountConfig") or {}
+        actual_mounts = actual.get("MountPoints") or []
+        expected_mount = expected_tos["MountPoints"][0]
+        if not actual.get("EnableTos") or not any(
+            all(mount.get(key) == expected_mount[key] for key in expected_mount)
+            for mount in actual_mounts
+        ):
+            raise DeploymentError("Worker TOS output mount metadata is incomplete")
     checks = [
         ("worker_id", tool.get("ToolId"), tool_id),
         (

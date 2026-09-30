@@ -4,7 +4,7 @@
 
 - 组件 ID：`studio-mpa-creation`
 - 状态：active
-- 修订日期：2026-09-24
+- 修订日期：2026-09-30
 - 设计及证据：[Studio MPA 创建](../../prd-spec/features/mpa-agent-oneclick-provision/2026-09-20-studio-mpa-creation.zh.md)
 - 所属代码：`veadk/integrations/mpa/managed/`、`frontend/server/mpa_creation.py`、`frontend/src/adk/mpaCreation.ts`、`frontend/src/ui/mpa-create/`；CLI 和目录接入。
 - 测试：`tests/integrations/mpa_managed/`、`frontend/tests/mpaCreation.test.tsx`。
@@ -32,6 +32,17 @@ VeADK 负责托管 YAML 解析、云服务/数据库编排、有权限约束的�
 - **CON-9 — UI：** 火山引擎的 MPA 筛选下，有智能体管理权限时展示创建卡片，含空列表。窗口显示固定地域、原有生成的 `mi-[0-9a-f]{24}` 只读 ID、描述和资源计划。三步分别展示基础信息、PostgreSQL 自动准备和 OpenViking；仅第三步提交。POST 前保存请求身份，提交后锁定输入，确保响应丢失后安全重试。卸载时中止轮询并忽略迟到响应，保留服务端工作，重开时从会话存储恢复。明确失败或取消的任务同时提供同 ID 重试和独立的新建操作；后者仅以新请求/智能体 ID 及默认值替换浏览器草稿，不删除或修改原服务端任务与资源。运行中和提交结果不明时，弹窗不允许开始另一个身份。成功后刷新原地域。复用本地化 BaseUI/Studio 组件、键盘/输入法行为及语义主题变量。`ModalLayout.footer` 是可选 React 节点：省略保留原操作，`null` 隐藏页脚；原调用者不变。参见[终态任务新建修复](../../prd-spec/bugfixes/studio-mpa-creation/2026-09-24-start-another-agent-after-failure.zh.md)。
 
 ## HTTP 契约
+
+CON-9 导航修复（2026-09-30）：步骤标题是支持键盘操作的按钮。
+恢复已提交草稿后，前面的步骤和“上一步”仍可查看；已提交字段保持锁定，
+重试保留原请求身份。向前导航校验镜像和 PG 配置，忙碌操作禁用导航。
+参见[导航修复](../../prd-spec/bugfixes/mpa-create-navigation/2026-09-30-recover-step-navigation.zh.md)。
+
+CON-9 显式新请求修订（2026-09-30，已实现）：任何已提交草稿均提供新建入口，
+包括运行中、结果未知或查询不可用的任务。显式以新身份和可编辑默认配置替换
+浏览器恢复草稿，不取消或修改旧云端任务。UI 操作未结束及配置加载时禁用；
+服务端提交限制不变。本修订替代上文仅终态可新建的限制。
+参见[设计](../../prd-spec/bugfixes/mpa-create-navigation/2026-09-30-explicit-new-request.zh.md)。
 
 | 方法与路径 | 响应 |
 | --- | --- |
@@ -69,7 +80,7 @@ CON-9 创建镜像：弹窗包含可编辑的 MPA/Worker 镜像输入框，使�
 
 CON-10 — Worker 恢复/诊断：暂时性 Worker 操作最多尝试 4 次，间隔 1/2/4 秒，受默认 600 秒阶段预算和总任务期限限制。创建重试保持同一载荷/ClientToken；仅已登记的托管 Worker 可恢复已识别的不存在错误。永久/未知错误和归属冲突立即失败。只含安全枚举的诊断记录到日志和 `task_diagnostics`（每任务最新 100 条，跨重试保留），绝不持久化原始异常数据。任务 HTTP 字段和错误码不变。见[已批准设计](../../prd-spec/bugfixes/mpa-worker-retry/2026-09-20-worker-retry.zh.md)。
 
-CON-10 元数据可见性：区分初始化元数据缺失和显式冲突。具有持久化 ID/令牌/哈希的托管 Worker 仅在 Creating/Pending/Starting/Initializing/Provisioning 或无状态时可等待缺失 ID/项目/归属标签，最多 4 次不完整观测，等待 5/10/20 秒。Ready 缺失字段、已有值冲突、终态/未知状态以及无托管创建意图的 Worker 立即失败。固定字段诊断不包含值。见[可见性修复](../../prd-spec/bugfixes/mpa-worker-retry/2026-09-20-worker-metadata-visibility.zh.md)。
+CON-10 元数据可见性：区分初始化元数据缺失和显式冲突。具有持久化 ID/令牌/哈希的托管 Worker 仅在 Creating/Pending/Starting/Initializing/Provisioning 或无状态时可等待缺失 ID/项目/归属标签，每 5 秒检查，受现有 Worker/任务期限限制，不设置独立观察次数上限。Ready 缺失字段、已有值冲突、终态/未知状态以及无托管创建意图的 Worker 立即失败。固定字段诊断不包含值；元数据 attempt 最大保持 4，兼容已有诊断协议。Worker API 错误重试限制不变。见[期限修复及验证限制](../../prd-spec/bugfixes/mpa-worker-retry/2026-09-30-worker-metadata-deadline.zh.md)。
 
 ## 自动 PG 粒度提案（尚未实现）
 

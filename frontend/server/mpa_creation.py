@@ -38,7 +38,10 @@ from veadk.integrations.mpa.managed.config import (
     load_studio_profile,
     validate_creation_resources,
     validate_image_reference,
+    validate_creation_tos,
+    with_creation_images,
     with_creation_resources,
+    with_creation_tos,
 )
 from veadk.integrations.mpa.managed.credentials import load_volcengine_credentials
 from veadk.integrations.mpa.managed.tasks import CreationTasks, TaskError, owner_key
@@ -66,6 +69,9 @@ class CreationRequest(BaseModel):
     openvikingUrl: str = Field(default="", max_length=1024)
     openvikingResourceId: str = Field(default="", max_length=128)
     openvikingApiKey: str = Field(default="", max_length=512, repr=False)
+    tosAccessKey: str = Field(default="", max_length=256, repr=False)
+    tosSecretKey: str = Field(default="", max_length=256, repr=False)
+    tosBucket: str = Field(default="", max_length=256)
 
     @field_validator("runtimeImage", "workerImage")
     @classmethod
@@ -75,6 +81,7 @@ class CreationRequest(BaseModel):
     @model_validator(mode="after")
     def validate_resources(self):
         validate_creation_resources(self.model_dump())
+        validate_creation_tos(self.model_dump())
         return self
 
 
@@ -127,6 +134,10 @@ def mount_mpa_creation_routes(
         try:
             path, config = profile(body.region)
             payload = body.model_dump(mode="json")
+            tos = {
+                field: payload.pop(field)
+                for field in ("tosAccessKey", "tosSecretKey", "tosBucket")
+            }
             with_creation_resources(config, payload)
             openviking_api_key = payload.pop("openvikingApiKey")
             resources = validate_creation_resources(
@@ -143,6 +154,7 @@ def mount_mpa_creation_routes(
                     payload[field] = resources[field]
                 else:
                     payload.pop(field)
+            with_creation_tos(with_creation_images(config, images), tos)
             return await get_tasks().start(
                 identity,
                 payload,
@@ -151,6 +163,7 @@ def mount_mpa_creation_routes(
                 images=images,
                 secrets={"openvikingApiKey": openviking_api_key},
                 studio_runtime_owner=studio_runtime_owner,
+                tos=tos,
             )
         except ConfigurationError as exc:
             raise HTTPException(400, str(exc)) from None

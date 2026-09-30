@@ -5,6 +5,15 @@ server that `veadk frontend` launches — no separate backend.
 
 ## Release notifications
 
+The MPA creation wizard supports clicking step headings and returning to earlier
+settings after restoring a submitted draft. Submitted settings remain read-only;
+retry retains the original identity. Any submitted draft offers New Agent to
+open a fresh, editable request. It replaces the browser recovery draft without
+cancelling the old task; active-task admission limits still apply on submission.
+
+恢复已提交草稿时配置保持只读，重试沿用原身份。“新建另一个智能体”会生成新请求，
+开放编辑并替换浏览器恢复草稿，不取消旧任务；提交仍受服务端活动任务限制。
+
 The release workflow sends one Feishu card after both cloud providers finish
 publishing. A separate VeFaaS Webhook discovers the app bot’s group memberships
 and persists delivery results to avoid duplicate notifications on retries.
@@ -1636,7 +1645,9 @@ MPA grouped replies hide exact answer mirrors only in their derived view: an ext
 
 ### MPA A2A shared gateway compatibility
 
-MPA creation defaults to A2A discovery (`ENABLE_A2A=true`, `DISABLE_JWT_AUTH=false`). When a tagged MPA Runtime's agent card omits the shared gateway `/runtime/<ID>` prefix from its same-origin `/a2a/jsonrpc` URL, the Studio backend restores the prefix from the control-plane endpoint for chat and history requests. General-agent URLs are unchanged. Existing Runtimes need an explicit configuration release; reconnect to refresh discovery. Restart Studio after this backend update; no frontend rebuild is required.
+MPA conversations (native or A2A) hide the separate “会话产物” entry because it does not read the Worker `/data/output` mount. General Runtime sessions retain the entry. Existing MPA Markdown file-download links are unchanged.
+
+Fresh flat MPA creation defaults to `ENABLE_A2A=true` and `DISABLE_JWT_AUTH=true`; explicit `false` overrides and referenced Runtime/template environments are preserved. The inner legacy REST JWT gate is bypassed, including its admin checks and header-based identity paths; trusted callers must control identity headers. Outer gateway key-auth is unchanged. Studio now prefers a valid Agent Card for tagged MPA Runtimes, selecting `a2a-default` even when the Runtime also advertises ADK. General Runtimes and MPA without a usable card keep existing discovery behavior. This avoids native Profile/session preflight on the A2A path; it does not enable `MPA_AGENTKIT_MODE`, change independent management-endpoint authentication or migrate old sessions. If a tagged MPA Runtime's agent card omits the shared gateway `/runtime/<ID>` prefix from its same-origin `/a2a/jsonrpc` URL, the Studio backend still restores the prefix from the control-plane endpoint for chat and history requests. General-agent URLs are unchanged. Existing Runtimes need an explicit configuration release for environment changes; reconnect to refresh discovery. Restart Studio after this backend update; no frontend rebuild is required.
 
 ### 智能构建首页与任务找回
 

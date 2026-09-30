@@ -203,10 +203,10 @@ sqlite3 -readonly .adk/mpa-creation.sqlite3 "SELECT task_id,datetime(created,'un
 
 ### 初始化元数据延迟
 
-对于已持久化创建 ID/令牌/哈希的托管 Worker，初始化期间缺失 ID/项目/归属标签时，最多观察四次不完整响应，依次等待 5、10、20 秒，处理 CreateTool 返回后元数据稍晚可见的情况。已有值明确冲突仍立即失败；Ready 后缺失字段及终态/未知状态不享受宽限。等待遵循原阶段期限和取消，不会创建另一个 Worker。安全诊断操作标明具体字段（`worker_id`、`worker_project`、`worker_managed_by`、`worker_agent_key`、`worker_agent_binding`、`worker_state`）；`metadata_pending` 表示正在等待，`metadata_missing` 表示有界检查未通过。实际字段值仍保持私有。
+对于已持久化创建 ID/令牌/哈希的托管 Worker，初始化期间缺失 ID/项目/归属标签时，每 5 秒检查，受原阶段期限和取消限制，不设置独立观察次数上限，处理 CreateTool 返回后元数据稍晚可见的情况。已有值明确冲突仍立即失败；Ready 后缺失字段及终态/未知状态不享受宽限。等待不会创建另一个 Worker。安全诊断操作标明具体字段（`worker_id`、`worker_project`、`worker_managed_by`、`worker_agent_key`、`worker_agent_binding`、`worker_state`）；`metadata_pending` 表示正在等待，`metadata_missing` 表示当前状态不能接受必需元数据缺失。元数据诊断 attempt 最大保持 4；Worker API 错误重试保留独立的四次限制。实际字段值仍保持私有。
 
 托管部署接受带 `sslmode` 的 PostgreSQL 注册库 URL，并将该查询参数转换为 MPA Runtime 的 asyncpg 驱动使用的 `ssl`，保留原 TLS 模式。自动准备和手动配置的管理库均适用，无需重新构建镜像。已有未完成部署可以在保持资源身份不变的情况下恢复并应用此转换。
 
-## Studio A2A 发现默认配置
+## Studio Runtime 鉴权默认配置
 
-Flat 创建默认设置 `ENABLE_A2A=true` 和 `DISABLE_JWT_AUTH=false`。使用兼容的 MPA 镜像时，Studio 的 Runtime-key `/list-apps` 探测收到 404，随后通过 A2A agent card 发现 `a2a-default`。`A2A_TIP_VERIFY_ENABLED=false` 保留现有外层网关 key-auth 集成，不绕过 REST JWT 鉴权。仍支持显式 `managed.runtime.env` 覆盖；引用 Runtime / 模板的环境保持不变。已有 Runtime 需要显式更新配置并发布；在 Studio 重新连接以刷新发现结果。本次默认值修改不需要重建前端。
+Flat 创建默认设置 `ENABLE_A2A=true` 和 `DISABLE_JWT_AUTH=true`。绕过旧版 REST 内层 JWT 校验，包括其管理权限检查和 header 身份路径；可信 Studio/网关调用方必须控制身份 header。外层网关 key-auth 和 `A2A_TIP_VERIFY_ENABLED=false` 不变。Studio 对控制面识别的 MPA 优先使用可用 Agent Card，即使 `/list-apps` 同时广告 ADK，也选择 `a2a-default`；普通 Runtime 和无可用卡片的 MPA 保持原发现逻辑。跳过原生会话 Profile 前置查询，不跳过独立管理鉴权，不迁移旧会话。仍支持显式 `managed.runtime.env` 覆盖，包括 `DISABLE_JWT_AUTH=false`；引用 Runtime/模板环境保持不变。已有 Runtime 环境变化需显式更新配置并发布；在 Studio 重新连接以刷新发现结果。不启用 `MPA_AGENTKIT_MODE`。后端发现变化需重启 Studio，不需要重建前端。
