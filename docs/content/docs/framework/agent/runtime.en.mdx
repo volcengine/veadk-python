@@ -242,6 +242,8 @@ Either way, a path that came from the *model* is untrusted input: resolve it aga
 | `reasoning_effort` | `"medium"` | Reasoning budget: `minimal`/`low`/`medium`/`high`/`xhigh`. Higher is slower and uses more tokens. |
 | `personality` | `"pragmatic"` | Codex's own reply style: `none`/`friendly`/`pragmatic`. |
 | `model_transport` | `"auto"` | How Codex reaches the model. `direct`: Codex calls a Responses-capable backend itself and uses the agent's tools through a local MCP server the runtime runs for the turn, so Codex drives the tool loop. `shim`: an in-process Responses→Chat shim sits in between and executes the tools, for chat-only backends. `auto` picks `direct` for Volcengine Ark (`*.volces.com`), BytePlus (`*.bytepluses.com`) and `api.openai.com`, `shim` otherwise. |
+| `turn_timeout_seconds` | `None` | Upper bound for one Codex turn, in seconds; past it the turn is interrupted and a `TimeoutError` is raised. `None` means no bound. |
+| `auto_compact_token_limit` | `None` | Token count at which Codex compacts the history itself (Codex's `model_auto_compact_token_limit`). `direct` transport only; `None` keeps Codex's default. |
 | `thread_mode` | `"resume"` | `resume`: each session is bound to one Codex thread whose rollout is saved with the session (in the same database when short-term memory is database-backed) and resumed on the next turn on any instance, so Codex keeps its own full history instead of being handed a replayed transcript. A changed agent instruction starts a new thread seeded from the transcript. `ephemeral`: a fresh thread every invocation. Applies to the `direct` transport only; the `shim` is always `ephemeral`. |
 | `max_tool_iterations` | `32` | Budget of bridged ADK/MCP tool round-trips the shim may run for the whole Codex turn (1–256). Applies to the `shim` transport only. See the behavior change below. |
 | `tool_timeout_seconds` | `120.0` | Per-call timeout for a bridged ADK/MCP tool. `None` disables the timeout. |
@@ -291,6 +293,32 @@ Four more variables tune the Responses→Chat shim. These are not part of the ov
 | `CODEX_SHIM_START_TIMEOUT` | `10` | Seconds to wait for the shim's local HTTP server to come up. On timeout the startup fails loudly instead of leaving Codex unable to connect. |
 | `CODEX_SHIM_CACHE_MAX` | `8` | Cap on cached shim instances per process (keyed by backend address + credential), bounding servers and ports in a multi-tenant process. |
 
+### Codex runtime architecture
+
+Codex owns the agent loop, the tool loop, the sandbox and short-term context; VeADK owns session binding, tool access, event translation, policy mapping, observability and deployment.
+
+```mermaid
+flowchart LR
+    R[Runner: sessions / memory / tenancy] --> CR[Codex runtime: orchestration]
+    CR --> TS[(Thread store: persisted with the session)]
+    CR --> CX[Codex: agent loop / tool loop / sandbox / context]
+    CX -->|MCP| B[Local MCP server: the agent's tools]
+    CX -->|Responses API| M[Model: Ark / OpenAI]
+    CX -->|event stream| CR
+    CR -->|ADK events| R
+```
+
+- **Direct (`direct`)**: Codex calls a Responses-capable model itself, and the agent's function and MCP tools reach Codex through a local MCP server the runtime runs for the turn, so Codex drives the tool loop.
+- **Session continuity (`thread_mode="resume"`)**: each session is bound to one Codex thread, persisted with the session and resumed on the next turn on any instance, so the model sees Codex's own full history rather than a replayed transcript.
+- **Steering**: `await runner.steer(session_id, "use pandas instead")` adds an instruction to the turn in flight without starting a new one; the turn must be running in this process, otherwise it returns `False`.
+- **Turn timeout**: past `turn_timeout_seconds` the turn is interrupted and the caller gets a `TimeoutError`.
+- **Context compaction**: `auto_compact_token_limit` lets Codex compact the history itself once tokens cross the limit.
+
+| Backend | Status | Notes |
+| :--- | :--- | :--- |
+| Local (`local`) | Supported | Codex runs as a subprocess on the agent's instance; threads persist with the session, which suits stateless multi-instance deployments. |
+| Managed (`managed`) | Planned | Codex turns run in a managed service; VeADK keeps session binding and event translation. The interface stays the same. |
+
 ### Codex observability
 
 Codex-native lifecycle notifications and ADK Function/MCP tool calls are converted into ADK Events. Runtime logs use stable `codex_*` event names and attribution fields such as `invocation_id`, `call_id`, `tool`, `status`, and `duration_ms`. Tool arguments, tool results, API tokens, credentials, and backend addresses are not logged. Token usage is exposed through `codex_event_type=token_usage` events and the corresponding log entry.
@@ -298,6 +326,7 @@ Codex-native lifecycle notifications and ADK Function/MCP tool calls are convert
 On top of that:
 
 - **A `call_llm` span.** ADK opens `call_llm` from its own LLM flow, which this runtime replaces, so the runtime opens the equivalent span itself and writes the prompt, the response and the token usage onto it at the end of the turn. VeADK's whole telemetry chain — the in-memory exporter's session index, trace export, portal metrics, and trace-based evaluation — therefore sees a Codex invocation at all. Mind the granularity: **one span per turn**, not one per inner model call.
+- **`veadk.codex.*` span attributes.** The `call_llm` span also records `transport`, `thread_id`, `turn_id`, `thread_resumed`, `model`, `sandbox`, `approval_mode`, `tool_count`, `status` and `duration_ms` — never prompts, tool arguments or keys.
 - **`usage_metadata`.** The turn's token usage is summed and attached to the single merged final event of that turn, rather than to each intermediate event, so downstream consumers that sum `usage_metadata` across events do not double-count.
 - **`RunConfig(max_llm_calls=...)` is enforced.** The shim charges the budget before every real backend model call. On exhaustion Codex sees a `429 llm_calls_limit` (not a 500, which it would retry — replaying every tool side effect of the turn), and once the turn ends the runtime re-raises `LlmCallsLimitExceededError` to the caller instead of returning whatever partial answer Codex salvaged. On the `direct` transport there is no shim, and Codex announces nothing before it sends a model request, so the runtime charges the budget after each model call instead: the call that crosses the limit completes, one more request may already be in flight and is aborted when the turn is interrupted, and no further call is made.
 
