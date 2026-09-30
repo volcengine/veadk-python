@@ -72,6 +72,7 @@ from veadk.runtime.agent_transfer import transfer_agent_name
 from veadk.runtime.codex.config import CodexRuntimeConfig
 from veadk.runtime.codex.config import codex_subprocess_env
 from veadk.runtime.codex.config import toml_string
+from veadk.runtime.codex import metrics as codex_metrics
 from veadk.runtime.codex.mcp_bridge import McpBridge
 from veadk.runtime.codex.mcp_bridge import get_bridge
 from veadk.runtime.codex.model_provider import CodexModelRoute
@@ -86,6 +87,7 @@ from veadk.runtime.codex.skills import sync_skills_to_codex_home
 from veadk.runtime.codex.thread_store import CodexThreadStore
 from veadk.runtime.codex.thread_store import ThreadKey
 from veadk.runtime.codex.thread_store import ThreadRecord
+from veadk.runtime.codex.thread_store import RolloutTooLarge
 from veadk.runtime.codex.thread_store import ThreadStoreConflict
 from veadk.runtime.codex.thread_store import ThreadStoreCorrupt
 from veadk.runtime.codex.thread_store import instruction_hash
@@ -99,6 +101,7 @@ from veadk.runtime.codex.tools_bridge import (
     sync_bundle_to_tools_dict,
 )
 from veadk.runtime.codex.turn_control import ActiveTurns
+from veadk.runtime.codex.turn_control import CodexTurnTimeout
 from veadk.runtime.codex.turn_control import SessionTurnLocks
 from veadk.runtime.codex.turn_control import TurnCompletion
 from veadk.runtime.codex.turn_control import interrupt_turn
@@ -631,11 +634,13 @@ class CodexRuntime(BaseRuntime):
                                 thread_record.covered_invocation_id,
                             ),
                             _resumed_tool_results(resumed_events),
+                            workspace_reset=_workspace_is_empty(workspace),
                         ),
                         runtime_call.llm_request,
                         workspace,
                     )
                 elif thread_record is not None:
+                    codex_metrics.record_resume("instructions_changed")
                     # Codex keeps the developer instructions a thread started
                     # with; new ones passed on resume never reach the model.
                     # A changed instruction therefore needs a new thread,
@@ -749,8 +754,10 @@ class CodexRuntime(BaseRuntime):
                         # Every setting is passed again: Codex does not carry
                         # the model or sandbox over into a resumed thread in a
                         # new process, it falls back to its own defaults.
-                        thread = await codex.thread_resume(
+                        thread, resume_retried = await _resume_with_retry(
+                            codex,
                             resume_thread_id,
+                            ctx,
                             include_turns=False,
                             model=model,
                             model_provider=route.provider_id,
@@ -761,12 +768,16 @@ class CodexRuntime(BaseRuntime):
                             **({"config": thread_config} if thread_config else {}),
                         )
                         turn_input = resume_input_items
+                        codex_metrics.record_resume(
+                            "retried_then_resumed" if resume_retried else "resumed"
+                        )
                         logger.info(
                             "codex_thread_resumed invocation_id=%s thread_id=%s",
                             ctx.invocation_id,
                             resume_thread_id,
                         )
                     except Exception as e:  # noqa: BLE001 - fall back below
+                        codex_metrics.record_resume("fallback_after_error")
                         logger.warning(
                             "codex_thread_resume_failed invocation_id=%s "
                             "thread_id=%s error_type=%s error=%s detail=starting "
@@ -778,6 +789,8 @@ class CodexRuntime(BaseRuntime):
                         )
                         thread = None
                 if thread is None:
+                    if persistent and thread_record is None:
+                        codex_metrics.record_resume("new_thread")
                     thread = await codex.thread_start(
                         model=model,
                         model_provider=route.provider_id,
@@ -807,6 +820,9 @@ class CodexRuntime(BaseRuntime):
                 )
                 stream = turn.stream()
                 completion = TurnCompletion(str(getattr(turn, "id", "") or ""))
+                codex_metrics.record_startup(
+                    transport, time.monotonic() - run_started_at
+                )
                 logger.info(
                     "codex_turn_started invocation_id=%s thread_id=%s turn_id=%s",
                     ctx.invocation_id,
@@ -1058,6 +1074,7 @@ class CodexRuntime(BaseRuntime):
                 # being text to emit.
                 llm_response = final_events_to_llm_response(final_text_events)
                 usage_metadata = build_turn_usage_metadata(latest_token_usage)
+                codex_metrics.record_tokens(transport, latest_token_usage.get("total"))
                 if usage_metadata is not None:
                     llm_response.usage_metadata = usage_metadata
                 llm_response = await run_after_model_callbacks(
@@ -1154,6 +1171,8 @@ class CodexRuntime(BaseRuntime):
                     )
             raise
         except BaseException as e:
+            if isinstance(e, CodexTurnTimeout):
+                run_status = "timeout"
             # Read the shim's recorded error *before* the `finally`'s
             # `unregister_turn` drops the turn state. The shim serves backend
             # calls on the server's task, so an exhausted `max_llm_calls` budget
@@ -1254,6 +1273,9 @@ class CodexRuntime(BaseRuntime):
                     },
                 )
                 await _cleanup()
+                codex_metrics.record_turn(
+                    run_status, transport, time.monotonic() - run_started_at
+                )
                 logger.info(
                     "codex_runtime_complete invocation_id=%s status=%s duration_ms=%d",
                     ctx.invocation_id,
@@ -1367,6 +1389,50 @@ def _steer_key(ctx: "InvocationContext", agent_name: str) -> Any:
     return session_key(session.app_name, session.user_id, session.id, agent_name)
 
 
+# Resume is retried only on transient overload: nothing has run yet, so a
+# retry is safe, and giving up would discard the thread's native context.
+_RESUME_ATTEMPTS = 3
+_RESUME_BACKOFF_SECONDS = (0.5, 1.0)
+
+
+def _is_transient_codex_error(error: BaseException) -> bool:
+    """Whether a Codex RPC error is a transient overload worth retrying."""
+    try:
+        from openai_codex import is_retryable_error
+    except ImportError:  # an SDK stub without the helper
+        return type(error).__name__ in ("ServerBusyError", "RetryLimitExceededError")
+    return bool(is_retryable_error(error))
+
+
+async def _resume_with_retry(
+    codex: Any, thread_id: str, ctx: "InvocationContext", **kwargs: Any
+) -> tuple[Any, bool]:
+    """``thread_resume`` with bounded retries on transient overload.
+
+    Returns the thread and whether a retry was needed.
+
+    Deterministic failures (the thread is unknown, invalid parameters, a
+    closed transport) are raised at once; the caller then starts a new thread
+    from the session transcript.
+    """
+    for attempt in range(_RESUME_ATTEMPTS):
+        try:
+            return await codex.thread_resume(thread_id, **kwargs), attempt > 0
+        except Exception as e:  # noqa: BLE001 - classified below
+            if attempt == _RESUME_ATTEMPTS - 1 or not _is_transient_codex_error(e):
+                raise
+            logger.warning(
+                "codex_thread_resume_retry invocation_id=%s thread_id=%s "
+                "attempt=%d error_type=%s",
+                ctx.invocation_id,
+                thread_id,
+                attempt + 1,
+                type(e).__name__,
+            )
+            await asyncio.sleep(_RESUME_BACKOFF_SECONDS[attempt])
+    raise AssertionError("unreachable")
+
+
 def _thread_binding(
     ctx: "InvocationContext", agent: "Agent"
 ) -> tuple[ThreadKey | None, CodexThreadStore | None]:
@@ -1411,6 +1477,7 @@ async def _load_thread(
             await store.delete(key)
         return None
     except Exception as e:  # noqa: BLE001 - unreachable store
+        codex_metrics.record_resume("store_error")
         logger.warning(
             "codex_thread_load_failed invocation_id=%s session_id=%s agent=%s "
             "error_type=%s error=%s",
@@ -1442,6 +1509,7 @@ async def _save_thread(
     try:
         rollout = await asyncio.to_thread(export_rollout, codex_home, thread_id)
         if rollout is None:
+            codex_metrics.record_save("skipped")
             logger.warning(
                 "codex_thread_save_skipped invocation_id=%s reason=no_rollout",
                 ctx.invocation_id,
@@ -1455,7 +1523,24 @@ async def _save_thread(
             expected_version=previous.version if previous is not None else None,
             covered_invocation_id=ctx.invocation_id,
         )
+        codex_metrics.record_save("saved")
+    except RolloutTooLarge as e:
+        # Every later save of this thread would be refused too, while the
+        # stored copy only falls further behind. Drop the binding: the next
+        # turn starts a new thread from the session transcript.
+        codex_metrics.record_save("too_large")
+        logger.warning(
+            "codex_thread_rollout_too_large invocation_id=%s thread_id=%s "
+            "size=%d limit=%d detail=the next turn starts a new thread",
+            ctx.invocation_id,
+            thread_id,
+            e.size,
+            e.limit,
+        )
+        with contextlib.suppress(Exception):
+            await store.delete(key)
     except ThreadStoreConflict:
+        codex_metrics.record_save("conflict")
         logger.warning(
             "codex_thread_save_conflict invocation_id=%s thread_id=%s "
             "session_id=%s agent=%s expected_version=%s detail=another "
@@ -1469,6 +1554,7 @@ async def _save_thread(
         )
     except asyncio.CancelledError:
         # Cancellation must reach the caller; the turn's rollout is lost.
+        codex_metrics.record_save("cancelled")
         logger.warning(
             "codex_thread_save_cancelled invocation_id=%s thread_id=%s",
             ctx.invocation_id,
@@ -1476,6 +1562,7 @@ async def _save_thread(
         )
         raise
     except Exception as e:  # noqa: BLE001 - never fail the turn over this
+        codex_metrics.record_save("failed")
         logger.warning(
             "codex_thread_save_failed invocation_id=%s thread_id=%s "
             "session_id=%s agent=%s error_type=%s error=%s",
@@ -1575,8 +1662,20 @@ def _short_error(error: BaseException, limit: int = 500) -> str:
     return _clip(" ".join(str(error).split()), limit)
 
 
+def _workspace_is_empty(workspace: str) -> bool:
+    """Whether the turn's workspace holds nothing (a fresh instance or restart)."""
+    try:
+        return not any(Path(workspace).iterdir())
+    except OSError:
+        return False
+
+
 def _with_backfill(
-    prompt: str, lines: list[str], tool_results: list[str] | None = None
+    prompt: str,
+    lines: list[str],
+    tool_results: list[str] | None = None,
+    *,
+    workspace_reset: bool = False,
 ) -> str:
     """Prefix the prompt with what this agent's thread missed.
 
@@ -1584,6 +1683,14 @@ def _with_backfill(
     tool calls from its previous turn that only ran once the user answered.
     """
     blocks: list[str] = []
+    if workspace_reset:
+        # The thread resumed on an instance (or after a restart) whose
+        # workspace is empty: the conversation survives, the files do not.
+        blocks.append(
+            "Note: your working directory was reset since your earlier turns. "
+            "Files you created before may no longer exist; check, and recreate "
+            "them if you need them."
+        )
     if lines:
         missed = "\n".join(lines)
         blocks.append(

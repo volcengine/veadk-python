@@ -53,6 +53,11 @@ DIRECT_PROVIDER_ID = "veadk_direct"
 #: Env var carrying the model API key on the direct route. Named like a
 #: credential on purpose, so ``codex_subprocess_env`` masks any host value.
 DIRECT_KEY_ENV = "VEADK_CODEX_MODEL_API_KEY"
+# Env vars carrying sensitive model headers; the VEADK_CODEX_ prefix keeps them
+# out of the sandboxed shell (see `pinned_codex_settings`).
+_HEADER_ENV_PREFIX = "VEADK_CODEX_MODEL_HEADER_"
+_SENSITIVE_HEADER_NAMES = frozenset({"authorization", "proxy-authorization", "cookie"})
+_SENSITIVE_HEADER_MARKERS = ("key", "token", "secret", "password", "signature")
 
 #: Small, bounded retries for the direct route. Codex's defaults (4 request /
 #: 5 stream retries with backoff) turn one dead endpoint into a long stall;
@@ -221,8 +226,11 @@ def direct_route(
             A trailing slash or ``/responses`` suffix is removed; Codex appends
             ``/responses`` itself.
         api_key: Model API key. Travels only in ``route.env``.
-        extra_headers: Static, non-secret headers for every model request
-            (Codex's ``http_headers`` provider key).
+        extra_headers: Headers for every model request. Sensitive ones (see
+            :func:`is_sensitive_header`) go through ``env_http_headers``: the
+            config file names an env var, and the value travels only in
+            ``route.env``, which the sandboxed shell cannot see. The rest are
+            static ``http_headers``.
 
     Returns:
         CodexModelRoute: The direct route.
@@ -240,15 +248,37 @@ def direct_route(
         "request_max_retries": _DIRECT_REQUEST_MAX_RETRIES,
         "stream_max_retries": _DIRECT_STREAM_MAX_RETRIES,
     }
-    if extra_headers:
-        provider_config["http_headers"] = {
-            str(k): str(v) for k, v in extra_headers.items()
-        }
+    env = {DIRECT_KEY_ENV: api_key}
+    static: dict[str, str] = {}
+    from_env: dict[str, str] = {}
+    for index, (name, value) in enumerate((extra_headers or {}).items()):
+        if is_sensitive_header(str(name)):
+            var = f"{_HEADER_ENV_PREFIX}{index}"
+            from_env[str(name)] = var
+            env[var] = str(value)
+        else:
+            static[str(name)] = str(value)
+    if static:
+        provider_config["http_headers"] = static
+    if from_env:
+        provider_config["env_http_headers"] = from_env
     return CodexModelRoute(
         transport="direct",
         provider_id=DIRECT_PROVIDER_ID,
         provider_config=provider_config,
-        env={DIRECT_KEY_ENV: api_key},
+        env=env,
+    )
+
+
+def is_sensitive_header(name: str) -> bool:
+    """Whether a header carries a credential and must stay out of files.
+
+    Codex's config file sits on disk for the whole turn; a credential written
+    there is readable by anything that can read CODEX_HOME.
+    """
+    lowered = name.strip().lower()
+    return lowered in _SENSITIVE_HEADER_NAMES or any(
+        marker in lowered for marker in _SENSITIVE_HEADER_MARKERS
     )
 
 

@@ -125,6 +125,8 @@ Codex 执行的命令看不到凭证类环境变量。生成的 Codex 配置固�
 
 缺少该策略时，沙箱内执行 `env` 会打印出模型 API Key 与本轮令牌（已在 Codex CLI 0.159 上验证）。命令需要的其他凭证应通过 ADK 工具使用，而不是经由环境变量进入沙箱。
 
+模型请求头同样不会进入沙箱。`direct` 传输下，`model_extra_config.extra_headers` 中名称为 `Authorization`、`Proxy-Authorization`、`Cookie`，或包含 `key`/`token`/`secret`/`password`/`signature`（不区分大小写）的请求头，**不会写入 Codex 的配置文件**：其值经 Codex 的 `env_http_headers` 由环境变量传入，沙箱内的 shell 看不到这些变量。其余请求头作为静态请求头发送。
+
 #### 安全基线组合
 
 把上面几项拼起来，就是在不可信输入下跑 codex 的默认配方。四个设置各挡一个方向，缺一不可：
@@ -272,6 +274,14 @@ Codex 自带一份约 20KB、针对自身工具链（`apply_patch`、`update_pla
 | `CODEX_SHIM_START_TIMEOUT` | `10` | 等待 shim 的本地 HTTP 服务起来的秒数；超时即判定启动失败并明确报错，而不是让 Codex 一直连不上。 |
 | `CODEX_SHIM_CACHE_MAX` | `8` | 进程内缓存的 shim 实例上限（按后端地址+凭证区分），用于限制多租户进程里的服务与端口数量。 |
 
+另有三个 thread 存储的容量参数，同样不参与覆盖规则，含义见 [限制](#限制)：
+
+| 环境变量 | 默认值 | 说明 |
+| :--- | :--- | :--- |
+| `VEADK_CODEX_MAX_ROLLOUT_BYTES` | `33554432`（32 MiB） | 单个 thread rollout 的大小上限（字节），超过后不再保存。 |
+| `VEADK_CODEX_MEMORY_STORE_MAX_BYTES` | `268435456`（256 MiB） | 短期记忆使用 `local` 后端时，进程内 thread 存储的总字节上限，超出后按最近最少使用淘汰。 |
+| `VEADK_CODEX_MEMORY_STORE_MAX_RECORDS` | `10000` | 同上，进程内 thread 存储的记录数上限。 |
+
 ### Codex 运行架构
 
 Codex 负责 Agent 循环、工具循环、沙箱与短期上下文；VeADK 负责 Session 绑定、工具接入、事件转换、策略映射、可观测性与部署。
@@ -289,6 +299,7 @@ flowchart LR
 
 - **直连（`direct`）**：Codex 直接调用支持 Responses API 的模型，Agent 的函数工具与 MCP 工具经 runtime 为本轮启动的本地 MCP server 交给 Codex，由 Codex 驱动工具循环。
 - **会话连续性（`thread_mode="resume"`）**：每个 Session 绑定一个 Codex thread，thread 随 Session 持久化，下一轮可在任意实例上恢复，模型看到的是 Codex 自己的完整历史，而不是回放的对话记录。
+- **恢复重试**：恢复 thread 遇到瞬时错误（服务繁忙 / 过载、传输已关闭）时，按退避有限次重试，仍失败才退回到用对话记录引导的新 thread；thread 不存在或参数无效时立即退回。已开始的回合从不重试，因为其中的工具可能已产生副作用。
 - **转向（steer）**：`await runner.steer(session_id, "改用 pandas")` 把补充指令加入正在进行的回合，不会新开回合；回合须在当前进程中运行，否则返回 `False`。
 - **回合超时**：`turn_timeout_seconds`（默认 1800 秒）到期后中断回合，调用方收到 `TimeoutError`。
 - **上下文压缩**：`auto_compact_token_limit` 交由 Codex 在 token 超过阈值时自行压缩历史。
@@ -297,6 +308,15 @@ flowchart LR
 | :--- | :--- | :--- |
 | 本地（`local`） | 已支持 | Codex 以子进程运行在 Agent 所在实例，thread 随 Session 持久化，适用于多实例无状态部署。 |
 | 托管（`managed`） | 规划中 | Codex 回合在托管服务中运行，VeADK 只负责 Session 绑定与事件转换；接口保持不变。 |
+
+#### 限制
+
+| 方面 | 说明 |
+| :--- | :--- |
+| Workspace 持久化 | Workspace 不跨实例、不跨重启保留。thread（对话）可在任意实例上恢复，但 workspace 默认是实例本地的临时目录；恢复后的回合发现 workspace 为空时，模型会被告知之前回合的文件可能已丢失，需要时重新生成。Workspace 持久化在规划中。 |
+| 并发 | 同一进程内，同一 Session 的调用串行执行（`direct` + `resume`）。跨实例没有租约：两个实例并发运行同一 Session 时可能都会执行工具，后保存的 rollout 被拒绝，该回合在下一次恢复时依据 Session 对话记录交还给 thread。工具副作用不能重复执行时，应把同一 Session 在同一时刻只路由到一个实例。 |
+| `max_llm_calls` | `direct` 传输下为尽力而为：配额在每次模型调用完成后扣减，回合被中断前可能仍有一次在途请求发出。需要请求前的硬上限时使用 `model_transport="shim"`。 |
+| Rollout 大小 | 单个 thread 的 rollout 有大小上限（默认 32 MiB，`VEADK_CODEX_MAX_ROLLOUT_BYTES`），超出后不再保存，下一轮依据 Session 对话记录新开 thread。短期记忆使用 `local` 后端时，进程内 thread 存储按最近最少使用淘汰，上限见 [Codex 环境变量](#codex-环境变量)。 |
 
 ### Codex 可观测性
 
@@ -308,6 +328,19 @@ Codex 原生生命周期和 ADK Function/MCP 工具调用都会转换为 ADK Eve
 - **`veadk.codex.*` span 属性**：`call_llm` span 还记录 `transport`、`thread_id`、`turn_id`、`thread_resumed`、`model`、`sandbox`、`approval_mode`、`tool_count`、`status` 与 `duration_ms`，不包含提示词、工具参数或密钥。
 - **`usage_metadata`**：整轮的 token 用量汇总后，只挂在**每回合一个的合并后终态 Event** 上（而不是逐条事件累加），避免下游做求和统计时重复计数。
 - **`RunConfig(max_llm_calls=...)` 会被强制执行**：shim 在每一次真实的后端模型调用前扣减配额。超限时 Codex 侧收到一个 `429 llm_calls_limit`（而不是它会重试的 500——重试会把本回合的工具副作用重跑一遍），回合结束后 runtime 再向调用方重新抛出 `LlmCallsLimitExceededError`，而不是返回 Codex 勉强拼出的半截答案。`direct` 传输下没有 shim，Codex 在发起模型请求前也不发出任何通知，runtime 改为在每次模型调用完成后扣减配额：超出配额的那次调用会完成，此时可能已有一次请求在途，它会随回合中断而中止；之后不会再有新的调用。
+
+#### 指标
+
+runtime 通过进程的 OpenTelemetry MeterProvider 上报以下指标；未配置 MeterProvider 时为空操作。属性均为低基数，不包含用户、Session 或 thread ID。
+
+| 指标 | 类型 | 单位 | 属性 | 说明 |
+| :--- | :--- | :--- | :--- | :--- |
+| `veadk.codex.thread.resume` | Counter | 1 | `outcome`：`resumed`/`new_thread`/`instructions_changed`/`retried_then_resumed`/`fallback_after_error`/`store_error` | thread 恢复结果。 |
+| `veadk.codex.thread.save` | Counter | 1 | `outcome`：`saved`/`conflict`/`failed`/`skipped`/`cancelled`/`too_large` | rollout 保存结果。 |
+| `veadk.codex.turn` | Counter | 1 | `status`：`completed`/`failed`/`cancelled`/`transferred`/`timeout`；`transport`：`direct`/`shim` | 回合数。 |
+| `veadk.codex.turn.duration` | Histogram | s | 同 `veadk.codex.turn` | 回合耗时。 |
+| `veadk.codex.turn.startup` | Histogram | s | `transport` | 从调用开始到 Codex 回合开始的耗时。 |
+| `veadk.codex.turn.tokens` | Counter | token | `transport`；`kind`：`input`/`output`/`cached_input`/`reasoning_output` | 回合 token 用量。 |
 
 ## 支持矩阵
 
