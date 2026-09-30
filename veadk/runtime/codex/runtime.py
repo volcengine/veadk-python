@@ -97,7 +97,11 @@ from veadk.runtime.codex.tools_bridge import (
     resume_confirmed_tools,
     sync_bundle_to_tools_dict,
 )
+from veadk.runtime.codex.turn_control import ActiveTurns
 from veadk.runtime.codex.turn_control import SessionTurnLocks
+from veadk.runtime.codex.turn_control import TurnCompletion
+from veadk.runtime.codex.turn_control import interrupt_turn
+from veadk.runtime.codex.turn_control import run_with_turn_timeout
 from veadk.runtime.codex.turn_control import session_key
 from veadk.runtime.codex.translate import NO_TEXT_PROMPT
 from veadk.runtime.codex.translate import (
@@ -145,6 +149,11 @@ _MCP_TOKEN_ENV = "VEADK_CODEX_MCP_TOKEN"
 # One Codex thread per session can only run one turn at a time: two
 # invocations resuming the same rollout would each write back their own copy.
 _SESSION_LOCKS = SessionTurnLocks()
+# The turn each session is running in this process, for `CodexRuntime.steer`.
+_ACTIVE_TURNS = ActiveTurns()
+# How long a stopped turn gets to wind down (after a timeout or cancellation)
+# before its stream is abandoned.
+_TURN_STOP_GRACE_SECONDS = 5.0
 
 
 class _QueueSentinel(enum.Enum):
@@ -625,6 +634,19 @@ class CodexRuntime(BaseRuntime):
                 len(runtime_call.base_instructions or ""),
                 len(developer_instructions),
             )
+            _annotate_span(
+                call_llm_span,
+                {
+                    "runtime": "codex",
+                    "backend": "local",
+                    "transport": transport,
+                    "model": model,
+                    "sandbox": runtime_config.sandbox,
+                    "approval_mode": runtime_config.approval_mode,
+                    "tool_count": len(tool_bundle.executors),
+                    "persistent_thread": persistent,
+                },
+            )
             if runtime_config.approval_mode == "auto_review":
                 logger.warning(
                     "codex_approval_auto_accept invocation_id=%s approval_mode=%s "
@@ -647,6 +669,10 @@ class CodexRuntime(BaseRuntime):
             if bridge is not None:
                 subprocess_env.update(route.env)
                 direct_config = route.thread_config()
+                if runtime_config.auto_compact_token_limit:
+                    direct_config["model_auto_compact_token_limit"] = (
+                        runtime_config.auto_compact_token_limit
+                    )
                 if bridge_token is not None:
                     subprocess_env[_MCP_TOKEN_ENV] = bridge_token
                     direct_config["mcp_servers"] = {
@@ -667,6 +693,10 @@ class CodexRuntime(BaseRuntime):
             raise
         turn = None
         pump: asyncio.Task[None] | None = None
+        completion: TurnCompletion | None = None
+        watchdog: asyncio.Task[Any] | None = None
+        # Holds the turn's steer registration; closed once the turn is over.
+        turn_scope = contextlib.ExitStack()
         # Lookahead for the tool-only turn. That turn's merged response carries
         # the turn's `usage_metadata` and any `state_delta` a model callback
         # wrote, but it has no content, and a contentless, tool-free,
@@ -741,6 +771,16 @@ class CodexRuntime(BaseRuntime):
                     effort=runtime_config.reasoning_effort,
                 )
                 stream = turn.stream()
+                completion = TurnCompletion(str(getattr(turn, "id", "") or ""))
+                _annotate_span(
+                    call_llm_span,
+                    {
+                        "thread_id": getattr(thread, "id", None),
+                        "turn_id": getattr(turn, "id", None),
+                        "thread_resumed": turn_input is resume_input_items
+                        and resume_thread_id is not None,
+                    },
+                )
                 # This turn's usage. A resumed thread's `total` includes every
                 # earlier turn, so the turn's share is `total` minus the thread
                 # total from before its first model call (`total - last` of the
@@ -766,6 +806,7 @@ class CodexRuntime(BaseRuntime):
                         # carries no `turn_id`, so it was only ever skipped by
                         # accident of the attribute being absent.
                         async for note in stream:
+                            completion.observe(note)
                             payload = note.payload
                             if bridge is not None and _is_bridged_mcp_item(
                                 payload, bridged_items
@@ -815,12 +856,45 @@ class CodexRuntime(BaseRuntime):
                     except BaseException as e:
                         await event_queue.put(e)
                     finally:
+                        completion.close()
                         aclose = getattr(stream, "aclose", None)
                         if aclose is not None:
                             await aclose()
                         await event_queue.put(_QUEUE_DONE)
 
                 pump = asyncio.create_task(_pump_codex())
+                if runtime_config.turn_timeout_seconds:
+                    # Past the deadline the turn is interrupted, given a grace
+                    # period to wind down, and the watchdog then raises a
+                    # `TimeoutError`; the pump ending (normally or not) lets
+                    # the loop below reach it.
+                    watchdog = asyncio.create_task(
+                        run_with_turn_timeout(
+                            turn,
+                            pump,
+                            completion=completion,
+                            timeout=runtime_config.turn_timeout_seconds,
+                            grace=_TURN_STOP_GRACE_SECONDS,
+                        )
+                    )
+                # Steering adds input to this very turn. Direct transport only:
+                # through the shim, a steered user message would carry no turn
+                # marker and the shim would stop serving the agent's tools.
+                if bridge is not None:
+                    try:
+                        turn_scope.enter_context(
+                            _ACTIVE_TURNS.register(
+                                _steer_key(ctx, agent.name),
+                                turn,
+                                completion=completion,
+                            )
+                        )
+                    except Exception:  # noqa: BLE001 - another turn owns the key
+                        logger.warning(
+                            "codex_steer_unavailable invocation_id=%s "
+                            "reason=session_already_has_an_active_turn",
+                            ctx.invocation_id,
+                        )
                 # Buffer unconditionally. Codex emits one durable `agentMessage`
                 # per intermediate model reply, so streaming them straight
                 # through would produce several `is_final_response()` events and
@@ -837,6 +911,12 @@ class CodexRuntime(BaseRuntime):
                     if queued is _QUEUE_DONE:
                         break
                     if isinstance(queued, BaseException):
+                        # While this loop runs, only the watchdog cancels the
+                        # pump: surface its turn timeout, not a cancellation.
+                        if watchdog is not None and isinstance(
+                            queued, asyncio.CancelledError
+                        ):
+                            await watchdog
                         raise queued
                     event = queued
                     # A bridged tool that needs the user (credential or
@@ -891,12 +971,17 @@ class CodexRuntime(BaseRuntime):
                         run_status = "transferred"
                         break
                     merge_target = event
+                turn_scope.close()
+                # With a deadline the watchdog owns the pump: past the deadline
+                # it cancels a pump that will not stop, so awaiting the pump
+                # itself would surface that as a cancellation. The watchdog
+                # returns once the pump is done, or raises the turn timeout.
                 if transfer_requested:
-                    await pump
+                    await (watchdog if watchdog is not None else pump)
                     if deferred_transfer_event is not None:
                         yield deferred_transfer_event
                     return
-                await pump
+                await (watchdog if watchdog is not None else pump)
 
                 # The shim serves backend calls on the server's task, so an
                 # exception it raised (an exhausted `max_llm_calls` budget) got
@@ -974,7 +1059,20 @@ class CodexRuntime(BaseRuntime):
                     ctx.invocation_id,
                     type(_turn_error()).__name__,
                 )
-            if turn is not None:
+            if turn is not None and completion is not None:
+                # Wait until the turn has really stopped: an interrupt sent
+                # before the model request starts is rejected, and a turn
+                # still winding down would swallow the next invocation's input.
+                try:
+                    await interrupt_turn(
+                        turn, completion=completion, timeout=_TURN_STOP_GRACE_SECONDS
+                    )
+                except Exception:  # noqa: BLE001
+                    logger.warning(
+                        "codex_interrupt_failed invocation_id=%s",
+                        ctx.invocation_id,
+                    )
+            elif turn is not None:
                 try:
                     await turn.interrupt()
                 except Exception:  # noqa: BLE001
@@ -1047,6 +1145,10 @@ class CodexRuntime(BaseRuntime):
                 _emit_telemetry_once(_error_llm_response(e))
             raise e
         finally:
+            turn_scope.close()
+            if watchdog is not None and not watchdog.done():
+                watchdog.cancel()
+                await asyncio.gather(watchdog, return_exceptions=True)
             if pump is not None and not pump.done():
                 pump.cancel()
                 await asyncio.gather(pump, return_exceptions=True)
@@ -1068,6 +1170,13 @@ class CodexRuntime(BaseRuntime):
                     thread_record,
                     ctx,
                 )
+            _annotate_span(
+                call_llm_span,
+                {
+                    "status": run_status,
+                    "duration_ms": round((time.monotonic() - run_started_at) * 1000),
+                },
+            )
             await _cleanup()
             logger.info(
                 "codex_runtime_complete invocation_id=%s status=%s duration_ms=%d",
@@ -1075,6 +1184,24 @@ class CodexRuntime(BaseRuntime):
                 run_status,
                 round((time.monotonic() - run_started_at) * 1000),
             )
+
+    async def steer(
+        self,
+        agent: "Agent",
+        *,
+        app_name: str,
+        user_id: str,
+        session_id: str,
+        text: str,
+    ) -> bool:
+        """Add ``text`` to the Codex turn running for the session, if any.
+
+        Only turns on the direct transport register for steering, and only in
+        the process running them.
+        """
+        return await _ACTIVE_TURNS.steer(
+            session_key(app_name, user_id, session_id, agent.name), text
+        )
 
     def _resolve_model(self, agent: "Agent") -> str:
         name = agent.model_name
@@ -1147,6 +1274,29 @@ def _prepare_codex_home(
         f.write(config)
 
     return home
+
+
+def _annotate_span(span: "Span | None", attributes: dict[str, Any]) -> None:
+    """Record ``veadk.codex.*`` attributes on the turn's span.
+
+    Only operational metadata -- never prompts, tool arguments or keys.
+    Tracing must not break a turn, so failures are ignored.
+    """
+    if span is None:
+        return
+    for name, value in attributes.items():
+        if value is None:
+            continue
+        try:
+            span.set_attribute(f"veadk.codex.{name}", value)
+        except Exception:  # noqa: BLE001 - tracing is best effort
+            pass
+
+
+def _steer_key(ctx: "InvocationContext", agent_name: str) -> Any:
+    """The key a session's active turn is registered under for steering."""
+    session = ctx.session
+    return session_key(session.app_name, session.user_id, session.id, agent_name)
 
 
 def _thread_binding(

@@ -326,6 +326,15 @@ async def _upload_image_to_tos(
         )
 
 
+def _descendants(agent: object) -> list[object]:
+    """All sub-agents below ``agent``, depth first."""
+    found: list[object] = []
+    for child in getattr(agent, "sub_agents", None) or []:
+        found.append(child)
+        found.extend(_descendants(child))
+    return found
+
+
 class Runner(ADKRunner):
     """VeADK Runner that augments ADK with session, memory, tracing, and media upload.
 
@@ -727,6 +736,40 @@ class Runner(ADKRunner):
             self.app_name, self.user_id, session_id
         )
         return eval_set_path
+
+    async def steer(self, session_id: str, text: str, user_id: str = "") -> bool:
+        """Add an instruction to the turn currently running for a session.
+
+        The text joins the in-flight turn instead of starting a new one, so
+        the agent adjusts course without losing its progress. Supported by
+        runtimes that expose it (``runtime="codex"`` on the direct transport);
+        the turn must be running in this process.
+
+        Args:
+            session_id (str): The session whose running turn to steer.
+            text (str): The additional instruction.
+            user_id (str): The session's user; defaults to the runner's user.
+
+        Returns:
+            bool: Whether a running turn received the text.
+        """
+        from veadk.runtime import get_runtime
+
+        agents = [self.agent, *_descendants(self.agent)]
+        for agent in agents:
+            runtime_name = getattr(agent, "runtime", "adk")
+            if runtime_name == "adk":
+                continue
+            delivered = await get_runtime(runtime_name).steer(
+                agent,
+                app_name=self.app_name,
+                user_id=user_id or self.user_id,
+                session_id=session_id,
+                text=text,
+            )
+            if delivered:
+                return True
+        return False
 
     async def save_session_to_long_term_memory(
         self, session_id: str, user_id: str = "", app_name: str = "", **kwargs

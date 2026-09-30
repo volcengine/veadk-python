@@ -99,6 +99,23 @@ class CodexRuntimeConfig(BaseModel):
         ),
     )
     tool_timeout_seconds: float | None = Field(default=120.0, gt=0)
+    turn_timeout_seconds: float | None = Field(
+        default=None,
+        gt=0,
+        description=(
+            "Upper bound for one Codex turn. Past it the turn is interrupted "
+            "and the invocation fails with a TimeoutError. None means no bound."
+        ),
+    )
+    auto_compact_token_limit: int | None = Field(
+        default=None,
+        gt=0,
+        description=(
+            "Token count at which Codex compacts the thread's history itself "
+            "(Codex's own summarization; its `model_auto_compact_token_limit`). "
+            "Direct transport only. None keeps Codex's default."
+        ),
+    )
     model_transport: Literal["auto", "direct", "shim"] = Field(
         default="auto",
         description=(

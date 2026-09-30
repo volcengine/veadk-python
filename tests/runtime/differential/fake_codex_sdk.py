@@ -120,6 +120,22 @@ def invalid_request_error_class() -> type:
     return InvalidRequestError
 
 
+def internal_rpc_error_class() -> type:
+    """``openai_codex.InternalRpcError`` if the SDK is real, else the stub's.
+
+    What the fake raises for a request real Codex rejects with JSON-RPC
+    ``-32603`` (for example ``turn()`` while a compaction turn is running).
+    """
+    module = sys.modules.get("openai_codex")
+    if module is not None and hasattr(module, "InternalRpcError"):
+        return module.InternalRpcError
+    if openai_codex_available():
+        from openai_codex import InternalRpcError as real  # type: ignore
+
+        return real
+    return InternalRpcError
+
+
 def install_openai_codex_stub() -> bool:
     """Register a minimal ``openai_codex`` stub when the real SDK is absent.
 
@@ -644,6 +660,88 @@ MCP_APPROVAL_DENIED = "MCP tool call requires approval, but approval policy is n
 
 _END = object()
 
+#: Final user message of a compaction request (verbatim from codex 0.159.2).
+COMPACTION_PROMPT = (
+    "You are performing a CONTEXT CHECKPOINT COMPACTION. Create a handoff "
+    "summary for another LLM that will resume the task.\n\nInclude:\n"
+    "- Current progress and key decisions made\n"
+    "- Important context, constraints, or user preferences\n"
+    "- What remains to be done (clear next steps)\n"
+    "- Any critical data, examples, or references needed to continue\n\n"
+    "Be concise, structured, and focused on helping the next LLM seamlessly "
+    "continue the work.\n"
+)
+#: Prefix of the user message carrying a compaction summary (codex 0.159.2);
+#: the summary text follows after a newline.
+SUMMARY_PREFIX = (
+    "Another language model started to solve this problem and produced a "
+    "summary of its thinking process. You also have access to the state of "
+    "the tools that were used by that language model. Use this to build on "
+    "the work that has already been done and avoid duplicating work. Here is "
+    "the summary produced by the other language model, use the information in "
+    "this summary to assist with your own analysis:"
+)
+#: Thread config key enabling Codex-native auto-compaction.
+AUTO_COMPACT_LIMIT_KEY = "model_auto_compact_token_limit"
+#: ``-32603`` message for a ``turn()`` racing a compaction turn.
+NOT_STEERABLE_COMPACT = "ActiveTurnNotSteerable { turn_kind: Compact }"
+
+
+def _message(role: str, text: str) -> dict[str, Any]:
+    return {
+        "type": "message",
+        "role": role,
+        "content": [{"type": "input_text", "text": text}],
+    }
+
+
+def _message_text(item: dict[str, Any]) -> str:
+    return "".join(
+        str(part.get("text") or "")
+        for part in item.get("content") or []
+        if isinstance(part, dict)
+    )
+
+
+def _is_user_message(item: dict[str, Any]) -> bool:
+    return item.get("type") == "message" and item.get("role") == "user"
+
+
+def _is_summary_message(item: dict[str, Any]) -> bool:
+    return _is_user_message(item) and _message_text(item).startswith(SUMMARY_PREFIX)
+
+
+def _steer_text(value: Any) -> str:
+    """Text of a ``turn.steer`` input: a str, one input item or a list.
+
+    Items may be ``TextInput``-named objects (as for ``turn()``) or wire dicts
+    (``{"type": "text", "text": ...}``); other kinds carry no text here.
+    """
+    if isinstance(value, str):
+        return value
+    items = value if isinstance(value, (list, tuple)) else [value]
+    texts: list[str] = []
+    for item in items:
+        if isinstance(item, dict):
+            if item.get("type") == "text" and isinstance(item.get("text"), str):
+                texts.append(item["text"])
+        else:
+            text = _prompt_text([item])
+            if text:
+                texts.append(text)
+    return "\n".join(texts)
+
+
+def _usage_total(usage: dict[str, Any]) -> int:
+    """``total_tokens`` of one response (what the auto-compact limit reads)."""
+    usage = _normalize_usage(usage)
+    total = usage.get("total_tokens")
+    if total is None:
+        total = int(usage.get("input_tokens") or 0) + int(
+            usage.get("output_tokens") or 0
+        )
+    return int(total or 0)
+
 
 def _default_model_call() -> Any:
     """The *currently patched* ``litellm.aresponses`` the shim would have used.
@@ -712,6 +810,15 @@ class DirectDrivingCodex:
     ``{"type": "namespace", "name": "mcp__<server>"}`` tool, and loops model
     call -> namespaced ``function_call`` -> MCP ``tools/call`` ->
     ``function_call_output`` until the model stops calling tools.
+
+    Turn control mirrors codex 0.159.2: ``turn.steer(input)`` adds a user
+    message to the running turn's *next* model request (forcing one more
+    request even after a final answer); ``thread.compact()`` runs a separate
+    compaction turn in the background; and a thread config
+    ``model_auto_compact_token_limit`` compacts automatically once the last
+    model response's ``total_tokens`` reaches the limit -- before the next
+    turn's first request, or mid-turn before a follow-up request, never at the
+    end of a turn (see :meth:`_DirectThread.run_compaction`).
     """
 
     #: Model requests per turn before the loop gives up (Codex has no such
@@ -742,6 +849,13 @@ class DirectDrivingCodex:
         self.thread_starts: list[dict[str, Any]] = []
         #: ``thread_resume`` kwargs (plus ``thread_id``), one dict per call.
         self.thread_resumes: list[dict[str, Any]] = []
+        #: Every accepted ``turn.steer``: ``{"thread_id", "turn_id", "text",
+        #: "input"}``.
+        self.steers: list[dict[str, Any]] = []
+        #: Every compaction request body (also in ``requests``), plus
+        #: ``_provider``, ``_trigger`` (``"manual"`` / ``"pre_turn"`` /
+        #: ``"mid_turn"``) and ``_turn_id``.
+        self.compactions: list[dict[str, Any]] = []
         if type(self).instances is not None:
             type(self).instances.append(self)
 
@@ -869,6 +983,24 @@ class _DirectThread:
         self.rollout_path: str | None = rollout_path
         # History items already on disk (a resumed rollout holds them all).
         self._persisted = len(self.history)
+        limit = config.get(AUTO_COMPACT_LIMIT_KEY)
+        #: ``model_auto_compact_token_limit`` from this thread's config
+        #: (``thread_start`` or ``thread_resume``); ``None`` = never auto.
+        self.auto_compact_limit: int | None = None if limit is None else int(limit)
+        #: ``total_tokens`` of the last model response (persisted, so a
+        #: resumed thread can compact before its first turn, as Codex does).
+        self.last_total_tokens = 0
+        #: Set by a manual / pre-turn compaction: the next turn re-injects the
+        #: developer message after the summary (Codex's initial context).
+        self.reinject_initial_context = False
+        #: Developer instructions a re-injection uses: on resume, Codex takes
+        #: the resume call's value (the original stays in the old history).
+        self.developer_instructions = start_kwargs.get("developer_instructions")
+        #: The turn that is running (created and not yet finished), if any.
+        self.active_turn: _DirectTurn | None = None
+        #: The running (or last) manual compaction task.
+        self.compaction: asyncio.Task[None] | None = None
+        self._compaction_turn: dict[str, Any] | None = None
 
     @classmethod
     def from_rollout(
@@ -881,6 +1013,8 @@ class _DirectThread:
         meta: dict[str, Any] = {}
         history: list[dict[str, Any]] = []
         turn_log: list[dict[str, Any]] = []
+        last_total = 0
+        reinject = False
         with open(path, encoding="utf-8") as handle:
             for line in handle:
                 if not line.strip():
@@ -891,8 +1025,19 @@ class _DirectThread:
                     meta = dict(payload or {})
                 elif kind == "response_item":
                     history.append(payload)
+                    if (payload or {}).get("role") == "developer":
+                        reinject = False
                 elif kind == "turn_completed":
                     turn_log.append(dict(payload or {}))
+                elif kind == "compacted":
+                    # Like Codex's ``compacted`` record: the history is
+                    # replaced wholesale, not appended to.
+                    payload = dict(payload or {})
+                    history = list(payload.get("replacement_history") or [])
+                    reinject = bool(payload.get("reinject_initial_context"))
+                    last_total = 0
+                elif kind == "token_count":
+                    last_total = int((payload or {}).get("last_total_tokens") or 0)
         if meta.get("id") != thread_id:
             raise invalid_request_error_class()(
                 -32600, f"rollout for {thread_id} has mismatched session id"
@@ -905,7 +1050,7 @@ class _DirectThread:
                 continue
             effective[key] = value
         effective["ephemeral"] = False
-        return cls(
+        thread = cls(
             client,
             effective,
             thread_id=thread_id,
@@ -913,11 +1058,149 @@ class _DirectThread:
             turn_log=turn_log,
             rollout_path=path,
         )
+        thread.last_total_tokens = last_total
+        thread.reinject_initial_context = reinject
+        thread.developer_instructions = resume_kwargs.get(
+            "developer_instructions"
+        ) or meta.get("developer_instructions")
+        return thread
 
     async def turn(self, input_items: Any, **kwargs: Any) -> "_DirectTurn":
+        if self.compacting:
+            raise internal_rpc_error_class()(-32603, NOT_STEERABLE_COMPACT)
         turn = _DirectTurn(self, input_items, kwargs)
         self.turns.append(turn)
+        self.active_turn = turn
         return turn
+
+    # ----------------------------------------------------------- compaction
+
+    @property
+    def compacting(self) -> bool:
+        return self.compaction is not None and not self.compaction.done()
+
+    def over_auto_compact_limit(self) -> bool:
+        """Codex's trigger: the last response's ``total_tokens`` >= limit
+        (cumulative usage across responses never counts)."""
+        limit = self.auto_compact_limit
+        return limit is not None and self.last_total_tokens >= limit
+
+    def record_usage(self, usage: dict[str, Any]) -> None:
+        self.last_total_tokens = _usage_total(usage)
+        self._write_record("token_count", {"last_total_tokens": self.last_total_tokens})
+
+    async def compact(self) -> Any:
+        """Start a compaction turn and return at once (``thread/compact/start``).
+
+        Like real Codex, the compaction turn's events reach no turn handle;
+        ``read(include_turns=True)`` shows it (``inProgress``, then final) as a
+        turn holding one ``contextCompaction`` item, and a ``turn()`` while it
+        runs fails with ``-32603`` ``ActiveTurnNotSteerable``. Await
+        ``thread.compaction`` (or poll ``read``) to see it finish.
+        """
+        import uuid
+        from types import SimpleNamespace
+
+        if self.compacting:
+            raise internal_rpc_error_class()(-32603, NOT_STEERABLE_COMPACT)
+        turn_id = f"turn-{uuid.uuid4().hex[:12]}"
+        item = {"type": "contextCompaction", "id": f"compact-{uuid.uuid4().hex[:12]}"}
+        self._compaction_turn = {"id": turn_id, "status": "inProgress", "items": [item]}
+        self.compaction = asyncio.create_task(self._manual_compaction(turn_id, item))
+        return SimpleNamespace()
+
+    async def _manual_compaction(self, turn_id: str, item: dict[str, Any]) -> None:
+        status = "completed"
+        try:
+            await self.run_compaction("manual", turn_id=turn_id)
+        except asyncio.CancelledError:
+            status = "interrupted"
+            raise
+        except Exception:  # noqa: BLE001 - a failed compaction turn
+            status = "failed"
+        finally:
+            # Record the finished turn before dropping the in-progress view,
+            # with no await in between, so ``read`` never misses it.
+            self.persist({"id": turn_id, "status": status, "items": [item]})
+            self._compaction_turn = None
+
+    async def run_compaction(
+        self, trigger: str, *, turn_id: str | None = None
+    ) -> dict[str, Any]:
+        """One compaction pass; returns the compaction response's usage.
+
+        Verified against codex 0.159.2: the request re-sends the whole history
+        plus a final :data:`COMPACTION_PROMPT` user message with ``tools=[]``
+        and ``parallel_tool_calls=False``. The new history keeps only the
+        earlier *user* messages (previous summaries dropped) followed by
+        :data:`SUMMARY_PREFIX` + the model's text; assistant replies, tool
+        calls and tool outputs are dropped. After a manual or pre-turn
+        compaction the next turn re-injects the developer message after the
+        summary; a mid-turn compaction (``trigger="mid_turn"``) puts it at the
+        front immediately, since the turn keeps sampling. The rewrite is
+        persisted as a ``compacted`` rollout record, so a resume sees it.
+        """
+        self.persist()
+        provider = self.provider
+        env_key = provider.get("env_key")
+        api_key = self.client.env.get(str(env_key)) if env_key else None
+        body = {
+            "model": str(self.start_kwargs.get("model") or "scripted-model"),
+            "instructions": str(self.start_kwargs.get("base_instructions") or ""),
+            "input": json.loads(json.dumps(self.history))
+            + [_message("user", COMPACTION_PROMPT)],
+            "tools": [],
+            "tool_choice": "auto",
+            "parallel_tool_calls": False,
+            "store": False,
+            "stream": False,
+        }
+        record = json.loads(json.dumps(body))
+        record["_provider"] = {
+            "id": self.provider_id,
+            "base_url": provider.get("base_url"),
+            "env_key": env_key,
+            "wire_api": provider.get("wire_api"),
+            "api_key": api_key,
+        }
+        record["_trigger"] = trigger
+        record["_turn_id"] = turn_id
+        self.client.requests.append(record)
+        self.client.compactions.append(record)
+        DIRECT_REQUEST_LOG.append(record)
+        response = _as_dict(
+            await self.client._resolve_model_call()(
+                **body, api_base=provider.get("base_url"), api_key=api_key
+            )
+        )
+        summary = "".join(
+            _message_text(item)
+            for item in (_as_dict(i) for i in response.get("output") or [])
+            if item.get("type") == "message"
+        )
+        replacement: list[dict[str, Any]] = []
+        if trigger == "mid_turn" and self.developer_instructions:
+            replacement.append(_message("developer", str(self.developer_instructions)))
+        replacement.extend(
+            item
+            for item in self.history
+            if _is_user_message(item) and not _is_summary_message(item)
+        )
+        replacement.append(_message("user", f"{SUMMARY_PREFIX}\n{summary}"))
+        self.history = replacement
+        self.reinject_initial_context = trigger != "mid_turn"
+        self.last_total_tokens = 0
+        self._write_record(
+            "compacted",
+            {
+                "message": f"{SUMMARY_PREFIX}\n{summary}",
+                "replacement_history": replacement,
+                "reinject_initial_context": self.reinject_initial_context,
+            },
+            flush=False,
+        )
+        self._persisted = len(self.history)
+        return dict(response.get("usage") or {})
 
     async def read(self, *, include_turns: bool = False) -> Any:
         """A ``ThreadReadResponse``-shaped ``SimpleNamespace``.
@@ -931,11 +1214,16 @@ class _DirectThread:
             raise invalid_request_error_class()(
                 -32600, "ephemeral threads do not support includeTurns"
             )
-        turns = (
-            [SimpleNamespace(items=[], **t) for t in self.turn_log]
-            if include_turns
-            else []
-        )
+        turns: list[Any] = []
+        if include_turns:
+            log = list(self.turn_log)
+            if self._compaction_turn is not None:
+                log.append(self._compaction_turn)
+            for entry in log:
+                entry = dict(entry)
+                # Only ``contextCompaction`` items are recorded per turn.
+                items = [SimpleNamespace(**i) for i in entry.pop("items", None) or []]
+                turns.append(SimpleNamespace(items=items, **entry))
         return SimpleNamespace(
             thread=SimpleNamespace(id=self.id, ephemeral=self.ephemeral, turns=turns)
         )
@@ -1001,6 +1289,18 @@ class _DirectThread:
         if turn_status is not None:
             self.turn_log.append(turn_status)
 
+    def _write_record(
+        self, kind: str, payload: dict[str, Any], *, flush: bool = True
+    ) -> None:
+        """Append one non-history record, after pending history if ``flush``."""
+        if flush:
+            self.persist()
+        if not self._rollout_writable():
+            return
+        with self._open_rollout() as handle:
+            handle.write(json.dumps({"type": kind, "payload": payload}))
+            handle.write("\n")
+
 
 class _McpServer:
     """One connected MCP server for the lifetime of a turn."""
@@ -1056,6 +1356,111 @@ class _DirectTurn:
         self.id = f"turn-{uuid.uuid4().hex[:12]}"
         self._worker: asyncio.Task[None] | None = None
         self._interrupted = False
+        #: Steered texts not yet added to a model request.
+        self._pending_steers: list[str] = []
+        #: False once the turn can no longer take steered input.
+        self._accepting = True
+        #: ``contextCompaction`` items of auto-compactions in this turn.
+        self.items: list[dict[str, Any]] = []
+
+    async def steer(self, input: Any) -> Any:
+        """Add user input to this running turn (``turn/steer``).
+
+        As in codex 0.159.2 the input becomes a user message (and a
+        ``userMessage`` item) in the turn's *next* model request -- never the
+        one in flight -- and forces that request even when the in-flight one
+        ends the turn. The turn id is unchanged. A finished turn raises
+        ``-32600`` "no active turn to steer" (or "expected active turn id ...
+        but found ..." when another turn of the thread is running).
+        """
+        from types import SimpleNamespace
+
+        if not self._accepting:
+            active = self.thread.active_turn
+            if active is not None and active is not self and active._accepting:
+                raise invalid_request_error_class()(
+                    -32600,
+                    f"expected active turn id {self.id} but found {active.id}",
+                )
+            raise invalid_request_error_class()(-32600, "no active turn to steer")
+        text = _steer_text(input)
+        self._pending_steers.append(text)
+        self.client.steers.append(
+            {
+                "thread_id": self.thread.id,
+                "turn_id": self.id,
+                "text": text,
+                "input": input,
+            }
+        )
+        return SimpleNamespace(turn_id=self.id)
+
+    def _close(self) -> None:
+        self._accepting = False
+        if self.thread.active_turn is self:
+            self.thread.active_turn = None
+
+    def _status_record(self, status: str) -> dict[str, Any]:
+        record: dict[str, Any] = {"id": self.id, "status": status}
+        if self.items:
+            record["items"] = [dict(item) for item in self.items]
+        return record
+
+    def _user_item_notes(self, text: str, emit: Any) -> None:
+        import uuid
+
+        item = {
+            "id": f"user-{uuid.uuid4().hex[:12]}",
+            "type": "userMessage",
+            "content": [{"type": "text", "text": text, "text_elements": []}],
+        }
+        emit(self._note("ItemStartedNotification", {"item": item}))
+        emit(self._note("ItemCompletedNotification", {"item": item}))
+
+    def _drain_steers(self, emit: Any) -> bool:
+        """Move pending steers into history; True if there were any."""
+        steers, self._pending_steers = self._pending_steers, []
+        for text in steers:
+            self._user_item_notes(text, emit)
+            self.thread.history.append(_message("user", text))
+        if steers:
+            self.thread.persist()
+        return bool(steers)
+
+    async def _auto_compact(
+        self, trigger: str, emit: Any, running: dict[str, int]
+    ) -> dict[str, Any] | None:
+        """Run an auto-compaction inside this turn; an error dict on failure.
+
+        Its ``contextCompaction`` item (and the compaction's token usage) is
+        streamed on this turn's handle, as real Codex does.
+        """
+        import uuid
+
+        item = {"type": "contextCompaction", "id": f"compact-{uuid.uuid4().hex[:12]}"}
+        emit(self._note("ItemStartedNotification", {"item": dict(item)}))
+        try:
+            usage = await self.thread.run_compaction(trigger, turn_id=self.id)
+        except Exception as e:  # noqa: BLE001 - becomes a failed turn
+            return {"message": f"{type(e).__name__}: {e}"}
+        self.items.append(item)
+        last = _usage_block(_normalize_usage(usage))
+        for key, value in last.items():
+            running[key] = running.get(key, 0) + value
+        emit(
+            self._note(
+                "ThreadTokenUsageUpdatedNotification",
+                {
+                    "token_usage": {
+                        "last": last,
+                        "total": dict(running),
+                        "model_context_window": self.client.model_context_window,
+                    }
+                },
+            )
+        )
+        emit(self._note("ItemCompletedNotification", {"item": dict(item)}))
+        return None
 
     async def interrupt(self) -> None:
         """Cancel the in-flight model / MCP calls; the stream then closes
@@ -1114,9 +1519,10 @@ class _DirectTurn:
             except asyncio.CancelledError:
                 if not self._interrupted:
                     raise
-                self.thread.persist({"id": self.id, "status": "interrupted"})
+                self.thread.persist(self._status_record("interrupted"))
                 yield self._turn_note("interrupted", None)
         finally:
+            self._close()
             if not self._worker.done():
                 self._worker.cancel()
                 await asyncio.gather(self._worker, return_exceptions=True)
@@ -1135,8 +1541,9 @@ class _DirectTurn:
             async with AsyncExitStack() as stack:
                 servers = await self._connect(stack)
                 error = await self._loop(servers, emit)
+            self._close()
             self.thread.persist(
-                {"id": self.id, "status": "completed" if error is None else "failed"}
+                self._status_record("completed" if error is None else "failed")
             )
             if error is None:
                 emit(self._turn_note("completed", None))
@@ -1148,6 +1555,7 @@ class _DirectTurn:
                 )
                 emit(self._turn_note("failed", error))
         finally:
+            self._close()
             emit(_END)
 
     async def _connect(self, stack: Any) -> dict[str, _McpServer]:
@@ -1207,7 +1615,15 @@ class _DirectTurn:
     def _seed_history(self) -> None:
         history = self.thread.history
         developer = self.thread.start_kwargs.get("developer_instructions")
-        if developer and not history:
+        if self.thread.reinject_initial_context:
+            # After a manual / pre-turn compaction Codex re-sends its initial
+            # context (developer message) after the summary.
+            self.thread.reinject_initial_context = False
+            if self.thread.developer_instructions:
+                history.append(
+                    _message("developer", str(self.thread.developer_instructions))
+                )
+        elif developer and not history:
             history.append(
                 {
                     "type": "message",
@@ -1230,6 +1646,13 @@ class _DirectTurn:
     ) -> dict[str, Any] | None:
         import uuid
 
+        running: dict[str, int] = {}
+        if self.thread.over_auto_compact_limit():
+            # Pre-turn auto-compaction: before the new user message exists.
+            error = await self._auto_compact("pre_turn", emit, running)
+            if error is not None:
+                return error
+
         user_item_id = f"user-{uuid.uuid4().hex[:12]}"
         user_item = {
             "id": user_item_id,
@@ -1250,7 +1673,6 @@ class _DirectTurn:
         provider = self.thread.provider
         env_key = provider.get("env_key")
         api_key = self.client.env.get(str(env_key)) if env_key else None
-        running: dict[str, int] = {}
 
         for _ in range(self.client.max_agent_loops):
             body = self._request_body(servers)
@@ -1303,6 +1725,8 @@ class _DirectTurn:
             outputs = await self._execute(calls, servers, emit)
             self.thread.history.extend(outputs)
             self.thread.persist()
+            steered = self._drain_steers(emit)
+            self.thread.record_usage(dict(response.get("usage") or {}))
 
             last = _usage_block(_normalize_usage(response.get("usage") or {}))
             for key, value in last.items():
@@ -1319,8 +1743,15 @@ class _DirectTurn:
                     },
                 )
             )
-            if not calls:
+            if not calls and not steered:
+                self._accepting = False
                 break
+            if self.thread.over_auto_compact_limit():
+                # Mid-turn auto-compaction, before the follow-up request.
+                error = await self._auto_compact("mid_turn", emit, running)
+                if error is not None:
+                    return error
+        self._accepting = False
         return None
 
     # ------------------------------------------------------------ tool calls

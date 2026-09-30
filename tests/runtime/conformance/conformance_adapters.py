@@ -44,6 +44,7 @@ production code path:
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 import json
 import os
 import shutil
@@ -263,7 +264,12 @@ class CodexAdapter(RuntimeAdapter):
 
     name = "codex"
     capabilities = frozenset(
-        {Capability.APPROVALS, Capability.MCP_TOOLS, Capability.SKILLS}
+        {
+            Capability.APPROVALS,
+            Capability.MCP_TOOLS,
+            Capability.SKILLS,
+            Capability.TURN_TIMEOUT,
+        }
     )
     streams_partials = True
     #: ``CodexRuntimeConfig.model_transport`` the agents run with.
@@ -388,7 +394,10 @@ class CodexAdapter(RuntimeAdapter):
             model_api_key=_API_KEY,
             runtime="codex",
             tools=list(tools),
-            codex_runtime_config={"model_transport": self.transport},
+            codex_runtime_config={
+                "model_transport": self.transport,
+                **agent_kwargs.pop("codex_runtime_config", {}),
+            },
             **agent_kwargs,
         )
         return ScriptedAgent(key=key, agent=agent, plan=rounds)
@@ -413,6 +422,9 @@ class CodexAdapter(RuntimeAdapter):
 
         return CodexRuntime, "run_async"
 
+    def turn_timeout_kwargs(self, seconds: float) -> dict[str, Any]:
+        return {"codex_runtime_config": {"turn_timeout_seconds": seconds}}
+
     def _fake_codex_class(self) -> type:
         return fake_codex_sdk.ShimDrivingCodex
 
@@ -431,7 +443,11 @@ class CodexDirectAdapter(CodexAdapter):
 
     name = "codex-direct"
     transport = "direct"
-    capabilities = CodexAdapter.capabilities | {Capability.RESUME_ACROSS_RESTART}
+    capabilities = CodexAdapter.capabilities | {
+        Capability.RESUME_ACROSS_RESTART,
+        Capability.STEER,
+        Capability.COMPACTION,
+    }
 
     def __init__(self, monkeypatch: Any, tmp_path: Any) -> None:
         super().__init__(monkeypatch, tmp_path)
@@ -473,6 +489,27 @@ class CodexDirectAdapter(CodexAdapter):
 
     def native_thread_id(self, session_id: str) -> str | None:
         return self._saved_threads.get(session_id)
+
+    async def steer(self, session_id: str, text: str) -> None:
+        from conformance_harness import ConformanceHarness
+        from veadk.runtime.codex.runtime import CodexRuntime
+
+        # Through the runtime's public entry point, as `Runner.steer` does.
+        agent = SimpleNamespace(name=AGENT_NAME)
+        delivered = await CodexRuntime().steer(
+            agent,  # type: ignore[arg-type]
+            app_name=ConformanceHarness.APP_NAME,
+            user_id=ConformanceHarness.USER_ID,
+            session_id=session_id,
+            text=text,
+        )
+        assert delivered, "the steer found no running turn for the session"
+
+    def compaction_kwargs(self) -> dict[str, Any]:
+        # Codex compacts once the last response reports at least this many
+        # tokens; every scripted round reports 2, so turn 1 crosses it and
+        # turn 2 starts by compacting.
+        return {"codex_runtime_config": {"auto_compact_token_limit": 1}}
 
     def teardown(self) -> None:
         from veadk.runtime.codex import mcp_bridge
