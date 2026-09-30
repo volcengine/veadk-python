@@ -235,19 +235,19 @@ def test_mask_secret_hides_middle() -> None:
     assert "CODEX_MCP_RUNTIME_API_KEY" in SECRET_ENV_KEYS
 
 
-def test_runtime_a2a_default_and_explicit_override() -> None:
+def test_runtime_jwt_bypass_default_and_explicit_override() -> None:
     env = build_runtime_env(_params(), public_endpoint="https://runtime.example.com")
-    assert env["DISABLE_JWT_AUTH"] == "false"
+    assert env["DISABLE_JWT_AUTH"] == "true"
     assert env["ENABLE_A2A"] == "true"
     assert env["A2A_TIP_VERIFY_ENABLED"] == "false"
     assert "MPA_AGENTKIT_MODE" not in env
-    overrides = {"DISABLE_JWT_AUTH": "true", "ENABLE_A2A": "false"}
+    overrides = {"DISABLE_JWT_AUTH": "false", "ENABLE_A2A": "false"}
     env = build_runtime_env(
         _params(extra_env=overrides), public_endpoint="https://runtime.example.com"
     )
-    assert env["DISABLE_JWT_AUTH"] == "true"
+    assert env["DISABLE_JWT_AUTH"] == "false"
     assert env["ENABLE_A2A"] == "false"
-    assert overrides == {"DISABLE_JWT_AUTH": "true", "ENABLE_A2A": "false"}
+    assert overrides == {"DISABLE_JWT_AUTH": "false", "ENABLE_A2A": "false"}
 
 
 def test_database_instrumentation_default_and_explicit_override() -> None:

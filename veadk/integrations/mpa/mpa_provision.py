@@ -187,9 +187,9 @@ def build_runtime_env(
         "SCHEDULED_TASK_BACKEND": "postgresql",
         # Resolve the configured UserPool before accepting user-facing traffic.
         "IDENTITY_STARTUP_ENABLED": "true",
-        # Advertise A2A to Studio's Runtime-key discovery probe. REST endpoints
-        # require a user JWT; bypassing that gate incorrectly advertises ADK.
-        "DISABLE_JWT_AUTH": "false",
+        # Studio uses outer gateway key auth and trusted user identity headers,
+        # not the legacy REST JWT gate. Explicit extra_env can restore that gate.
+        "DISABLE_JWT_AUTH": "true",
         "ENABLE_A2A": "true",
         "MPA_LAZY_LOGIN": "false",
         # VeADK uses external resources and only retains CLAW_SPACE_ID as a

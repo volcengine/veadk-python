@@ -1645,7 +1645,7 @@ MPA grouped replies hide exact answer mirrors only in their derived view: an ext
 
 ### MPA A2A shared gateway compatibility
 
-MPA creation defaults to A2A discovery (`ENABLE_A2A=true`, `DISABLE_JWT_AUTH=false`). When a tagged MPA Runtime's agent card omits the shared gateway `/runtime/<ID>` prefix from its same-origin `/a2a/jsonrpc` URL, the Studio backend restores the prefix from the control-plane endpoint for chat and history requests. General-agent URLs are unchanged. Existing Runtimes need an explicit configuration release; reconnect to refresh discovery. Restart Studio after this backend update; no frontend rebuild is required.
+Fresh flat MPA creation defaults to `ENABLE_A2A=true` and `DISABLE_JWT_AUTH=true`; explicit `false` overrides and referenced Runtime/template environments are preserved. The inner legacy REST JWT gate is bypassed, including its admin checks and header-based identity paths; trusted callers must control identity headers. Outer gateway key-auth is unchanged, and `/list-apps` may advertise ADK rather than forcing A2A discovery. This does not enable `MPA_AGENTKIT_MODE` or migrate old sessions. When using A2A, if a tagged MPA Runtime's agent card omits the shared gateway `/runtime/<ID>` prefix from its same-origin `/a2a/jsonrpc` URL, the Studio backend still restores the prefix from the control-plane endpoint for chat and history requests. General-agent URLs are unchanged. Existing Runtimes need an explicit configuration release; reconnect to refresh discovery. Restart Studio after this backend update; no frontend rebuild is required.
 
 ### 智能构建首页与任务找回
 

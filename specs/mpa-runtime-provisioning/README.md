@@ -2,7 +2,7 @@
 
 - **Component ID:** `mpa-runtime-provisioning`
 - **Status:** Draft; proposed changes are governed by the related PRD
-- **Revision:** 2026-09-29
+- **Revision:** 2026-09-30
 - **Chinese version:** [README.zh.md](README.zh.md)
 - **Related PRD:** [MPA Runtime Integration Hardening](../../prd-spec/bugfixes/mpa-runtime-integration/2026-09-12-mpa-runtime-integration-hardening.md)
 - **Related PRD:** [MPA Studio Workload Identity Provisioning](../../prd-spec/features/mpa-studio-workload-identity/2026-09-20-mpa-studio-workload-identity.md)
@@ -61,7 +61,7 @@ Missing endpoint, key, Runtime ID, or APIG ID blocks metadata finalization. Runt
 | `CON-7`, `CON-9` | `uv run --extra dev pytest tests/integrations/test_mpa_identity.py tests/cli/test_cli_mpa.py` |
 | End-to-end | Create/reuse an isolated Runtime, inspect metadata without printing keys, invoke A2A and built-in MCP, and observe two MCP-cache intervals |
 
-VeADK MPA provisioning defaults to ENABLE_A2A=true and DISABLE_JWT_AUTH=false. Without an ADK user JWT, a compatible MPA Runtime returns 404 from /list-apps so Studio discovers its A2A card and selects a2a-default. A2A_TIP_VERIFY_ENABLED=false retains the existing gateway key-auth integration. Explicit extra_env values remain last-wins. Managed flat creation uses these defaults; referenced Runtime/template environments are preserved. Existing Runtimes require an explicit update. General agents are unchanged.
+VeADK MPA provisioning defaults to `ENABLE_A2A=true` and `DISABLE_JWT_AUTH=true`, as requested in [Studio key-auth defaults](../../prd-spec/bugfixes/mpa-default-jwt/2026-09-30-studio-key-auth-default.md). The inner legacy REST JWT gate is bypassed, including its admin checks and header-based identity paths; trusted Studio/gateway callers must control identity headers. Outer gateway key-auth and `A2A_TIP_VERIFY_ENABLED=false` are unchanged. With a compatible MPA image, `/list-apps` may advertise ADK instead of forcing A2A discovery; transport compatibility and old-session migration are not guaranteed by this default. Explicit `extra_env` values remain last-wins, including `DISABLE_JWT_AUTH=false`. Managed flat creation uses these defaults; referenced Runtime/template environments are preserved. Existing Runtimes require an explicit update and release. `MPA_AGENTKIT_MODE` is not enabled. General agents are unchanged.
 
 MPA provisioning defaults `OTEL_PYTHON_DISABLED_INSTRUMENTATIONS` to `sqlalchemy,asyncpg,psycopg,psycopg2,dbapi`, suppressing database auto-instrumentation while preserving business tracing. Explicit `extra_env` overrides win, including an empty string to re-enable instrumentation. This applies to newly provisioned or explicitly redeployed resources, not existing running instances.
 

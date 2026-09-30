@@ -237,7 +237,7 @@ def test_network_gateway_worker_precede_runtime(
             if source == "flat":
                 assert request["Command"] == "bash run.sh"
                 runtime_env = service.env_map(request)
-                assert runtime_env["DISABLE_JWT_AUTH"] == "false"
+                assert runtime_env["DISABLE_JWT_AUTH"] == "true"
                 assert runtime_env["ENABLE_A2A"] == "true"
                 assert runtime_env["A2A_TIP_VERIFY_ENABLED"] == "false"
                 assert (
@@ -482,6 +482,7 @@ def test_runtime_settings_override_source_without_losing_other_environment():
 
     source = template()
     source["ApmplusEnable"] = True
+    source["Envs"].append({"Key": "DISABLE_JWT_AUTH", "Value": "true"})
     options = Runtime.model_validate(
         {
             "image": "registry.example/pinned:v1",
@@ -493,7 +494,11 @@ def test_runtime_settings_override_source_without_losing_other_environment():
             "max-concurrency": 20,
             "apmplus-enable": False,
             "project-name": "project",
-            "env": {"MODEL_AGENT_NAME": "explicit-model", "PGHOST": "explicit-db"},
+            "env": {
+                "MODEL_AGENT_NAME": "explicit-model",
+                "PGHOST": "explicit-db",
+                "DISABLE_JWT_AUTH": "false",
+            },
         }
     )
     service.apply_runtime_settings(source, options)
@@ -527,6 +532,7 @@ def test_runtime_settings_override_source_without_losing_other_environment():
     assert env["MODEL_AGENT_NAME"] == "explicit-model"
     assert env["PGHOST"] == "explicit-db"
     assert env["PGUSER"] == "app"
+    assert env["DISABLE_JWT_AUTH"] == "false"
 
 
 def test_managed_identity_settings_override_template_and_require_complete_pair():
@@ -558,6 +564,7 @@ def test_omitted_runtime_settings_preserve_source():
     from veadk.integrations.mpa.managed.config import Runtime
 
     source = template()
+    source["Envs"].append({"Key": "DISABLE_JWT_AUTH", "Value": "false"})
     original = copy.deepcopy(source)
     service.apply_runtime_settings(source, Runtime())
     assert source == original

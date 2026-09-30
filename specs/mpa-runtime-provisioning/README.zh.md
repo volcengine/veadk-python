@@ -2,7 +2,7 @@
 
 - **Component ID：** `mpa-runtime-provisioning`
 - **状态：** 草案；提议变更由关联 PRD 管理
-- **修订日期：** 2026-09-29
+- **修订日期：** 2026-09-30
 - **English version:** [README.md](README.md)
 - **关联 PRD：** [MPA Runtime 集成加固](../../prd-spec/bugfixes/mpa-runtime-integration/2026-09-12-mpa-runtime-integration-hardening.zh.md)
 - **关联 PRD：** [MPA Studio 工作负载身份创建](../../prd-spec/features/mpa-studio-workload-identity/2026-09-20-mpa-studio-workload-identity.zh.md)
@@ -58,7 +58,7 @@ MPA 专用的全新托管模板使用标准命令 `bash run.sh`；显式 JSON �
 | `CON-7`、`CON-9` | `uv run --extra dev pytest tests/integrations/test_mpa_identity.py tests/cli/test_cli_mpa.py` |
 | 端到端 | 创建/复用隔离 Runtime，不打印 Key 地检查 metadata，调用 A2A 和内置 MCP，并观察两个 MCP 缓存周期 |
 
-VeADK MPA 部署默认设置 ENABLE_A2A=true 和 DISABLE_JWT_AUTH=false。没有 ADK 用户 JWT 时，兼容的 MPA Runtime 对 /list-apps 返回 404，Studio 因而发现其 A2A card 并选择 a2a-default。A2A_TIP_VERIFY_ENABLED=false 保留现有网关 key-auth 集成。显式 extra_env 仍最后覆盖。Managed flat 创建使用这些默认值；引用 Runtime / 模板的环境保持不变。已有 Runtime 需要显式更新。通用智能体不受影响。
+VeADK MPA 部署按 [Studio key-auth 默认配置](../../prd-spec/bugfixes/mpa-default-jwt/2026-09-30-studio-key-auth-default.zh.md) 默认设置 `ENABLE_A2A=true` 和 `DISABLE_JWT_AUTH=true`。绕过旧版 REST 内层 JWT 校验，包括其管理权限检查和 header 身份路径；可信 Studio/网关调用方必须控制身份 header。外层网关 key-auth 和 `A2A_TIP_VERIFY_ENABLED=false` 不变。使用兼容的 MPA 镜像时，`/list-apps` 可能发现 ADK，而不是强制 A2A；该默认值不保证传输兼容性，也不迁移旧会话。显式 `extra_env` 仍最后覆盖，包括 `DISABLE_JWT_AUTH=false`。Managed flat 创建使用这些默认值；引用 Runtime/模板环境保持不变。已有 Runtime 需要显式更新并发布。不启用 `MPA_AGENTKIT_MODE`。通用智能体不受影响。
 
 MPA 部署默认注入 `OTEL_PYTHON_DISABLED_INSTRUMENTATIONS=sqlalchemy,asyncpg,psycopg,psycopg2,dbapi`，关闭数据库自动埋点并保留业务链路。显式 `extra_env` 优先，包括传空字符串重新启用埋点。适用于新部署或显式重新部署的资源，不自动修改已有运行实例。
 

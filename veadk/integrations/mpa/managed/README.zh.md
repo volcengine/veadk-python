@@ -207,6 +207,6 @@ sqlite3 -readonly .adk/mpa-creation.sqlite3 "SELECT task_id,datetime(created,'un
 
 托管部署接受带 `sslmode` 的 PostgreSQL 注册库 URL，并将该查询参数转换为 MPA Runtime 的 asyncpg 驱动使用的 `ssl`，保留原 TLS 模式。自动准备和手动配置的管理库均适用，无需重新构建镜像。已有未完成部署可以在保持资源身份不变的情况下恢复并应用此转换。
 
-## Studio A2A 发现默认配置
+## Studio Runtime 鉴权默认配置
 
-Flat 创建默认设置 `ENABLE_A2A=true` 和 `DISABLE_JWT_AUTH=false`。使用兼容的 MPA 镜像时，Studio 的 Runtime-key `/list-apps` 探测收到 404，随后通过 A2A agent card 发现 `a2a-default`。`A2A_TIP_VERIFY_ENABLED=false` 保留现有外层网关 key-auth 集成，不绕过 REST JWT 鉴权。仍支持显式 `managed.runtime.env` 覆盖；引用 Runtime / 模板的环境保持不变。已有 Runtime 需要显式更新配置并发布；在 Studio 重新连接以刷新发现结果。本次默认值修改不需要重建前端。
+Flat 创建默认设置 `ENABLE_A2A=true` 和 `DISABLE_JWT_AUTH=true`。绕过旧版 REST 内层 JWT 校验，包括其管理权限检查和 header 身份路径；可信 Studio/网关调用方必须控制身份 header。外层网关 key-auth 和 `A2A_TIP_VERIFY_ENABLED=false` 不变。使用兼容的 MPA 镜像时，`/list-apps` 可能发现 ADK，而不是强制 A2A；该默认值不保证传输兼容性，也不迁移旧会话。仍支持显式 `managed.runtime.env` 覆盖，包括 `DISABLE_JWT_AUTH=false`；引用 Runtime/模板环境保持不变。已有 Runtime 需要显式更新配置并发布；在 Studio 重新连接以刷新发现结果。不启用 `MPA_AGENTKIT_MODE`。本次默认值修改不需要重建前端。
