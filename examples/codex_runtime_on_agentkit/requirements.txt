@@ -2,15 +2,13 @@
 #
 # veadk-python >= 0.5.39 ships the codex runtime (veadk/runtime/codex).
 #
-# This mirrors veadk-python's own `[codex]` extra. The extra is not used
-# directly because uv refuses a *transitive* pre-release: openai-codex and its
-# bundled-binary dependency openai-codex-cli-bin (the Codex CLI as a manylinux
-# wheel) are pre-releases, and uv only accepts them when the exact pre-release
-# version is pinned at the top level, as below. Keep these pins in sync with
-# the `[codex]` extra in pyproject.toml.
+# This mirrors veadk-python's own `[codex]` extra, pinned here so the image
+# gets this exact SDK even with a veadk-python release whose extra still pins
+# an older one. openai-codex pins its matching Codex CLI binary
+# (openai-codex-cli-bin) exactly, so the binary is not listed separately. Keep
+# this pin in sync with the `[codex]` extra in pyproject.toml.
 veadk-python>=0.5.39
-openai-codex==0.1.0b3
-openai-codex-cli-bin==0.137.0a4
+openai-codex==0.159.2
 
 # The Responses->chat shim (veadk/runtime/codex/proxy.py) imports these at
 # module level, and app.py imports uvicorn directly. They resolve transitively

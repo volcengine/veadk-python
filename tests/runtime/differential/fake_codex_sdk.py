@@ -110,18 +110,6 @@ def install_openai_codex_stub() -> bool:
         workspace_write = "workspace_write"
         full_access = "full_access"
 
-    class Personality(_StrEnum):
-        none = "none"
-        friendly = "friendly"
-        pragmatic = "pragmatic"
-
-    class ReasoningEffort(_StrEnum):
-        minimal = "minimal"
-        low = "low"
-        medium = "medium"
-        high = "high"
-        xhigh = "xhigh"
-
     class CodexConfig:
         def __init__(self, *, cwd: str | None = None, env: dict | None = None) -> None:
             self.cwd = cwd
@@ -148,10 +136,6 @@ def install_openai_codex_stub() -> bool:
 
     module = pytypes.ModuleType("openai_codex")
     module.__veadk_stub__ = True  # type: ignore[attr-defined]
-    generated = pytypes.ModuleType("openai_codex.generated")
-    generated.__veadk_stub__ = True  # type: ignore[attr-defined]
-    v2_all = pytypes.ModuleType("openai_codex.generated.v2_all")
-    v2_all.__veadk_stub__ = True  # type: ignore[attr-defined]
 
     for name, value in (
         ("ApprovalMode", ApprovalMode),
@@ -164,32 +148,10 @@ def install_openai_codex_stub() -> bool:
         ("AsyncCodex", ShimDrivingCodex),
     ):
         setattr(module, name, value)
-    for name, value in (
-        ("Personality", Personality),
-        ("ReasoningEffort", ReasoningEffort),
-    ):
-        setattr(v2_all, name, value)
-    for name in _NOTIFICATION_NAMES:
-        setattr(v2_all, name, _shim_notification_class(name))
-    module.generated = generated  # type: ignore[attr-defined]
-    generated.v2_all = v2_all  # type: ignore[attr-defined]
 
     sys.modules["openai_codex"] = module
-    sys.modules["openai_codex.generated"] = generated
-    sys.modules["openai_codex.generated.v2_all"] = v2_all
     return True
 
-
-_NOTIFICATION_NAMES = (
-    "TurnStartedNotification",
-    "TurnCompletedNotification",
-    "ItemStartedNotification",
-    "ItemCompletedNotification",
-    "AgentMessageDeltaNotification",
-    "ReasoningSummaryTextDeltaNotification",
-    "ThreadTokenUsageUpdatedNotification",
-    "ErrorNotification",
-)
 
 _SHIM_CLASSES: dict[str, type] = {}
 

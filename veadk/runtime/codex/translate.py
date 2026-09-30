@@ -961,6 +961,24 @@ _EXPLICITLY_IGNORED: frozenset[str] = frozenset(
         # Account-level attestation notice (e.g. "trustedAccessForCyber") with
         # no per-turn meaning.
         "ModelVerificationNotification",
+        # Model-provider credential refresh in progress/finished. One class
+        # serves both authRecoveryStarted and authRecoveryCompleted, so the
+        # phase is not even recoverable here; a failed recovery still surfaces
+        # as ErrorNotification or a failed TurnCompletedNotification.
+        "AuthRecoveryNotification",
+        # UI hint that the model's output is held back for safety checks
+        # (`showBufferingUi`). Deltas resume, or the turn ends, on their own;
+        # this runtime has no buffering indicator to drive.
+        "ModelSafetyBufferingUpdatedNotification",
+        # One-way marker (only `startedAtMs`) that auto-review escalated to a
+        # strict review. Nothing to answer: approval decisions arrive as server
+        # requests handled by the SDK, and per-item review progress already
+        # reaches ADK via ItemGuardianApprovalReview{Started,Completed}.
+        "StrictReviewRequiredNotification",
+        # Opaque moderation metadata (`metadata: Any`) with no user-facing
+        # content. An actual policy block arrives as ErrorNotification
+        # (e.g. cyberPolicy) or ModelReroutedNotification.
+        "TurnModerationMetadataNotification",
     }
 )
 

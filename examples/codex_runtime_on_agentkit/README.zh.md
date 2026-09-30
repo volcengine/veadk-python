@@ -36,10 +36,9 @@ codex_runtime_on_agentkit/
   `MODEL_AGENT_*` chat 端点（火山引擎 Ark）桥接过去。普通 Ark chat 模型无需改动即可用。
 - **`openai-codex` 不是 veadk 的依赖**，所以在 `requirements.txt` 里显式列出。它会带上
   `openai-codex-cli-bin`——以 **manylinux wheel** 形式打包了 Codex 二进制，Linux
-  构建里无需单独装二进制。它当前是 pre-release，连同其二进制依赖都**钉死到精确的
-  预发布版本**，这样 `uv pip install` 无需全局 `--prerelease=allow` 也能装上。
-  这些 pin 与 veadk-python 的 `[codex]` extra 保持一致；这里不直接用该 extra，
-  是因为 uv 只在**顶层**钉死精确预发布版本时才放行，通过 extra 传递则不行。
+  构建里无需单独装二进制。SDK 会把该二进制钉到与自身相同的版本，所以只需列出
+  `openai-codex`。这个 pin 与 veadk-python 的 `[codex]` extra 保持一致；显式列出是为了
+  在 veadk-python 已发布版本的 extra 仍钉着旧版本时，镜像也能装上这个 SDK 版本。
 - `fastapi` / `uvicorn` 也显式列出：`app.py` 直接 import `uvicorn`，runtime 的
   Responses→chat shim 两者都在模块级 import。目前它们能从 google-adk 传递解析到，
   但 adk 已经在把 web 依赖挪进 extra，所以 `[codex]` 和本文件都显式声明。
