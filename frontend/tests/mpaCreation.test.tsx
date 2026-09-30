@@ -123,7 +123,7 @@ it("keeps submitted identity fixed when the POST response is lost", async () => 
   const submit = button("submit");
   await act(async () => submit.click());
   const original = vi.mocked(api.startMpaCreation).mock.calls[0][0];
-  expect(button("previousStep")).toBeUndefined();
+  expect(button("previousStep")).toBeDefined();
   await act(async () => submit.click());
   expect(vi.mocked(api.startMpaCreation).mock.calls[1][0]).toEqual(original);
 });
@@ -276,7 +276,7 @@ it("keeps a submitted short ID unchanged for task retry", async () => {
   });
   vi.mocked(api.startMpaCreation).mockRejectedValue(new Error("Response lost"));
   await mount();
-  expect(button("previousStep")).toBeUndefined();
+  expect(button("previousStep")).toBeDefined();
   await act(async () => submitButton().click());
   expect(vi.mocked(api.startMpaCreation).mock.calls[0][0].agentId).toBe(
     "mi-1234567890ab",
@@ -392,6 +392,74 @@ it("does not offer a new identity for a running or uncertain task", async () => 
   await mount();
   expect(button("newAgent")).toBeUndefined();
 });
+
+it("navigates restored submitted settings without unlocking or changing identity", async () => {
+  sessionStorage.setItem(
+    "mpa-create:cn-beijing",
+    JSON.stringify({
+      input: {
+        region: "cn-beijing",
+        requestId: "saved-request",
+        agentId: "mi-saved",
+        runtimeImage: "registry.example/runtime:v1",
+        workerImage: "registry.example/worker:v1",
+        pgHost: "db.example",
+        pgPort: "5432",
+        description: "",
+      },
+      submitted: true,
+      step: 2,
+    }),
+  );
+  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
+    configured: true,
+    region: "cn-beijing",
+  });
+  await mount();
+  const steps = () => [
+    ...document.querySelectorAll<HTMLButtonElement>(".mpa-create-steps button"),
+  ];
+  expect(steps()).toHaveLength(3);
+  await act(async () => steps()[0].click());
+  expect(field("agentId").value).toBe("mi-saved");
+  expect(field("runtimeImage").disabled).toBe(true);
+  await act(async () => steps()[1].click());
+  expect(field("pgHost").disabled).toBe(true);
+  await act(async () => steps()[2].click());
+  expect(field("openvikingUrl")).toBeDefined();
+  expect(api.startMpaCreation).not.toHaveBeenCalled();
+  expect(
+    JSON.parse(sessionStorage.getItem("mpa-create:cn-beijing")!).input
+      .requestId,
+  ).toBe("saved-request");
+});
+
+it("validates forward step clicks and disables navigation during submission", async () => {
+  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
+    configured: true,
+    region: "cn-beijing",
+    pgHost: "db.example",
+    pgPort: "5432",
+  });
+  vi.mocked(api.startMpaCreation).mockReturnValue(new Promise(() => {}));
+  await mount();
+  const steps = () => [
+    ...document.querySelectorAll<HTMLButtonElement>(".mpa-create-steps button"),
+  ];
+  await edit("runtimeImage", "invalid image");
+  expect(steps()[1].disabled).toBe(true);
+  expect(steps()[2].disabled).toBe(true);
+  await edit("runtimeImage", "registry.example/runtime:v1");
+  await act(async () => steps()[1].click());
+  await edit("pgPort", "invalid");
+  expect(steps()[0].disabled).toBe(false);
+  expect(steps()[2].disabled).toBe(true);
+  await edit("pgPort", "5432");
+  await act(async () => steps()[2].click());
+  await act(async () => submitButton().click());
+  expect(steps().every((step) => step.disabled)).toBe(true);
+  expect(button("previousStep").disabled).toBe(true);
+});
 it("passes PG and OpenViking selections to creation and keeps secrets out of session storage", async () => {
   vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
     configured: true,
@@ -494,7 +562,7 @@ it("prefills both images and submits edits or an intentionally cleared default",
     runtimeImage: "registry.example/mpa:custom",
     workerImage: "",
   });
-  expect(button("previousStep")).toBeUndefined();
+  expect(button("previousStep")).toBeDefined();
 });
 it("blocks malformed image references but allows empty values", async () => {
   vi.mocked(api.getMpaCreationConfig).mockResolvedValue({

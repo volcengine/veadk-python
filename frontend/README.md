@@ -5,6 +5,10 @@ server that `veadk frontend` launches — no separate backend.
 
 ## Release notifications
 
+The MPA creation wizard supports clicking step headings and returning to earlier
+settings after restoring a submitted draft. Submitted settings remain read-only;
+retry retains the original identity. Failed/cancelled tasks offer New Agent.
+
 The release workflow sends one Feishu card after both cloud providers finish
 publishing. A separate VeFaaS Webhook discovers the app bot’s group memberships
 and persists delivery results to avoid duplicate notifications on retries.

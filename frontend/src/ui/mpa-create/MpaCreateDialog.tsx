@@ -371,12 +371,23 @@ export function MpaCreateDialog({
                         key={name}
                         aria-current={step === index ? "step" : undefined}
                       >
-                        <span>{index + 1}</span>
-                        {t(
-                          key(
-                            `steps.${name === "postgres" && autoPg ? "autoPostgres" : name}`,
-                          ),
-                        )}
+                        <button
+                          type="button"
+                          disabled={
+                            busy ||
+                            (index > step &&
+                              !submitted &&
+                              (!imagesValid || (index === 2 && !pgValid)))
+                          }
+                          onClick={() => setStep(index)}
+                        >
+                          <span>{index + 1}</span>
+                          {t(
+                            key(
+                              `steps.${name === "postgres" && autoPg ? "autoPostgres" : name}`,
+                            ),
+                          )}
+                        </button>
                       </li>
                     ),
                   )}
@@ -713,7 +724,7 @@ export function MpaCreateDialog({
                         {t(key("newAgent"))}
                       </Button>
                     )}
-                    {!submitted && step > 0 && (
+                    {step > 0 && (
                       <Button
                         variant="outline"
                         disabled={busy}

@@ -33,6 +33,12 @@ VeADK owns managed YAML parsing, cloud/database orchestration, authorized durabl
 
 ## HTTP contract
 
+CON-9 navigation correction (2026-09-30): step headings are keyboard-accessible
+buttons. Earlier steps and Previous remain available after restoring a submitted
+draft; submitted fields stay locked and retry keeps the same identity. Forward
+navigation validates image references and the PG target. Busy actions disable
+navigation. See [navigation fix](../../prd-spec/bugfixes/mpa-create-navigation/2026-09-30-recover-step-navigation.md).
+
 | Method and path | Response |
 | --- | --- |
 | `GET /web/mpa-creation/config?region=...` | 200 `{configured,region,error?}`; success also returns safe `source`, resource names, `checks:["configuration"]`, `requiresLiveChecks:true` |

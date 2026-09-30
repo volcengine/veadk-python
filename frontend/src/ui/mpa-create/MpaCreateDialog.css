@@ -47,6 +47,28 @@
   color: var(--studio-text-primary);
   font-weight: 600;
 }
+.mpa-create-steps button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.mpa-create-steps button:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+.mpa-create-steps button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
 .mpa-create-steps li span {
   display: inline-grid;
   place-items: center;

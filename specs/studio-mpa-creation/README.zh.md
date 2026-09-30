@@ -33,6 +33,11 @@ VeADK 负责托管 YAML 解析、云服务/数据库编排、有权限约束的�
 
 ## HTTP 契约
 
+CON-9 导航修复（2026-09-30）：步骤标题是支持键盘操作的按钮。
+恢复已提交草稿后，前面的步骤和“上一步”仍可查看；已提交字段保持锁定，
+重试保留原请求身份。向前导航校验镜像和 PG 配置，忙碌操作禁用导航。
+参见[导航修复](../../prd-spec/bugfixes/mpa-create-navigation/2026-09-30-recover-step-navigation.zh.md)。
+
 | 方法与路径 | 响应 |
 | --- | --- |
 | `GET /web/mpa-creation/config?region=...` | 200 `{configured,region,error?}`；成功另含安全 `source`、资源名、`checks:["configuration"]`、`requiresLiveChecks:true` |
