@@ -242,6 +242,7 @@ Either way, a path that came from the *model* is untrusted input: resolve it aga
 | `reasoning_effort` | `"medium"` | Reasoning budget: `minimal`/`low`/`medium`/`high`/`xhigh`. Higher is slower and uses more tokens. |
 | `personality` | `"pragmatic"` | Codex's own reply style: `none`/`friendly`/`pragmatic`. |
 | `model_transport` | `"auto"` | How Codex reaches the model. `direct`: Codex calls a Responses-capable backend itself and uses the agent's tools through a local MCP server the runtime runs for the turn, so Codex drives the tool loop. `shim`: an in-process Responses→Chat shim sits in between and executes the tools, for chat-only backends. `auto` picks `direct` for Volcengine Ark (`*.volces.com`), BytePlus (`*.bytepluses.com`) and `api.openai.com`, `shim` otherwise. |
+| `thread_mode` | `"resume"` | `resume`: each session is bound to one Codex thread whose rollout is saved with the session (in the same database when short-term memory is database-backed) and resumed on the next turn on any instance, so Codex keeps its own full history instead of being handed a replayed transcript. A changed agent instruction starts a new thread seeded from the transcript. `ephemeral`: a fresh thread every invocation. Applies to the `direct` transport only; the `shim` is always `ephemeral`. |
 | `max_tool_iterations` | `32` | Budget of bridged ADK/MCP tool round-trips the shim may run for the whole Codex turn (1–256). Applies to the `shim` transport only. See the behavior change below. |
 | `tool_timeout_seconds` | `120.0` | Per-call timeout for a bridged ADK/MCP tool. `None` disables the timeout. |
 | `reuse_workspace` | `False` | Only meaningful alongside `workspace_root`, and only worth setting for a single tenant — see [Workspace lifetime](#workspace-lifetime) above. Leave both unset and let tools call `current_workspace()`; see [The workspace is the data plane](#the-workspace-is-the-data-plane). |
@@ -269,7 +270,7 @@ The `direct` transport removes `request_user_input` (and `web_search`, multi-age
 ### Codex environment variables
 
 <Callout type="warn">
-The five variables below **override** the Python `CodexRuntimeConfig` rather than acting as defaults for it. A hard-coded `sandbox="workspace_write"` in your code is still overridden by `VEADK_CODEX_SANDBOX=full_access` in the deployment environment. This precedence is the opposite of most settings and matters most where the platform injects environment variables (containers, FaaS).
+The six variables below **override** the Python `CodexRuntimeConfig` rather than acting as defaults for it. A hard-coded `sandbox="workspace_write"` in your code is still overridden by `VEADK_CODEX_SANDBOX=full_access` in the deployment environment. This precedence is the opposite of most settings and matters most where the platform injects environment variables (containers, FaaS).
 </Callout>
 
 | Variable | Overrides | Notes |
@@ -279,6 +280,7 @@ The five variables below **override** the Python `CodexRuntimeConfig` rather tha
 | `VEADK_CODEX_WORKSPACE_ROOT` | `workspace_root` | Absolute path to the workspace. |
 | `VEADK_CODEX_NETWORK_ACCESS` | `network_access` | `1`/`true`/`yes`/`on` enable it; anything else disables it. |
 | `VEADK_CODEX_MODEL_TRANSPORT` | `model_transport` | `auto`/`direct`/`shim`. |
+| `VEADK_CODEX_THREAD_MODE` | `thread_mode` | `resume`/`ephemeral`. |
 
 Four more variables tune the Responses→Chat shim. These are not part of the override rule above — they only tune the shim itself:
 

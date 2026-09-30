@@ -137,7 +137,9 @@ def test_find_rollout_rejects_glob_thread_id(tmp_path: Path) -> None:
         "config.toml",
         f"rollout-x-{TID}.jsonl",
         "sessions/2026/09/30/config.toml",
-        f"sessions/2026/09/30/rollout-x-{uuid.uuid4()}.jsonl",
+        # Another thread's rollout. A fixed id, not uuid4(): parametrize ids
+        # must be identical in every `pytest -n` worker.
+        "sessions/2026/09/30/rollout-x-6f1c2d3e-4a5b-4c6d-8e9f-0a1b2c3d4e5f.jsonl",
         "",
     ],
 )

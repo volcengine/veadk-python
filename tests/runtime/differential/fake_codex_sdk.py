@@ -78,6 +78,48 @@ def openai_codex_available() -> bool:
         return False
 
 
+class CodexError(Exception):
+    """Stub of ``openai_codex.errors.CodexError`` (used when the SDK is absent)."""
+
+
+class JsonRpcError(CodexError):
+    """Stub of ``openai_codex.errors.JsonRpcError``: same ``code``/``message``."""
+
+    def __init__(self, code: int, message: str, data: Any = None) -> None:
+        super().__init__(f"JSON-RPC error {code}: {message}")
+        self.code = code
+        self.message = message
+        self.data = data
+
+
+class CodexRpcError(JsonRpcError):
+    """Stub of ``openai_codex.errors.CodexRpcError``."""
+
+
+class InvalidRequestError(CodexRpcError):
+    """Stub of ``openai_codex.errors.InvalidRequestError`` (JSON-RPC -32600)."""
+
+
+class InternalRpcError(CodexRpcError):
+    """Stub of ``openai_codex.errors.InternalRpcError`` (JSON-RPC -32603)."""
+
+
+def invalid_request_error_class() -> type:
+    """``openai_codex.InvalidRequestError`` if the SDK is real, else the stub's.
+
+    This is what the fake raises for a request real Codex rejects with
+    JSON-RPC ``-32600`` (for example ``thread/resume`` of an unknown thread).
+    """
+    module = sys.modules.get("openai_codex")
+    if module is not None and hasattr(module, "InvalidRequestError"):
+        return module.InvalidRequestError
+    if openai_codex_available():
+        from openai_codex import InvalidRequestError as real  # type: ignore
+
+        return real
+    return InvalidRequestError
+
+
 def install_openai_codex_stub() -> bool:
     """Register a minimal ``openai_codex`` stub when the real SDK is absent.
 
@@ -152,6 +194,11 @@ def install_openai_codex_stub() -> bool:
         ("LocalImageInput", LocalImageInput),
         ("MentionInput", MentionInput),
         ("AsyncCodex", ShimDrivingCodex),
+        ("CodexError", CodexError),
+        ("JsonRpcError", JsonRpcError),
+        ("CodexRpcError", CodexRpcError),
+        ("InvalidRequestError", InvalidRequestError),
+        ("InternalRpcError", InternalRpcError),
     ):
         setattr(module, name, value)
 
@@ -691,6 +738,10 @@ class DirectDrivingCodex:
         #: Every notification payload this client streamed, in order.
         self.notifications: list[Any] = []
         self.threads: list[_DirectThread] = []
+        #: ``thread_start`` kwargs, one dict per call.
+        self.thread_starts: list[dict[str, Any]] = []
+        #: ``thread_resume`` kwargs (plus ``thread_id``), one dict per call.
+        self.thread_resumes: list[dict[str, Any]] = []
         if type(self).instances is not None:
             type(self).instances.append(self)
 
@@ -710,7 +761,45 @@ class DirectDrivingCodex:
         return None
 
     async def thread_start(self, **kwargs: Any) -> "_DirectThread":
+        """Start a thread; a non-ephemeral one persists a rollout file.
+
+        Real Codex defaults to a persisted thread, so ``ephemeral`` omitted or
+        ``False`` both write ``$CODEX_HOME/sessions/.../rollout-*-<id>.jsonl``
+        (only when ``CodexConfig.env`` names a ``CODEX_HOME``: the fake never
+        falls back to ``~/.codex``).
+        """
+        self.thread_starts.append(dict(kwargs))
         thread = _DirectThread(self, kwargs)
+        self.threads.append(thread)
+        return thread
+
+    async def thread_resume(self, thread_id: str, **kwargs: Any) -> "_DirectThread":
+        """Resume ``thread_id`` from its rollout under this client's CODEX_HOME.
+
+        Mirrors real Codex: only the rollout file is needed; the restored
+        history (developer message included) is the prefix of every later
+        model request; a new ``developer_instructions`` is ignored; other
+        kwargs (``model``, ``model_provider``, ``config``, ``approval_mode``,
+        ...) apply from now on. An unknown id raises
+        :func:`invalid_request_error_class` (JSON-RPC ``-32600``).
+        """
+        from veadk.runtime.codex import rollout_io
+
+        self.thread_resumes.append({"thread_id": thread_id, **kwargs})
+        home = self.env.get("CODEX_HOME")
+        path = None
+        try:
+            rollout_io.validate_thread_id(thread_id)
+        except ValueError:
+            pass
+        else:
+            if home:
+                path = rollout_io.find_rollout(home, thread_id)
+        if path is None:
+            raise invalid_request_error_class()(
+                -32600, f"no rollout found for thread id {thread_id}"
+            )
+        thread = _DirectThread.from_rollout(self, thread_id, path, kwargs)
         self.threads.append(thread)
         return thread
 
@@ -721,13 +810,38 @@ class DirectDrivingCodex:
         return call if call is not None else _default_model_call()
 
 
+#: Keys a rollout's ``session_meta`` persists so a resume in a fresh process
+#: can rebuild the thread's settings (real Codex keeps these in the rollout).
+_PERSISTED_START_KEYS = (
+    "model",
+    "model_provider",
+    "base_instructions",
+    "developer_instructions",
+    "approval_mode",
+    "sandbox",
+    "cwd",
+    "personality",
+)
+
+
 class _DirectThread:
-    def __init__(self, client: DirectDrivingCodex, start_kwargs: dict[str, Any]):
+    def __init__(
+        self,
+        client: DirectDrivingCodex,
+        start_kwargs: dict[str, Any],
+        *,
+        thread_id: str | None = None,
+        history: list[dict[str, Any]] | None = None,
+        turn_log: list[dict[str, Any]] | None = None,
+        rollout_path: str | None = None,
+    ):
         import uuid
 
         self.client = client
         self.start_kwargs = start_kwargs
-        self.id = f"thread-{uuid.uuid4().hex[:12]}"
+        # Real thread ids are UUIDs (and must pass rollout_io.validate_thread_id).
+        self.id = thread_id or str(uuid.uuid4())
+        self.ephemeral = bool(start_kwargs.get("ephemeral"))
         config = dict(start_kwargs.get("config") or {})
         self.provider_id = str(start_kwargs.get("model_provider") or "")
         providers = dict(config.get("model_providers") or {})
@@ -745,14 +859,147 @@ class _DirectThread:
             str(name): dict(value or {})
             for name, value in dict(config.get("mcp_servers") or {}).items()
         }
-        #: Thread history carried across turns, as real Codex does.
-        self.history: list[dict[str, Any]] = []
+        #: Thread history carried across turns, as real Codex does: exactly
+        #: the Responses ``input`` items the next model request starts with.
+        self.history: list[dict[str, Any]] = list(history or [])
+        #: ``{"id", "status"}`` per finished turn (restored on resume).
+        self.turn_log: list[dict[str, Any]] = list(turn_log or [])
         self.turns: list[_DirectTurn] = []
+        #: Absolute rollout path; set on resume, created lazily on first write.
+        self.rollout_path: str | None = rollout_path
+        # History items already on disk (a resumed rollout holds them all).
+        self._persisted = len(self.history)
+
+    @classmethod
+    def from_rollout(
+        cls,
+        client: DirectDrivingCodex,
+        thread_id: str,
+        path: str,
+        resume_kwargs: dict[str, Any],
+    ) -> "_DirectThread":
+        meta: dict[str, Any] = {}
+        history: list[dict[str, Any]] = []
+        turn_log: list[dict[str, Any]] = []
+        with open(path, encoding="utf-8") as handle:
+            for line in handle:
+                if not line.strip():
+                    continue
+                record = json.loads(line)
+                kind, payload = record.get("type"), record.get("payload")
+                if kind == "session_meta":
+                    meta = dict(payload or {})
+                elif kind == "response_item":
+                    history.append(payload)
+                elif kind == "turn_completed":
+                    turn_log.append(dict(payload or {}))
+        if meta.get("id") != thread_id:
+            raise invalid_request_error_class()(
+                -32600, f"rollout for {thread_id} has mismatched session id"
+            )
+        effective = {k: meta[k] for k in _PERSISTED_START_KEYS if k in meta}
+        for key, value in resume_kwargs.items():
+            # The original developer message stays in history; real Codex
+            # does not swap it for the one passed on resume.
+            if key in ("developer_instructions", "include_turns") or value is None:
+                continue
+            effective[key] = value
+        effective["ephemeral"] = False
+        return cls(
+            client,
+            effective,
+            thread_id=thread_id,
+            history=history,
+            turn_log=turn_log,
+            rollout_path=path,
+        )
 
     async def turn(self, input_items: Any, **kwargs: Any) -> "_DirectTurn":
         turn = _DirectTurn(self, input_items, kwargs)
         self.turns.append(turn)
         return turn
+
+    async def read(self, *, include_turns: bool = False) -> Any:
+        """A ``ThreadReadResponse``-shaped ``SimpleNamespace``.
+
+        Like real Codex, ``include_turns=True`` on an ephemeral thread is an
+        invalid request.
+        """
+        from types import SimpleNamespace
+
+        if include_turns and self.ephemeral:
+            raise invalid_request_error_class()(
+                -32600, "ephemeral threads do not support includeTurns"
+            )
+        turns = (
+            [SimpleNamespace(items=[], **t) for t in self.turn_log]
+            if include_turns
+            else []
+        )
+        return SimpleNamespace(
+            thread=SimpleNamespace(id=self.id, ephemeral=self.ephemeral, turns=turns)
+        )
+
+    # -------------------------------------------------------------- rollout
+
+    def _rollout_writable(self) -> bool:
+        return not self.ephemeral and bool(self.client.env.get("CODEX_HOME"))
+
+    def _open_rollout(self) -> Any:
+        """Append handle on the rollout, creating it (with meta) on first use."""
+        from datetime import datetime
+
+        if self.rollout_path is None:
+            now = datetime.now()
+            directory = os.path.join(
+                self.client.env["CODEX_HOME"],
+                "sessions",
+                now.strftime("%Y"),
+                now.strftime("%m"),
+                now.strftime("%d"),
+            )
+            os.makedirs(directory, exist_ok=True)
+            self.rollout_path = os.path.join(
+                directory,
+                f"rollout-{now.strftime('%Y-%m-%dT%H-%M-%S')}-{self.id}.jsonl",
+            )
+            meta = {
+                "id": self.id,
+                "timestamp": now.isoformat(),
+                **{
+                    k: _enum_value(self.start_kwargs[k])
+                    for k in _PERSISTED_START_KEYS
+                    if self.start_kwargs.get(k) is not None
+                },
+            }
+            with open(self.rollout_path, "a", encoding="utf-8") as handle:
+                handle.write(json.dumps({"type": "session_meta", "payload": meta}))
+                handle.write("\n")
+        return open(self.rollout_path, "a", encoding="utf-8")
+
+    def persist(self, turn_status: dict[str, Any] | None = None) -> None:
+        """Append new history items (and a turn marker) to the rollout.
+
+        Called after the user message is recorded, after every model response
+        and after every batch of tool outputs, so the file holds the whole
+        thread at each point -- as real Codex's rollout recorder does.
+        """
+        if not self._rollout_writable():
+            if turn_status is not None:
+                self.turn_log.append(turn_status)
+            return
+        with self._open_rollout() as handle:
+            for item in self.history[self._persisted :]:
+                handle.write(json.dumps({"type": "response_item", "payload": item}))
+                handle.write("\n")
+            if turn_status is not None:
+                handle.write(
+                    json.dumps({"type": "turn_completed", "payload": turn_status})
+                )
+                handle.write("\n")
+        self._persisted = len(self.history)
+        if turn_status is not None:
+            self.turn_log.append(turn_status)
 
 
 class _McpServer:
@@ -867,6 +1114,7 @@ class _DirectTurn:
             except asyncio.CancelledError:
                 if not self._interrupted:
                     raise
+                self.thread.persist({"id": self.id, "status": "interrupted"})
                 yield self._turn_note("interrupted", None)
         finally:
             if not self._worker.done():
@@ -887,6 +1135,9 @@ class _DirectTurn:
             async with AsyncExitStack() as stack:
                 servers = await self._connect(stack)
                 error = await self._loop(servers, emit)
+            self.thread.persist(
+                {"id": self.id, "status": "completed" if error is None else "failed"}
+            )
             if error is None:
                 emit(self._turn_note("completed", None))
             else:
@@ -994,6 +1245,7 @@ class _DirectTurn:
         emit(self._note("ItemStartedNotification", {"item": user_item}))
         emit(self._note("ItemCompletedNotification", {"item": user_item}))
         self._seed_history()
+        self.thread.persist()
 
         provider = self.thread.provider
         env_key = provider.get("env_key")
@@ -1046,9 +1298,11 @@ class _DirectTurn:
                     self.thread.history.append(item)
                 for name, payload in _item_payloads(self.id, item):
                     emit(self._note(name, payload))
+            self.thread.persist()
 
             outputs = await self._execute(calls, servers, emit)
             self.thread.history.extend(outputs)
+            self.thread.persist()
 
             last = _usage_block(_normalize_usage(response.get("usage") or {}))
             for key, value in last.items():

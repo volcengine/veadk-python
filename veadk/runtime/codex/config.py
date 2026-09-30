@@ -110,6 +110,18 @@ class CodexRuntimeConfig(BaseModel):
             "api.openai.com) and 'shim' for everything else."
         ),
     )
+    thread_mode: Literal["resume", "ephemeral"] = Field(
+        default="resume",
+        description=(
+            "'resume' keeps one Codex thread per session: the thread's rollout "
+            "is stored alongside the session (in its database when the "
+            "short-term memory is database-backed) and resumed on the next "
+            "turn, so Codex keeps its own full history instead of being handed "
+            "a replayed transcript. 'ephemeral' starts a fresh thread every "
+            "invocation. Only the direct transport resumes; the shim is always "
+            "ephemeral, because the tools it runs never reach Codex's history."
+        ),
+    )
 
     @field_validator("workspace_root")
     @classmethod
@@ -174,6 +186,8 @@ class CodexRuntimeConfig(BaseModel):
             updates["workspace_root"] = value
         if value := os.getenv("VEADK_CODEX_MODEL_TRANSPORT"):
             updates["model_transport"] = value.strip().lower()
+        if value := os.getenv("VEADK_CODEX_THREAD_MODE"):
+            updates["thread_mode"] = value.strip().lower()
         if value := os.getenv("VEADK_CODEX_NETWORK_ACCESS"):
             updates["network_access"] = value.strip().lower() in {
                 "1",

@@ -87,7 +87,7 @@ def build_prompt(ctx: "InvocationContext") -> str:
     ).strip()
 
     if not history:
-        return current_text or "The user supplied attachments without text."
+        return current_text or NO_TEXT_PROMPT
 
     history_json = json.dumps(history, ensure_ascii=False, separators=(",", ":"))
     current_json = json.dumps(current_record, ensure_ascii=False, separators=(",", ":"))
@@ -100,13 +100,24 @@ def build_prompt(ctx: "InvocationContext") -> str:
     )
 
 
-def build_prompt_from_llm_request(llm_request: "LlmRequest") -> str:
-    """Render callback-mutated LlmRequest contents into Codex turn input."""
+#: Turn input used when the user's message has no text (attachments only, or a
+#: bare confirmation/credential response).
+NO_TEXT_PROMPT = "The user supplied attachments without text."
+
+
+def build_prompt_from_llm_request(
+    llm_request: "LlmRequest", *, include_history: bool = True
+) -> str:
+    """Render callback-mutated LlmRequest contents into Codex turn input.
+
+    ``include_history=False`` renders the current message only, for a resumed
+    Codex thread that already holds the earlier turns itself.
+    """
 
     records = [_content_event_record(content) for content in llm_request.contents]
     records = [record for record in records if record["parts"]]
     if not records:
-        return "The user supplied attachments without text."
+        return NO_TEXT_PROMPT
 
     current_record = records[-1]["parts"]
     current_text = "\n".join(
@@ -114,9 +125,9 @@ def build_prompt_from_llm_request(llm_request: "LlmRequest") -> str:
         for part in current_record
         if part.get("type") == "text" and part.get("text")
     ).strip()
-    history = records[:-1]
+    history = records[:-1] if include_history else []
     if not history:
-        return current_text or "The user supplied attachments without text."
+        return current_text or NO_TEXT_PROMPT
 
     history_json = json.dumps(history, ensure_ascii=False, separators=(",", ":"))
     current_json = json.dumps(current_record, ensure_ascii=False, separators=(",", ":"))

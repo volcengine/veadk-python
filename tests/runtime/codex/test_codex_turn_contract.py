@@ -29,6 +29,7 @@ paired positive for the compaction-isolation tests: whatever marks a request as
 from __future__ import annotations
 
 import asyncio
+import json
 import contextvars
 import shutil
 import sys
@@ -1103,3 +1104,190 @@ async def test_direct_transport_stops_the_turn_when_a_tool_needs_confirmation(
     assert "Deleted everything, done." not in answers, (
         "the model carried on past a tool that was waiting for confirmation"
     )
+
+
+# ------------------------------------------------------ direct transport: resume
+
+
+async def _direct_session(
+    monkeypatch, plan, *, codex_class=None, instruction="Answer."
+):
+    """A Runner on one session, on the direct transport, for multi-turn tests.
+
+    Returns ``(send, backend, codex_class, set_instruction)``: ``send(text)``
+    runs one invocation and returns its error (or None).
+    """
+    from veadk import Agent
+    from veadk.runtime import get_runtime
+
+    fake_codex_sdk.install_openai_codex_stub()
+    get_runtime.cache_clear()
+    from veadk.runtime.codex import runtime as runtime_module
+
+    backend = ScriptedBackend(plan, arm="codex")
+    codex_class = codex_class or fake_codex_sdk.DirectDrivingCodex.configured()
+    monkeypatch.setattr(
+        "veadk.runtime.codex.proxy.litellm.aresponses", backend.as_aresponses()
+    )
+    monkeypatch.setattr(runtime_module, "AsyncCodex", codex_class)
+
+    agent = Agent(
+        name="resume_agent",
+        description="A codex resume agent.",
+        instruction=instruction,
+        model_name="scripted-model",
+        model_api_base="https://backend.invalid/v1",
+        model_api_key="backend-key",
+        runtime="codex",
+        **_DIRECT,
+    )
+    session_service = InMemorySessionService()
+    session_id = f"session-{uuid.uuid4().hex[:8]}"
+    await session_service.create_session(
+        app_name="contract", user_id="user", session_id=session_id
+    )
+    runner = Runner(app_name="contract", agent=agent, session_service=session_service)
+
+    async def send(text: str) -> BaseException | None:
+        try:
+            async for _ in runner.run_async(
+                user_id="user",
+                session_id=session_id,
+                new_message=types.Content(role="user", parts=[types.Part(text=text)]),
+            ):
+                pass
+        except BaseException as e:  # noqa: BLE001 - the error is the observable
+            return e
+        return None
+
+    def set_instruction(text: str) -> None:
+        agent.instruction = text
+
+    return send, backend, codex_class, set_instruction
+
+
+def _starts_and_resumes(codex_class) -> list[tuple[int, int]]:
+    """``(thread_starts, thread_resumes)`` per Codex process, in order."""
+    return [
+        (len(client.thread_starts), len(client.thread_resumes))
+        for client in codex_class.instances
+    ]
+
+
+@pytest.mark.asyncio
+async def test_changed_instruction_starts_a_new_thread_with_the_transcript(
+    monkeypatch,
+) -> None:
+    """Codex keeps the developer instructions a thread started with.
+
+    Passed again on resume they never reach the model, so an agent whose
+    instruction changed between turns would keep obeying the old one. A new
+    thread is started instead, seeded from the session transcript so the
+    conversation is not lost.
+    """
+    from veadk.runtime.codex.mcp_bridge import shutdown_bridge
+
+    send, backend, codex_class, set_instruction = await _direct_session(
+        monkeypatch,
+        (Round(text="first answer", usage=(1, 1)), Round(text="second", usage=(1, 1))),
+        instruction="RULE-A: be brief.",
+    )
+    try:
+        assert await send("remember the word PAPAYA") is None
+        set_instruction("RULE-B: be verbose.")
+        assert await send("which word?") is None
+    finally:
+        await shutdown_bridge()
+
+    assert _starts_and_resumes(codex_class) == [(1, 0), (1, 0)]
+    second = json.dumps(backend.raw_requests[-1], default=str)
+    assert "RULE-B" in second and "RULE-A" not in second
+    assert "PAPAYA" in second, "the new thread lost the conversation so far"
+
+
+@pytest.mark.asyncio
+async def test_failed_resume_falls_back_to_a_new_thread_with_the_transcript(
+    monkeypatch,
+) -> None:
+    """A thread that cannot be resumed must not fail the user's turn."""
+    from veadk.runtime.codex.mcp_bridge import shutdown_bridge
+
+    class _UnresumableCodex(fake_codex_sdk.DirectDrivingCodex):
+        async def thread_resume(self, thread_id, **kwargs):
+            self.thread_resumes.append(dict(kwargs))
+            raise fake_codex_sdk.invalid_request_error_class()(
+                -32600, "thread not found"
+            )
+
+    codex_class = _UnresumableCodex.configured()
+    send, backend, _, _ = await _direct_session(
+        monkeypatch,
+        (Round(text="first answer", usage=(1, 1)), Round(text="second", usage=(1, 1))),
+        codex_class=codex_class,
+    )
+    try:
+        assert await send("remember the word PAPAYA") is None
+        assert await send("which word?") is None
+    finally:
+        await shutdown_bridge()
+
+    # The second process tried to resume, failed, and started a new thread.
+    assert _starts_and_resumes(codex_class) == [(1, 0), (1, 1)]
+    assert "PAPAYA" in json.dumps(backend.raw_requests[-1], default=str)
+
+
+@pytest.mark.asyncio
+async def test_concurrent_invocations_of_one_session_take_turns(monkeypatch) -> None:
+    """Two invocations of one session must not run one thread at once.
+
+    Both would resume the same rollout and each write back its own copy; the
+    later save would be rejected and that turn silently lost from the thread.
+    The session lock makes the second wait and then resume the first's work.
+    """
+    from veadk.runtime.codex.mcp_bridge import shutdown_bridge
+
+    send, backend, codex_class, _ = await _direct_session(
+        monkeypatch,
+        (
+            Round(text="one", usage=(1, 1)),
+            Round(text="two", usage=(1, 1)),
+            Round(text="three", usage=(1, 1)),
+        ),
+    )
+    # Hold the second invocation's model call until the test has checked that
+    # the third one did not get to the model alongside it.
+    scripted = backend.as_aresponses()
+    in_model = asyncio.Event()
+    release = asyncio.Event()
+    # Counted on entry: the scripted backend only logs a call once it is let
+    # through, so its own log cannot show a call waiting at the gate.
+    entered = 0
+
+    async def gated(**kwargs: Any) -> Any:
+        nonlocal entered
+        entered += 1
+        if entered == 2:  # the first call of "left"
+            in_model.set()
+            await asyncio.wait_for(release.wait(), timeout=10)
+        return await scripted(**kwargs)
+
+    monkeypatch.setattr("veadk.runtime.codex.proxy.litellm.aresponses", gated)
+    try:
+        assert await send("start") is None
+        left = asyncio.create_task(send("left"))
+        await asyncio.wait_for(in_model.wait(), timeout=10)
+        right = asyncio.create_task(send("right"))
+        await asyncio.sleep(0.5)
+        overlapped = entered > 2
+        release.set()
+        errors = await asyncio.gather(left, right)
+    finally:
+        release.set()
+        await shutdown_bridge()
+
+    assert not overlapped, "the second invocation reached the model mid-turn"
+    assert errors == [None, None]
+    assert _starts_and_resumes(codex_class) == [(1, 0), (0, 1), (0, 1)]
+    last = json.dumps(backend.raw_requests[-1], default=str)
+    # The later invocation resumed a thread that already held the earlier one.
+    assert "left" in last and "right" in last
