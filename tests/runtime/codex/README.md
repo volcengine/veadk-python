@@ -49,15 +49,26 @@ replaced by `ShimDrivingCodex`, which POSTs a real `stream: True`
 (in-process, no socket, no Codex binary, xdist-safe) and reads its endpoint out
 of the `config.toml` that `_prepare_codex_home` generated.
 
+For the direct mode (Codex calls the provider itself and reaches ADK tools
+through VeADK's MCP bridge) the replacement is `DirectDrivingCodex` instead:
+it reads `model_providers` / `mcp_servers` from `thread_start(config=...)` and
+credentials from `CodexConfig.env`, calls the model through the (patched)
+`litellm.aresponses` with no shim in between, and speaks real streamable-HTTP
+MCP to each configured server. Select it with
+`monkeypatch.setattr(runtime_module, "AsyncCodex", DirectDrivingCodex)` (or a
+`DirectDrivingCodex.configured(...)` subclass).
+
 ## No network, no ports, no binary
 
 Apart from the two opt-in files above (`test_codex_runtime_smoke.py`,
 `test_codex_real_model_probe.py`), nothing in this directory or in
 `../differential/` binds a port, spawns the Codex CLI, or reaches the network —
-with one exception:
+with two exceptions:
 `test_codex_runtime.py::test_tool_executor_supports_stdio_mcp_toolset` spawns a
-real Python subprocess from `examples/`. It is bounded by an explicit timeout so
-it cannot hang a `pytest -n 16` run.
+real Python subprocess from `examples/`, and
+`../differential/test_fake_direct_codex.py` binds a FastMCP server to
+`127.0.0.1:0` (loopback, ephemeral port, so still xdist-safe). Both are bounded
+by explicit timeouts so they cannot hang a `pytest -n 16` run.
 
 `test_codex_shim_rounds.py` constructs `ResponsesShim` directly rather than
 calling `get_shim`, so the process-global `_SHIMS` cache (and its uvicorn
