@@ -38,6 +38,12 @@ CON-9 导航修复（2026-09-30）：步骤标题是支持键盘操作的按钮�
 重试保留原请求身份。向前导航校验镜像和 PG 配置，忙碌操作禁用导航。
 参见[导航修复](../../prd-spec/bugfixes/mpa-create-navigation/2026-09-30-recover-step-navigation.zh.md)。
 
+CON-9 显式新请求修订（2026-09-30，已批准）：任何已提交草稿均提供新建入口，
+包括运行中、结果未知或查询不可用的任务。显式以新身份和可编辑默认配置替换
+浏览器恢复草稿，不取消或修改旧云端任务。UI 操作未结束及配置加载时禁用；
+服务端提交限制不变。本修订替代上文仅终态可新建的限制。
+参见[设计](../../prd-spec/bugfixes/mpa-create-navigation/2026-09-30-explicit-new-request.zh.md)。
+
 | 方法与路径 | 响应 |
 | --- | --- |
 | `GET /web/mpa-creation/config?region=...` | 200 `{configured,region,error?}`；成功另含安全 `source`、资源名、`checks:["configuration"]`、`requiresLiveChecks:true` |

@@ -1644,6 +1644,7 @@
       "submit": "Start creation",
       "retry": "Retry creation",
       "newAgent": "Create another agent",
+      "newAgentDescription": "Create another agent opens an editable new request and replaces this recovery draft. It does not cancel the old task. If the old task is still running, wait for it to finish before submitting.",
       "close": "Close",
       "cancel": "Cancel creation",
       "confirmCancel": "Confirm cancellation",

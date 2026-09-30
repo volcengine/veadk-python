@@ -7,7 +7,12 @@ server that `veadk frontend` launches — no separate backend.
 
 The MPA creation wizard supports clicking step headings and returning to earlier
 settings after restoring a submitted draft. Submitted settings remain read-only;
-retry retains the original identity. Failed/cancelled tasks offer New Agent.
+retry retains the original identity. Any submitted draft offers New Agent to
+open a fresh, editable request. It replaces the browser recovery draft without
+cancelling the old task; active-task admission limits still apply on submission.
+
+恢复已提交草稿时配置保持只读，重试沿用原身份。“新建另一个智能体”会生成新请求，
+开放编辑并替换浏览器恢复草稿，不取消旧任务；提交仍受服务端活动任务限制。
 
 The release workflow sends one Feishu card after both cloud providers finish
 publishing. A separate VeFaaS Webhook discovers the app bot’s group memberships

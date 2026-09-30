@@ -302,12 +302,6 @@ export function MpaCreateDialog({
     }
   }
   function startAnotherAgent() {
-    if (
-      busy ||
-      loading ||
-      (task?.state !== "failed" && task?.state !== "cancelled")
-    )
-      return;
     const nextInput: MpaCreationInput = {
       ...freshInput(region),
       runtimeImage: config?.runtimeImage ?? "",
@@ -689,6 +683,7 @@ export function MpaCreateDialog({
                 )}
                 {error && <p role="alert">{error}</p>}
                 {running && <p>{t(key("background"))}</p>}
+                {submitted && <p>{t(key("newAgentDescription"))}</p>}
                 {confirmCancel ? (
                   <section
                     role="alertdialog"
@@ -714,8 +709,7 @@ export function MpaCreateDialog({
                     <Button variant="outline" disabled={busy} onClick={onClose}>
                       {t(key("close"))}
                     </Button>
-                    {(task?.state === "failed" ||
-                      task?.state === "cancelled") && (
+                    {submitted && (
                       <Button
                         variant="outline"
                         disabled={busy || loading}

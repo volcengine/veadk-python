@@ -39,6 +39,13 @@ draft; submitted fields stay locked and retry keeps the same identity. Forward
 navigation validates image references and the PG target. Busy actions disable
 navigation. See [navigation fix](../../prd-spec/bugfixes/mpa-create-navigation/2026-09-30-recover-step-navigation.md).
 
+CON-9 explicit-new-request amendment (2026-09-30, approved): any submitted draft
+offers New Agent, including running/uncertain/unavailable tasks. This explicitly
+replaces the browser recovery draft with fresh identity and editable defaults,
+without cancelling or modifying the old cloud task. Pending UI actions and config
+loads disable it; server admission limits remain unchanged. This supersedes the
+terminal-only restriction above. See [design](../../prd-spec/bugfixes/mpa-create-navigation/2026-09-30-explicit-new-request.md).
+
 | Method and path | Response |
 | --- | --- |
 | `GET /web/mpa-creation/config?region=...` | 200 `{configured,region,error?}`; success also returns safe `source`, resource names, `checks:["configuration"]`, `requiresLiveChecks:true` |
