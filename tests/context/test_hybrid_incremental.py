@@ -116,14 +116,47 @@ async def test_external_cancel_retains_committed_batch_and_restart_only_embeds_m
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("budget", [0.1, 0.3])
 async def test_internal_timeout_retains_completed_batch_but_search_stays_lexical(
-    tmp_path,
+    tmp_path, monkeypatch, budget
 ):
+    from veadk.context import _hybrid_index
+
+    clock = [100.0]
+    timeouts = []
+    embedder = StallAfterCompletedBatch()
+
+    async def expire_second_batch(awaitable, timeout):
+        timeouts.append(timeout)
+        if len(timeouts) == 1:
+            result = await asyncio.wait_for(awaitable, timeout=30)
+            clock[0] += budget * 0.4
+            return result
+        task = asyncio.create_task(awaitable)
+        try:
+            await asyncio.wait_for(embedder.waiting.wait(), timeout=30)
+            clock[0] += timeout
+            return await asyncio.wait_for(task, timeout=0)
+        finally:
+            if not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+
+    monkeypatch.setattr(
+        _hybrid_index, "time", SimpleNamespace(monotonic=lambda: clock[0])
+    )
     store = Store(tmp_path / "index.sqlite3")
     try:
         store.put(SCOPE, "source", source_text())
-        embedder = StallAfterCompletedBatch()
-        status = await prepare(store, SCOPE, embedder, timeout=0.1)
+        with monkeypatch.context() as patch:
+            patch.setattr(
+                _hybrid_index,
+                "asyncio",
+                SimpleNamespace(**{**vars(asyncio), "wait_for": expire_second_batch}),
+            )
+            status = await prepare(store, SCOPE, embedder, timeout=budget)
+        assert timeouts == [pytest.approx(budget), pytest.approx(budget * 0.6)]
+        assert status["seconds"] == pytest.approx(budget)
         assert status["degraded"] and status["indexed"] == 16
         assert len(saved(store)) == 16 and embedder.cancelled
         query = Embedding()
@@ -267,17 +300,60 @@ async def test_source_change_during_embedding_cannot_commit_stale_vectors(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("budget", [0.2, 0.5])
 async def test_sdk_history_timeout_can_resume_index_without_changing_original_session(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, budget
 ):
+    from veadk.context import hybrid_retriever
+
     path = tmp_path / "derived.sqlite3"
     contents = [content("user", source_text())]
-    retriever = HybridContextRetriever(path, StallAfterCompletedBatch())
+    embedder = StallAfterCompletedBatch()
+    retriever = HybridContextRetriever(path, embedder)
     scope = scope_for(contents, retriever)
     original = scope.session.model_copy(deep=True)
-    monkeypatch.setattr(retrieval, "RETRIEVAL_TIMEOUT", 0.2)
+    clock = [100.0]
+    outer_timeouts, inner_timeouts = [], []
+
+    async def outer_watchdog(awaitable, *, timeout):
+        outer_timeouts.append(timeout)
+        return await asyncio.wait_for(awaitable, timeout=30)
+
+    async def expire_after_commit(awaitable, *, timeout):
+        inner_timeouts.append(timeout)
+        task = asyncio.create_task(awaitable)
+        try:
+            await asyncio.wait_for(embedder.waiting.wait(), timeout=30)
+            clock[0] += timeout
+            return await asyncio.wait_for(task, timeout=0)
+        finally:
+            if not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+
     try:
-        assert await select_history(scope, contents, "automobile") == []
+        # Assert the real SDK budget and its cancellation reserve explicitly.
+        # Host scheduling must not decide whether the first batch was committed.
+        with monkeypatch.context() as patch:
+            patch.setattr(retrieval, "RETRIEVAL_TIMEOUT", budget)
+            for module, wait_for in (
+                (retrieval, outer_watchdog),
+                (hybrid_retriever, expire_after_commit),
+            ):
+                patch.setattr(
+                    module, "time", SimpleNamespace(monotonic=lambda: clock[0])
+                )
+                patch.setattr(
+                    module,
+                    "asyncio",
+                    SimpleNamespace(**{**vars(asyncio), "wait_for": wait_for}),
+                )
+            assert await select_history(scope, contents, "automobile") == []
+        assert outer_timeouts == [pytest.approx(budget)]
+        assert inner_timeouts == [pytest.approx(budget * 0.8)]
+        assert embedder.cancelled
+        assert ["automobile"] not in embedder.requests
+        assert retriever.last_status == "timeout_bm25_fallback"
         assert scope.session == original
         assert (
             retriever._store.db.execute("SELECT COUNT(*) FROM vectors").fetchone()[0]
@@ -287,7 +363,9 @@ async def test_sdk_history_timeout_can_resume_index_without_changing_original_se
         await retriever.close()
     resumed = Embedding()
     retriever = HybridContextRetriever(path, resumed)
-    # A new invocation has a fresh query cache, while the durable index survives.
+    # Recovery tests durable completeness with its own watchdog, not whether
+    # the host can re-open SQLite and finish the index within the expired budget.
+    monkeypatch.setattr(retrieval, "RETRIEVAL_TIMEOUT", 30.0)
     scope = scope_for(contents, retriever)
     try:
         selected = await select_history(scope, contents, "automobile")
@@ -295,10 +373,14 @@ async def test_sdk_history_timeout_can_resume_index_without_changing_original_se
         assert scope.session == original
         for message, part, start, end in selected:
             assert 0 <= start < end <= len(contents[message].parts[part].text)
-        chunks = retriever._store.db.execute("SELECT COUNT(*) FROM chunks").fetchone()[
-            0
+        index_scope = Scope("history", "u", "s", "agent", "")
+        chunks = retriever._store.chunks(index_scope)
+        # Only missing source chunks and one query are embedded after restart.
+        assert resumed.requests[-1] == ["automobile"]
+        assert [text for call in resumed.requests[:-1] for text in call] == [
+            chunk.embedding_text for chunk in chunks[16:]
         ]
-        assert sum(map(len, resumed.requests)) == chunks - 16 + 1
+        assert len(saved(retriever._store, index_scope)) == len(chunks)
     finally:
         await retriever.close()
 

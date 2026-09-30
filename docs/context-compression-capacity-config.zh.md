@@ -80,7 +80,7 @@ agent = Agent(name="assistant")
 | 验证项 | 结果 |
 | --- | --- |
 | 配置与预算定向回归 | 153 项通过 |
-| 完整强制门禁 | 1,293 passed、5 skipped、0 failures/errors；Python 3.12 / google-adk 2.2.0 |
+| 完整强制门禁 | 两组各 1,295 passed、5 skipped、0 failures/errors；Python 3.10 / ADK 1.34.0、Python 3.12 / ADK 2.2.0 |
 | 新增配置回归 | 覆盖类型/范围/重复名称、缺失与损坏文件、工作目录独立及错误信息；已纳入 `tests/context/` 强制入口 |
 | 实际包构建 | wheel 和 sdist 都包含与源码字节一致的 JSON |
 | 安装后验证 | 从实际安装的 wheel 读取全部 25 条配置，与迁移前一致；不受工作目录同名文件影响，普通 Agent 创建通过 |
