@@ -136,6 +136,69 @@ def test_env_override_rejects_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
         CodexRuntimeConfig.from_agent(SimpleNamespace())
 
 
+# ----------------------------------------------- thread mode and turn bounds
+
+
+def test_thread_mode_defaults_to_resume_and_rejects_unknown() -> None:
+    """``thread_mode`` is a closed set; a typo must fail at config time.
+
+    Accepting an unknown value would leave the runtime's
+    ``thread_mode == "resume"`` check false, silently turning a misspelt
+    ``"resume"`` into ephemeral threads that forget every earlier turn.
+    """
+    assert CodexRuntimeConfig().thread_mode == "resume"
+    assert CodexRuntimeConfig(thread_mode="ephemeral").thread_mode == "ephemeral"
+    with pytest.raises(ValidationError):
+        CodexRuntimeConfig(thread_mode="persistent")
+
+
+@pytest.mark.parametrize(
+    ("env_value", "expected"),
+    [("ephemeral", "ephemeral"), (" RESUME ", "resume"), ("Ephemeral\n", "ephemeral")],
+)
+def test_thread_mode_env_override(
+    monkeypatch: pytest.MonkeyPatch, env_value: str, expected: str
+) -> None:
+    """``VEADK_CODEX_THREAD_MODE`` overrides the agent, case/space-insensitively.
+
+    It is the deployment-level switch (e.g. to fall back to ephemeral threads
+    without a code change), so it must win over the agent's own setting.
+    """
+    monkeypatch.setenv("VEADK_CODEX_THREAD_MODE", env_value)
+    other = "resume" if expected == "ephemeral" else "ephemeral"
+    agent = SimpleNamespace(codex_runtime_config={"thread_mode": other})
+    assert CodexRuntimeConfig.from_agent(agent).thread_mode == expected
+
+
+def test_thread_mode_env_absent_keeps_agent_setting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("VEADK_CODEX_THREAD_MODE", raising=False)
+    agent = SimpleNamespace(codex_runtime_config={"thread_mode": "ephemeral"})
+    assert CodexRuntimeConfig.from_agent(agent).thread_mode == "ephemeral"
+
+
+def test_thread_mode_env_rejects_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("VEADK_CODEX_THREAD_MODE", "forever")
+    with pytest.raises(ValidationError):
+        CodexRuntimeConfig.from_agent(SimpleNamespace())
+
+
+@pytest.mark.parametrize("field", ["turn_timeout_seconds", "auto_compact_token_limit"])
+@pytest.mark.parametrize("value", [0, -1])
+def test_turn_bounds_reject_non_positive(field: str, value: int) -> None:
+    """Zero is not "no bound"; ``None`` is.
+
+    A zero turn timeout would fail every turn the moment it starts, and a zero
+    compaction limit would make Codex compact on every turn. Both read
+    like "off" to a user, so they are rejected rather than applied.
+    """
+    with pytest.raises(ValidationError):
+        CodexRuntimeConfig(**{field: value})
+    assert getattr(CodexRuntimeConfig(**{field: None}), field) is None
+    assert getattr(CodexRuntimeConfig(**{field: 1}), field) == 1
+
+
 # ------------------------------------------------------------------- routes
 
 

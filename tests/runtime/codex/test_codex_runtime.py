@@ -1207,3 +1207,40 @@ def test_default_ark_config_does_not_force_the_shim() -> None:
 
     assert _model_extra_body(default) == {}
     assert _model_extra_body(custom) == {"thinking": {"type": "disabled"}}
+
+
+@pytest.mark.asyncio
+async def test_corrupt_thread_record_is_discarded_so_the_next_save_succeeds(
+    tmp_path: Path,
+) -> None:
+    """A record that fails its integrity check must not pin the session.
+
+    A turn that cannot load its thread starts a new one and saves it with
+    ``expected_version=None`` ("must not exist yet"). If the corrupt record
+    were left in the store, that save -- and every later one -- would conflict,
+    so the session would silently run on throwaway threads forever. Loading
+    therefore deletes the record and reports "no thread".
+    """
+    from veadk.runtime.codex.rollout_io import Rollout
+    from veadk.runtime.codex.runtime import _load_thread
+    from veadk.runtime.codex.thread_store import LocalDirThreadStore
+    from veadk.runtime.codex.thread_store import ThreadKey
+    from veadk.runtime.codex.thread_store import ThreadStoreCorrupt
+
+    tid = "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b"
+    relpath = f"sessions/2026/09/30/rollout-2026-09-30T10-00-00-{tid}.jsonl"
+    rollout = Rollout(thread_id=tid, relpath=relpath, data=b"turn1\n")
+    key = ThreadKey(app_name="app", user_id="u1", session_id="s1", agent_name="a")
+    store = LocalDirThreadStore(tmp_path / "threads")
+    await store.save(key, tid, rollout, "h", expected_version=None)
+    path, _ = store._paths(key)
+    header, _, _payload = path.read_bytes().partition(b"\n")
+    path.write_bytes(header + b"\nnot gzip")
+    with pytest.raises(ThreadStoreCorrupt):
+        await store.load(key)
+
+    ctx = SimpleNamespace(invocation_id="inv-corrupt")
+    assert await _load_thread(store, key, ctx) is None
+
+    assert await store.load(key) is None, "the corrupt record was left in place"
+    assert await store.save(key, tid, rollout, "h", expected_version=None) == 1

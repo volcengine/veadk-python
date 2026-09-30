@@ -48,6 +48,7 @@ from veadk.runtime.codex.thread_store import (
     ThreadKey,
     ThreadRecord,
     ThreadStoreConflict,
+    ThreadStoreCorrupt,
     instruction_hash,
     select_thread_store,
 )
@@ -362,6 +363,59 @@ async def test_store_rejects_mismatched_rollout(kind: str, tmp_path: Path) -> No
                 expected_version=None,
             )
         assert await store.load(KEY) is None
+
+
+async def _tamper(store: Any, kind: str, how: str) -> None:
+    """Damage the stored record for ``KEY`` the way bad storage would.
+
+    ``how="blob"`` replaces the compressed rollout with bytes that are not
+    gzip; ``how="sha"`` keeps a decodable rollout but records a checksum that
+    does not match it (a torn write, or the payload swapped under the header).
+    """
+    bad_sha = "0" * 64
+    if kind == "localdir":
+        path, _ = store._paths(KEY)
+        header_line, _, payload = path.read_bytes().partition(b"\n")
+        header = json.loads(header_line)
+        if how == "blob":
+            payload = b"definitely not gzip"
+        else:
+            header["rollout_sha256"] = bad_sha
+        path.write_bytes(json.dumps(header).encode("utf-8") + b"\n" + payload)
+        return
+    from sqlalchemy import update
+
+    table = store._table
+    if how == "blob":
+        values: dict[str, Any] = {"rollout_gz": b"definitely not gzip"}
+    else:
+        values = {"rollout_sha256": bad_sha}
+    async with store.engine.begin() as conn:
+        await conn.execute(update(table).where(store._where(KEY)).values(**values))
+
+
+# `memory` is deliberately absent: `InMemoryThreadStore` keeps the
+# `ThreadRecord` object itself, never a serialized blob, so there is nothing
+# on its path that can be damaged and nothing for it to check.
+@pytest.mark.asyncio
+@pytest.mark.parametrize("how", ["blob", "sha"])
+@pytest.mark.parametrize("kind", ["localdir", "database"])
+async def test_store_load_rejects_corrupt_rollout(
+    kind: str, how: str, tmp_path: Path
+) -> None:
+    """A damaged rollout must fail ``load`` loudly, not come back as data.
+
+    Handing Codex a rollout that does not decode (or is not the one that was
+    written) would resume a thread from garbage, or from another turn's
+    history. ``ThreadStoreCorrupt`` is also the only signal the runtime has to
+    discard the record: anything else leaves it in place and every later save
+    of the session conflicts with it.
+    """
+    async with _make_store(kind, tmp_path) as store:
+        await store.save(KEY, TID, _rollout(b"turn1\n"), "h", expected_version=None)
+        await _tamper(store, kind, how)
+        with pytest.raises(ThreadStoreCorrupt):
+            await store.load(KEY)
 
 
 @pytest.mark.asyncio
