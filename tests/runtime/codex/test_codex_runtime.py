@@ -1244,3 +1244,21 @@ async def test_corrupt_thread_record_is_discarded_so_the_next_save_succeeds(
 
     assert await store.load(key) is None, "the corrupt record was left in place"
     assert await store.save(key, tid, rollout, "h", expected_version=None) == 1
+
+
+def test_backfill_includes_a_parent_agent_in_the_same_invocation() -> None:
+    """Transfer keeps the invocation id, so the parent's words live in the
+    current invocation; filtering the whole invocation out lost them."""
+    from veadk.runtime.codex.runtime import _turns_since_own
+
+    events = [
+        _text_event("user", "earlier question", "inv-1"),
+        _text_event("codex_agent", "earlier answer", "inv-1"),
+        _text_event("user", "fix the build", "inv-2"),
+        _text_event("router", "Handing this to codex: the CI log says X", "inv-2"),
+    ]
+    ctx = SimpleNamespace(invocation_id="inv-2", session=SimpleNamespace(events=events))
+
+    lines = _turns_since_own(ctx, "codex_agent", covered_invocation_id="inv-1")
+
+    assert lines == ["router: Handing this to codex: the CI log says X"]

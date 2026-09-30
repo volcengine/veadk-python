@@ -299,6 +299,9 @@ def test_lean_codex_config_contents() -> None:
             "view_image": False,
         },
         "tools": {"experimental_request_user_input": {"enabled": False}},
+        "shell_environment_policy": {
+            "exclude": ["VEADK_CODEX_*", "*API_KEY*", "*SECRET*", "*TOKEN*"]
+        },
     }
 
 

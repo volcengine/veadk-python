@@ -99,17 +99,41 @@ class CodexModelRoute:
         return config
 
 
-def lean_codex_config() -> dict[str, Any]:
-    """Settings pinned for every VeADK Codex thread, as a thread override.
+def pinned_codex_settings() -> dict[str, Any]:
+    """Settings every VeADK Codex thread needs, on either transport.
 
-    Each key was verified against CLI 0.159.2 at thread level:
+    The single source for both the generated ``config.toml`` (shim and direct)
+    and the direct transport's thread override. Each key was verified against
+    CLI 0.159.2:
 
     - ``model_reasoning_summary="none"``: Codex otherwise sends
       ``reasoning.summary="auto"``, which Ark rejects outright.
     - ``features.unbounded_connection_retries=false``: otherwise an unreachable
-      endpoint is retried forever and the turn never ends.
-    - ``features.goals=false``: goals need a persisted thread; ours are
-      ephemeral. Removes ``create_goal``/``get_goal``/``update_goal``.
+      endpoint is retried forever instead of failing the turn fast.
+    - ``features.goals=false``: VeADK does not drive Codex goals; left on,
+      Codex advertises ``create_goal``/``get_goal``/``update_goal``.
+    - ``shell_environment_policy.exclude``: keeps VeADK's credentials (the
+      direct model key, the shim turn token, the MCP bridge token) out of the
+      shell Codex runs for the model; without it `env` in the sandbox printed
+      them.
+
+    Returns:
+        dict[str, Any]: A fresh nested dict, safe for the caller to mutate.
+    """
+    return {
+        "model_reasoning_summary": "none",
+        "features": {"unbounded_connection_retries": False, "goals": False},
+        "shell_environment_policy": {
+            "exclude": ["VEADK_CODEX_*", "*API_KEY*", "*SECRET*", "*TOKEN*"]
+        },
+    }
+
+
+def lean_codex_config() -> dict[str, Any]:
+    """:func:`pinned_codex_settings` plus the direct transport's tool trimming.
+
+    On top of the pinned settings (all verified at thread level on 0.159.2):
+
     - ``features.multi_agent=false``: removes ``multi_agent_v1``.
     - ``features.view_image=false``: removes ``view_image``.
     - ``web_search="disabled"``: removes the hosted ``web_search`` tool.
@@ -117,21 +141,16 @@ def lean_codex_config() -> dict[str, Any]:
       ``request_user_input``; there is no interactive user behind a turn.
 
     Together the trimmed tools roughly halve the input tokens of each request.
+    The shim keeps Codex's tools (it forwards function tools only anyway).
 
     Returns:
         dict[str, Any]: A fresh nested dict, safe for the caller to mutate.
     """
-    return {
-        "model_reasoning_summary": "none",
-        "web_search": "disabled",
-        "features": {
-            "unbounded_connection_retries": False,
-            "goals": False,
-            "multi_agent": False,
-            "view_image": False,
-        },
-        "tools": {"experimental_request_user_input": {"enabled": False}},
-    }
+    config = pinned_codex_settings()
+    config["web_search"] = "disabled"
+    config["features"].update({"multi_agent": False, "view_image": False})
+    config["tools"] = {"experimental_request_user_input": {"enabled": False}}
+    return config
 
 
 def _host(api_base: str) -> str:

@@ -76,6 +76,7 @@ from veadk.runtime.codex.mcp_bridge import McpBridge
 from veadk.runtime.codex.mcp_bridge import get_bridge
 from veadk.runtime.codex.model_provider import CodexModelRoute
 from veadk.runtime.codex.model_provider import direct_route
+from veadk.runtime.codex.model_provider import pinned_codex_settings
 from veadk.runtime.codex.model_provider import resolve_transport
 from veadk.runtime.codex.model_provider import shim_route
 from veadk.runtime.codex.proxy import get_shim
@@ -146,8 +147,6 @@ _PROVIDER_ID = "veadk"
 _KEY_ENV = "VEADK_CODEX_API_KEY"
 # Carries the MCP bridge's per-turn bearer token into the Codex subprocess.
 _MCP_TOKEN_ENV = "VEADK_CODEX_MCP_TOKEN"
-# Environment variables the sandboxed shell must never inherit (TOML array).
-_SHELL_ENV_EXCLUDES = '["VEADK_CODEX_*", "*API_KEY*", "*SECRET*", "*TOKEN*"]'
 # Bounds on what a resumed turn is handed about the conversation it missed.
 _BACKFILL_MAX_MESSAGES = 50
 _BACKFILL_MAX_CHARS = 4000
@@ -626,7 +625,11 @@ class CodexRuntime(BaseRuntime):
                             build_prompt_from_llm_request(
                                 runtime_call.llm_request, include_history=False
                             ),
-                            _turns_since_own(ctx, agent.name),
+                            _turns_since_own(
+                                ctx,
+                                agent.name,
+                                thread_record.covered_invocation_id,
+                            ),
                             _resumed_tool_results(resumed_events),
                         ),
                         runtime_call.llm_request,
@@ -1309,6 +1312,7 @@ def _prepare_codex_home(
         "workspace_write": "workspace-write",
         "full_access": "danger-full-access",
     }[runtime_config.sandbox]
+    pinned_scalars, pinned_tables = _toml_settings(pinned_codex_settings())
     provider_block = "".join(
         f"{key} = {_toml_value(value)}\n"
         for key, value in route.provider_config.items()
@@ -1324,32 +1328,15 @@ def _prepare_codex_home(
         # binary) and `store: false` is now unconditional in Codex's client,
         # so writing it here only produced a silently ignored key.
         f"model_reasoning_effort = {toml_string(runtime_config.reasoning_effort)}\n"
-        # Since CLI 0.159 Codex sends `reasoning.summary = "auto"` by default,
-        # and Ark's Responses API rejects the whole request over it
-        # (`json: unknown field "summary"`). "none" makes Codex omit the field.
-        f'model_reasoning_summary = "none"\n'
-        f"personality = {toml_string(runtime_config.personality)}\n\n"
+        f"personality = {toml_string(runtime_config.personality)}\n"
+        # Pinned settings shared with the direct transport's thread config;
+        # see `pinned_codex_settings` for why each one is needed.
+        f"{pinned_scalars}\n"
         f"[model_providers.{route.provider_id}]\n"
         f"{provider_block}\n"
         f"[sandbox_workspace_write]\n"
         f"network_access = {str(runtime_config.network_access).lower()}\n\n"
-        f"[features]\n"
-        # On by default since CLI 0.159: an unreachable backend is retried
-        # forever instead of failing the turn after a few attempts. The turn
-        # timeout would eventually stop it, but only after its (long)
-        # deadline; failing fast surfaces the real error.
-        f"unbounded_connection_retries = false\n"
-        # Goals need a persisted thread, but every thread here is ephemeral.
-        # Left on, Codex still advertises the goal tools to the backend model.
-        f"goals = false\n\n"
-        # Keep credentials out of the shell Codex runs for the model: the
-        # direct transport's model key, the shim's turn token and the MCP
-        # bridge token all live in this subprocess's environment, and without
-        # an explicit policy `env` in the sandbox printed them (verified on
-        # CLI 0.159). A leaked bridge token would let a shell call the agent's
-        # tools directly.
-        f"[shell_environment_policy]\n"
-        f"exclude = {_SHELL_ENV_EXCLUDES}\n"
+        f"{pinned_tables}"
     )
     with open(os.path.join(home, "config.toml"), "w", encoding="utf-8") as f:
         f.write(config)
@@ -1466,6 +1453,7 @@ async def _save_thread(
             rollout,
             instructions_hash,
             expected_version=previous.version if previous is not None else None,
+            covered_invocation_id=ctx.invocation_id,
         )
     except ThreadStoreConflict:
         logger.warning(
@@ -1500,23 +1488,38 @@ async def _save_thread(
         )
 
 
-def _turns_since_own(ctx: "InvocationContext", agent_name: str) -> list[str]:
-    """Messages this agent's thread has not seen: everything said by the user
-    or other agents after this agent's last reply, minus the current message.
+def _turns_since_own(
+    ctx: "InvocationContext", agent_name: str, covered_invocation_id: str = ""
+) -> list[str]:
+    """Messages the resumed thread has not seen, oldest first.
 
-    Empty when this agent never replied in the session, which cannot happen
-    for a resumed thread anyway.
+    The thread's rollout covers the session up to ``covered_invocation_id``
+    (the last invocation whose rollout was saved). Everything after it is
+    handed over: user and other-agent messages, and this agent's own replies
+    from turns whose save was lost -- the thread lacks those too. The current
+    invocation's own user message is rendered separately, and this agent has
+    said nothing yet in it; anything else in it (a parent agent's words before
+    transferring here) is included.
+
+    Without a coverage marker (older records) the anchor falls back to this
+    agent's last reply in an earlier invocation.
     """
     events = list(getattr(ctx.session, "events", None) or [])
-    last_own = None
-    for index, event in enumerate(events):
-        if event.author == agent_name and event.invocation_id != ctx.invocation_id:
-            last_own = index
-    if last_own is None:
+    anchor = None
+    if covered_invocation_id:
+        for index, event in enumerate(events):
+            if event.invocation_id == covered_invocation_id:
+                anchor = index
+    if anchor is None:
+        for index, event in enumerate(events):
+            if event.author == agent_name and event.invocation_id != ctx.invocation_id:
+                anchor = index
+    if anchor is None:
         return []
     lines: list[str] = []
-    for event in events[last_own + 1 :]:
-        if event.invocation_id == ctx.invocation_id or event.author == agent_name:
+    for event in events[anchor + 1 :]:
+        current = event.invocation_id == ctx.invocation_id
+        if current and event.author in ("user", agent_name):
             continue
         text = "\n".join(
             part.text
@@ -1524,7 +1527,12 @@ def _turns_since_own(ctx: "InvocationContext", agent_name: str) -> list[str]:
             if part.text and not part.thought
         ).strip()
         if text:
-            lines.append(f"{event.author}: {_clip(text, _BACKFILL_MAX_CHARS)}")
+            author = (
+                f"you ({agent_name}, earlier reply)"
+                if event.author == agent_name
+                else event.author
+            )
+            lines.append(f"{author}: {_clip(text, _BACKFILL_MAX_CHARS)}")
     # The most recent messages matter most; a long gap is summarized by count.
     if len(lines) > _BACKFILL_MAX_MESSAGES:
         dropped = len(lines) - _BACKFILL_MAX_MESSAGES
@@ -1626,12 +1634,35 @@ def _turn_usage(usage: dict[str, Any], baseline: dict[str, Any]) -> dict[str, An
     return {**usage, "total": turn_total}
 
 
+def _toml_settings(settings: dict[str, Any]) -> tuple[str, str]:
+    """Render ``settings`` as (top-level keys, ``[table]`` sections) of TOML.
+
+    Top-level keys must precede every table header, so the two parts are
+    returned separately for the caller to place.
+    """
+    scalars = "".join(
+        f"{key} = {_toml_value(value)}\n"
+        for key, value in settings.items()
+        if not isinstance(value, dict)
+    )
+    tables = "".join(
+        f"[{key}]\n"
+        + "".join(f"{name} = {_toml_value(item)}\n" for name, item in value.items())
+        + "\n"
+        for key, value in settings.items()
+        if isinstance(value, dict)
+    )
+    return scalars, tables
+
+
 def _toml_value(value: Any) -> str:
-    """Encode a provider-config value (scalar or flat table) as inline TOML."""
+    """Encode a config value (scalar, list or flat table) as inline TOML."""
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, (int, float)):
         return str(value)
+    if isinstance(value, (list, tuple)):
+        return "[" + ", ".join(_toml_value(item) for item in value) + "]"
     if isinstance(value, dict):
         pairs = ", ".join(
             f"{toml_string(str(k))} = {_toml_value(v)}" for k, v in value.items()

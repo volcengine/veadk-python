@@ -1498,3 +1498,54 @@ async def test_next_turn_resumes_from_another_writers_record(monkeypatch) -> Non
     assert not [
         r for r in records if r.getMessage().startswith("codex_thread_save_conflict")
     ]
+
+
+@pytest.mark.asyncio
+async def test_a_turn_whose_save_was_lost_is_handed_back_on_the_next_resume(
+    monkeypatch,
+) -> None:
+    """A lost rollout save must not silently drop a turn from the thread.
+
+    If turn 2's save fails (a cross-instance conflict, a store error), turn 3
+    resumes the rollout from turn 1. The runtime used to backfill only what
+    others said after this agent's last reply -- and turn 2's reply *is* the
+    last reply, so turn 2 vanished from the thread without a trace. The
+    record now names the last invocation its rollout covers, and everything
+    after it (turn 2's user message and reply) is handed over.
+    """
+    from veadk.runtime.codex import runtime as runtime_module
+    from veadk.runtime.codex.mcp_bridge import shutdown_bridge
+    from veadk.runtime.codex.thread_store import (
+        InMemoryThreadStore,
+        ThreadStoreConflict,
+    )
+
+    class _LosesSecondSave(InMemoryThreadStore):
+        saves = 0
+
+        async def save(self, *args, **kwargs):
+            type(self).saves += 1
+            if type(self).saves == 2:
+                raise ThreadStoreConflict("another instance saved first")
+            return await super().save(*args, **kwargs)
+
+    store = _LosesSecondSave()
+    monkeypatch.setattr(runtime_module, "select_thread_store", lambda *_: store)
+    send, backend, _, _ = await _direct_session(
+        monkeypatch,
+        (
+            Round(text="noted the apple", usage=(1, 1)),
+            Round(text="noted the BANANA-42", usage=(1, 1)),
+            Round(text="apple and banana", usage=(1, 1)),
+        ),
+    )
+    try:
+        assert await send("remember apple") is None
+        assert await send("remember BANANA-7") is None  # this save is lost
+        assert await send("what do you remember?") is None
+    finally:
+        await shutdown_bridge()
+
+    last = json.dumps(backend.raw_requests[-1], default=str)
+    assert "BANANA-7" in last, "turn 2's user message was lost from the thread"
+    assert "noted the BANANA-42" in last, "turn 2's reply was lost from the thread"

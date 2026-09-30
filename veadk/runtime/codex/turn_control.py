@@ -45,57 +45,27 @@ This module turns those facts into a small set of primitives. None of them
 starts a model request on its own; they only sequence the SDK calls the
 runtime already makes.
 
-Wiring into ``CodexRuntime.run_async`` (one invocation = one turn)::
+How ``CodexRuntime.run_async`` uses them (one invocation = one turn):
 
-    key = session_key(app_name, user_id, session_id, agent.name)
-    async with SESSION_LOCKS.hold(key):              # serialise turns per session
-        handle = await start_fresh_turn(thread, input_items,
-                                        previous_turn_id=last_turn_id, ...)
-        completion = TurnCompletion(handle.id)
+- :class:`SessionTurnLocks` serialises the invocations of a session, on the
+  direct transport with ``thread_mode="resume"`` only (the other paths start a
+  fresh ephemeral thread per invocation, so there is nothing to share).
+- :class:`TurnCompletion` is fed every notification by the stream pump and
+  closed when the stream ends.
+- :func:`run_with_turn_timeout` wraps the pump when ``turn_timeout_seconds``
+  is set; the runtime awaits the watchdog instead of the pump, and a pump the
+  watchdog cancelled surfaces as its :class:`CodexTurnTimeout`.
+- :class:`ActiveTurns` holds the running turn per session for
+  ``BaseRuntime.steer`` / ``Runner.steer`` (direct transport only); a steer
+  never falls back to ``thread.turn()``.
+- :func:`interrupt_turn` stops the turn on cancellation (``CancelledError`` or
+  the consumer closing the generator).
 
-        async def _pump_codex():
-            try:
-                async for note in handle.stream():
-                    completion.observe(note)          # resolves on turn/completed
-                    ...translate + event_queue.put(...)
-            except BaseException as e:
-                await event_queue.put(e)
-            finally:
-                completion.close()                    # stream ended: never hang waiters
-                await event_queue.put(_QUEUE_DONE)
-
-        pump = asyncio.create_task(_pump_codex())
-        watchdog = asyncio.create_task(run_with_turn_timeout(
-            handle, pump, completion=completion,
-            timeout=config.turn_timeout_seconds, grace=config.interrupt_grace_seconds))
-        with ACTIVE_TURNS.register(key, handle, completion=completion):
-            while True:
-                queued = await event_queue.get()
-                if queued is _QUEUE_DONE:
-                    break
-                if isinstance(queued, BaseException):
-                    # a pump cancelled by the watchdog shows up here first
-                    if watchdog.done() and watchdog.exception() is not None:
-                        raise watchdog.exception()
-                    raise queued
-                yield ...
-        await watchdog          # raises CodexTurnTimeout if the deadline fired
-        last_turn_id = handle.id
-
-    # on invocation cancellation (CancelledError), replace the bare
-    # ``await turn.interrupt()`` with
-    #     await interrupt_turn(handle, completion=completion, timeout=grace)
-    # so the next invocation's ``start_fresh_turn`` cannot join the dying turn.
-
-A "steer" entry point (an API that adds user input to a running invocation)
-calls ``await ACTIVE_TURNS.steer(key, text)`` and reports "no active turn" to
-its caller on ``False``. It must *not* fall back to ``thread.turn()``: that
-would race the running invocation for the same thread.
-
-Compaction (``compact_and_wait``) must run while holding the session lock, on a
-non-ephemeral thread, and between turns; a ``turn()`` racing it fails with
-``ActiveTurnNotSteerable`` (see :func:`is_turn_not_steerable`), which
-:func:`start_fresh_turn` retries within its ``start_timeout``.
+Not wired into the runtime today: :func:`start_fresh_turn` (every invocation
+runs in a fresh Codex process, so no earlier turn can be joined) and
+:func:`compact_and_wait` (compaction is left to Codex via
+``auto_compact_token_limit``). They are kept, tested, for an explicit
+compaction API and for a long-lived shared Codex client.
 
 All primitives are process-local. A second worker process holding the same
 Codex thread is out of scope; the session lock only serialises this process.
