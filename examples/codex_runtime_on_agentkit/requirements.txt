@@ -1,13 +1,17 @@
 # Installed in the image by AgentKit's default `uv pip install -r requirements.txt`.
 #
-# veadk-python >= 0.5.39 ships the codex runtime (veadk/runtime/codex).
+# veadk-python >= 1.1.15 is the first release whose codex runtime handles
+# Codex CLI 0.159 on Ark (model_reasoning_summary="none",
+# unbounded_connection_retries=false). An older veadk-python paired with the
+# openai-codex pin below builds a config that fails every Ark call, so the
+# openai-codex pin and this lower bound must move together.
 #
 # This mirrors veadk-python's own `[codex]` extra, pinned here so the image
 # gets this exact SDK even with a veadk-python release whose extra still pins
 # an older one. openai-codex pins its matching Codex CLI binary
 # (openai-codex-cli-bin) exactly, so the binary is not listed separately. Keep
 # this pin in sync with the `[codex]` extra in pyproject.toml.
-veadk-python>=0.5.39
+veadk-python>=1.1.15
 openai-codex==0.159.2
 
 # The Responses->chat shim (veadk/runtime/codex/proxy.py) imports these at

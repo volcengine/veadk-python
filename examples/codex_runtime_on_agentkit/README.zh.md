@@ -39,6 +39,10 @@ codex_runtime_on_agentkit/
   构建里无需单独装二进制。SDK 会把该二进制钉到与自身相同的版本，所以只需列出
   `openai-codex`。这个 pin 与 veadk-python 的 `[codex]` extra 保持一致；显式列出是为了
   在 veadk-python 已发布版本的 extra 仍钉着旧版本时，镜像也能装上这个 SDK 版本。
+- `veadk-python` 要求 `>=1.1.15`，而不只是包含 codex 运行时的任意版本：更早的版本不会
+  设置 Codex CLI 0.159 在 Ark 上所需的选项（`model_reasoning_summary="none"`、
+  `unbounded_connection_retries=false`），能和钉住的 CLI 一起装上，但每次 Ark 调用都会
+  失败。`openai-codex` 的 pin 与 `veadk-python` 的下限必须同步调整。
 - `fastapi` / `uvicorn` 也显式列出：`app.py` 直接 import `uvicorn`，runtime 的
   Responses→chat shim 两者都在模块级 import。目前它们能从 google-adk 传递解析到，
   但 adk 已经在把 web 依赖挪进 extra，所以 `[codex]` 和本文件都显式声明。

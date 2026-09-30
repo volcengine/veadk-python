@@ -365,6 +365,13 @@ def test_codex_home_pins_settings_the_pinned_cli_would_break(tmp_path) -> None:
     # The CLI otherwise sends `reasoning.summary = "auto"`, which Ark's
     # Responses API rejects outright (`json: unknown field "summary"`).
     assert config["model_reasoning_summary"] == "none"
+    # Without an explicit policy the sandboxed shell's `env` showed the model
+    # key and turn tokens; see the smoke test for the end-to-end check.
+    assert set(config["shell_environment_policy"]["exclude"]) >= {
+        "VEADK_CODEX_*",
+        "*API_KEY*",
+        "*TOKEN*",
+    }
     assert config["model_providers"]["veadk"]["wire_api"] == "responses"
     assert config["sandbox_workspace_write"]["network_access"] is True
 

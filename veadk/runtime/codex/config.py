@@ -100,11 +100,13 @@ class CodexRuntimeConfig(BaseModel):
     )
     tool_timeout_seconds: float | None = Field(default=120.0, gt=0)
     turn_timeout_seconds: float | None = Field(
-        default=None,
+        default=1800.0,
         gt=0,
         description=(
             "Upper bound for one Codex turn. Past it the turn is interrupted "
-            "and the invocation fails with a TimeoutError. None means no bound."
+            "and the invocation fails with a TimeoutError. Bounded by default: "
+            "a turn that never ends would also block its session's later "
+            "invocations, which queue behind it. None means no bound."
         ),
     )
     auto_compact_token_limit: int | None = Field(

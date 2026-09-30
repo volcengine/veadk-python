@@ -622,3 +622,151 @@ async def test_real_codex_binary_fails_turn_when_shim_is_unreachable() -> None:
 
     assert status == "failed", status
     assert time.monotonic() - started < _RUN_TIMEOUT_SECONDS * 2
+
+
+@pytest.mark.codex_smoke
+@pytest.mark.asyncio
+async def test_real_codex_shell_cannot_see_the_model_key() -> None:
+    """Commands Codex runs for the model must not see VeADK's credentials.
+
+    On the direct transport the real model key sits in the Codex subprocess
+    environment (the shim path keeps a turn token there instead, and the MCP
+    bridge token is always there). Before the generated config pinned a shell
+    environment policy, `env` in the sandbox printed the key. This drives the
+    real binary with the config the runtime writes and asks it to run `env`.
+    """
+    if os.getenv("CODEX_RUN_SMOKE") != "1":
+        pytest.skip("set CODEX_RUN_SMOKE=1 to spawn the real Codex binary")
+    reason = _skip_reason()
+    if reason is not None:
+        pytest.skip(reason)
+
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    from openai_codex import AsyncCodex, CodexConfig
+
+    from veadk.runtime.codex import runtime as runtime_module
+    from veadk.runtime.codex.config import CodexRuntimeConfig, codex_subprocess_env
+    from veadk.runtime.codex.model_provider import direct_route
+
+    secret = f"sk-smoke-{uuid.uuid4().hex}"
+    requests: list[dict[str, Any]] = []
+
+    def _response(output: list[dict[str, Any]]) -> bytes:
+        body = {
+            "id": f"resp_{len(requests)}",
+            "object": "response",
+            "created_at": int(time.time()),
+            "model": "smoke-model",
+            "status": "completed",
+            "output": output,
+            "usage": {
+                "input_tokens": 1,
+                "output_tokens": 1,
+                "total_tokens": 2,
+                "input_tokens_details": {"cached_tokens": 0},
+                "output_tokens_details": {"reasoning_tokens": 0},
+            },
+        }
+        events = [
+            {"type": "response.created", "response": {**body, "output": []}},
+            *(
+                event
+                for index, item in enumerate(output)
+                for event in (
+                    {
+                        "type": "response.output_item.added",
+                        "output_index": index,
+                        "item": item,
+                    },
+                    {
+                        "type": "response.output_item.done",
+                        "output_index": index,
+                        "item": item,
+                    },
+                )
+            ),
+            {"type": "response.completed", "response": body},
+        ]
+        return "".join(
+            f"event: {e['type']}\ndata: {json.dumps(e)}\n\n" for e in events
+        ).encode()
+
+    class _Model(BaseHTTPRequestHandler):
+        def log_message(self, *_: Any) -> None:
+            pass
+
+        def do_POST(self) -> None:  # noqa: N802 - http.server API
+            requests.append(
+                json.loads(self.rfile.read(int(self.headers["content-length"])))
+            )
+            if len(requests) == 1:
+                output = [
+                    {
+                        "type": "function_call",
+                        "id": "fc_env",
+                        "call_id": "call_env",
+                        "name": "exec_command",
+                        "arguments": json.dumps({"cmd": "env"}),
+                        "status": "completed",
+                    }
+                ]
+            else:
+                output = [
+                    {
+                        "type": "message",
+                        "id": "msg_done",
+                        "role": "assistant",
+                        "status": "completed",
+                        "content": [
+                            {"type": "output_text", "text": "done", "annotations": []}
+                        ],
+                    }
+                ]
+            data = _response(output)
+            self.send_response(200)
+            self.send_header("content-type", "text/event-stream")
+            self.send_header("content-length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _Model)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    route = direct_route(f"http://127.0.0.1:{server.server_address[1]}/v1", secret)
+    home = runtime_module._prepare_codex_home(
+        route, "smoke-model", CodexRuntimeConfig()
+    )
+    workspace = tempfile.mkdtemp(prefix="veadk-codex-smoke-env-")
+    env = codex_subprocess_env(home, "")
+    env.update(route.env)
+    try:
+        async with AsyncCodex(config=CodexConfig(cwd=workspace, env=env)) as codex:
+            thread = await codex.thread_start(
+                model="smoke-model",
+                model_provider=route.provider_id,
+                config=route.thread_config(),
+                cwd=workspace,
+                ephemeral=True,
+            )
+            turn = await thread.turn("print the environment")
+            await asyncio.wait_for(_drain(turn), _RUN_TIMEOUT_SECONDS)
+    finally:
+        server.shutdown()
+        shutil.rmtree(home, ignore_errors=True)
+        shutil.rmtree(workspace, ignore_errors=True)
+
+    outputs = [
+        item
+        for request in requests[1:]
+        for item in request.get("input", [])
+        if item.get("type") == "function_call_output"
+    ]
+    assert outputs, "Codex never ran `env`, so the check proved nothing"
+    assert "PATH=" in json.dumps(outputs), "the command output is not an env listing"
+    assert secret not in json.dumps(outputs), "the sandboxed shell saw the model key"
+
+
+async def _drain(turn: Any) -> None:
+    async for _ in turn.stream():
+        pass
