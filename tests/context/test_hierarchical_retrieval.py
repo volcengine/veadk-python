@@ -22,6 +22,7 @@ The same tests run against the frozen fine-span baseline without this module.
 import asyncio
 from dataclasses import replace
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -160,14 +161,55 @@ class StallChildren(Semantic):
 @pytest.mark.asyncio
 async def test_child_timeout_uses_complete_parents_without_partial_child_ranking(
     tmp_path,
+    monkeypatch,
 ):
+    from veadk.context import hierarchical_retriever
+
     embedder = StallChildren()
     retriever = Retriever(tmp_path / "index.sqlite3", embedder)
     text = source()
+    clock = [100.0]
+    timeouts = []
+
+    async def stage_wait(awaitable, timeout):
+        timeouts.append(timeout)
+        stage = len(timeouts)
+        if stage == 1:  # Overall request deadline.
+            return await asyncio.wait_for(awaitable, timeout=5)
+        if stage == 2:  # Complete parent preparation/search before children.
+            result = await asyncio.wait_for(awaitable, timeout=5)
+            clock[0] += 0.1
+            return result
+        task = asyncio.create_task(awaitable)
+        try:
+            await asyncio.wait_for(embedder.waiting.wait(), timeout=5)
+            clock[0] += timeout
+            return await asyncio.wait_for(task, timeout=0)
+        finally:
+            if not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+
+    # Parent setup must not race a 250 ms wall-clock timer on a shared runner.
+    # Record each production budget and expire only after child work starts.
+    monkeypatch.setattr(
+        hierarchical_retriever, "time", SimpleNamespace(monotonic=lambda: clock[0])
+    )
+    monkeypatch.setattr(
+        hierarchical_retriever,
+        "asyncio",
+        SimpleNamespace(**{**vars(asyncio), "wait_for": stage_wait}),
+    )
     try:
         spans = await retriever.rank_with_deadline(
-            IDENTITY, "record", text, QUERY, deadline=time.monotonic() + 0.25
+            IDENTITY, "record", text, QUERY, deadline=100.25
         )
+        assert timeouts == [
+            pytest.approx(0.25),
+            pytest.approx(0.1875),
+            pytest.approx(0.135),
+        ]
+        assert clock[0] < 100.25
         assert embedder.waiting.is_set() and embedder.cancelled
         assert retriever.last_status == "parent_semantic_child_lexical"
         assert spans and all(0 <= a < b <= len(text) for a, b in spans)

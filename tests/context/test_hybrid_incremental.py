@@ -15,6 +15,7 @@
 """Durable progress at cancellation, provider failure and SDK history boundaries."""
 
 import asyncio
+from types import SimpleNamespace
 import pytest
 
 from veadk.context._hybrid_index import Scope, Store, prepare, search
@@ -303,23 +304,48 @@ async def test_sdk_history_timeout_can_resume_index_without_changing_original_se
 
 
 @pytest.mark.asyncio
-async def test_all_batches_share_one_timeout_instead_of_resetting_it(tmp_path):
-    class Slow(Embedding):
-        cancelled = False
+async def test_all_batches_share_one_timeout_instead_of_resetting_it(
+    tmp_path, monkeypatch
+):
+    from veadk.context import _hybrid_index
 
-        async def embed(self, texts):
-            try:
-                await asyncio.sleep(0.2)
-            except asyncio.CancelledError:
-                self.cancelled = True
-                raise
-            return await super().embed(texts)
+    clock = [100.0]
+    timeouts = []
+    embedder = StallAfterCompletedBatch()
+
+    async def bounded_batch(awaitable, timeout):
+        timeouts.append(timeout)
+        if len(timeouts) == 1:
+            result = await asyncio.wait_for(awaitable, timeout=5)
+            clock[0] += 0.2
+            return result
+        task = asyncio.create_task(awaitable)
+        try:
+            await asyncio.wait_for(embedder.waiting.wait(), timeout=5)
+            clock[0] += timeout
+            return await asyncio.wait_for(task, timeout=0)
+        finally:
+            if not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+
+    # Verify the second batch receives only the remaining budget, independent
+    # of host scheduling, while retaining real cancellation and durable writes.
+    monkeypatch.setattr(
+        _hybrid_index, "time", SimpleNamespace(monotonic=lambda: clock[0])
+    )
+    monkeypatch.setattr(
+        _hybrid_index,
+        "asyncio",
+        SimpleNamespace(**{**vars(asyncio), "wait_for": bounded_batch}),
+    )
 
     store = Store(tmp_path / "index.sqlite3")
-    embedder = Slow()
     try:
         store.put(SCOPE, "source", source_text(45))
         status = await prepare(store, SCOPE, embedder, timeout=0.35)
+        assert timeouts == [pytest.approx(0.35), pytest.approx(0.15)]
+        assert status["seconds"] == pytest.approx(0.35)
         assert status["degraded"] and status["indexed"] == 16
         assert embedder.cancelled and len(saved(store)) == 16
     finally:
