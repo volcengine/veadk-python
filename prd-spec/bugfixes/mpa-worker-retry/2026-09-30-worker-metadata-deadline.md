@@ -43,3 +43,12 @@ User approval: “那你改下代码” approves the preceding proposal to wait 
 - not_run: cloud/browser/deployment are outside this code-only change. Frontend test/build and Codex/provider smoke: not_applicable, no UI/generated assets or process/provider execution changes.
 
 Direct implementation review confirms unchanged caller interfaces, strict ownership/TOS checks, bounded fixed polling under the existing wrapper deadline, cancellation propagation and retained bindings. Both document languages preserve FR/AC/T IDs and numeric limits. The branch was fetched and rebased against the existing PR's `superops/main` base before verification; already up to date. No running Studio process or cloud resource was modified.
+
+### Subsequently authorized release
+
+On 2026-09-30, the user separately authorized updating the existing Studio with “那你先部署云端吧”, without retrying MPA creation. Reused `VeFaaS.update_application_code_bundle` to replace only the offline code bundle.
+
+- pass: source `c9b2c285`; wheel `0.0.1.dev1248+gc9b2c285f.d20260930`, SHA256 `d68b5308995a81698bc2f4c8871ef62ea831f6bf82c1a282cbf9ebb1cf7738d7`. All 186 offline file hashes passed; 113 frontend assets and dependency declarations match the previous release.
+- pass: existing application `deploy_success`; all 10 instances are revision 36 and Ready, replacing revision 35; sampled two instances completed service startup. All 44 environment values match revision 35 (response ordering changed); the entrypoint remains `bash ./run.sh`, with unchanged network, role, runtime, memory and request timeout.
+- pass: refreshed the original cloud address in a separate browser tab; login state and homepage work. Preserved the user's original failed creation form without submitting a retry.
+- not_run: live MPA creation and session/TOS read/write. Recovery of the existing Error Runtime's empty network is outside this fix; successful publication does not prove same-agent-ID retry success. AC-3's existing full-repository gate failures remain unresolved.
