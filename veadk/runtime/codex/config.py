@@ -99,6 +99,17 @@ class CodexRuntimeConfig(BaseModel):
         ),
     )
     tool_timeout_seconds: float | None = Field(default=120.0, gt=0)
+    model_transport: Literal["auto", "direct", "shim"] = Field(
+        default="auto",
+        description=(
+            "How Codex reaches the model. 'direct' points Codex at the model "
+            "endpoint's own Responses API; 'shim' routes it through VeADK's "
+            "in-process Responses-to-chat shim, which also executes ADK tools. "
+            "'auto' picks 'direct' only for hosts known to serve the OpenAI "
+            "Responses API compatibly (Volcengine Ark, BytePlus ModelArk, "
+            "api.openai.com) and 'shim' for everything else."
+        ),
+    )
 
     @field_validator("workspace_root")
     @classmethod
@@ -161,6 +172,8 @@ class CodexRuntimeConfig(BaseModel):
             updates["approval_mode"] = value
         if value := os.getenv("VEADK_CODEX_WORKSPACE_ROOT"):
             updates["workspace_root"] = value
+        if value := os.getenv("VEADK_CODEX_MODEL_TRANSPORT"):
+            updates["model_transport"] = value.strip().lower()
         if value := os.getenv("VEADK_CODEX_NETWORK_ACCESS"):
             updates["network_access"] = value.strip().lower() in {
                 "1",
