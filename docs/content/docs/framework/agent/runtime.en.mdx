@@ -120,6 +120,17 @@ Because of that, `CodexRuntimeConfig(sandbox="full_access", network_access=False
 
 `full_access` and `reuse_workspace=True` relax filesystem isolation between invocations and should only be enabled in trusted environments.
 
+Commands Codex runs never see credential-like environment variables. The generated Codex config always sets `[shell_environment_policy]` to exclude these variables from the command environment:
+
+| Excluded pattern | Covers |
+| :--- | :--- |
+| `VEADK_CODEX_*` | Configuration and per-turn tokens the runtime passes to Codex. |
+| `*API_KEY*` | Model API keys and similar secrets, such as `MODEL_AGENT_API_KEY`. |
+| `*SECRET*` | Cloud secret keys and similar credentials. |
+| `*TOKEN*` | Access tokens of any kind. |
+
+Without this policy, running `env` inside the sandbox printed the model API key and the turn tokens (verified on Codex CLI 0.159). Any other credential a command needs belongs behind an ADK tool rather than in the sandbox environment.
+
 #### The security baseline
 
 Put the pieces above together and you get the default recipe for running codex
@@ -241,11 +252,11 @@ Either way, a path that came from the *model* is untrusted input: resolve it aga
 | :--- | :--- | :--- |
 | `reasoning_effort` | `"medium"` | Reasoning budget: `minimal`/`low`/`medium`/`high`/`xhigh`. Higher is slower and uses more tokens. |
 | `personality` | `"pragmatic"` | Codex's own reply style: `none`/`friendly`/`pragmatic`. |
-| `model_transport` | `"auto"` | How Codex reaches the model. `direct`: Codex calls a Responses-capable backend itself and uses the agent's tools through a local MCP server the runtime runs for the turn, so Codex drives the tool loop. `shim`: an in-process Responses→Chat shim sits in between and executes the tools, for chat-only backends. `auto` picks `direct` for Volcengine Ark (`*.volces.com`), BytePlus (`*.bytepluses.com`) and `api.openai.com`, `shim` otherwise. |
-| `turn_timeout_seconds` | `None` | Upper bound for one Codex turn, in seconds; past it the turn is interrupted and a `TimeoutError` is raised. `None` means no bound. |
+| `model_transport` | `"auto"` | How Codex reaches the model. `direct`: Codex calls a Responses-capable backend itself and uses the agent's tools through a local MCP server the runtime runs for the turn, so Codex drives the tool loop. `shim`: an in-process Responses→Chat shim sits in between and executes the tools, for chat-only backends. `auto` picks `direct` for Volcengine Ark (`*.volces.com`), BytePlus (`*.bytepluses.com`) and `api.openai.com`, `shim` otherwise; an agent whose `model_extra_config` has a non-empty `extra_body` stays on `shim` under `auto`, because `direct` cannot forward a request body. With an explicit `direct`, `extra_body` is not forwarded and a warning is logged. |
+| `turn_timeout_seconds` | `1800.0` | Upper bound for one Codex turn, in seconds; past it the turn is interrupted and a `TimeoutError` is raised. `None` means no bound. Invocations of one session queue on a per-session lock, so an unbounded turn would also block every later invocation of that session; the default is therefore 30 minutes. |
 | `auto_compact_token_limit` | `None` | Token count at which Codex compacts the history itself (Codex's `model_auto_compact_token_limit`). `direct` transport only; `None` keeps Codex's default. |
 | `thread_mode` | `"resume"` | `resume`: each session is bound to one Codex thread whose rollout is saved with the session (in the same database when short-term memory is database-backed) and resumed on the next turn on any instance, so Codex keeps its own full history instead of being handed a replayed transcript. A changed agent instruction starts a new thread seeded from the transcript. `ephemeral`: a fresh thread every invocation. Applies to the `direct` transport only; the `shim` is always `ephemeral`. |
-| `max_tool_iterations` | `32` | Budget of bridged ADK/MCP tool round-trips the shim may run for the whole Codex turn (1–256). Applies to the `shim` transport only. See the behavior change below. |
+| `max_tool_iterations` | `32` | Budget of bridged ADK/MCP tool calls for the whole Codex turn (1–256), on both transports. On `shim` the shim counts them; on `direct` the runtime counts the calls the local MCP server receives in the turn and, once over the limit, interrupts the turn with `CodexToolIterationLimitError`. See the behavior change below. |
 | `tool_timeout_seconds` | `120.0` | Per-call timeout for a bridged ADK/MCP tool. `None` disables the timeout. |
 | `reuse_workspace` | `False` | Only meaningful alongside `workspace_root`, and only worth setting for a single tenant — see [Workspace lifetime](#workspace-lifetime) above. Leave both unset and let tools call `current_workspace()`; see [The workspace is the data plane](#the-workspace-is-the-data-plane). |
 
@@ -311,7 +322,7 @@ flowchart LR
 - **Direct (`direct`)**: Codex calls a Responses-capable model itself, and the agent's function and MCP tools reach Codex through a local MCP server the runtime runs for the turn, so Codex drives the tool loop.
 - **Session continuity (`thread_mode="resume"`)**: each session is bound to one Codex thread, persisted with the session and resumed on the next turn on any instance, so the model sees Codex's own full history rather than a replayed transcript.
 - **Steering**: `await runner.steer(session_id, "use pandas instead")` adds an instruction to the turn in flight without starting a new one; the turn must be running in this process, otherwise it returns `False`.
-- **Turn timeout**: past `turn_timeout_seconds` the turn is interrupted and the caller gets a `TimeoutError`.
+- **Turn timeout**: past `turn_timeout_seconds` (1800 seconds by default) the turn is interrupted and the caller gets a `TimeoutError`.
 - **Context compaction**: `auto_compact_token_limit` lets Codex compact the history itself once tokens cross the limit.
 
 | Backend | Status | Notes |
@@ -355,7 +366,7 @@ On top of that:
 | :--- | :--- |
 | `model_name=[primary, fallback...]` | Only the first entry is used; the fallback chain does not apply. |
 | `model_provider` (non-`openai`) | The runtime always talks to `model_api_base` over an OpenAI-compatible API. |
-| `model_extra_config` | `piagent` only. **codex forwards it**: the shim puts `extra_headers` and `extra_body` — including VeADK's Ark defaults for request encryption and prompt caching — onto the backend request, matching the `adk` path. |
+| `model_extra_config` | `piagent` only. **codex forwards it**: the shim puts `extra_headers` and `extra_body` — including VeADK's Ark defaults for request encryption and prompt caching — onto the backend request, matching the `adk` path. The `direct` transport forwards only `extra_headers`; with a non-empty `extra_body`, `auto` stays on `shim` — see [Codex execution knobs](#codex-execution-knobs). |
 | `enable_responses` / `enable_responses_cache` | The Ark Responses API is unused, so `previous_response_id` continuation and response caching do not apply. |
 | `example_store` | Delivered by `ExampleTool.process_llm_request`, a hook external runtimes never call, so no few-shot examples reach the model. |
 | `knowledgebase` | **The knowledge base is silently disabled.** Same root cause: `LoadKnowledgebaseTool.process_llm_request` is what tells the model the knowledge base exists and when to query it, and that hook is never called, so retrieval is never triggered. |

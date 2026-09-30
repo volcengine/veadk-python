@@ -1291,3 +1291,68 @@ async def test_concurrent_invocations_of_one_session_take_turns(monkeypatch) -> 
     last = json.dumps(backend.raw_requests[-1], default=str)
     # The later invocation resumed a thread that already held the earlier one.
     assert "left" in last and "right" in last
+
+
+@pytest.mark.asyncio
+async def test_direct_transport_caps_tool_calls_per_turn(monkeypatch) -> None:
+    """``max_tool_iterations`` must bound Codex's tool loop on the direct path.
+
+    The shim enforced it by counting its own tool round-trips. With Codex
+    driving the loop the runtime counts the bridge's calls instead; without
+    that, Ark agents (auto -> direct) would silently lose the cap.
+    """
+    from veadk.runtime.codex.runtime import CodexToolIterationLimitError
+
+    _events, _session, backend, error = await _run_direct_turn(
+        monkeypatch,
+        plan=tuple(
+            Round(tool_calls=(("record_fact", {"fact": f"f{i}"}),), usage=(1, 1))
+            for i in range(4)
+        )
+        + (Round(text="never reached", usage=(1, 1)),),
+        agent_kwargs={
+            "tools": [record_fact],
+            "codex_runtime_config": {
+                "model_transport": "direct",
+                "max_tool_iterations": 1,
+            },
+        },
+    )
+
+    assert isinstance(error, CodexToolIterationLimitError), error
+    assert len(backend.calls) < 5, "the turn kept calling tools past the cap"
+
+
+@pytest.mark.asyncio
+async def test_auto_transport_keeps_the_shim_for_extra_body(
+    monkeypatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Direct Codex cannot forward a request body, so `extra_body` would be
+    dropped silently (e.g. a thinking switch). Under ``auto`` the runtime
+    stays on the shim for such agents."""
+    import logging
+
+    fake_codex_sdk.install_openai_codex_stub()
+    from veadk.runtime.codex import runtime as runtime_module
+
+    monkeypatch.setattr(runtime_module, "resolve_transport", lambda *_: "direct")
+    runtime_logger = logging.getLogger("veadk.runtime.codex.runtime")
+    runtime_logger.addHandler(caplog.handler)
+    runtime_logger.setLevel(logging.INFO)
+    try:
+        _events, _session, backend, error = await _run_turn(
+            monkeypatch,
+            plan=(Round(text="ok", usage=(1, 1)),),
+            agent_kwargs={
+                "model_extra_config": {"extra_body": {"thinking": {"type": "off"}}}
+            },
+        )
+    finally:
+        runtime_logger.removeHandler(caplog.handler)
+
+    assert error is None, error
+    messages = "\n".join(record.getMessage() for record in caplog.records)
+    assert "codex_transport_fallback" in messages
+    assert "transport=shim" in messages
+    # The shim forwarded the body to the backend.
+    assert backend.calls, "the turn never reached the backend"

@@ -146,6 +146,12 @@ _PROVIDER_ID = "veadk"
 _KEY_ENV = "VEADK_CODEX_API_KEY"
 # Carries the MCP bridge's per-turn bearer token into the Codex subprocess.
 _MCP_TOKEN_ENV = "VEADK_CODEX_MCP_TOKEN"
+# Environment variables the sandboxed shell must never inherit (TOML array).
+_SHELL_ENV_EXCLUDES = '["VEADK_CODEX_*", "*API_KEY*", "*SECRET*", "*TOKEN*"]'
+# Bounds on what a resumed turn is handed about the conversation it missed.
+_BACKFILL_MAX_MESSAGES = 50
+_BACKFILL_MAX_CHARS = 4000
+_RESUMED_RESULT_MAX_CHARS = 8000
 # One Codex thread per session can only run one turn at a time: two
 # invocations resuming the same rollout would each write back their own copy.
 _SESSION_LOCKS = SessionTurnLocks()
@@ -154,6 +160,10 @@ _ACTIVE_TURNS = ActiveTurns()
 # How long a stopped turn gets to wind down (after a timeout or cancellation)
 # before its stream is abandoned.
 _TURN_STOP_GRACE_SECONDS = 5.0
+
+
+class CodexToolIterationLimitError(RuntimeError):
+    """A turn called the agent's tools more than ``max_tool_iterations``."""
 
 
 class _QueueSentinel(enum.Enum):
@@ -289,6 +299,24 @@ class CodexRuntime(BaseRuntime):
         # loop. "shim": the in-process Responses->chat shim sits in between and
         # runs the ADK tools itself, for backends that only speak chat.
         transport = resolve_transport(runtime_config, api_base)
+        if transport == "direct" and _model_extra_body(agent):
+            # Codex's provider config has no request-body passthrough, so the
+            # direct transport would silently drop `extra_body` (e.g. a
+            # thinking switch). Under "auto" keep the shim, which forwards it.
+            if runtime_config.model_transport == "auto":
+                logger.info(
+                    "codex_transport_fallback invocation_id=%s transport=shim "
+                    "reason=extra_body_requires_shim",
+                    ctx.invocation_id,
+                )
+                transport = "shim"
+            else:
+                logger.warning(
+                    "codex_extra_body_ignored invocation_id=%s detail=the "
+                    "direct transport cannot forward model_extra_config "
+                    "extra_body; use model_transport='shim' to keep it",
+                    ctx.invocation_id,
+                )
         shim = await get_shim(api_base, api_key) if transport == "shim" else None
         bridge = await get_bridge() if transport == "direct" else None
         route: CodexModelRoute = (
@@ -589,7 +617,9 @@ class CodexRuntime(BaseRuntime):
                     thread_record is not None
                     and thread_record.instruction_hash == thread_instruction_hash
                 ):
-                    import_rollout(codex_home, thread_record.rollout)
+                    await asyncio.to_thread(
+                        import_rollout, codex_home, thread_record.rollout
+                    )
                     resume_thread_id = thread_record.thread_id
                     resume_input_items = _build_codex_input(
                         _with_backfill(
@@ -736,10 +766,12 @@ class CodexRuntime(BaseRuntime):
                     except Exception as e:  # noqa: BLE001 - fall back below
                         logger.warning(
                             "codex_thread_resume_failed invocation_id=%s "
-                            "error_type=%s detail=starting a new thread from "
-                            "the session transcript",
+                            "thread_id=%s error_type=%s error=%s detail=starting "
+                            "a new thread from the session transcript",
                             ctx.invocation_id,
+                            resume_thread_id,
                             type(e).__name__,
+                            _short_error(e),
                         )
                         thread = None
                 if thread is None:
@@ -772,6 +804,12 @@ class CodexRuntime(BaseRuntime):
                 )
                 stream = turn.stream()
                 completion = TurnCompletion(str(getattr(turn, "id", "") or ""))
+                logger.info(
+                    "codex_turn_started invocation_id=%s thread_id=%s turn_id=%s",
+                    ctx.invocation_id,
+                    getattr(thread, "id", None),
+                    getattr(turn, "id", None),
+                )
                 _annotate_span(
                     call_llm_span,
                     {
@@ -924,14 +962,33 @@ class CodexRuntime(BaseRuntime):
                     # already emitted its ADK request event. Codex would keep
                     # the turn going on the placeholder result, so stop it
                     # here; the next invocation resumes the call the usual way.
-                    if (
-                        bridge is not None
-                        and bridge_token is not None
-                        and not bridge_interrupted
-                    ):
+                    if bridge is not None and bridge_token is not None:
                         state = bridge.turn_state(bridge_token)
-                        if state is not None and state.interrupts:
+                        if (
+                            state is not None
+                            and state.interrupts
+                            and not bridge_interrupted
+                        ):
                             bridge_interrupted = True
+                            await _interrupt_quietly(turn, ctx)
+                        # The shim capped ADK tool round-trips per turn; Codex
+                        # drives the loop here, so the cap is enforced on the
+                        # bridge's call count instead.
+                        if (
+                            state is not None
+                            and direct_turn_error is None
+                            and state.calls > runtime_config.max_tool_iterations
+                        ):
+                            direct_turn_error = CodexToolIterationLimitError(
+                                f"Codex called the agent's tools {state.calls} "
+                                "times this turn, over max_tool_iterations="
+                                f"{runtime_config.max_tool_iterations}."
+                            )
+                            logger.warning(
+                                "codex_tool_iteration_limit invocation_id=%s limit=%d",
+                                ctx.invocation_id,
+                                runtime_config.max_tool_iterations,
+                            )
                             await _interrupt_quietly(turn, ctx)
                     transfer_target = transfer_agent_name(event)
                     if transfer_target and use_adk_transfer_scheduler:
@@ -1168,34 +1225,38 @@ class CodexRuntime(BaseRuntime):
             # the rollout records the steps already taken, so the next turn
             # resumes from them instead of repeating them. Before `_cleanup`,
             # which deletes CODEX_HOME and releases the session lock.
-            if (
-                thread_store is not None
-                and thread_key is not None
-                and active_thread_id is not None
-            ):
-                await _save_thread(
-                    thread_store,
-                    thread_key,
-                    codex_home,
-                    active_thread_id,
-                    thread_instruction_hash,
-                    thread_record,
-                    ctx,
+            try:
+                if (
+                    thread_store is not None
+                    and thread_key is not None
+                    and active_thread_id is not None
+                ):
+                    await _save_thread(
+                        thread_store,
+                        thread_key,
+                        codex_home,
+                        active_thread_id,
+                        thread_instruction_hash,
+                        thread_record,
+                        ctx,
+                    )
+            finally:
+                _annotate_span(
+                    call_llm_span,
+                    {
+                        "status": run_status,
+                        "duration_ms": round(
+                            (time.monotonic() - run_started_at) * 1000
+                        ),
+                    },
                 )
-            _annotate_span(
-                call_llm_span,
-                {
-                    "status": run_status,
-                    "duration_ms": round((time.monotonic() - run_started_at) * 1000),
-                },
-            )
-            await _cleanup()
-            logger.info(
-                "codex_runtime_complete invocation_id=%s status=%s duration_ms=%d",
-                ctx.invocation_id,
-                run_status,
-                round((time.monotonic() - run_started_at) * 1000),
-            )
+                await _cleanup()
+                logger.info(
+                    "codex_runtime_complete invocation_id=%s status=%s duration_ms=%d",
+                    ctx.invocation_id,
+                    run_status,
+                    round((time.monotonic() - run_started_at) * 1000),
+                )
 
     async def steer(
         self,
@@ -1274,13 +1335,21 @@ def _prepare_codex_home(
         f"network_access = {str(runtime_config.network_access).lower()}\n\n"
         f"[features]\n"
         # On by default since CLI 0.159: an unreachable backend is retried
-        # forever instead of failing the turn after a few attempts. This
-        # runtime has no turn-level timeout, so a dead shim would hang the
-        # invocation instead of surfacing an error.
+        # forever instead of failing the turn after a few attempts. The turn
+        # timeout would eventually stop it, but only after its (long)
+        # deadline; failing fast surfaces the real error.
         f"unbounded_connection_retries = false\n"
         # Goals need a persisted thread, but every thread here is ephemeral.
         # Left on, Codex still advertises the goal tools to the backend model.
-        f"goals = false\n"
+        f"goals = false\n\n"
+        # Keep credentials out of the shell Codex runs for the model: the
+        # direct transport's model key, the shim's turn token and the MCP
+        # bridge token all live in this subprocess's environment, and without
+        # an explicit policy `env` in the sandbox printed them (verified on
+        # CLI 0.159). A leaked bridge token would let a shell call the agent's
+        # tools directly.
+        f"[shell_environment_policy]\n"
+        f"exclude = {_SHELL_ENV_EXCLUDES}\n"
     )
     with open(os.path.join(home, "config.toml"), "w", encoding="utf-8") as f:
         f.write(config)
@@ -1356,9 +1425,13 @@ async def _load_thread(
         return None
     except Exception as e:  # noqa: BLE001 - unreachable store
         logger.warning(
-            "codex_thread_load_failed invocation_id=%s error_type=%s",
+            "codex_thread_load_failed invocation_id=%s session_id=%s agent=%s "
+            "error_type=%s error=%s",
             ctx.invocation_id,
+            key.session_id,
+            key.agent_name,
             type(e).__name__,
+            _short_error(e),
         )
         return None
 
@@ -1380,7 +1453,7 @@ async def _save_thread(
     other's turn.
     """
     try:
-        rollout = export_rollout(codex_home, thread_id)
+        rollout = await asyncio.to_thread(export_rollout, codex_home, thread_id)
         if rollout is None:
             logger.warning(
                 "codex_thread_save_skipped invocation_id=%s reason=no_rollout",
@@ -1396,16 +1469,34 @@ async def _save_thread(
         )
     except ThreadStoreConflict:
         logger.warning(
-            "codex_thread_save_conflict invocation_id=%s detail=another "
+            "codex_thread_save_conflict invocation_id=%s thread_id=%s "
+            "session_id=%s agent=%s expected_version=%s detail=another "
             "invocation of this session saved first; this turn's rollout is "
             "dropped",
             ctx.invocation_id,
+            thread_id,
+            key.session_id,
+            key.agent_name,
+            previous.version if previous is not None else None,
         )
-    except BaseException as e:  # noqa: BLE001 - best effort, incl. cancellation
+    except asyncio.CancelledError:
+        # Cancellation must reach the caller; the turn's rollout is lost.
         logger.warning(
-            "codex_thread_save_failed invocation_id=%s error_type=%s",
+            "codex_thread_save_cancelled invocation_id=%s thread_id=%s",
             ctx.invocation_id,
+            thread_id,
+        )
+        raise
+    except Exception as e:  # noqa: BLE001 - never fail the turn over this
+        logger.warning(
+            "codex_thread_save_failed invocation_id=%s thread_id=%s "
+            "session_id=%s agent=%s error_type=%s error=%s",
+            ctx.invocation_id,
+            thread_id,
+            key.session_id,
+            key.agent_name,
             type(e).__name__,
+            _short_error(e),
         )
 
 
@@ -1433,7 +1524,13 @@ def _turns_since_own(ctx: "InvocationContext", agent_name: str) -> list[str]:
             if part.text and not part.thought
         ).strip()
         if text:
-            lines.append(f"{event.author}: {text}")
+            lines.append(f"{event.author}: {_clip(text, _BACKFILL_MAX_CHARS)}")
+    # The most recent messages matter most; a long gap is summarized by count.
+    if len(lines) > _BACKFILL_MAX_MESSAGES:
+        dropped = len(lines) - _BACKFILL_MAX_MESSAGES
+        lines = [f"({dropped} earlier messages omitted)"] + lines[
+            -_BACKFILL_MAX_MESSAGES:
+        ]
     return lines
 
 
@@ -1448,11 +1545,26 @@ def _resumed_tool_results(events: list["Event"]) -> list[str]:
     lines: list[str] = []
     for event in events:
         for response in get_event_function_responses(event):
-            payload = json.dumps(response.response, ensure_ascii=False, default=str)
+            payload = _clip(
+                json.dumps(response.response, ensure_ascii=False, default=str),
+                _RESUMED_RESULT_MAX_CHARS,
+            )
             lines.append(
                 f"{response.name} (call {response.id}) now ran and returned: {payload}"
             )
     return lines
+
+
+def _clip(text: str, limit: int) -> str:
+    """Cap ``text`` at ``limit`` characters, marking the cut."""
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]}... [truncated {len(text) - limit} chars]"
+
+
+def _short_error(error: BaseException, limit: int = 500) -> str:
+    """A one-line, bounded error message for logs."""
+    return _clip(" ".join(str(error).split()), limit)
 
 
 def _with_backfill(
@@ -1542,6 +1654,14 @@ def _model_extra_headers(agent: "Agent") -> dict[str, str] | None:
     return headers or None
 
 
+def _model_extra_body(agent: "Agent") -> dict[str, Any]:
+    """The request-body extras the shim would forward for this agent."""
+    from veadk.runtime.codex.proxy import _split_model_extra_config
+
+    _, body = _split_model_extra_config(agent.model_extra_config)
+    return body
+
+
 def _current_otel_context() -> Any:
     """The caller's OTel context, re-attached around bridged tool calls."""
     try:
@@ -1557,8 +1677,14 @@ async def _interrupt_quietly(turn: Any, ctx: "InvocationContext") -> None:
         return
     try:
         await turn.interrupt()
-    except Exception:  # noqa: BLE001 - the turn may already be over
-        logger.warning("codex_interrupt_failed invocation_id=%s", ctx.invocation_id)
+    except Exception as e:  # noqa: BLE001 - the turn may already be over
+        logger.warning(
+            "codex_interrupt_failed invocation_id=%s turn_id=%s error_type=%s error=%s",
+            ctx.invocation_id,
+            getattr(turn, "id", None),
+            type(e).__name__,
+            _short_error(e),
+        )
 
 
 def _is_bridged_mcp_item(payload: Any, bridged_items: set[str]) -> bool:

@@ -405,13 +405,17 @@ class McpBridge:
         except Exception as e:  # noqa: BLE001 - never crash the server
             turn.state.errors.append(e)
             _log("error")
+            # The message is what makes the failure diagnosable; it is
+            # truncated and repr-escaped so one log line stays one line.
+            # Tool arguments are never logged.
             logger.warning(
                 "codex_mcp_bridge_executor_failed invocation_id=%s call_id=%s "
-                "tool=%s error_type=%s",
+                "tool=%s error_type=%s error=%r",
                 turn.invocation_id,
                 call_id,
                 name,
                 type(e).__name__,
+                str(e)[:_ERROR_TEXT_LIMIT],
             )
             message = f"Tool `{name}` failed: {type(e).__name__}: {e}"
             return _text_result(message[:_ERROR_TEXT_LIMIT], is_error=True)

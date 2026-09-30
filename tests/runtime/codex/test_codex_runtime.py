@@ -1126,3 +1126,84 @@ def test_resumed_turn_is_told_what_others_said_since_its_last_reply() -> None:
     assert "hi, I can help" not in prompt
     assert prompt.endswith("codex, summarize")
     assert _with_backfill("same", []) == "same"
+
+
+def test_backfill_is_bounded() -> None:
+    """A long gap or a huge message must not blow up the resumed prompt."""
+    from veadk.runtime.codex import runtime as rt
+
+    events = [_text_event("codex_agent", "earlier reply", "inv-0")]
+    events += [
+        _text_event("user", f"message {i} " + "x" * 10_000, f"inv-{i + 1}")
+        for i in range(rt._BACKFILL_MAX_MESSAGES + 10)
+    ]
+    ctx = SimpleNamespace(
+        invocation_id="inv-now", session=SimpleNamespace(events=events)
+    )
+
+    lines = rt._turns_since_own(ctx, "codex_agent")
+
+    assert len(lines) == rt._BACKFILL_MAX_MESSAGES + 1
+    assert lines[0] == "(10 earlier messages omitted)"
+    assert all(len(line) < rt._BACKFILL_MAX_CHARS + 100 for line in lines)
+    assert "message 59" in lines[-1]
+
+
+@pytest.mark.asyncio
+async def test_saving_the_rollout_does_not_swallow_cancellation(tmp_path) -> None:
+    """The save runs in the runtime's `finally`; swallowing a cancellation
+    there would break the caller's cancel and hold the session lock longer."""
+    from veadk.runtime.codex import runtime as rt
+    from veadk.runtime.codex.thread_store import ThreadKey
+
+    class _CancellingStore:
+        async def save(self, *args, **kwargs):
+            raise asyncio.CancelledError
+
+    rollout_path = (
+        tmp_path / "sessions/2026/09/30/rollout-2026-09-30T00-00-00-"
+        "01a0f000-0000-7000-8000-000000000001.jsonl"
+    )
+    rollout_path.parent.mkdir(parents=True)
+    rollout_path.write_text("{}\n")
+
+    with pytest.raises(asyncio.CancelledError):
+        await rt._save_thread(
+            _CancellingStore(),
+            ThreadKey(app_name="a", user_id="u", session_id="s", agent_name="g"),
+            str(tmp_path),
+            "01a0f000-0000-7000-8000-000000000001",
+            "hash",
+            None,
+            SimpleNamespace(invocation_id="inv"),
+        )
+
+
+def test_default_ark_config_does_not_force_the_shim() -> None:
+    """VeADK's default Ark `extra_body` (caching) is dropped on Responses anyway.
+
+    If it counted as a body to forward, every Ark agent would fall back to the
+    shim and the direct transport would never be used by default.
+    """
+    from veadk import Agent
+    from veadk.runtime.codex.runtime import _model_extra_body
+
+    base = "https://ark.cn-beijing.volces.com/api/v3"
+    default = Agent(
+        name="a",
+        runtime="codex",
+        model_name="m",
+        model_api_base=base,
+        model_api_key="k",
+    )
+    custom = Agent(
+        name="b",
+        runtime="codex",
+        model_name="m",
+        model_api_base=base,
+        model_api_key="k",
+        model_extra_config={"extra_body": {"thinking": {"type": "disabled"}}},
+    )
+
+    assert _model_extra_body(default) == {}
+    assert _model_extra_body(custom) == {"thinking": {"type": "disabled"}}
