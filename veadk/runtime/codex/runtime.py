@@ -90,6 +90,7 @@ from veadk.runtime.codex.thread_store import ThreadRecord
 from veadk.runtime.codex.thread_store import RolloutTooLarge
 from veadk.runtime.codex.thread_store import ThreadStoreConflict
 from veadk.runtime.codex.thread_store import ThreadStoreCorrupt
+from veadk.runtime.codex.thread_store import ThreadStoreIncompatible
 from veadk.runtime.codex.thread_store import instruction_hash
 from veadk.runtime.codex.thread_store import select_thread_store
 from veadk.runtime.codex.tools_bridge import (
@@ -614,7 +615,13 @@ class CodexRuntime(BaseRuntime):
                     )
                 )
                 thread_instruction_hash = instruction_hash(developer_instructions)
-                thread_record = await _load_thread(thread_store, thread_key, ctx)
+                try:
+                    thread_record = await _load_thread(thread_store, thread_key, ctx)
+                except ThreadStoreIncompatible:
+                    # Written by a newer VeADK: run this turn on a new thread
+                    # and do not save it, which would overwrite a record the
+                    # newer instance still needs.
+                    thread_store = None
                 if (
                     thread_record is not None
                     and thread_record.instruction_hash == thread_instruction_hash
@@ -1465,6 +1472,18 @@ async def _load_thread(
     """Load the session's thread record; a broken record means a new thread."""
     try:
         return await store.load(key)
+    except ThreadStoreIncompatible as e:
+        codex_metrics.record_resume("incompatible")
+        logger.warning(
+            "codex_thread_record_incompatible invocation_id=%s session_id=%s "
+            "agent=%s error=%s detail=running on a new thread; the record is "
+            "kept for the newer VeADK that wrote it",
+            ctx.invocation_id,
+            key.session_id,
+            key.agent_name,
+            _short_error(e),
+        )
+        raise
     except ThreadStoreCorrupt:
         # Left in place, the record would make every later save conflict (a
         # new thread saves as "must not exist yet"), pinning the session to

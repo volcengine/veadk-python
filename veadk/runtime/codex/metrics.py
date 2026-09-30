@@ -25,7 +25,7 @@ Instruments (meter name ``veadk.runtime.codex``):
 
 | Name | Type | Unit | Attributes | Meaning |
 |---|---|---|---|---|
-| `veadk.codex.thread.resume` | Counter | `1` | `outcome`: resumed, new_thread, instructions_changed, retried_then_resumed, fallback_after_error, store_error, other | How each invocation obtained its Codex thread. |
+| `veadk.codex.thread.resume` | Counter | `1` | `outcome`: resumed, new_thread, instructions_changed, retried_then_resumed, fallback_after_error, store_error, incompatible, other | How each invocation obtained its Codex thread. |
 | `veadk.codex.thread.save` | Counter | `1` | `outcome`: saved, conflict, failed, skipped, cancelled, too_large, other | Result of persisting the thread after a turn. |
 | `veadk.codex.turn` | Counter | `1` | `status`: completed, failed, cancelled, transferred, timeout, other; `transport`: direct, shim, other | Finished Codex turns. |
 | `veadk.codex.turn.duration` | Histogram | `s` | same as `veadk.codex.turn` | Wall-clock duration of a finished turn. |
@@ -72,6 +72,7 @@ RESUME_OUTCOMES = frozenset(
         "retried_then_resumed",
         "fallback_after_error",
         "store_error",
+        "incompatible",
     }
 )
 SAVE_OUTCOMES = frozenset(

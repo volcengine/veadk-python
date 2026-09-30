@@ -14,7 +14,11 @@
 
 """Rollout file I/O and the Codex thread stores.
 
-Everything except the last test is offline file/sqlite work. The last test
+Everything except the last test is offline file/sqlite work. The store
+contract tests also run against a real MySQL / PostgreSQL when
+``VEADK_TEST_MYSQL_URL`` / ``VEADK_TEST_POSTGRES_URL`` hold an async SQLAlchemy
+URL (``mysql+aiomysql://...``, ``postgresql+asyncpg://...``); each test gets
+its own table, dropped afterwards. The last test
 (``codex_smoke``, opt in with ``CODEX_RUN_SMOKE=1``) runs the real Codex binary
 against a stub Responses backend to prove that a rollout that went through a
 ``DatabaseThreadStore`` really resumes in a fresh ``CODEX_HOME``.
@@ -48,10 +52,13 @@ from veadk.runtime.codex.thread_store import (
     ThreadKey,
     ThreadRecord,
     MAX_ROLLOUT_BYTES,
+    SCHEMA_VERSION,
     RolloutTooLarge,
     ThreadStoreConflict,
     ThreadStoreCorrupt,
     ThreadStoreError,
+    ThreadStoreIncompatible,
+    ThreadStoreSchemaError,
     instruction_hash,
     rollout_size_limit,
     select_thread_store,
@@ -215,7 +222,7 @@ async def _make_store(kind: str, tmp_path: Path):
         yield InMemoryThreadStore()
     elif kind == "localdir":
         yield LocalDirThreadStore(tmp_path / "threads")
-    else:
+    elif kind == "database":
         from sqlalchemy.ext.asyncio import create_async_engine
 
         engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'db.sqlite'}")
@@ -223,9 +230,30 @@ async def _make_store(kind: str, tmp_path: Path):
             yield DatabaseThreadStore(engine)
         finally:
             await engine.dispose()
+    else:
+        from sqlalchemy.ext.asyncio import create_async_engine
+
+        url = os.getenv(_SERVER_DB_ENVS[kind])
+        if not url:
+            pytest.skip(f"set {_SERVER_DB_ENVS[kind]} to run against {kind}")
+        engine = create_async_engine(url)
+        store = DatabaseThreadStore(
+            engine, table_name=f"veadk_codex_threads_t{uuid.uuid4().hex[:12]}"
+        )
+        try:
+            yield store
+        finally:
+            async with engine.begin() as conn:
+                await conn.run_sync(store._metadata.drop_all, checkfirst=True)
+            await engine.dispose()
 
 
-STORE_KINDS = ["memory", "localdir", "database"]
+_SERVER_DB_ENVS = {
+    "mysql": "VEADK_TEST_MYSQL_URL",
+    "postgresql": "VEADK_TEST_POSTGRES_URL",
+}
+DB_KINDS = ["database", *_SERVER_DB_ENVS]
+STORE_KINDS = ["memory", "localdir", *DB_KINDS]
 
 
 @pytest.mark.asyncio
@@ -402,7 +430,7 @@ async def _tamper(store: Any, kind: str, how: str) -> None:
 # blob in process memory, never on storage that can be damaged underneath it.
 @pytest.mark.asyncio
 @pytest.mark.parametrize("how", ["blob", "sha"])
-@pytest.mark.parametrize("kind", ["localdir", "database"])
+@pytest.mark.parametrize("kind", ["localdir", *DB_KINDS])
 async def test_store_load_rejects_corrupt_rollout(
     kind: str, how: str, tmp_path: Path
 ) -> None:
@@ -419,6 +447,94 @@ async def test_store_load_rejects_corrupt_rollout(
         await _tamper(store, kind, how)
         with pytest.raises(ThreadStoreCorrupt):
             await store.load(KEY)
+
+
+async def _set_schema_version(store: Any, kind: str, version: int) -> None:
+    if kind == "localdir":
+        path, _ = store._paths(KEY)
+        header_line, _, payload = path.read_bytes().partition(b"\n")
+        header = json.loads(header_line)
+        header["schema_version"] = version
+        path.write_bytes(json.dumps(header).encode("utf-8") + b"\n" + payload)
+        return
+    from sqlalchemy import update
+
+    async with store.engine.begin() as conn:
+        await conn.execute(
+            update(store._table).where(store._where(KEY)).values(schema_version=version)
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["localdir", *DB_KINDS])
+async def test_store_refuses_newer_schema_and_keeps_record(
+    kind: str, tmp_path: Path
+) -> None:
+    """A record written by a newer VeADK is neither read nor overwritten.
+
+    Mid rolling upgrade an old instance can meet a record in a format it does
+    not know. Reading it could hand Codex a misparsed rollout; saving over it
+    would destroy the thread the newer instances are still resuming.
+    """
+    async with _make_store(kind, tmp_path) as store:
+        await store.save(KEY, TID, _rollout(b"new\n"), "h", expected_version=None)
+        await _set_schema_version(store, kind, SCHEMA_VERSION + 1)
+        with pytest.raises(ThreadStoreIncompatible) as info:
+            await store.load(KEY)
+        assert not isinstance(info.value, ThreadStoreCorrupt)
+        # Neither a create nor an update replaces it.
+        for expected in (None, 1):
+            with pytest.raises(ThreadStoreError):
+                await store.save(
+                    KEY, TID, _rollout(b"old\n"), "h", expected_version=expected
+                )
+        await _set_schema_version(store, kind, SCHEMA_VERSION)
+        rec = await store.load(KEY)
+        assert rec is not None and rec.version == 1 and rec.rollout.data == b"new\n"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["localdir", *DB_KINDS])
+async def test_store_writes_current_schema_version(kind: str, tmp_path: Path) -> None:
+    async with _make_store(kind, tmp_path) as store:
+        await store.save(KEY, TID, _rollout(), "h", expected_version=None)
+        if kind == "localdir":
+            path, _ = store._paths(KEY)
+            header = json.loads(path.read_bytes().partition(b"\n")[0])
+            assert header["schema_version"] == SCHEMA_VERSION
+            return
+        from sqlalchemy import select
+
+        async with store.engine.connect() as conn:
+            version = (
+                await conn.execute(select(store._table.c.schema_version))
+            ).scalar_one()
+        assert version == SCHEMA_VERSION
+
+
+@pytest.mark.asyncio
+async def test_database_store_rejects_table_without_schema_column(
+    tmp_path: Path,
+) -> None:
+    """A table left by a pre-release build fails loudly, not on every insert."""
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'db.sqlite'}")
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "CREATE TABLE veadk_codex_threads (app_name VARCHAR(128), "
+                    "user_id VARCHAR(128), session_id VARCHAR(128), "
+                    "agent_name VARCHAR(128), thread_id VARCHAR(128))"
+                )
+            )
+        store = DatabaseThreadStore(engine)
+        with pytest.raises(ThreadStoreSchemaError, match="schema_version"):
+            await store.load(KEY)
+    finally:
+        await engine.dispose()
 
 
 @pytest.mark.asyncio
@@ -818,7 +934,10 @@ class _SSEStub:
 
 @pytest.mark.codex_smoke
 @pytest.mark.asyncio
-async def test_rollout_resumes_in_fresh_codex_home_via_db_store(tmp_path: Path) -> None:
+@pytest.mark.parametrize("kind", DB_KINDS)
+async def test_rollout_resumes_in_fresh_codex_home_via_db_store(
+    kind: str, tmp_path: Path
+) -> None:
     if os.getenv("CODEX_RUN_SMOKE") != "1":
         pytest.skip("set CODEX_RUN_SMOKE=1 to spawn the real Codex binary")
     from tests.runtime.codex.test_codex_runtime_smoke import _skip_reason
@@ -828,7 +947,6 @@ async def test_rollout_resumes_in_fresh_codex_home_via_db_store(tmp_path: Path) 
         pytest.skip(reason)
 
     from openai_codex import ApprovalMode, AsyncCodex, CodexConfig, Sandbox
-    from sqlalchemy.ext.asyncio import create_async_engine
 
     first_text = f"veadk-first-turn-{uuid.uuid4().hex}"
     second_text = f"veadk-second-turn-{uuid.uuid4().hex}"
@@ -859,8 +977,12 @@ async def test_rollout_resumes_in_fresh_codex_home_via_db_store(tmp_path: Path) 
         env = {**os.environ, "CODEX_HOME": str(home), "STUB_KEY": "x"}
         return AsyncCodex(config=CodexConfig(cwd=str(cwd), env=env))
 
-    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'threads.db'}")
-    try:
+    async with contextlib.AsyncExitStack() as stack:
+        stack.push_async_callback(stub.stop)
+        # Two store objects on one engine: the reader shares nothing with the
+        # writer but the database, as on another instance.
+        store = await stack.enter_async_context(_make_store(kind, tmp_path))
+        reader = DatabaseThreadStore(store.engine, table_name=store._table.name)
 
         async def drive() -> None:
             async with codex(home_a) as c:
@@ -870,11 +992,10 @@ async def test_rollout_resumes_in_fresh_codex_home_via_db_store(tmp_path: Path) 
             rollout = export_rollout(str(home_a), thread_id)
             assert rollout is not None and first_text.encode() in rollout.data
 
-            store = DatabaseThreadStore(engine)
             await store.save(
                 KEY, thread_id, rollout, instruction_hash(""), expected_version=None
             )
-            record = await DatabaseThreadStore(engine).load(KEY)
+            record = await reader.load(KEY)
             assert record is not None and record.rollout == rollout
             import_rollout(str(home_b), record.rollout)
 
@@ -893,6 +1014,3 @@ async def test_rollout_resumes_in_fresh_codex_home_via_db_store(tmp_path: Path) 
             assert turn_posts[0].count(first_text) == 1, turn_posts[0].count(first_text)
 
         await asyncio.wait_for(drive(), 90)
-    finally:
-        await engine.dispose()
-        await stub.stop()
