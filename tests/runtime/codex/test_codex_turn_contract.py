@@ -229,7 +229,7 @@ async def test_agent_turn_replays_across_two_codex_requests(monkeypatch) -> None
     This one forces Codex to issue a *second* request under the same turn token,
     by having the model ask for a tool the shim has no executor for: the shim
     hands that call back to Codex, which answers it and re-POSTs. Only
-    ``turn_context.state.replay_items`` can put the earlier ADK pair into that
+    ``turn_context.state.replay_into`` can put the earlier ADK pair into that
     second request, since Codex rebuilds ``input`` from its own thread and never
     saw it.
 

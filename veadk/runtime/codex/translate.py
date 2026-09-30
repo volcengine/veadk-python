@@ -25,6 +25,7 @@ import base64
 import json
 import mimetypes
 import os
+import shlex
 from collections.abc import Callable
 from enum import Enum
 from pathlib import Path
@@ -409,6 +410,31 @@ def _parse_args(raw: Any) -> dict[str, Any]:
     return {}
 
 
+_WRAPPER_SHELLS = frozenset({"sh", "bash", "zsh"})
+
+
+def _unwrap_shell_command(command: str) -> str:
+    """Return the command the model asked for, without Codex's shell wrapper.
+
+    Codex runs every command through the user's login shell and reports the
+    wrapped form (``/bin/zsh -lc '<cmd>'``). Recorded verbatim, that form is
+    what the next invocation's model sees in its replayed history, and it
+    imitates it: it sends ``/bin/zsh -lc '...'`` as its own command, Codex
+    wraps it again, and the history fills up with doubly nested shells.
+    """
+    try:
+        argv = shlex.split(command)
+    except ValueError:
+        return command
+    if (
+        len(argv) == 3
+        and os.path.basename(argv[0]) in _WRAPPER_SHELLS
+        and argv[1] in ("-c", "-lc")
+    ):
+        return argv[2]
+    return command
+
+
 def _tool_call(
     data: dict[str, Any],
 ) -> tuple[str, dict[str, Any], dict[str, Any]] | None:
@@ -422,7 +448,10 @@ def _tool_call(
     if itype == "commandExecution":
         return (
             "exec_command",
-            {"command": data.get("command", ""), "cwd": data.get("cwd")},
+            {
+                "command": _unwrap_shell_command(data.get("command") or ""),
+                "cwd": data.get("cwd"),
+            },
             {
                 "output": data.get("aggregated_output", ""),
                 "exit_code": data.get("exit_code"),
