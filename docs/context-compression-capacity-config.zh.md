@@ -34,7 +34,8 @@ veadk/context/model_capacities.json
       "default_answer_tokens": null,
       "reasoning_token_reserve": 0,
       "answer_only_max_tokens": false,
-      "ark_thinking_controls": false
+      "ark_thinking_controls": false,
+      "openai_transport": true
     }
   ]
 }
@@ -50,7 +51,8 @@ veadk/context/model_capacities.json
 | `default_answer_tokens`、`reasoning_token_reserve` | 回答和推理的规划预算，按该版本的接口语义填写 |
 | `answer_only_max_tokens` | 该接口的 `max_tokens` 是否只计算回答；不是所有模型都相同 |
 | `ark_thinking_controls` | 是否启用当前 SDK 已适配的方舟 thinking 参数处理；不等于模型是否支持推理 |
-| `source`、`verified_on` | 官方依据与实际核实日期；本次文件迁移不会修改原核实日期 |
+| `openai_transport` | 是否明确允许该型号使用 `openai/` 兼容接口前缀；仍只匹配本条精确 ID/别名 |
+| `source`、`verified_on` | 官方依据与实际核实日期；保留未重新核实条目的原日期 |
 
 单独公布输入和输出上限，不代表二者相加就是共享窗口。容量配置也不会替用户开启或关闭 thinking；实际生成参数仍由模型配置决定。
 
@@ -75,16 +77,8 @@ agent = Agent(name="assistant")
 
 配置缺失或不可读取时抛出 `model_capacity_config_unavailable`；格式、字段、容量关系或名称冲突错误时抛出 `invalid_model_capacity_config`。错误不会静默降级为空表后猜测容量。未覆盖模型仍保持原来的 `model_capacity_required` 行为与显式容量配置指引。
 
-迁移范围为原有 25 个条目，包括容量、别名、来源、核实日期以及回答/推理规划；已与迁移前实际加载的数据逐字段核对，全部一致。
+当前手工表包含 76 个型号、9 个服务商和 21 个别名，详见[覆盖表与官方依据](context-compression-model-coverage.zh.md)。它还会使用 LiteLLM 本地目录作为后备，不等同于 SDK 总共只支持这些型号。
 
-| 验证项 | 结果 |
-| --- | --- |
-| 配置与预算定向回归 | 153 项通过 |
-| 完整强制门禁 | 两组各 1,295 passed、5 skipped、0 failures/errors；Python 3.10 / ADK 1.34.0、Python 3.12 / ADK 2.2.0 |
-| 新增配置回归 | 覆盖类型/范围/重复名称、缺失与损坏文件、工作目录独立及错误信息；已纳入 `tests/context/` 强制入口 |
-| 实际包构建 | wheel 和 sdist 都包含与源码字节一致的 JSON |
-| 安装后验证 | 从实际安装的 wheel 读取全部 25 条配置，与迁移前一致；不受工作目录同名文件影响，普通 Agent 创建通过 |
-
-执行全部在隔离 Devbox 目录，真实 LLM 调用 0、客户 Runtime 操作 0、新增依赖 0。Python 3.10 / 3.12 的发布与依赖回归各 10 项通过，新虚拟环境安装及依赖一致性检查通过。远端 CI 以 [PR #1152](https://github.com/volcengine/veadk-python/pull/1152) 当前提交为准；尚未正式发布。
+新增容量与传输别名回归已纳入 `tests/context/` 强制入口。5663 Devbox 上 Python 3.10 / ADK 1.34.0、Python 3.12 / ADK 2.2.0 的完整门禁各 1,310 项通过、5 项跳过；容量定向回归各 116 项通过。pre-commit、wheel/sdist 打包及安装后读取验证通过。远端 CI 以 PR #1152 当前 SHA 为准。新增依赖 0，本轮真实模型调用 0。
 
 开发者接入示例见[上下文压缩开发者入门与使用示例](context-compression-developer-guide.zh.md)。

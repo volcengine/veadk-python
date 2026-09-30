@@ -42,6 +42,7 @@ def config():
                 "reasoning_token_reserve": 0,
                 "answer_only_max_tokens": False,
                 "ark_thinking_controls": False,
+                "openai_transport": False,
             }
         ],
     }
@@ -89,6 +90,17 @@ def test_configuration_values_and_aliases_drive_resolution(config):
     assert lookup["example/example-v1"].context_window == 9000
     assert "openai/example-v1" not in lookup
     assert rows[0].aliases == ("example-current",)
+
+
+def test_openai_transport_requires_explicit_row_configuration(config):
+    rows = capacity._parse_capacities(json.dumps(config))
+    assert "openai/example-v1" not in capacity._capacity_lookup(rows)
+    config["models"][0]["openai_transport"] = True
+    rows = capacity._parse_capacities(json.dumps(config))
+    lookup = capacity._capacity_lookup(rows)
+    assert lookup["openai/example-v1"] == rows[0]
+    assert lookup["openai/example-current"] == rows[0]
+    assert "unreviewed/example-v1" not in lookup
 
 
 @pytest.mark.parametrize(
@@ -143,6 +155,7 @@ def test_capacity_configuration_rejects_invalid_schema(config, key, value):
         ("answer_only_max_tokens", "false"),
         ("answer_only_max_tokens", True),
         ("ark_thinking_controls", 1),
+        ("openai_transport", "false"),
         ("source", "file:///local"),
         ("source", "https://example.com@"),
         ("source", 3),

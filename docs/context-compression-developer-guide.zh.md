@@ -128,7 +128,7 @@ BM25 按匹配词的区分度、出现次数和片段长度排序，适合日志
 
 ### 5.1 模型容量从哪里来
 
-容量优先取 SDK 配置文件 `veadk/context/model_capacities.json`，其次使用随 LiteLLM 安装的本地精确条目；当前不会实时请求方舟容量接口。模型容量与协议参数均在 JSON 中维护，Python 只负责加载、校验和查询，详见[模型上下文容量配置说明](context-compression-capacity-config.zh.md)。私有接入点或未覆盖的模型，需要按部署的实际限制配置 context_window，并通过 output_reserve 明确预留输出空间。不能只凭模型家族猜窗口，也不能用 input_limit 代替总窗口。
+容量优先取 SDK 配置文件 `veadk/context/model_capacities.json`，其次使用随 LiteLLM 安装的本地精确条目；当前不会实时请求方舟容量接口。模型容量与协议参数均在 JSON 中维护，Python 只负责加载、校验和查询，当前手工表覆盖 76 个型号、9 个服务商、21 个别名，详见[覆盖范围与官方来源](context-compression-model-coverage.zh.md)及[模型上下文容量配置说明](context-compression-capacity-config.zh.md)。私有接入点或未覆盖的模型，需要按部署的实际限制配置 context_window，并通过 output_reserve 明确预留输出空间。不能只凭模型家族猜窗口，也不能用 input_limit 代替总窗口。
 
 维护已有模型的窗口时，只修改 `veadk/context/model_capacities.json` 中相应版本的条目，保留来源与核实日期，不需要修改 Python 代码。配置随 SDK 包交付；修改后重新构建、安装并重启应用，当前不提供热更新。
 
@@ -151,7 +151,7 @@ BM25 按匹配词的区分度、出现次数和片段长度排序，适合日志
 | veadk/runner.py、veadk/memory/ | Session 与 SQLite 持久化 |
 | tests/context/ | 压缩、预算、检索和原文回查回归 |
 
-当前候选已在隔离 Devbox 完成完整门禁：两组各 1,295 项通过、5 项跳过（Python 3.10 / google-adk 1.34.0；Python 3.12 / google-adk 2.2.0），包含无模型检索与新增的容量配置回归；实际安装包的 JSON 配置读取验证通过。本文示例已对照公开 API 核对并完成语法静态检查，本轮未调用真实模型。
+容量扩展新增了最大输入限制、默认生成型号及兼容接口别名的离线回归，已纳入强制门禁。5663 Devbox 上 Python 3.10 / ADK 1.34.0 与 Python 3.12 / ADK 2.2.0 的完整门禁各 1,310 项通过、5 项跳过，容量定向回归各 116 项通过；pre-commit、打包与安装验证通过，详见[模型覆盖说明](context-compression-model-coverage.zh.md)。本文示例已对照公开 API 核对并完成语法静态检查，本轮未调用真实模型。
 
 SQLite 超时恢复回归分别验证预算、真实取消、已完成批次持久化及恢复仅补缺失片段；两个 Python 版本下加入 500ms 异步停顿均通过。生产超时参数未变。
 

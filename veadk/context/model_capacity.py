@@ -22,6 +22,9 @@ belong to each row so changes can be reviewed with their evidence.
 publishes only an input cap (Gemini), reuse that cap as the shared ceiling;
 never add the output cap to invent a larger window. For k/K/M abbreviations we
 use decimal units conservatively. Exact integer limits retain their units.
+If no independent input cap is published, the shared ceiling also caps input;
+request budgeting still subtracts output and safety headroom. When documented
+modes have different limits, the row uses their conservative common bound.
 
 Output reserves are SDK planning defaults, NOT API generation parameters or a
 promise that arbitrary reasoning fits. Native output settings are preserved.
@@ -52,6 +55,7 @@ class ModelCapacity:
     reasoning_token_reserve: int
     answer_only_max_tokens: bool
     ark_thinking_controls: bool
+    openai_transport: bool
 
 
 def _invalid(field):
@@ -113,7 +117,11 @@ def _row_from_config(row):
         raise _invalid("reasoning_token_reserve")
     if (answer or 0) + reasoning > row["default_output_reserve"]:
         raise _invalid("output planning reserves")
-    for field in ("answer_only_max_tokens", "ark_thinking_controls"):
+    for field in (
+        "answer_only_max_tokens",
+        "ark_thinking_controls",
+        "openai_transport",
+    ):
         if type(row[field]) is not bool:
             raise _invalid(field)
     if row["answer_only_max_tokens"] and answer is None:
@@ -137,13 +145,13 @@ def _row_from_config(row):
 
 
 def _capacity_lookup(rows):
-    # Bare IDs identify only their reviewed provider. openai/ is also an Ark
-    # transport spelling; it never grants cross-provider capacity borrowing.
+    # Bare IDs identify only their reviewed provider. Explicit transport
+    # aliases are per-row configuration, never arbitrary prefix stripping.
     result = {}
     for row in rows:
         for model_id in (row.model_id, *row.aliases):
             names = [model_id, f"{row.provider}/{model_id}"]
-            if row.provider == "volcengine":
+            if row.openai_transport and row.provider != "openai":
                 names.append(f"openai/{model_id}")
             for name in names:
                 if name in result:

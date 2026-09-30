@@ -14,7 +14,8 @@
       "default_answer_tokens": 4096,
       "reasoning_token_reserve": 12288,
       "answer_only_max_tokens": true,
-      "ark_thinking_controls": true
+      "ark_thinking_controls": true,
+      "openai_transport": true
     },
     {
       "provider": "volcengine",
@@ -29,7 +30,8 @@
       "default_answer_tokens": 4096,
       "reasoning_token_reserve": 12288,
       "answer_only_max_tokens": true,
-      "ark_thinking_controls": false
+      "ark_thinking_controls": false,
+      "openai_transport": true
     },
     {
       "provider": "volcengine",
@@ -44,7 +46,8 @@
       "default_answer_tokens": 4096,
       "reasoning_token_reserve": 12288,
       "answer_only_max_tokens": true,
-      "ark_thinking_controls": false
+      "ark_thinking_controls": false,
+      "openai_transport": true
     },
     {
       "provider": "volcengine",
@@ -59,7 +62,8 @@
       "default_answer_tokens": 4096,
       "reasoning_token_reserve": 12288,
       "answer_only_max_tokens": true,
-      "ark_thinking_controls": false
+      "ark_thinking_controls": false,
+      "openai_transport": true
     },
     {
       "provider": "volcengine",
@@ -74,7 +78,8 @@
       "default_answer_tokens": 4096,
       "reasoning_token_reserve": 12288,
       "answer_only_max_tokens": true,
-      "ark_thinking_controls": false
+      "ark_thinking_controls": false,
+      "openai_transport": true
     },
     {
       "provider": "volcengine",
@@ -89,7 +94,8 @@
       "default_answer_tokens": 4096,
       "reasoning_token_reserve": 12288,
       "answer_only_max_tokens": true,
-      "ark_thinking_controls": false
+      "ark_thinking_controls": false,
+      "openai_transport": true
     },
     {
       "provider": "volcengine",
@@ -104,7 +110,8 @@
       "default_answer_tokens": 4096,
       "reasoning_token_reserve": 12288,
       "answer_only_max_tokens": true,
-      "ark_thinking_controls": false
+      "ark_thinking_controls": false,
+      "openai_transport": true
     },
     {
       "provider": "volcengine",
@@ -119,7 +126,8 @@
       "default_answer_tokens": 4096,
       "reasoning_token_reserve": 12288,
       "answer_only_max_tokens": true,
-      "ark_thinking_controls": false
+      "ark_thinking_controls": false,
+      "openai_transport": true
     },
     {
       "provider": "volcengine",
@@ -134,7 +142,8 @@
       "default_answer_tokens": 4096,
       "reasoning_token_reserve": 12288,
       "answer_only_max_tokens": true,
-      "ark_thinking_controls": false
+      "ark_thinking_controls": false,
+      "openai_transport": true
     },
     {
       "provider": "volcengine",
@@ -149,7 +158,8 @@
       "default_answer_tokens": 4096,
       "reasoning_token_reserve": 12288,
       "answer_only_max_tokens": true,
-      "ark_thinking_controls": false
+      "ark_thinking_controls": false,
+      "openai_transport": true
     },
     {
       "provider": "volcengine",
@@ -164,7 +174,8 @@
       "default_answer_tokens": null,
       "reasoning_token_reserve": 0,
       "answer_only_max_tokens": false,
-      "ark_thinking_controls": false
+      "ark_thinking_controls": false,
+      "openai_transport": true
     },
     {
       "provider": "volcengine",
@@ -179,7 +190,8 @@
       "default_answer_tokens": 4096,
       "reasoning_token_reserve": 12288,
       "answer_only_max_tokens": true,
-      "ark_thinking_controls": false
+      "ark_thinking_controls": false,
+      "openai_transport": true
     },
     {
       "provider": "volcengine",
@@ -194,7 +206,8 @@
       "default_answer_tokens": 4096,
       "reasoning_token_reserve": 12288,
       "answer_only_max_tokens": true,
-      "ark_thinking_controls": false
+      "ark_thinking_controls": false,
+      "openai_transport": true
     },
     {
       "provider": "volcengine",
@@ -209,7 +222,8 @@
       "default_answer_tokens": 4096,
       "reasoning_token_reserve": 12288,
       "answer_only_max_tokens": true,
-      "ark_thinking_controls": false
+      "ark_thinking_controls": false,
+      "openai_transport": true
     },
     {
       "provider": "volcengine",
@@ -224,52 +238,56 @@
       "default_answer_tokens": 4096,
       "reasoning_token_reserve": 12288,
       "answer_only_max_tokens": true,
-      "ark_thinking_controls": false
+      "ark_thinking_controls": false,
+      "openai_transport": true
     },
     {
       "provider": "openai",
       "model_id": "gpt-6-astra",
       "context_window": 1050000,
-      "max_input_tokens": 1050000,
+      "max_input_tokens": 922000,
       "max_output_tokens": 128000,
       "source": "https://developers.openai.com/api/docs/models/gpt-6-astra",
-      "verified_on": "2026-09-28",
+      "verified_on": "2026-09-30",
       "default_output_reserve": 16384,
       "aliases": [],
       "default_answer_tokens": null,
       "reasoning_token_reserve": 0,
       "answer_only_max_tokens": false,
-      "ark_thinking_controls": false
+      "ark_thinking_controls": false,
+      "openai_transport": false
     },
     {
       "provider": "openai",
       "model_id": "gpt-5.6-terra",
       "context_window": 1050000,
-      "max_input_tokens": 1050000,
+      "max_input_tokens": 922000,
       "max_output_tokens": 128000,
       "source": "https://developers.openai.com/api/docs/models/gpt-5.6-terra",
-      "verified_on": "2026-09-28",
+      "verified_on": "2026-09-30",
       "default_output_reserve": 16384,
       "aliases": [],
       "default_answer_tokens": null,
       "reasoning_token_reserve": 0,
       "answer_only_max_tokens": false,
-      "ark_thinking_controls": false
+      "ark_thinking_controls": false,
+      "openai_transport": false
     },
     {
       "provider": "openai",
       "model_id": "gpt-5.6-luna",
       "context_window": 1050000,
-      "max_input_tokens": 1050000,
+      "max_input_tokens": 922000,
       "max_output_tokens": 128000,
       "source": "https://developers.openai.com/api/docs/models/gpt-5.6-luna",
-      "verified_on": "2026-09-28",
+      "verified_on": "2026-09-30",
       "default_output_reserve": 16384,
       "aliases": [],
       "default_answer_tokens": null,
       "reasoning_token_reserve": 0,
       "answer_only_max_tokens": false,
-      "ark_thinking_controls": false
+      "ark_thinking_controls": false,
+      "openai_transport": false
     },
     {
       "provider": "openai",
@@ -286,7 +304,8 @@
       "default_answer_tokens": null,
       "reasoning_token_reserve": 0,
       "answer_only_max_tokens": false,
-      "ark_thinking_controls": false
+      "ark_thinking_controls": false,
+      "openai_transport": false
     },
     {
       "provider": "openai",
@@ -303,7 +322,8 @@
       "default_answer_tokens": null,
       "reasoning_token_reserve": 0,
       "answer_only_max_tokens": false,
-      "ark_thinking_controls": false
+      "ark_thinking_controls": false,
+      "openai_transport": false
     },
     {
       "provider": "anthropic",
@@ -318,7 +338,8 @@
       "default_answer_tokens": null,
       "reasoning_token_reserve": 0,
       "answer_only_max_tokens": false,
-      "ark_thinking_controls": false
+      "ark_thinking_controls": false,
+      "openai_transport": false
     },
     {
       "provider": "anthropic",
@@ -333,7 +354,8 @@
       "default_answer_tokens": null,
       "reasoning_token_reserve": 0,
       "answer_only_max_tokens": false,
-      "ark_thinking_controls": false
+      "ark_thinking_controls": false,
+      "openai_transport": false
     },
     {
       "provider": "anthropic",
@@ -348,7 +370,8 @@
       "default_answer_tokens": null,
       "reasoning_token_reserve": 0,
       "answer_only_max_tokens": false,
-      "ark_thinking_controls": false
+      "ark_thinking_controls": false,
+      "openai_transport": false
     },
     {
       "provider": "anthropic",
@@ -363,7 +386,8 @@
       "default_answer_tokens": null,
       "reasoning_token_reserve": 0,
       "answer_only_max_tokens": false,
-      "ark_thinking_controls": false
+      "ark_thinking_controls": false,
+      "openai_transport": false
     },
     {
       "provider": "gemini",
@@ -372,13 +396,867 @@
       "max_input_tokens": 1048576,
       "max_output_tokens": 65536,
       "source": "https://ai.google.dev/gemini-api/docs/models/gemini-3.8-flash",
-      "verified_on": "2026-09-28",
+      "verified_on": "2026-09-30",
       "default_output_reserve": 16384,
       "aliases": [],
       "default_answer_tokens": null,
       "reasoning_token_reserve": 0,
       "answer_only_max_tokens": false,
-      "ark_thinking_controls": false
+      "ark_thinking_controls": false,
+      "openai_transport": false
+    },
+    {
+      "provider": "openai",
+      "model_id": "gpt-6-sol",
+      "context_window": 1050000,
+      "max_input_tokens": 922000,
+      "max_output_tokens": 128000,
+      "source": "https://developers.openai.com/api/docs/models/gpt-6-sol",
+      "verified_on": "2026-09-30",
+      "default_output_reserve": 16384,
+      "aliases": [],
+      "default_answer_tokens": null,
+      "reasoning_token_reserve": 0,
+      "answer_only_max_tokens": false,
+      "ark_thinking_controls": false,
+      "openai_transport": false
+    },
+    {
+      "provider": "openai",
+      "model_id": "gpt-6-luna",
+      "context_window": 1050000,
+      "max_input_tokens": 922000,
+      "max_output_tokens": 128000,
+      "source": "https://developers.openai.com/api/docs/models/gpt-6-luna",
+      "verified_on": "2026-09-30",
+      "default_output_reserve": 16384,
+      "aliases": [],
+      "default_answer_tokens": null,
+      "reasoning_token_reserve": 0,
+      "answer_only_max_tokens": false,
+      "ark_thinking_controls": false,
+      "openai_transport": false
+    },
+    {
+      "provider": "openai",
+      "model_id": "gpt-5.6-sol",
+      "context_window": 1050000,
+      "max_input_tokens": 922000,
+      "max_output_tokens": 128000,
+      "source": "https://developers.openai.com/api/docs/models/gpt-5.6-sol",
+      "verified_on": "2026-09-30",
+      "default_output_reserve": 16384,
+      "aliases": [],
+      "default_answer_tokens": null,
+      "reasoning_token_reserve": 0,
+      "answer_only_max_tokens": false,
+      "ark_thinking_controls": false,
+      "openai_transport": false
+    },
+    {
+      "provider": "openai",
+      "model_id": "gpt-5.5",
+      "context_window": 1050000,
+      "max_input_tokens": 1050000,
+      "max_output_tokens": 128000,
+      "source": "https://developers.openai.com/api/docs/models/gpt-5.5",
+      "verified_on": "2026-09-30",
+      "default_output_reserve": 16384,
+      "aliases": [
+        "gpt-5.5-2026-04-23"
+      ],
+      "default_answer_tokens": null,
+      "reasoning_token_reserve": 0,
+      "answer_only_max_tokens": false,
+      "ark_thinking_controls": false,
+      "openai_transport": false
+    },
+    {
+      "provider": "openai",
+      "model_id": "gpt-5.5-pro",
+      "context_window": 1050000,
+      "max_input_tokens": 1050000,
+      "max_output_tokens": 128000,
+      "source": "https://developers.openai.com/api/docs/models/gpt-5.5-pro",
+      "verified_on": "2026-09-30",
+      "default_output_reserve": 16384,
+      "aliases": [
+        "gpt-5.5-pro-2026-04-23"
+      ],
+      "default_answer_tokens": null,
+      "reasoning_token_reserve": 0,
+      "answer_only_max_tokens": false,
+      "ark_thinking_controls": false,
+      "openai_transport": false
+    },
+    {
+      "provider": "openai",
+      "model_id": "gpt-5.4",
+      "context_window": 1050000,
+      "max_input_tokens": 1050000,
+      "max_output_tokens": 128000,
+      "source": "https://developers.openai.com/api/docs/models/gpt-5.4",
+      "verified_on": "2026-09-30",
+      "default_output_reserve": 16384,
+      "aliases": [
+        "gpt-5.4-2026-03-05"
+      ],
+      "default_answer_tokens": null,
+      "reasoning_token_reserve": 0,
+      "answer_only_max_tokens": false,
+      "ark_thinking_controls": false,
+      "openai_transport": false
+    },
+    {
+      "provider": "openai",
+      "model_id": "gpt-5.4-pro",
+      "context_window": 1050000,
+      "max_input_tokens": 1050000,
+      "max_output_tokens": 128000,
+      "source": "https://developers.openai.com/api/docs/models/gpt-5.4-pro",
+      "verified_on": "2026-09-30",
+      "default_output_reserve": 16384,
+      "aliases": [
+        "gpt-5.4-pro-2026-03-05"
+      ],
+      "default_answer_tokens": null,
+      "reasoning_token_reserve": 0,
+      "answer_only_max_tokens": false,
+      "ark_thinking_controls": false,
+      "openai_transport": false
+    },
+    {
+      "provider": "openai",
+      "model_id": "gpt-5.4-mini",
+      "context_window": 400000,
+      "max_input_tokens": 272000,
+      "max_output_tokens": 128000,
+      "source": "https://developers.openai.com/api/docs/models/gpt-5.4-mini",
+      "verified_on": "2026-09-30",
+      "default_output_reserve": 16384,
+      "aliases": [
+        "gpt-5.4-mini-2026-03-17"
+      ],
+      "default_answer_tokens": null,
+      "reasoning_token_reserve": 0,
+      "answer_only_max_tokens": false,
+      "ark_thinking_controls": false,
+      "openai_transport": false
+    },
+    {
+      "provider": "openai",
+      "model_id": "gpt-5.4-nano",
+      "context_window": 400000,
+      "max_input_tokens": 272000,
+      "max_output_tokens": 128000,
+      "source": "https://developers.openai.com/api/docs/models/gpt-5.4-nano",
+      "verified_on": "2026-09-30",
+      "default_output_reserve": 16384,
+      "aliases": [
+        "gpt-5.4-nano-2026-03-17"
+      ],
+      "default_answer_tokens": null,
+      "reasoning_token_reserve": 0,
+      "answer_only_max_tokens": false,
+      "ark_thinking_controls": false,
+      "openai_transport": false
+    },
+    {
+      "provider": "openai",
+      "model_id": "gpt-5.3-codex",
+      "context_window": 400000,
+      "max_input_tokens": 272000,
+      "max_output_tokens": 128000,
+      "source": "https://developers.openai.com/api/docs/models/gpt-5.3-codex",
+      "verified_on": "2026-09-30",
+      "default_output_reserve": 16384,
+      "aliases": [],
+      "default_answer_tokens": null,
+      "reasoning_token_reserve": 0,
+      "answer_only_max_tokens": false,
+      "ark_thinking_controls": false,
+      "openai_transport": false
+    },
+    {
+      "provider": "openai",
+      "model_id": "gpt-5.2",
+      "context_window": 400000,
+      "max_input_tokens": 400000,
+      "max_output_tokens": 128000,
+      "source": "https://developers.openai.com/api/docs/models/gpt-5.2",
+      "verified_on": "2026-09-30",
+      "default_output_reserve": 16384,
+      "aliases": [
+        "gpt-5.2-2025-12-11"
+      ],
+      "default_answer_tokens": null,
+      "reasoning_token_reserve": 0,
+      "answer_only_max_tokens": false,
+      "ark_thinking_controls": false,
+      "openai_transport": false
+    },
+    {
+      "provider": "openai",
+      "model_id": "gpt-5.2-pro",
+      "context_window": 400000,
+      "max_input_tokens": 400000,
+      "max_output_tokens": 128000,
+      "source": "https://developers.openai.com/api/docs/models/gpt-5.2-pro",
+      "verified_on": "2026-09-30",
+      "default_output_reserve": 16384,
+      "aliases": [
+        "gpt-5.2-pro-2025-12-11"
+      ],
+      "default_answer_tokens": null,
+      "reasoning_token_reserve": 0,
+      "answer_only_max_tokens": false,
+      "ark_thinking_controls": false,
+      "openai_transport": false
+    },
+    {
+      "provider": "openai",
+      "model_id": "gpt-5.1",
+      "context_window": 400000,
+      "max_input_tokens": 400000,
+      "max_output_tokens": 128000,
+      "source": "https://developers.openai.com/api/docs/models/gpt-5.1",
+      "verified_on": "2026-09-30",
+      "default_output_reserve": 16384,
+      "aliases": [
+        "gpt-5.1-2025-11-13"
+      ],
+      "default_answer_tokens": null,
+      "reasoning_token_reserve": 0,
+      "answer_only_max_tokens": false,
+      "ark_thinking_controls": false,
+      "openai_transport": false
+    },
+    {
+      "provider": "openai",
+      "model_id": "gpt-5",
+      "context_window": 400000,
+      "max_input_tokens": 272000,
+      "max_output_tokens": 128000,
+      "source": "https://developers.openai.com/api/docs/models/gpt-5",
+      "verified_on": "2026-09-30",
+      "default_output_reserve": 16384,
+      "aliases": [
+        "gpt-5-2025-08-07"
+      ],
+      "default_answer_tokens": null,
+      "reasoning_token_reserve": 0,
+      "answer_only_max_tokens": false,
+      "ark_thinking_controls": false,
+      "openai_transport": false
+    },
+    {
+      "provider": "openai",
+      "model_id": "gpt-5-mini",
+      "context_window": 400000,
+      "max_input_tokens": 272000,
+      "max_output_tokens": 128000,
+      "source": "https://developers.openai.com/api/docs/models/gpt-5-mini",
+      "verified_on": "2026-09-30",
+      "default_output_reserve": 16384,
+      "aliases": [
+        "gpt-5-mini-2025-08-07"
+      ],
+      "default_answer_tokens": null,
+      "reasoning_token_reserve": 0,
+      "answer_only_max_tokens": false,
+      "ark_thinking_controls": false,
+      "openai_transport": false
+    },
+    {
+      "provider": "openai",
+      "model_id": "gpt-5-nano",
+      "context_window": 400000,
+      "max_input_tokens": 272000,
+      "max_output_tokens": 128000,
+      "source": "https://developers.openai.com/api/docs/models/gpt-5-nano",
+      "verified_on": "2026-09-30",
+      "default_output_reserve": 16384,
+      "aliases": [
+        "gpt-5-nano-2025-08-07"
+      ],
+      "default_answer_tokens": null,
+      "reasoning_token_reserve": 0,
+      "answer_only_max_tokens": false,
+      "ark_thinking_controls": false,
+      "openai_transport": false
+    },
+    {
+      "provider": "openai",
+      "model_id": "gpt-4.1-mini",
+      "context_window": 1047576,
+      "max_input_tokens": 1047576,
+      "max_output_tokens": 32768,
+      "source": "https://developers.openai.com/api/docs/models/gpt-4.1-mini",
+      "verified_on": "2026-09-30",
+      "default_output_reserve": 16384,
+      "aliases": [
+        "gpt-4.1-mini-2025-04-14"
+      ],
+      "default_answer_tokens": null,
+      "reasoning_token_reserve": 0,
+      "answer_only_max_tokens": false,
+      "ark_thinking_controls": false,
+      "openai_transport": false
+    },
+    {
+      "provider": "openai",
+      "model_id": "gpt-4.1-nano",
+      "context_window": 1047576,
+      "max_input_tokens": 1047576,
+      "max_output_tokens": 32768,
+      "source": "https://developers.openai.com/api/docs/models/gpt-4.1-nano",
+      "verified_on": "2026-09-30",
+      "default_output_reserve": 16384,
+      "aliases": [
+        "gpt-4.1-nano-2025-04-14"
+      ],
+      "default_answer_tokens": null,
+      "reasoning_token_reserve": 0,
+      "answer_only_max_tokens": false,
+      "ark_thinking_controls": false,
+      "openai_transport": false
+    },
+    {
+      "provider": "openai",
+      "model_id": "gpt-4o-mini",
+      "context_window": 128000,
+      "max_input_tokens": 128000,
+      "max_output_tokens": 16384,
+      "source": "https://developers.openai.com/api/docs/models/gpt-4o-mini",
+      "verified_on": "2026-09-30",
+      "default_output_reserve": 16384,
+      "aliases": [
+        "gpt-4o-mini-2024-07-18"
+      ],
+      "default_answer_tokens": null,
+      "reasoning_token_reserve": 0,
+      "answer_only_max_tokens": false,
+      "ark_thinking_controls": false,
+      "openai_transport": false
+    },
+    {
+      "provider": "openai",
+      "model_id": "o3",
+      "context_window": 200000,
+      "max_input_tokens": 200000,
+      "max_output_tokens": 100000,
+      "source": "https://developers.openai.com/api/docs/models/o3",
+      "verified_on": "2026-09-30",
+      "default_output_reserve": 16384,
+      "aliases": [
+        "o3-2025-04-16"
+      ],
+      "default_answer_tokens": null,
+      "reasoning_token_reserve": 0,
+      "answer_only_max_tokens": false,
+      "ark_thinking_controls": false,
+      "openai_transport": false
+    },
+    {
+      "provider": "openai",
+      "model_id": "o4-mini",
+      "context_window": 200000,
+      "max_input_tokens": 200000,
+      "max_output_tokens": 100000,
+      "source": "https://developers.openai.com/api/docs/models/o4-mini",
+      "verified_on": "2026-09-30",
+      "default_output_reserve": 16384,
+      "aliases": [
+        "o4-mini-2025-04-16"
+      ],
+      "default_answer_tokens": null,
+      "reasoning_token_reserve": 0,
+      "answer_only_max_tokens": false,
+      "ark_thinking_controls": false,
+      "openai_transport": false
+    },
+    {
+      "provider": "deepseek",
+      "model_id": "deepseek-flash",
+      "context_window": 1000000,
+      "max_input_tokens": 1000000,
+      "max_output_tokens": 384000,
+      "source": "https://api-docs.deepseek.com/quick_start/pricing/",
+      "verified_on": "2026-09-30",
+      "default_output_reserve": 16384,
+      "aliases": [
+        "deepseek-v4-flash",
+        "deepseek-v4-flash-vision-exp"
+      ],
+      "default_answer_tokens": null,
+      "reasoning_token_reserve": 0,
+      "answer_only_max_tokens": false,
+      "ark_thinking_controls": false,
+      "openai_transport": true
+    },
+    {
+      "provider": "deepseek",
+      "model_id": "deepseek-v4-pro",
+      "context_window": 1000000,
+      "max_input_tokens": 1000000,
+      "max_output_tokens": 384000,
+      "source": "https://api-docs.deepseek.com/quick_start/pricing/",
+      "verified_on": "2026-09-30",
+      "default_output_reserve": 16384,
+      "aliases": [],
+      "default_answer_tokens": null,
+      "reasoning_token_reserve": 0,
+      "answer_only_max_tokens": false,
+      "ark_thinking_controls": false,
+      "openai_transport": true
+    },
+    {
+      "provider": "zai",
+      "model_id": "glm-5",
+      "context_window": 200000,
+      "max_input_tokens": 200000,
+      "max_output_tokens": 128000,
+      "source": "https://docs.bigmodel.cn/cn/guide/models/text/glm-5",
+      "verified_on": "2026-09-30",
+      "default_output_reserve": 16384,
+      "aliases": [],
+      "default_answer_tokens": null,
+      "reasoning_token_reserve": 0,
+      "answer_only_max_tokens": false,
+      "ark_thinking_controls": false,
+      "openai_transport": true
+    },
+    {
+      "provider": "zai",
+      "model_id": "glm-5.2",
+      "context_window": 1000000,
+      "max_input_tokens": 1000000,
+      "max_output_tokens": 128000,
+      "source": "https://docs.bigmodel.cn/cn/guide/models/text/glm-5.2",
+      "verified_on": "2026-09-30",
+      "default_output_reserve": 16384,
+      "aliases": [],
+      "default_answer_tokens": null,
+      "reasoning_token_reserve": 0,
+      "answer_only_max_tokens": false,
+      "ark_thinking_controls": false,
+      "openai_transport": true
+    },
+    {
+      "provider": "zai",
+      "model_id": "glm-5.3",
+      "context_window": 1000000,
+      "max_input_tokens": 1000000,
+      "max_output_tokens": 128000,
+      "source": "https://docs.bigmodel.cn/cn/guide/models/text/glm-5.3",
+      "verified_on": "2026-09-30",
+      "default_output_reserve": 16384,
+      "aliases": [],
+      "default_answer_tokens": null,
+      "reasoning_token_reserve": 0,
+      "answer_only_max_tokens": false,
+      "ark_thinking_controls": false,
+      "openai_transport": true
+    },
+    {
+      "provider": "zai",
+      "model_id": "glm-5.3-flash",
+      "context_window": 1000000,
+      "max_input_tokens": 1000000,
+      "max_output_tokens": 128000,
+      "source": "https://docs.bigmodel.cn/cn/guide/models/vlm/glm-5.3-flash",
+      "verified_on": "2026-09-30",
+      "default_output_reserve": 16384,
+      "aliases": [],
+      "default_answer_tokens": null,
+      "reasoning_token_reserve": 0,
+      "answer_only_max_tokens": false,
+      "ark_thinking_controls": false,
+      "openai_transport": true
+    },
+    {
+      "provider": "byteplus",
+      "model_id": "dola-seed-2-1-turbo-260628",
+      "context_window": 256000,
+      "max_input_tokens": 256000,
+      "max_output_tokens": 256000,
+      "source": "https://docs.byteplus.com/en/docs/ModelArk/model-list",
+      "verified_on": "2026-09-30",
+      "default_output_reserve": 16384,
+      "aliases": [],
+      "default_answer_tokens": 4096,
+      "reasoning_token_reserve": 12288,
+      "answer_only_max_tokens": true,
+      "ark_thinking_controls": false,
+      "openai_transport": true
+    },
+    {
+      "provider": "byteplus",
+      "model_id": "seed-2-0-lite-260428",
+      "context_window": 256000,
+      "max_input_tokens": 224000,
+      "max_output_tokens": 128000,
+      "source": "https://docs.byteplus.com/en/docs/ModelArk/model-list",
+      "verified_on": "2026-09-30",
+      "default_output_reserve": 16384,
+      "aliases": [],
+      "default_answer_tokens": 4096,
+      "reasoning_token_reserve": 12288,
+      "answer_only_max_tokens": true,
+      "ark_thinking_controls": false,
+      "openai_transport": true
+    },
+    {
+      "provider": "byteplus",
+      "model_id": "seed-2-0-mini-260428",
+      "context_window": 256000,
+      "max_input_tokens": 224000,
+      "max_output_tokens": 128000,
+      "source": "https://docs.byteplus.com/en/docs/ModelArk/model-list",
+      "verified_on": "2026-09-30",
+      "default_output_reserve": 16384,
+      "aliases": [],
+      "default_answer_tokens": 4096,
+      "reasoning_token_reserve": 12288,
+      "answer_only_max_tokens": true,
+      "ark_thinking_controls": false,
+      "openai_transport": true
+    },
+    {
+      "provider": "byteplus",
+      "model_id": "seed-2-0-pro-260328",
+      "context_window": 256000,
+      "max_input_tokens": 224000,
+      "max_output_tokens": 128000,
+      "source": "https://docs.byteplus.com/en/docs/ModelArk/model-list",
+      "verified_on": "2026-09-30",
+      "default_output_reserve": 16384,
+      "aliases": [],
+      "default_answer_tokens": 4096,
+      "reasoning_token_reserve": 12288,
+      "answer_only_max_tokens": true,
+      "ark_thinking_controls": false,
+      "openai_transport": true
+    },
+    {
+      "provider": "byteplus",
+      "model_id": "seed-2-0-lite-260228",
+      "context_window": 256000,
+      "max_input_tokens": 224000,
+      "max_output_tokens": 128000,
+      "source": "https://docs.byteplus.com/en/docs/ModelArk/model-list",
+      "verified_on": "2026-09-30",
+      "default_output_reserve": 16384,
+      "aliases": [],
+      "default_answer_tokens": 4096,
+      "reasoning_token_reserve": 12288,
+      "answer_only_max_tokens": true,
+      "ark_thinking_controls": false,
+      "openai_transport": true
+    },
+    {
+      "provider": "byteplus",
+      "model_id": "seed-2-0-mini-260215",
+      "context_window": 256000,
+      "max_input_tokens": 224000,
+      "max_output_tokens": 128000,
+      "source": "https://docs.byteplus.com/en/docs/ModelArk/model-list",
+      "verified_on": "2026-09-30",
+      "default_output_reserve": 16384,
+      "aliases": [],
+      "default_answer_tokens": 4096,
+      "reasoning_token_reserve": 12288,
+      "answer_only_max_tokens": true,
+      "ark_thinking_controls": false,
+      "openai_transport": true
+    },
+    {
+      "provider": "byteplus",
+      "model_id": "seed-2-0-code-preview-260328",
+      "context_window": 256000,
+      "max_input_tokens": 224000,
+      "max_output_tokens": 128000,
+      "source": "https://docs.byteplus.com/en/docs/ModelArk/model-list",
+      "verified_on": "2026-09-30",
+      "default_output_reserve": 16384,
+      "aliases": [],
+      "default_answer_tokens": 4096,
+      "reasoning_token_reserve": 12288,
+      "answer_only_max_tokens": true,
+      "ark_thinking_controls": false,
+      "openai_transport": true
+    },
+    {
+      "provider": "dashscope",
+      "model_id": "qwen3.8-max",
+      "context_window": 1000000,
+      "max_input_tokens": 983616,
+      "max_output_tokens": 131072,
+      "source": "https://help.aliyun.com/zh/model-studio/qwen3-8-max",
+      "verified_on": "2026-09-30",
+      "default_output_reserve": 16384,
+      "aliases": [],
+      "default_answer_tokens": 4096,
+      "reasoning_token_reserve": 12288,
+      "answer_only_max_tokens": true,
+      "ark_thinking_controls": false,
+      "openai_transport": true
+    },
+    {
+      "provider": "dashscope",
+      "model_id": "qwen3.7-plus",
+      "context_window": 1000000,
+      "max_input_tokens": 983616,
+      "max_output_tokens": 131072,
+      "source": "https://help.aliyun.com/zh/model-studio/qwen3-7-plus",
+      "verified_on": "2026-09-30",
+      "default_output_reserve": 16384,
+      "aliases": [],
+      "default_answer_tokens": 4096,
+      "reasoning_token_reserve": 12288,
+      "answer_only_max_tokens": true,
+      "ark_thinking_controls": false,
+      "openai_transport": true
+    },
+    {
+      "provider": "dashscope",
+      "model_id": "qwen3.8-flash",
+      "context_window": 1000000,
+      "max_input_tokens": 983616,
+      "max_output_tokens": 131072,
+      "source": "https://help.aliyun.com/zh/model-studio/qwen3-8-flash",
+      "verified_on": "2026-09-30",
+      "default_output_reserve": 16384,
+      "aliases": [],
+      "default_answer_tokens": 4096,
+      "reasoning_token_reserve": 12288,
+      "answer_only_max_tokens": true,
+      "ark_thinking_controls": false,
+      "openai_transport": true
+    },
+    {
+      "provider": "moonshot",
+      "model_id": "kimi-k3",
+      "context_window": 1000000,
+      "max_input_tokens": 1000000,
+      "max_output_tokens": 1000000,
+      "source": "https://platform.kimi.com/docs/api/chat",
+      "verified_on": "2026-09-30",
+      "default_output_reserve": 131072,
+      "aliases": [],
+      "default_answer_tokens": null,
+      "reasoning_token_reserve": 0,
+      "answer_only_max_tokens": false,
+      "ark_thinking_controls": false,
+      "openai_transport": true
+    },
+    {
+      "provider": "openai",
+      "model_id": "gpt-6.1-sol",
+      "context_window": 1050000,
+      "max_input_tokens": 922000,
+      "max_output_tokens": 128000,
+      "source": "https://developers.openai.com/api/docs/models/gpt-6.1-sol",
+      "verified_on": "2026-09-30",
+      "default_output_reserve": 16384,
+      "aliases": [],
+      "default_answer_tokens": null,
+      "reasoning_token_reserve": 0,
+      "answer_only_max_tokens": false,
+      "ark_thinking_controls": false,
+      "openai_transport": false
+    },
+    {
+      "provider": "gemini",
+      "model_id": "gemini-3.7-flash",
+      "context_window": 1048576,
+      "max_input_tokens": 1048576,
+      "max_output_tokens": 65536,
+      "source": "https://ai.google.dev/gemini-api/docs/models/gemini-3.7-flash",
+      "verified_on": "2026-09-30",
+      "default_output_reserve": 16384,
+      "aliases": [],
+      "default_answer_tokens": null,
+      "reasoning_token_reserve": 0,
+      "answer_only_max_tokens": false,
+      "ark_thinking_controls": false,
+      "openai_transport": false
+    },
+    {
+      "provider": "gemini",
+      "model_id": "gemini-3.6-flash",
+      "context_window": 1048576,
+      "max_input_tokens": 1048576,
+      "max_output_tokens": 65536,
+      "source": "https://ai.google.dev/gemini-api/docs/models/gemini-3.6-flash",
+      "verified_on": "2026-09-30",
+      "default_output_reserve": 16384,
+      "aliases": [],
+      "default_answer_tokens": null,
+      "reasoning_token_reserve": 0,
+      "answer_only_max_tokens": false,
+      "ark_thinking_controls": false,
+      "openai_transport": false
+    },
+    {
+      "provider": "gemini",
+      "model_id": "gemini-3.5-flash",
+      "context_window": 1048576,
+      "max_input_tokens": 1048576,
+      "max_output_tokens": 65536,
+      "source": "https://ai.google.dev/gemini-api/docs/models/gemini-3.5-flash",
+      "verified_on": "2026-09-30",
+      "default_output_reserve": 16384,
+      "aliases": [],
+      "default_answer_tokens": null,
+      "reasoning_token_reserve": 0,
+      "answer_only_max_tokens": false,
+      "ark_thinking_controls": false,
+      "openai_transport": false
+    },
+    {
+      "provider": "gemini",
+      "model_id": "gemini-3.5-flash-lite",
+      "context_window": 1048576,
+      "max_input_tokens": 1048576,
+      "max_output_tokens": 65536,
+      "source": "https://ai.google.dev/gemini-api/docs/models/gemini-3.5-flash-lite",
+      "verified_on": "2026-09-30",
+      "default_output_reserve": 16384,
+      "aliases": [],
+      "default_answer_tokens": null,
+      "reasoning_token_reserve": 0,
+      "answer_only_max_tokens": false,
+      "ark_thinking_controls": false,
+      "openai_transport": false
+    },
+    {
+      "provider": "gemini",
+      "model_id": "gemini-3.1-pro-preview",
+      "context_window": 1048576,
+      "max_input_tokens": 1048576,
+      "max_output_tokens": 65536,
+      "source": "https://ai.google.dev/gemini-api/docs/models/gemini-3.1-pro-preview",
+      "verified_on": "2026-09-30",
+      "default_output_reserve": 16384,
+      "aliases": [],
+      "default_answer_tokens": null,
+      "reasoning_token_reserve": 0,
+      "answer_only_max_tokens": false,
+      "ark_thinking_controls": false,
+      "openai_transport": false
+    },
+    {
+      "provider": "gemini",
+      "model_id": "gemini-3-flash-preview",
+      "context_window": 1048576,
+      "max_input_tokens": 1048576,
+      "max_output_tokens": 65536,
+      "source": "https://ai.google.dev/gemini-api/docs/models/gemini-3-flash-preview",
+      "verified_on": "2026-09-30",
+      "default_output_reserve": 16384,
+      "aliases": [],
+      "default_answer_tokens": null,
+      "reasoning_token_reserve": 0,
+      "answer_only_max_tokens": false,
+      "ark_thinking_controls": false,
+      "openai_transport": false
+    },
+    {
+      "provider": "gemini",
+      "model_id": "gemini-2.5-flash",
+      "context_window": 1048576,
+      "max_input_tokens": 1048576,
+      "max_output_tokens": 65536,
+      "source": "https://ai.google.dev/gemini-api/docs/models/gemini-2.5-flash",
+      "verified_on": "2026-09-30",
+      "default_output_reserve": 16384,
+      "aliases": [],
+      "default_answer_tokens": null,
+      "reasoning_token_reserve": 0,
+      "answer_only_max_tokens": false,
+      "ark_thinking_controls": false,
+      "openai_transport": false
+    },
+    {
+      "provider": "gemini",
+      "model_id": "gemini-2.5-flash-lite",
+      "context_window": 1048576,
+      "max_input_tokens": 1048576,
+      "max_output_tokens": 65536,
+      "source": "https://ai.google.dev/gemini-api/docs/models/gemini-2.5-flash-lite",
+      "verified_on": "2026-09-30",
+      "default_output_reserve": 16384,
+      "aliases": [],
+      "default_answer_tokens": null,
+      "reasoning_token_reserve": 0,
+      "answer_only_max_tokens": false,
+      "ark_thinking_controls": false,
+      "openai_transport": false
+    },
+    {
+      "provider": "gemini",
+      "model_id": "gemini-2.5-pro",
+      "context_window": 1048576,
+      "max_input_tokens": 1048576,
+      "max_output_tokens": 65536,
+      "source": "https://ai.google.dev/gemini-api/docs/models/gemini-2.5-pro",
+      "verified_on": "2026-09-30",
+      "default_output_reserve": 16384,
+      "aliases": [],
+      "default_answer_tokens": null,
+      "reasoning_token_reserve": 0,
+      "answer_only_max_tokens": false,
+      "ark_thinking_controls": false,
+      "openai_transport": false
+    },
+    {
+      "provider": "volcengine",
+      "model_id": "doubao-seed-evolving",
+      "context_window": 1024000,
+      "max_input_tokens": 1024000,
+      "max_output_tokens": 256000,
+      "source": "https://www.volcengine.com/docs/ark/model-list?lang=zh",
+      "verified_on": "2026-09-30",
+      "default_output_reserve": 16384,
+      "aliases": [],
+      "default_answer_tokens": 4096,
+      "reasoning_token_reserve": 12288,
+      "answer_only_max_tokens": true,
+      "ark_thinking_controls": false,
+      "openai_transport": true
+    },
+    {
+      "provider": "volcengine",
+      "model_id": "deepseek-v4-pro-260425",
+      "context_window": 1024000,
+      "max_input_tokens": 1024000,
+      "max_output_tokens": 384000,
+      "source": "https://www.volcengine.com/docs/ark/model-list?lang=zh",
+      "verified_on": "2026-09-30",
+      "default_output_reserve": 16384,
+      "aliases": [],
+      "default_answer_tokens": 4096,
+      "reasoning_token_reserve": 12288,
+      "answer_only_max_tokens": true,
+      "ark_thinking_controls": false,
+      "openai_transport": true
+    },
+    {
+      "provider": "volcengine",
+      "model_id": "doubao-seed-character-251128",
+      "context_window": 128000,
+      "max_input_tokens": 96000,
+      "max_output_tokens": 32000,
+      "source": "https://www.volcengine.com/docs/ark/model-list?lang=zh",
+      "verified_on": "2026-09-30",
+      "default_output_reserve": 16384,
+      "aliases": [],
+      "default_answer_tokens": 4096,
+      "reasoning_token_reserve": 12288,
+      "answer_only_max_tokens": true,
+      "ark_thinking_controls": false,
+      "openai_transport": true
     }
   ]
 }
