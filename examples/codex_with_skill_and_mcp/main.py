@@ -14,14 +14,15 @@
 
 """A `runtime="codex"` agent that uses both a local skill and an MCP tool.
 
-On a Codex runtime backed by a chat model (e.g. Volcengine Ark):
+On a Codex runtime:
 
 - **Skills** are materialized into Codex's on-disk skill directory and driven by
   Codex's native skill system.
-- **MCP / function tools** can't be handed to Codex directly (Codex presents
-  them to the model as a `namespace` tool the chat backend rejects), so the
-  runtime's shim advertises them to the backend as plain functions and executes
-  them itself.
+- **MCP / function tools** reach Codex as its own tools. On a Responses-capable
+  backend (Volcengine Ark, OpenAI) Codex calls the model directly and gets the
+  agent's tools through a local MCP server the runtime runs for the turn, so
+  Codex drives the tool loop. For a chat-only backend the runtime's shim sits
+  in between and executes the tools itself.
 
 Both are just normal VeADK/ADK wiring — the runtime handles the rest.
 
@@ -60,7 +61,7 @@ def build_agent() -> Agent:
     skill_toolset = SkillToolset(skills=[load_skill_from_dir(str(_SKILL_DIR))])
 
     # MCP: a stdio MCP server launched as a subprocess. The codex runtime lists
-    # its tools and executes them via the shim. Swap StdioServerParameters for
+    # its tools and hands them to Codex (see above). Swap StdioServerParameters for
     # StreamableHTTPConnectionParams(url=...) to point at a remote MCP server.
     weather_mcp = MCPToolset(
         connection_params=StdioServerParameters(
@@ -96,7 +97,8 @@ async def main() -> None:
         session_id="s1",
         new_message=types.Content(role="user", parts=[types.Part(text=question)]),
     ):
-        if not event.content or not event.content.parts:
+        # Partial events are streaming chunks of text the final event repeats.
+        if event.partial or not event.content or not event.content.parts:
             continue
         for part in event.content.parts:
             if part.text and not part.thought:

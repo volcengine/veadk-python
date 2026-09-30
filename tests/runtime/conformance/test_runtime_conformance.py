@@ -396,7 +396,7 @@ async def test_cancel_while_waiting_on_model(
         "the backend was called again after the turn was cancelled"
     )
     assert await wait_until(lambda: not adapter.leaks()), adapter.leaks()
-    leaked = pending_tasks() - before
+    leaked = {t for t in pending_tasks() - before if not adapter.is_service_task(t)}
     assert await wait_until(lambda: all(t.done() for t in leaked)), (
         f"tasks outlived the cancelled turn: {leaked}"
     )
@@ -687,7 +687,11 @@ async def test_turns_release_per_turn_state(
 
     assert adapter.leaks() == [], adapter.leaks()
     await settle()
-    leaked = {t for t in pending_tasks() - before if not t.done()}
+    leaked = {
+        t
+        for t in pending_tasks() - before
+        if not t.done() and not adapter.is_service_task(t)
+    }
     assert not leaked, f"tasks outlived their turns: {leaked}"
 
 

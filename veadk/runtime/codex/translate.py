@@ -1038,6 +1038,29 @@ _DISPATCH: dict[str, _NotificationHandler] = {
 }
 
 
+def is_mcp_item_for_server(payload: Any, server: str, seen_item_ids: set[str]) -> bool:
+    """Whether a notification belongs to an MCP tool call on ``server``.
+
+    Item start/completion carry the item, server name included; progress
+    notifications carry only the item id, so the ids seen at start are kept in
+    ``seen_item_ids`` (and dropped again at completion).
+    """
+    data = _item_dict(payload)
+    item = data.get("item")
+    if isinstance(item, dict):
+        if _scalar(item.get("type")) != "mcpToolCall" or item.get("server") != server:
+            return False
+        item_id = str(item.get("id") or "")
+        if item_id:
+            if type(payload).__name__ == "ItemCompletedNotification":
+                seen_item_ids.discard(item_id)
+            else:
+                seen_item_ids.add(item_id)
+        return True
+    item_id = data.get("item_id")
+    return bool(item_id) and str(item_id) in seen_item_ids
+
+
 def notification_to_events(
     payload: Any,
     author: str,

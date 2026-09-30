@@ -209,7 +209,8 @@ def load_orders(day: str) -> dict:
 | :--- | :--- | :--- |
 | `reasoning_effort` | `"medium"` | 推理强度，可选 `minimal`/`low`/`medium`/`high`/`xhigh`。越高越慢、消耗 token 越多。 |
 | `personality` | `"pragmatic"` | Codex 自带的回复风格，可选 `none`/`friendly`/`pragmatic`。 |
-| `max_tool_iterations` | `32` | 整个 Codex turn 内 shim 可执行的 ADK/MCP 工具轮次上限（1–256）。见下方行为变更说明。 |
+| `model_transport` | `"auto"` | Codex 如何访问模型：`direct` 让 Codex 直接调用支持 Responses API 的后端，并通过 runtime 为本轮启动的本地 MCP server 使用 Agent 的工具，工具循环由 Codex 驱动；`shim` 经由进程内 Responses→Chat 转换层，由转换层执行工具，适用于只支持 chat 的后端；`auto` 对火山方舟（`*.volces.com`）、BytePlus（`*.bytepluses.com`）与 `api.openai.com` 选 `direct`，其余选 `shim`。 |
+| `max_tool_iterations` | `32` | 整个 Codex turn 内 shim 可执行的 ADK/MCP 工具轮次上限（1–256），仅 `shim` 传输生效。见下方行为变更说明。 |
 | `tool_timeout_seconds` | `120.0` | 单个 ADK/MCP 工具调用的超时秒数；设为 `None` 表示不超时。 |
 | `reuse_workspace` | `False` | 仅在同时设置了 `workspace_root` 时生效，而且只值得在单租户场景下开启，见上方 [Workspace 生命周期](#workspace-生命周期)。否则两个字段都别设，让工具调用 `current_workspace()`，见 [Workspace 是数据面](#workspace-是数据面)。 |
 
@@ -229,14 +230,14 @@ Codex 自带一份约 20KB、针对自身工具链（`apply_patch`、`update_pla
 同一条通道上还会追加两条更正——Codex 被保留下来的系统提示词描述的工具链，这座桥并不能完整提供。runtime 会在每一轮的 developer instructions 后面追加一段简短的**工具可用性说明**：
 
 - 本次运行没有 `apply_patch`：shim 只转发 `function` 类型的工具，而 Codex 的文件编辑工具不是，所以创建和修改文件要用 `exec_command`（例如 `cat > file <<'EOF'` heredoc）。
-- `request_user_input` 确实被通告了，但没有人能回答它：一次 ADK 调用没有交互通道，调用它只会让这一轮什么都没做就结束。说明里会要求模型用手上已有的信息作判断，并在最终回复里讲清楚缺了什么。
+- （仅 `shim` 传输）`request_user_input` 确实被通告了，但没有人能回答它：一次 ADK 调用没有交互通道，调用它只会让这一轮什么都没做就结束。说明里会要求模型用手上已有的信息作判断，并在最终回复里讲清楚缺了什么。
 
-这两点你不需要再在自己 Agent 的 `instruction` 里手写一遍。
+`direct` 传输在 thread 配置里直接移除了 `request_user_input`（以及 `web_search`、多 agent 等用不到的工具），因此说明里只保留第一条。这些你都不需要再在自己 Agent 的 `instruction` 里手写一遍。
 
 ### Codex 环境变量
 
 <Callout type="warn">
-以下四个环境变量**覆盖** Python 中的 `CodexRuntimeConfig`，而不是作为它的默认值。也就是说，即使代码里写死了 `sandbox="workspace_write"`，部署环境里的 `VEADK_CODEX_SANDBOX=full_access` 依然会生效。这一优先级与大多数配置项相反，在容器/函数计算等由平台注入环境变量的场景中尤其需要注意。
+以下五个环境变量**覆盖** Python 中的 `CodexRuntimeConfig`，而不是作为它的默认值。也就是说，即使代码里写死了 `sandbox="workspace_write"`，部署环境里的 `VEADK_CODEX_SANDBOX=full_access` 依然会生效。这一优先级与大多数配置项相反，在容器/函数计算等由平台注入环境变量的场景中尤其需要注意。
 </Callout>
 
 | 环境变量 | 覆盖的配置项 | 说明 |
@@ -245,6 +246,7 @@ Codex 自带一份约 20KB、针对自身工具链（`apply_patch`、`update_pla
 | `VEADK_CODEX_APPROVAL_MODE` | `approval_mode` | 取值同 `approval_mode` 字段。 |
 | `VEADK_CODEX_WORKSPACE_ROOT` | `workspace_root` | 工作目录绝对路径。 |
 | `VEADK_CODEX_NETWORK_ACCESS` | `network_access` | `1`/`true`/`yes`/`on` 视为开启，其余视为关闭。 |
+| `VEADK_CODEX_MODEL_TRANSPORT` | `model_transport` | `auto`/`direct`/`shim`。 |
 
 另有四个用于 Responses→Chat 转换层（shim）的环境变量。它们不参与上面的覆盖规则，只是 shim 自身的调参：
 
@@ -263,7 +265,7 @@ Codex 原生生命周期和 ADK Function/MCP 工具调用都会转换为 ADK Eve
 
 - **`call_llm` span**：ADK 的 `call_llm` span 本由它自己的 LLM flow 打开，而该 flow 已被 codex 替换，因此 runtime 会自行打开一个同名 span，并在回合结束时写入 prompt、响应与 token 用量。VeADK 的整条遥测链路——内存 exporter 的 Session 索引、Trace 上报、Portal 指标、以及基于 Trace 的评测——因此都能看到 codex 回合。注意粒度：**每回合一个 span**，而不是每次内层模型调用一个。
 - **`usage_metadata`**：整轮的 token 用量汇总后，只挂在**每回合一个的合并后终态 Event** 上（而不是逐条事件累加），避免下游做求和统计时重复计数。
-- **`RunConfig(max_llm_calls=...)` 会被强制执行**：shim 在每一次真实的后端模型调用前扣减配额。超限时 Codex 侧收到一个 `429 llm_calls_limit`（而不是它会重试的 500——重试会把本回合的工具副作用重跑一遍），回合结束后 runtime 再向调用方重新抛出 `LlmCallsLimitExceededError`，而不是返回 Codex 勉强拼出的半截答案。
+- **`RunConfig(max_llm_calls=...)` 会被强制执行**：shim 在每一次真实的后端模型调用前扣减配额。超限时 Codex 侧收到一个 `429 llm_calls_limit`（而不是它会重试的 500——重试会把本回合的工具副作用重跑一遍），回合结束后 runtime 再向调用方重新抛出 `LlmCallsLimitExceededError`，而不是返回 Codex 勉强拼出的半截答案。`direct` 传输下没有 shim，Codex 在发起模型请求前也不发出任何通知，runtime 改为在每次模型调用完成后扣减配额：超出配额的那次调用会完成，此时可能已有一次请求在途，它会随回合中断而中止；之后不会再有新的调用。
 
 ## 支持矩阵
 

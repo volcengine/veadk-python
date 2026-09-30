@@ -46,10 +46,13 @@ API — so the two tools take different paths:
 - **Skill** → materialized into Codex's on-disk skill directory
   (`$CODEX_HOME/skills/<name>/SKILL.md`) and discovered by Codex's native skill
   system. Backend-independent.
-- **MCP tool** → Codex can't be handed MCP tools directly (it presents them to
-  the model as a `namespace` tool the chat backend rejects), so the runtime's
-  Responses shim advertises them to the backend as plain `function` tools and
-  executes them itself, invisibly to Codex.
+- **MCP tool** → handed to Codex as one of its own tools. On a
+  Responses-capable backend (Volcengine Ark, OpenAI) Codex calls the model
+  directly and reaches the agent's tools through a local MCP server the runtime
+  runs for the turn, so Codex drives the tool loop. For a chat-only backend
+  the runtime's Responses shim sits in between and executes the tools itself.
+  `CodexRuntimeConfig(model_transport=...)` (`auto` / `direct` / `shim`)
+  chooses; `auto` picks direct for Ark and OpenAI.
 
 Both are handled by the runtime — the agent code is just normal tool wiring.
 
@@ -67,9 +70,9 @@ python examples/codex_with_skill_and_mcp/main.py
 
 ## Notes
 
-- Tools are dispatched by the runtime shim, while calls, results, state
-  changes, confirmations, and authentication surface as standard ADK events
-  for Session/Trace/UI.
+- Tools execute in the runtime (through the MCP bridge or the shim), and
+  calls, results, state changes, confirmations, and authentication surface as
+  standard ADK events for Session/Trace/UI.
 - Static authentication (headers / bearer tokens / ve-identity workload
   tokens) and ADK interactive authentication requested during tool execution
   are supported. Authentication required before an MCP toolset can list tools
