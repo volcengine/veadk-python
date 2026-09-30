@@ -20,6 +20,7 @@ is an actual incomplete index, not a missing-module failure.
 
 import asyncio
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -37,6 +38,9 @@ FACT = "The automobile is stored at East Garage."
 QUERY = "car"
 SHORT = "z" * 31000 + FACT + "z" * 31000
 LONG = "z" * 240000 + FACT + "z" * 240000
+# Functional completeness/reuse checks are not five-second CPU/SQLite benchmarks.
+# Keep a watchdog; short deadline and cancellation contracts are tested separately.
+FUNCTIONAL_TIMEOUT = 30.0
 
 
 class Embedding:
@@ -68,7 +72,9 @@ class Embedding:
             self.active -= 1
 
 
-async def prepare(r, text, *, ref="source", identity=IDENTITY, seconds=5.0):
+async def prepare(
+    r, text, *, ref="source", identity=IDENTITY, seconds=FUNCTIONAL_TIMEOUT
+):
     return await r.prepare_source(
         identity, ref, text, deadline=time.monotonic() + seconds
     )
@@ -94,7 +100,11 @@ async def test_long_source_completes_one_bounded_ingestion_then_recovers_semanti
         again = await prepare(r, LONG)
         assert again["complete"] and again["indexed"] == 0
         spans = await r.rank_with_deadline(
-            IDENTITY, "source", LONG, QUERY, deadline=time.monotonic() + 5.0
+            IDENTITY,
+            "source",
+            LONG,
+            QUERY,
+            deadline=time.monotonic() + FUNCTIONAL_TIMEOUT,
         )
         assert r.last_status == "hybrid"
         assert any(FACT in LONG[a:b] for a, b in spans)
@@ -114,7 +124,11 @@ async def test_short_source_keeps_fine_semantics_and_query_does_no_document_work
         assert ready["complete"] and ready["granularity"] == "full_source_fine"
         before = e.documents
         spans = await r.rank_with_deadline(
-            IDENTITY, "source", SHORT, QUERY, deadline=time.monotonic() + 5.0
+            IDENTITY,
+            "source",
+            SHORT,
+            QUERY,
+            deadline=time.monotonic() + FUNCTIONAL_TIMEOUT,
         )
         assert e.documents == before and e.queries == 1
         assert any(FACT in SHORT[a:b] for a, b in spans)
@@ -201,6 +215,47 @@ async def test_parent_capacity_exceeded_is_still_incomplete_not_success(tmp_path
         result = await prepare(r, LONG)
         assert not result["complete"] and result["reason"] == "index_budget"
         assert result["indexed"] == 7 and result["remaining"] > 0
+    finally:
+        await r.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text", [SHORT, LONG], ids=["fine", "parent"])
+async def test_preparation_budget_includes_source_storage_before_embedding(
+    tmp_path, text, monkeypatch
+):
+    from veadk.context import _hybrid_index, hierarchical_retriever, hybrid_retriever
+
+    clock = [100.0]
+    timer = SimpleNamespace(monotonic=lambda: clock[0])
+    for module in (_hybrid_index, hierarchical_retriever, hybrid_retriever):
+        monkeypatch.setattr(module, "time", timer)
+    original_put = _hybrid_index.Store.put
+    delayed = [False]
+
+    def slow_store(store, *args, **kwargs):
+        result = original_put(store, *args, **kwargs)
+        if not delayed[0]:
+            delayed[0] = True
+            clock[0] += 6.0
+        return result
+
+    monkeypatch.setattr(_hybrid_index.Store, "put", slow_store)
+    e = Embedding()
+    r = Retriever(tmp_path / "index.sqlite3", e)
+    try:
+        result = await r.prepare_source(IDENTITY, "source", text, deadline=105.0)
+        assert not result["complete"] and result["reason"] == "TimeoutError"
+        assert result["indexed"] == 0 and result["remaining"] > 0
+        assert result["seconds"] == pytest.approx(6.0)
+        assert e.documents == e.queries == e.active == 0
+        store = r._fine._store if text == SHORT else r._parent._parents
+        assert (
+            store.read(Scope(*IDENTITY), "source", digest(text), 0, len(text)) == text
+        )
+        resumed = await r.prepare_source(IDENTITY, "source", text, deadline=111.0)
+        assert resumed["complete"] and resumed["remaining"] == 0
+        assert resumed["indexed"] > 0 and resumed["reused"] == 0
     finally:
         await r.close()
 
