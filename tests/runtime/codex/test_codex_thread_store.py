@@ -47,9 +47,13 @@ from veadk.runtime.codex.thread_store import (
     LocalDirThreadStore,
     ThreadKey,
     ThreadRecord,
+    MAX_ROLLOUT_BYTES,
+    RolloutTooLarge,
     ThreadStoreConflict,
     ThreadStoreCorrupt,
+    ThreadStoreError,
     instruction_hash,
+    rollout_size_limit,
     select_thread_store,
 )
 
@@ -394,9 +398,8 @@ async def _tamper(store: Any, kind: str, how: str) -> None:
         await conn.execute(update(table).where(store._where(KEY)).values(**values))
 
 
-# `memory` is deliberately absent: `InMemoryThreadStore` keeps the
-# `ThreadRecord` object itself, never a serialized blob, so there is nothing
-# on its path that can be damaged and nothing for it to check.
+# `memory` is deliberately absent: `InMemoryThreadStore` keeps its compressed
+# blob in process memory, never on storage that can be damaged underneath it.
 @pytest.mark.asyncio
 @pytest.mark.parametrize("how", ["blob", "sha"])
 @pytest.mark.parametrize("kind", ["localdir", "database"])
@@ -442,6 +445,207 @@ async def test_database_store_compresses_at_rest(tmp_path: Path) -> None:
         assert again is not None and again.rollout.data == data
     finally:
         await engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# Size limits
+# ---------------------------------------------------------------------------
+
+
+def test_rollout_size_limit_env(monkeypatch) -> None:
+    monkeypatch.delenv("VEADK_CODEX_MAX_ROLLOUT_BYTES", raising=False)
+    assert rollout_size_limit() == MAX_ROLLOUT_BYTES == 32 * 1024 * 1024
+    monkeypatch.setenv("VEADK_CODEX_MAX_ROLLOUT_BYTES", " 4096 ")
+    assert rollout_size_limit() == 4096
+    monkeypatch.setenv("VEADK_CODEX_MAX_ROLLOUT_BYTES", "")
+    assert rollout_size_limit() == MAX_ROLLOUT_BYTES
+    for bad in ("0", "-1", "abc", "1.5", "32MiB"):
+        monkeypatch.setenv("VEADK_CODEX_MAX_ROLLOUT_BYTES", bad)
+        with pytest.raises(ValueError, match="VEADK_CODEX_MAX_ROLLOUT_BYTES"):
+            rollout_size_limit()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", STORE_KINDS)
+async def test_store_rejects_too_large_rollout_and_keeps_previous(
+    kind: str, tmp_path: Path, monkeypatch
+) -> None:
+    """A rollout over the cap is refused before any write.
+
+    The runtime reacts by starting a new thread next turn, so the record it
+    already has must survive untouched: same version, same data.
+    """
+    monkeypatch.setenv("VEADK_CODEX_MAX_ROLLOUT_BYTES", "64")
+    async with _make_store(kind, tmp_path) as store:
+        # One byte over is refused, for a create too; at the limit is fine.
+        other = ThreadKey("app", "u1", "s-other", "agent")
+        with pytest.raises(RolloutTooLarge) as info:
+            await store.save(
+                other, TID, _rollout(b"x" * 65), "h", expected_version=None
+            )
+        assert isinstance(info.value, ThreadStoreError)
+        assert (info.value.size, info.value.limit) == (65, 64)
+        assert "x" * 10 not in str(info.value)
+        assert await store.load(other) is None
+
+        at_limit = _rollout(b"a" * 64)
+        await store.save(KEY, TID, at_limit, "h", expected_version=None)
+        with pytest.raises(RolloutTooLarge):
+            await store.save(
+                KEY,
+                TID,
+                _rollout(b"a" * 64 + b"b"),
+                "h2",
+                expected_version=1,
+                covered_invocation_id="inv-2",
+            )
+        rec = await store.load(KEY)
+        assert rec == ThreadRecord(
+            thread_id=TID, rollout=at_limit, version=1, instruction_hash="h"
+        )
+        # The store still accepts the next save on the unchanged version.
+        assert await store.save(KEY, TID, _rollout(b"ok"), "h", expected_version=1) == 2
+
+
+@pytest.mark.parametrize(
+    ("env", "value"),
+    [
+        ("VEADK_CODEX_MEMORY_STORE_MAX_BYTES", "0"),
+        ("VEADK_CODEX_MEMORY_STORE_MAX_RECORDS", "-3"),
+        ("VEADK_CODEX_MEMORY_STORE_MAX_RECORDS", "ten"),
+    ],
+)
+def test_memory_store_budget_env_validation(monkeypatch, env: str, value: str) -> None:
+    monkeypatch.setenv(env, value)
+    with pytest.raises(ValueError, match=env):
+        InMemoryThreadStore()
+
+
+def test_memory_store_budget_defaults_and_overrides(monkeypatch) -> None:
+    monkeypatch.delenv("VEADK_CODEX_MEMORY_STORE_MAX_BYTES", raising=False)
+    monkeypatch.delenv("VEADK_CODEX_MEMORY_STORE_MAX_RECORDS", raising=False)
+    store = InMemoryThreadStore()
+    assert (store.max_bytes, store.max_records) == (256 * 1024 * 1024, 10_000)
+    monkeypatch.setenv("VEADK_CODEX_MEMORY_STORE_MAX_BYTES", "1000")
+    monkeypatch.setenv("VEADK_CODEX_MEMORY_STORE_MAX_RECORDS", "7")
+    store = InMemoryThreadStore()
+    assert (store.max_bytes, store.max_records) == (1000, 7)
+    store = InMemoryThreadStore(max_bytes=5, max_records=2)
+    assert (store.max_bytes, store.max_records) == (5, 2)
+    for bad in (0, -1, True, 1.5):
+        with pytest.raises(ValueError):
+            InMemoryThreadStore(max_records=bad)
+        with pytest.raises(ValueError):
+            InMemoryThreadStore(max_bytes=bad)
+
+
+def _key(i: int) -> ThreadKey:
+    return ThreadKey("app", "u1", f"s{i}", "agent")
+
+
+def _tid(i: int) -> str:
+    return str(uuid.UUID(int=i + 1))
+
+
+@pytest.mark.asyncio
+async def test_memory_store_evicts_lru_by_record_count(caplog) -> None:
+    store = InMemoryThreadStore(max_records=3)
+    for i in range(3):
+        await store.save(
+            _key(i), _tid(i), _rollout(b"%d" % i, _tid(i)), "h", expected_version=None
+        )
+    # Touch s0 so s1 becomes the least recently used.
+    assert await store.load(_key(0)) is not None
+    with caplog.at_level("INFO"):
+        await store.save(
+            _key(3), _tid(3), _rollout(b"3", _tid(3)), "h", expected_version=None
+        )
+    assert len(store) == 3
+    assert await store.load(_key(1)) is None
+    for i in (0, 2, 3):
+        rec = await store.load(_key(i))
+        assert rec is not None and rec.rollout.data == b"%d" % i
+    [msg] = [
+        r.getMessage()
+        for r in caplog.records
+        if r.getMessage().startswith("codex_thread_store_evicted")
+    ]
+    assert "records=1 " in msg
+    # Counts only: no key or rollout content in the log line.
+    assert "s1" not in msg and _tid(1) not in msg and "app" not in msg
+
+    # A save to an existing key also refreshes it; s2 is now the LRU.
+    await store.save(
+        _key(0), _tid(0), _rollout(b"0b", _tid(0)), "h", expected_version=1
+    )
+    await store.save(
+        _key(3), _tid(3), _rollout(b"3b", _tid(3)), "h", expected_version=1
+    )
+    await store.save(
+        _key(4), _tid(4), _rollout(b"4", _tid(4)), "h", expected_version=None
+    )
+    assert await store.load(_key(2)) is None
+    assert {i for i in range(5) if await store.load(_key(i))} == {0, 3, 4}
+
+
+@pytest.mark.asyncio
+async def test_memory_store_evicts_lru_by_bytes() -> None:
+    # Incompressible payloads so the compressed size is ~ the raw size.
+    payloads = [os.urandom(1000) for _ in range(4)]
+    store = InMemoryThreadStore(max_bytes=3500, max_records=100)
+    for i in range(3):
+        await store.save(
+            _key(i), _tid(i), _rollout(payloads[i], _tid(i)), "h", expected_version=None
+        )
+    assert len(store) == 3 and 3000 < store.stored_bytes <= 3500
+    assert await store.load(_key(0)) is not None  # s1 becomes LRU
+    await store.save(
+        _key(3), _tid(3), _rollout(payloads[3], _tid(3)), "h", expected_version=None
+    )
+    assert store.stored_bytes <= 3500
+    assert await store.load(_key(1)) is None
+    for i in (0, 2, 3):
+        rec = await store.load(_key(i))
+        assert rec is not None and rec.rollout.data == payloads[i]
+
+    # One record larger than the whole budget pushes out everything else, but
+    # the record just saved is kept.
+    big = os.urandom(5000)
+    await store.save(
+        _key(9), _tid(9), _rollout(big, _tid(9)), "h", expected_version=None
+    )
+    assert len(store) == 1
+    rec = await store.load(_key(9))
+    assert rec is not None and rec.rollout.data == big
+
+    # Deleting releases its bytes.
+    await store.delete(_key(9))
+    assert len(store) == 0 and store.stored_bytes == 0
+
+
+@pytest.mark.asyncio
+async def test_memory_store_keeps_rollouts_compressed() -> None:
+    store = InMemoryThreadStore()
+    data = b'{"type":"response_item","payload":"same"}\n' * 20_000
+    rollout = _rollout(data)
+    await store.save(
+        KEY, TID, rollout, "h", expected_version=None, covered_invocation_id="inv-1"
+    )
+    assert store.stored_bytes < len(data) // 20
+    [entry] = store._records.values()
+    assert entry.rollout_gz[:2] == b"\x1f\x8b"
+    assert b"response_item" not in entry.rollout_gz
+    rec = await store.load(KEY)
+    assert rec == ThreadRecord(
+        thread_id=TID,
+        rollout=rollout,
+        version=1,
+        instruction_hash="h",
+        covered_invocation_id="inv-1",
+    )
+    # Replacing a record accounts for the old blob's bytes.
+    await store.save(KEY, TID, _rollout(b"small"), "h", expected_version=1)
+    assert 0 < store.stored_bytes < 100
 
 
 def test_mysql_blob_is_longblob() -> None:

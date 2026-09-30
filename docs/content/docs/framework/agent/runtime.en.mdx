@@ -131,6 +131,8 @@ Commands Codex runs never see credential-like environment variables. The generat
 
 Without this policy, running `env` inside the sandbox printed the model API key and the turn tokens (verified on Codex CLI 0.159). Any other credential a command needs belongs behind an ADK tool rather than in the sandbox environment.
 
+Model request headers stay out of the sandbox as well. On the `direct` transport, a header in `model_extra_config.extra_headers` whose name is `Authorization`, `Proxy-Authorization` or `Cookie`, or contains `key`/`token`/`secret`/`password`/`signature` (case-insensitive), is **never written to Codex's config file**: its value reaches Codex through environment variables via Codex's `env_http_headers`, which the sandboxed shell cannot see. Other headers are sent as static headers.
+
 #### The security baseline
 
 Put the pieces above together and you get the default recipe for running codex
@@ -304,6 +306,14 @@ Four more variables tune the Responses→Chat shim. These are not part of the ov
 | `CODEX_SHIM_START_TIMEOUT` | `10` | Seconds to wait for the shim's local HTTP server to come up. On timeout the startup fails loudly instead of leaving Codex unable to connect. |
 | `CODEX_SHIM_CACHE_MAX` | `8` | Cap on cached shim instances per process (keyed by backend address + credential), bounding servers and ports in a multi-tenant process. |
 
+Three more variables size the thread store. They are not part of the override rule either; see [Limitations](#limitations):
+
+| Variable | Default | Notes |
+| :--- | :--- | :--- |
+| `VEADK_CODEX_MAX_ROLLOUT_BYTES` | `33554432` (32 MiB) | Size cap for one thread's rollout, in bytes; past it the rollout is not saved. |
+| `VEADK_CODEX_MEMORY_STORE_MAX_BYTES` | `268435456` (256 MiB) | Total byte cap of the in-process thread store used with the `local` short-term memory backend; least-recently-used threads are evicted beyond it. |
+| `VEADK_CODEX_MEMORY_STORE_MAX_RECORDS` | `10000` | Record cap of the same in-process thread store. |
+
 ### Codex runtime architecture
 
 Codex owns the agent loop, the tool loop, the sandbox and short-term context; VeADK owns session binding, tool access, event translation, policy mapping, observability and deployment.
@@ -321,6 +331,7 @@ flowchart LR
 
 - **Direct (`direct`)**: Codex calls a Responses-capable model itself, and the agent's function and MCP tools reach Codex through a local MCP server the runtime runs for the turn, so Codex drives the tool loop.
 - **Session continuity (`thread_mode="resume"`)**: each session is bound to one Codex thread, persisted with the session and resumed on the next turn on any instance, so the model sees Codex's own full history rather than a replayed transcript.
+- **Resume retries**: resuming a thread retries transient errors (server busy / overloaded, transport closed) a bounded number of times with backoff before falling back to a new thread seeded from the transcript; a thread that does not exist or invalid parameters fall back immediately. A turn that has started is never retried, because its tools may already have had side effects.
 - **Steering**: `await runner.steer(session_id, "use pandas instead")` adds an instruction to the turn in flight without starting a new one; the turn must be running in this process, otherwise it returns `False`.
 - **Turn timeout**: past `turn_timeout_seconds` (1800 seconds by default) the turn is interrupted and the caller gets a `TimeoutError`.
 - **Context compaction**: `auto_compact_token_limit` lets Codex compact the history itself once tokens cross the limit.
@@ -329,6 +340,15 @@ flowchart LR
 | :--- | :--- | :--- |
 | Local (`local`) | Supported | Codex runs as a subprocess on the agent's instance; threads persist with the session, which suits stateless multi-instance deployments. |
 | Managed (`managed`) | Planned | Codex turns run in a managed service; VeADK keeps session binding and event translation. The interface stays the same. |
+
+#### Limitations
+
+| Area | Notes |
+| :--- | :--- |
+| Workspace persistence | Workspace files are not persisted across instances or restarts. The thread (conversation) resumes on any instance, but the workspace is an instance-local temporary directory by default; when a resumed turn finds an empty workspace, the model is told that files from earlier turns may be gone and to recreate them if needed. Persisting the workspace is planned. |
+| Concurrency | Within a process, invocations of one session are serialized (`direct` + `resume`). Across instances there is no lease: two instances running the same session concurrently may both execute tools; the later rollout save is rejected, and that turn is handed back to the thread from the session transcript on the next resume. Route one session to one instance at a time if tool side effects must not run twice. |
+| `max_llm_calls` | Best effort on the `direct` transport: the budget is charged after each model call, so one request already in flight may still be sent before the turn is interrupted. Use `model_transport="shim"` for a hard pre-request limit. |
+| Rollout size | A thread's rollout is capped (32 MiB by default, `VEADK_CODEX_MAX_ROLLOUT_BYTES`); past it the rollout is not saved and the next turn starts a new thread seeded from the session transcript. With the `local` short-term memory backend, the in-process thread store evicts least-recently-used threads; see [Codex environment variables](#codex-environment-variables) for its caps. |
 
 ### Codex observability
 
@@ -340,6 +360,19 @@ On top of that:
 - **`veadk.codex.*` span attributes.** The `call_llm` span also records `transport`, `thread_id`, `turn_id`, `thread_resumed`, `model`, `sandbox`, `approval_mode`, `tool_count`, `status` and `duration_ms` — never prompts, tool arguments or keys.
 - **`usage_metadata`.** The turn's token usage is summed and attached to the single merged final event of that turn, rather than to each intermediate event, so downstream consumers that sum `usage_metadata` across events do not double-count.
 - **`RunConfig(max_llm_calls=...)` is enforced.** The shim charges the budget before every real backend model call. On exhaustion Codex sees a `429 llm_calls_limit` (not a 500, which it would retry — replaying every tool side effect of the turn), and once the turn ends the runtime re-raises `LlmCallsLimitExceededError` to the caller instead of returning whatever partial answer Codex salvaged. On the `direct` transport there is no shim, and Codex announces nothing before it sends a model request, so the runtime charges the budget after each model call instead: the call that crosses the limit completes, one more request may already be in flight and is aborted when the turn is interrupted, and no further call is made.
+
+#### Metrics
+
+The runtime emits the following metrics through the process's OpenTelemetry MeterProvider; they are no-ops when none is configured. All attributes are low-cardinality and carry no user, session or thread IDs.
+
+| Metric | Type | Unit | Attributes | Description |
+| :--- | :--- | :--- | :--- | :--- |
+| `veadk.codex.thread.resume` | Counter | 1 | `outcome`: `resumed`/`new_thread`/`instructions_changed`/`retried_then_resumed`/`fallback_after_error`/`store_error` | Outcome of resuming a thread. |
+| `veadk.codex.thread.save` | Counter | 1 | `outcome`: `saved`/`conflict`/`failed`/`skipped`/`cancelled`/`too_large` | Outcome of saving a rollout. |
+| `veadk.codex.turn` | Counter | 1 | `status`: `completed`/`failed`/`cancelled`/`transferred`/`timeout`; `transport`: `direct`/`shim` | Turns run. |
+| `veadk.codex.turn.duration` | Histogram | s | Same as `veadk.codex.turn` | Turn duration. |
+| `veadk.codex.turn.startup` | Histogram | s | `transport` | Time from invocation start to the Codex turn starting. |
+| `veadk.codex.turn.tokens` | Counter | token | `transport`; `kind`: `input`/`output`/`cached_input`/`reasoning_output` | Token usage of turns. |
 
 ## Support matrix
 

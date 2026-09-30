@@ -651,7 +651,9 @@ async def test_real_codex_shell_cannot_see_the_model_key() -> None:
     from veadk.runtime.codex.model_provider import direct_route
 
     secret = f"sk-smoke-{uuid.uuid4().hex}"
+    header_secret = f"hdr-smoke-{uuid.uuid4().hex}"
     requests: list[dict[str, Any]] = []
+    received_headers: list[str] = []
 
     def _response(output: list[dict[str, Any]]) -> bytes:
         body = {
@@ -698,6 +700,7 @@ async def test_real_codex_shell_cannot_see_the_model_key() -> None:
             pass
 
         def do_POST(self) -> None:  # noqa: N802 - http.server API
+            received_headers.append(self.headers.get("X-Api-Key", ""))
             requests.append(
                 json.loads(self.rfile.read(int(self.headers["content-length"])))
             )
@@ -733,10 +736,16 @@ async def test_real_codex_shell_cannot_see_the_model_key() -> None:
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), _Model)
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    route = direct_route(f"http://127.0.0.1:{server.server_address[1]}/v1", secret)
+    route = direct_route(
+        f"http://127.0.0.1:{server.server_address[1]}/v1",
+        secret,
+        extra_headers={"X-Api-Key": header_secret},
+    )
     home = runtime_module._prepare_codex_home(
         route, "smoke-model", CodexRuntimeConfig()
     )
+    with open(os.path.join(home, "config.toml"), encoding="utf-8") as f:
+        config_text = f.read()
     workspace = tempfile.mkdtemp(prefix="veadk-codex-smoke-env-")
     env = codex_subprocess_env(home, "")
     env.update(route.env)
@@ -765,6 +774,11 @@ async def test_real_codex_shell_cannot_see_the_model_key() -> None:
     assert outputs, "Codex never ran `env`, so the check proved nothing"
     assert "PATH=" in json.dumps(outputs), "the command output is not an env listing"
     assert secret not in json.dumps(outputs), "the sandboxed shell saw the model key"
+    # A credential in a model header reaches the backend through the env, is
+    # never written to the config file, and is not visible to the shell either.
+    assert received_headers and all(h == header_secret for h in received_headers)
+    assert header_secret not in config_text
+    assert header_secret not in json.dumps(outputs)
 
 
 async def _drain(turn: Any) -> None:

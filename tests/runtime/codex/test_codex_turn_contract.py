@@ -1458,8 +1458,9 @@ async def test_next_turn_resumes_from_another_writers_record(monkeypatch) -> Non
     try:
         with _captured_runtime_logs() as records:
             assert await send("remember the word PAPAYA") is None
-            [(key, first)] = list(store._records.items())
-            assert first.version == 1
+            [key] = list(store._records)
+            first = await store.load(key)
+            assert first is not None and first.version == 1
 
             # The other instance's turn: the same thread, one more user message.
             item = {
@@ -1492,8 +1493,10 @@ async def test_next_turn_resumes_from_another_writers_record(monkeypatch) -> Non
     resumed = json.dumps(backend.raw_requests[-1], default=str)
     assert other_marker in resumed, "the turn resumed without the other writer's turn"
     assert "PAPAYA" in resumed
-    final = store._records[key]
-    assert final.version == 3, "this turn's save did not land on the newer version"
+    final = await store.load(key)
+    assert final is not None and final.version == 3, (
+        "this turn's save did not land on the newer version"
+    )
     assert other_marker.encode() in final.rollout.data
     assert not [
         r for r in records if r.getMessage().startswith("codex_thread_save_conflict")
@@ -1549,3 +1552,117 @@ async def test_a_turn_whose_save_was_lost_is_handed_back_on_the_next_resume(
     last = json.dumps(backend.raw_requests[-1], default=str)
     assert "BANANA-7" in last, "turn 2's user message was lost from the thread"
     assert "noted the BANANA-42" in last, "turn 2's reply was lost from the thread"
+
+
+@pytest.mark.asyncio
+async def test_a_transient_resume_error_is_retried_not_abandoned(monkeypatch) -> None:
+    """An overloaded app-server must not cost the session its native thread.
+
+    Resume used to fall back to a new thread on any error, so one transient
+    overload discarded the whole native context. Overload is now retried;
+    only deterministic errors (unknown thread, bad params) fall back.
+    """
+    from veadk.runtime.codex import runtime as runtime_module
+    from veadk.runtime.codex.mcp_bridge import shutdown_bridge
+
+    sdk = pytest.importorskip("openai_codex")
+    busy = getattr(sdk, "ServerBusyError", None)
+    if busy is None:
+        pytest.skip("the installed SDK has no ServerBusyError")
+    monkeypatch.setattr(runtime_module, "_RESUME_BACKOFF_SECONDS", (0.0, 0.0))
+
+    class _BusyOnce(fake_codex_sdk.DirectDrivingCodex):
+        busy_left = 1
+
+        async def thread_resume(self, thread_id, **kwargs):
+            if type(self).busy_left:
+                type(self).busy_left -= 1
+                self.thread_resumes.append(dict(kwargs))
+                raise busy(-32001, "server overloaded")
+            return await super().thread_resume(thread_id, **kwargs)
+
+    codex_class = _BusyOnce.configured()
+    send, backend, _, _ = await _direct_session(
+        monkeypatch,
+        (Round(text="noted PAPAYA", usage=(1, 1)), Round(text="PAPAYA", usage=(1, 1))),
+        codex_class=codex_class,
+    )
+    try:
+        assert await send("remember PAPAYA") is None
+        assert await send("which word?") is None
+    finally:
+        await shutdown_bridge()
+
+    # Second process: one failed resume, then a successful one; no new thread.
+    assert _starts_and_resumes(codex_class) == [(1, 0), (0, 2)]
+
+
+@pytest.mark.asyncio
+async def test_a_rollout_over_the_size_cap_drops_the_binding(monkeypatch) -> None:
+    """Past the cap every later save would fail while the stored copy fell
+    further behind; the binding is dropped and the next turn starts fresh."""
+    from veadk.runtime.codex.mcp_bridge import shutdown_bridge
+
+    send, _backend, codex_class, _ = await _direct_session(
+        monkeypatch,
+        (
+            Round(text="one", usage=(1, 1)),
+            Round(text="two", usage=(1, 1)),
+            Round(text="three", usage=(1, 1)),
+        ),
+    )
+    try:
+        assert await send("first") is None  # saved under the default cap
+        monkeypatch.setenv("VEADK_CODEX_MAX_ROLLOUT_BYTES", "10")
+        assert await send("second") is None  # resumed; its save is too large
+        monkeypatch.delenv("VEADK_CODEX_MAX_ROLLOUT_BYTES")
+        assert await send("third") is None
+    finally:
+        await shutdown_bridge()
+
+    # Turn 3 starts a new thread instead of resuming turn 1's stale rollout.
+    assert _starts_and_resumes(codex_class) == [(1, 0), (0, 1), (1, 0)]
+
+
+@pytest.mark.asyncio
+async def test_turn_outcomes_are_recorded_as_metrics(monkeypatch) -> None:
+    """Resume, save and turn outcomes reach the metrics, with no ids."""
+    from opentelemetry.sdk.metrics import MeterProvider
+    from opentelemetry.sdk.metrics.export import InMemoryMetricReader
+
+    from veadk.runtime.codex import metrics as codex_metrics
+    from veadk.runtime.codex.mcp_bridge import shutdown_bridge
+
+    reader = InMemoryMetricReader()
+    provider = MeterProvider(metric_readers=[reader])
+    codex_metrics.set_meter_for_testing(provider.get_meter("test"))
+    send, _backend, _, _ = await _direct_session(
+        monkeypatch,
+        (Round(text="one", usage=(3, 2)), Round(text="two", usage=(3, 2))),
+    )
+    try:
+        assert await send("first") is None
+        assert await send("second") is None
+    finally:
+        await shutdown_bridge()
+        codex_metrics.set_meter_for_testing(None)
+
+    points: dict[str, list] = {}
+    for resource in reader.get_metrics_data().resource_metrics:
+        for scope in resource.scope_metrics:
+            for metric in scope.metrics:
+                points[metric.name] = list(metric.data.data_points)
+
+    def counts(name: str, attr: str) -> dict:
+        return {p.attributes[attr]: p.value for p in points.get(name, [])}
+
+    assert counts("veadk.codex.thread.resume", "outcome") == {
+        "new_thread": 1,
+        "resumed": 1,
+    }
+    assert counts("veadk.codex.thread.save", "outcome") == {"saved": 2}
+    assert counts("veadk.codex.turn", "status") == {"completed": 2}
+    assert "veadk.codex.turn.startup" in points
+    for data_points in points.values():
+        for point in data_points:
+            assert not any("id" in key for key in point.attributes), point.attributes

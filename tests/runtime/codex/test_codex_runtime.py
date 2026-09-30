@@ -1262,3 +1262,17 @@ def test_backfill_includes_a_parent_agent_in_the_same_invocation() -> None:
     lines = _turns_since_own(ctx, "codex_agent", covered_invocation_id="inv-1")
 
     assert lines == ["router: Handing this to codex: the CI log says X"]
+
+
+def test_resume_on_an_empty_workspace_warns_the_model(tmp_path) -> None:
+    """The thread survives a new instance; its files do not."""
+    from veadk.runtime.codex.runtime import _with_backfill, _workspace_is_empty
+
+    assert _workspace_is_empty(str(tmp_path))
+    (tmp_path / "plan.md").write_text("x")
+    assert not _workspace_is_empty(str(tmp_path))
+
+    prompt = _with_backfill("continue", [], workspace_reset=True)
+    assert "working directory was reset" in prompt
+    assert prompt.endswith("continue")
+    assert _with_backfill("continue", []) == "continue"

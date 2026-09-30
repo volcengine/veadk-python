@@ -483,3 +483,49 @@ async def test_real_codex_honours_direct_route_thread_config() -> None:
         tools = _tool_names(body)
         assert not tools & _TRIMMED_TOOLS, sorted(tools & _TRIMMED_TOOLS)
         assert "exec_command" in tools, sorted(tools)
+
+
+def test_sensitive_headers_travel_by_env_not_in_the_config() -> None:
+    """Credentials in extra headers must not land in Codex's config file."""
+    route = direct_route(
+        "https://ark.cn-beijing.volces.com/api/v3",
+        _SECRET,
+        extra_headers={
+            "Authorization": "Bearer hdr-secret-1",
+            "X-Api-Key": "hdr-secret-2",
+            "x-is-encrypted": "true",
+        },
+    )
+
+    config = route.provider_config
+    assert config["http_headers"] == {"x-is-encrypted": "true"}
+    names = config["env_http_headers"]
+    assert set(names) == {"Authorization", "X-Api-Key"}
+    assert {route.env[var] for var in names.values()} == {
+        "Bearer hdr-secret-1",
+        "hdr-secret-2",
+    }
+    assert all(var.startswith("VEADK_CODEX_") for var in names.values())
+    assert "hdr-secret" not in repr(route.thread_config())
+
+
+@pytest.mark.parametrize(
+    ("name", "sensitive"),
+    [
+        ("Authorization", True),
+        ("proxy-authorization", True),
+        ("Cookie", True),
+        ("X-Api-Key", True),
+        ("x-session-token", True),
+        ("X-Client-Secret", True),
+        ("x-password", True),
+        ("X-Signature", True),
+        ("x-is-encrypted", False),
+        ("veadk-source", False),
+        ("User-Agent", False),
+    ],
+)
+def test_is_sensitive_header(name: str, sensitive: bool) -> None:
+    from veadk.runtime.codex.model_provider import is_sensitive_header
+
+    assert is_sensitive_header(name) is sensitive

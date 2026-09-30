@@ -30,13 +30,20 @@ somewhere shared. The store keeps, per ``(app, user, session, agent)``:
 Backends:
 
 * :class:`InMemoryThreadStore` - process-local; pairs with the ``local``
-  short-term memory backend and tests.
+  short-term memory backend and tests. Bounded: least-recently-used records
+  are evicted past a byte / record budget.
 * :class:`LocalDirThreadStore` - files under a directory; for development.
 * :class:`DatabaseThreadStore` - a table in the same database as the
   short-term memory's ``DatabaseSessionService`` (sqlite / mysql / postgresql).
 
 :func:`select_thread_store` picks one from a ``ShortTermMemory`` or session
 service. Rollout contents are never logged.
+
+A rollout only grows (Codex's compaction appends, it does not shrink the
+file), and every turn reads, compresses and writes it whole. Every store's
+``save`` therefore refuses a rollout larger than :func:`rollout_size_limit`
+with :class:`RolloutTooLarge`, leaving the stored record untouched, so the
+runtime can start a fresh thread instead of carrying an ever larger one.
 """
 
 from __future__ import annotations
@@ -51,6 +58,7 @@ import tempfile
 import threading
 import weakref
 from abc import ABC, abstractmethod
+from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -69,6 +77,50 @@ DEFAULT_TABLE_NAME = "veadk_codex_threads"
 _KEY_LENGTH = 128
 # gzip level: rollouts are highly repetitive JSON; 6 is the zlib sweet spot.
 _GZIP_LEVEL = 6
+
+#: Default cap on one rollout's raw (uncompressed) size, in bytes. Override
+#: with the ``VEADK_CODEX_MAX_ROLLOUT_BYTES`` environment variable; see
+#: :func:`rollout_size_limit`.
+MAX_ROLLOUT_BYTES = 32 * 1024 * 1024
+MAX_ROLLOUT_BYTES_ENV = "VEADK_CODEX_MAX_ROLLOUT_BYTES"
+
+#: Default budget of :class:`InMemoryThreadStore`: total compressed bytes
+#: held (``VEADK_CODEX_MEMORY_STORE_MAX_BYTES``) and number of records
+#: (``VEADK_CODEX_MEMORY_STORE_MAX_RECORDS``).
+MEMORY_STORE_MAX_BYTES = 256 * 1024 * 1024
+MEMORY_STORE_MAX_BYTES_ENV = "VEADK_CODEX_MEMORY_STORE_MAX_BYTES"
+MEMORY_STORE_MAX_RECORDS = 10_000
+MEMORY_STORE_MAX_RECORDS_ENV = "VEADK_CODEX_MEMORY_STORE_MAX_RECORDS"
+
+
+def _positive_int(value: Any, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError(f"{name} must be a positive integer, got {value!r}")
+    return value
+
+
+def _env_positive_int(env: str, default: int) -> int:
+    raw = os.environ.get(env)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = int(raw.strip())
+    except ValueError:
+        raise ValueError(f"{env} must be a positive integer, got {raw!r}") from None
+    return _positive_int(value, env)
+
+
+def rollout_size_limit() -> int:
+    """Largest rollout (raw bytes) a store will ``save``.
+
+    ``VEADK_CODEX_MAX_ROLLOUT_BYTES`` if set, else :data:`MAX_ROLLOUT_BYTES`.
+    Read on every call, so a changed environment takes effect without a
+    restart.
+
+    Raises:
+        ValueError: if the environment variable is not a positive integer.
+    """
+    return _env_positive_int(MAX_ROLLOUT_BYTES_ENV, MAX_ROLLOUT_BYTES)
 
 
 @dataclass(frozen=True)
@@ -129,6 +181,24 @@ class ThreadStoreCorrupt(ThreadStoreError):
     """A stored rollout failed its integrity check on load."""
 
 
+class RolloutTooLarge(ThreadStoreError):
+    """``save`` was given a rollout larger than :func:`rollout_size_limit`.
+
+    Raised before anything is written, so the previously stored record (and
+    its version) is unchanged. The thread has outgrown persistence; the caller
+    should start a new thread rather than retry.
+
+    Attributes:
+        size: The rollout's raw size in bytes.
+        limit: The limit it exceeded.
+    """
+
+    def __init__(self, size: int, limit: int) -> None:
+        super().__init__(f"rollout is {size} bytes, over the {limit}-byte limit")
+        self.size = size
+        self.limit = limit
+
+
 def instruction_hash(text: str) -> str:
     """Stable hash of developer instructions (``sha256`` hex of UTF-8)."""
     return hashlib.sha256((text or "").encode("utf-8")).hexdigest()
@@ -140,6 +210,9 @@ def _check_save_args(thread_id: str, rollout: Rollout) -> None:
         raise ValueError(
             f"rollout belongs to thread {rollout.thread_id!r}, not {thread_id!r}"
         )
+    limit = rollout_size_limit()
+    if len(rollout.data) > limit:
+        raise RolloutTooLarge(len(rollout.data), limit)
 
 
 def _check_key(key: ThreadKey) -> None:
@@ -162,7 +235,9 @@ def _sha256(data: bytes) -> str:
 class CodexThreadStore(ABC):
     """Versioned key -> :class:`ThreadRecord` storage.
 
-    ``save`` is a compare-and-set on ``version``:
+    ``save`` refuses a rollout over :func:`rollout_size_limit` with
+    :class:`RolloutTooLarge` before writing anything. Otherwise it is a
+    compare-and-set on ``version``:
 
     * ``expected_version=None`` creates the record; it fails with
       :class:`ThreadStoreConflict` if one already exists.
@@ -202,18 +277,100 @@ class CodexThreadStore(ABC):
 # ---------------------------------------------------------------------------
 
 
-class InMemoryThreadStore(CodexThreadStore):
-    """Process-local store. Records vanish with the process."""
+@dataclass(frozen=True)
+class _MemoryEntry:
+    """An :class:`InMemoryThreadStore` record with its rollout gzip-compressed."""
 
-    def __init__(self) -> None:
-        self._records: dict[ThreadKey, ThreadRecord] = {}
+    thread_id: str
+    relpath: str
+    rollout_gz: bytes
+    version: int
+    instruction_hash: str
+    covered_invocation_id: str
+
+
+class InMemoryThreadStore(CodexThreadStore):
+    """Process-local store. Records vanish with the process.
+
+    Rollouts are kept gzip-compressed. The store is bounded by the total
+    compressed bytes it holds and by its record count; past either budget the
+    least-recently-used records (``load`` and ``save`` both count as use) are
+    evicted. An evicted session simply starts a new Codex thread on its next
+    turn. The record just saved is never evicted by its own save, so one
+    rollout larger than ``max_bytes`` is still kept (alone).
+
+    Args:
+        max_bytes: Budget of compressed rollout bytes. Defaults to
+            ``VEADK_CODEX_MEMORY_STORE_MAX_BYTES`` or
+            :data:`MEMORY_STORE_MAX_BYTES`.
+        max_records: Budget of records. Defaults to
+            ``VEADK_CODEX_MEMORY_STORE_MAX_RECORDS`` or
+            :data:`MEMORY_STORE_MAX_RECORDS`.
+
+    Raises:
+        ValueError: if a budget (argument or environment) is not a positive
+            integer.
+    """
+
+    def __init__(
+        self, *, max_bytes: int | None = None, max_records: int | None = None
+    ) -> None:
+        self._max_bytes = (
+            _env_positive_int(MEMORY_STORE_MAX_BYTES_ENV, MEMORY_STORE_MAX_BYTES)
+            if max_bytes is None
+            else _positive_int(max_bytes, "max_bytes")
+        )
+        self._max_records = (
+            _env_positive_int(MEMORY_STORE_MAX_RECORDS_ENV, MEMORY_STORE_MAX_RECORDS)
+            if max_records is None
+            else _positive_int(max_records, "max_records")
+        )
+        # Least recently used first.
+        self._records: OrderedDict[ThreadKey, _MemoryEntry] = OrderedDict()
+        self._bytes = 0
         # No awaits happen while it is held, so a thread lock also covers
         # callers on different event loops.
         self._lock = threading.Lock()
 
+    @property
+    def max_bytes(self) -> int:
+        return self._max_bytes
+
+    @property
+    def max_records(self) -> int:
+        return self._max_records
+
+    @property
+    def stored_bytes(self) -> int:
+        """Compressed rollout bytes currently held."""
+        with self._lock:
+            return self._bytes
+
+    def __len__(self) -> int:
+        with self._lock:
+            return len(self._records)
+
     async def load(self, key: ThreadKey) -> ThreadRecord | None:
         with self._lock:
-            return self._records.get(key)
+            entry = self._records.get(key)
+            if entry is None:
+                return None
+            self._records.move_to_end(key)
+        try:
+            data = await asyncio.to_thread(gzip.decompress, entry.rollout_gz)
+        except (OSError, EOFError) as e:
+            raise ThreadStoreCorrupt(
+                f"undecodable rollout for thread {entry.thread_id}"
+            ) from e
+        return ThreadRecord(
+            thread_id=entry.thread_id,
+            rollout=Rollout(
+                thread_id=entry.thread_id, relpath=entry.relpath, data=data
+            ),
+            version=entry.version,
+            instruction_hash=entry.instruction_hash,
+            covered_invocation_id=entry.covered_invocation_id,
+        )
 
     async def save(
         self,
@@ -227,6 +384,9 @@ class InMemoryThreadStore(CodexThreadStore):
     ) -> int:
         _check_key(key)
         _check_save_args(thread_id, rollout)
+        # Compress outside the lock: it is the slow part, and a save that then
+        # loses the compare-and-set just discards it.
+        blob = await asyncio.to_thread(_compress, rollout.data)
         with self._lock:
             current = self._records.get(key)
             current_version = current.version if current else None
@@ -235,18 +395,48 @@ class InMemoryThreadStore(CodexThreadStore):
                     f"expected version {expected_version}, found {current_version}"
                 )
             version = 1 if current is None else current.version + 1
-            self._records[key] = ThreadRecord(
+            if current is not None:
+                self._bytes -= len(current.rollout_gz)
+            self._records[key] = _MemoryEntry(
                 thread_id=thread_id,
-                rollout=rollout,
+                relpath=rollout.relpath,
+                rollout_gz=blob,
                 version=version,
                 instruction_hash=instruction_hash,
                 covered_invocation_id=covered_invocation_id,
             )
-            return version
+            self._records.move_to_end(key)
+            self._bytes += len(blob)
+            evicted, evicted_bytes = self._evict_locked()
+            remaining, remaining_bytes = len(self._records), self._bytes
+        if evicted:
+            logger.info(
+                "codex_thread_store_evicted records=%d bytes=%d "
+                "remaining_records=%d remaining_bytes=%d",
+                evicted,
+                evicted_bytes,
+                remaining,
+                remaining_bytes,
+            )
+        return version
+
+    def _evict_locked(self) -> tuple[int, int]:
+        """Drop LRU records until within budget; keeps the newest one."""
+        evicted = evicted_bytes = 0
+        while len(self._records) > 1 and (
+            len(self._records) > self._max_records or self._bytes > self._max_bytes
+        ):
+            _, entry = self._records.popitem(last=False)
+            self._bytes -= len(entry.rollout_gz)
+            evicted += 1
+            evicted_bytes += len(entry.rollout_gz)
+        return evicted, evicted_bytes
 
     async def delete(self, key: ThreadKey) -> None:
         with self._lock:
-            self._records.pop(key, None)
+            entry = self._records.pop(key, None)
+            if entry is not None:
+                self._bytes -= len(entry.rollout_gz)
 
 
 # ---------------------------------------------------------------------------
