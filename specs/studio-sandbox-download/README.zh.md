@@ -2,7 +2,7 @@
 
 [English](README.md)
 
-组件：studio-sandbox-download；修订：2026-09-17；状态：active。
+组件：studio-sandbox-download；修订：2026-09-30；状态：active。
 职责代码：frontend/src/ui/SandboxFileLink.tsx、Markdown.tsx、App.tsx、adk/client.ts。依赖现有 Studio Runtime 代理与 MPA 会话下载接口。关联 [PRD](../../prd-spec/features/studio-sandbox-download/2026-09-17-history-download.zh.md)。
 
 ## 契约
@@ -17,3 +17,5 @@
 测试：frontend/tests/sandboxDownload.test.tsx、sandboxDownloadClient.test.ts。覆盖 CON-1/2/3，包括非法路径、当前 Runtime/会话路由、取消与重试。执行 `npm --prefix frontend test`、专用 Vitest 覆盖率、构建与浏览器历史下载。PRD 记录结果和边界。已实现，验证结果见 PRD。
 
 - CON-4：会话 Markdown 隐藏 `file-card`、`personal-drive-enable-card` 元素及其内容。下载入口使用主题 primary 色、16px 字体、最小 44px 高度、可见键盘焦点和文件名换行。每个下载入口独占一行，宽度随内容适配。保留周围消息正文。由 sandboxDownload.test.tsx 验证。
+
+- CON-5：Composer 对现有 Runtime 元数据识别的原生或 A2A MPA 连接，不挂载独立的 `RuntimeArtifacts` 入口，因此不运行其列表/预览 hook。普通 Runtime 会话保留入口及既有无会话/Sandbox 条件。MPA Markdown Sandbox 文件下载不变；Studio 产物存储不是 Worker `/data/output` 的适配。参见[显示规则设计](../../prd-spec/bugfixes/studio-mpa-artifact-entry/2026-09-30-hide-artifact-entry.zh.md)及 `frontend/tests/mpaSessionProtocol.test.mjs`。

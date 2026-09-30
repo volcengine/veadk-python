@@ -2,7 +2,7 @@
 
 [中文](README.zh.md)
 
-Component: studio-sandbox-download; revision: 2026-09-17; status: active.
+Component: studio-sandbox-download; revision: 2026-09-30; status: active.
 Owner: frontend/src/ui/SandboxFileLink.tsx, Markdown.tsx, App.tsx and adk/client.ts. Depends on existing Studio Runtime proxy and MPA session download API. Related [PRD](../../prd-spec/features/studio-sandbox-download/2026-09-17-history-download.md).
 
 ## Contracts
@@ -17,3 +17,5 @@ No persistent data/configuration or protocol changes. Existing history and strea
 Tests: frontend/tests/sandboxDownload.test.tsx and sandboxDownloadClient.test.ts. Cover CON-1/2/3 including negative paths, current Runtime/session routing, cancellation and retry. Run `npm --prefix frontend test`, dedicated Vitest coverage and build, plus browser history download. PRD records results and limits. Implemented; see PRD for verification.
 
 - CON-4: Conversation Markdown hides `file-card` and `personal-drive-enable-card` elements including their children. Download controls use primary theme colors, 16px text, 44px minimum height, visible keyboard focus and wrapping filenames. Each download control occupies its own line with content-sized width. Surrounding message text is retained. Tested in sandboxDownload.test.tsx.
+
+- CON-5: The composer does not mount the separate `RuntimeArtifacts` entry for native or A2A MPA connections identified by existing Runtime metadata. Its list/preview hooks therefore do not run for those connections. General Runtime sessions retain their entry and existing no-session/Sandbox guards. MPA Markdown Sandbox file downloads remain unchanged; the Studio artifact store is not an adapter for Worker `/data/output`. See [visibility design](../../prd-spec/bugfixes/studio-mpa-artifact-entry/2026-09-30-hide-artifact-entry.md) and `frontend/tests/mpaSessionProtocol.test.mjs`.
