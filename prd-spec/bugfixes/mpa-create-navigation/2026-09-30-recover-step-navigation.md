@@ -2,7 +2,7 @@
 
 [中文](2026-09-30-recover-step-navigation.zh.md)
 
-Change ID: mpa-create-navigation. Date: 2026-09-30. Status: approved.
+Change ID: mpa-create-navigation. Date: 2026-09-30. Status: implemented.
 
 ## Evidence and scope
 
@@ -37,4 +37,9 @@ Approval: user's explicit fix/deploy instruction in this conversation.
 Verification (2026-09-30): regression tests failed before the fix (pass as a
 reproducer). Frontend suite: 1367 Node + 42 Vitest tests pass; build pass;
 added executable statements: 3/3 covered (100%); pre-commit all-files pass,
-including secret scans. Cloud/browser verification: not_run, deployment pending.
+including secret scans. Cloud/browser verification: pass. Code `1bed366a`
+deployed to the existing Studio application `f5d61f368888`, function `xuime6ro`;
+release completed at 10:31 Asia/Shanghai. The remote browser verified step clicks,
+keyboard activation, Previous, and close/reopen restoration at step 3 with the
+same agent ID. Submitted-draft locks/identity are covered by regression tests;
+no new MPA was submitted during this navigation check.

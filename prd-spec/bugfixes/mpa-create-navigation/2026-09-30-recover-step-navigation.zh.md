@@ -2,7 +2,7 @@
 
 [English](2026-09-30-recover-step-navigation.md)
 
-变更 ID：mpa-create-navigation。日期：2026-09-30。状态：approved。
+变更 ID：mpa-create-navigation。日期：2026-09-30。状态：implemented。
 
 ## 证据与范围
 
@@ -36,4 +36,8 @@ T-3/AC-3：运行前端测试/构建、统计新增行覆盖率、推送并部�
 验证（2026-09-30）：修复前回归测试失败，复现结果为 pass。
 前端 1367 个 Node + 42 个 Vitest 测试 pass；构建 pass；
 新增可执行语句覆盖 3/3（100%）；pre-commit 全量检查及密钥扫描 pass。
-云端/浏览器验证：not_run，等待部署。
+云端/浏览器验证：pass。代码 `1bed366a` 已部署至现有 Studio 应用
+`f5d61f368888`、函数 `xuime6ro`，北京时间 10:31 发布完成。
+远程浏览器验证了步骤点击、键盘触发、“上一步”和关闭后恢复第 3 步草稿，
+智能体 ID 保持不变。已提交草稿的锁定与身份保持由回归测试覆盖；
+本次导航验证未提交新 MPA。
