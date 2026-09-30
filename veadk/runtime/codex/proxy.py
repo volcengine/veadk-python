@@ -250,6 +250,7 @@ class TurnToolState:
     __slots__ = (
         "_lock",
         "_transcript",
+        "_anchors",
         "_iterations",
         "_dropped",
         "_error",
@@ -260,6 +261,10 @@ class TurnToolState:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._transcript: list[dict[str, Any]] = []
+        # Parallel to `_transcript`: the `call_id` of the Codex-visible
+        # function call each recorded item happened just before, or `None`
+        # while that is not known yet. See `anchor_unplaced`.
+        self._anchors: list[str | None] = []
         self._iterations = 0
         self._dropped = 0
         self._error: BaseException | None = None
@@ -394,6 +399,7 @@ class TurnToolState:
             return
         with self._lock:
             self._transcript.extend(dict(item) for item in items)
+            self._anchors.extend(None for _ in items)
             overflow = len(self._transcript) - _TURN_TRANSCRIPT_MAX_ITEMS
             if overflow <= 0:
                 return
@@ -409,21 +415,62 @@ class TurnToolState:
             ):
                 overflow += 1
             del self._transcript[:overflow]
+            del self._anchors[:overflow]
             self._dropped += overflow
 
-    def replay_items(self, seen_call_ids: set[str]) -> list[dict[str, Any]]:
-        """Items to re-append to a fresh request's ``input``.
+    def anchor_unplaced(self, call_id: str | None) -> None:
+        """Pin items recorded during this request to where they happened.
 
-        Anything whose ``call_id`` is already present in the inbound request is
-        skipped, so the pairs can never be duplicated (both items of a pair
-        share a ``call_id``, so a pair is always kept or dropped whole).
+        The shim runs ADK tools *before* returning the model's reply to Codex,
+        so they belong just ahead of the first function call in that reply.
+        Codex will carry that call in every later request, which is what lets
+        :meth:`replay_into` put the ADK pairs back in order. A reply with no
+        function call ends the turn, so its items never need placing.
         """
+        if not call_id:
+            return
         with self._lock:
-            return [
-                dict(item)
-                for item in self._transcript
-                if item.get("call_id") not in seen_call_ids
+            self._anchors = [
+                call_id if anchor is None else anchor for anchor in self._anchors
             ]
+
+    def replay_into(self, conversation: list[Any]) -> int:
+        """Splice the turn's ADK tool pairs into ``conversation`` in order.
+
+        Appending them at the tail made every request end on the ADK results,
+        however much the model had done since: it kept concluding it had only
+        just fetched its data and started over, re-running the same commands
+        until the call budget ran out. Each pair is instead inserted before the
+        model reply it preceded -- the reply's function call plus any assistant
+        text or reasoning Codex recorded ahead of it. Pairs whose anchor is not
+        (or no longer, e.g. after compaction) in the request fall back to the
+        tail. Returns the number of items inserted.
+        """
+        seen = _call_ids(conversation)
+        with self._lock:
+            pending = [
+                (anchor, dict(item))
+                for anchor, item in zip(self._anchors, self._transcript)
+                if item.get("call_id") not in seen
+            ]
+        if not pending:
+            return 0
+
+        groups: dict[str, list[dict[str, Any]]] = {}
+        tail: list[dict[str, Any]] = []
+        for anchor, item in pending:
+            if anchor is None:
+                tail.append(item)
+            else:
+                groups.setdefault(anchor, []).append(item)
+        for anchor, items in groups.items():
+            position = _reply_start(conversation, anchor)
+            if position is None:
+                tail.extend(items)
+            else:
+                conversation[position:position] = items
+        conversation.extend(tail)
+        return len(pending)
 
 
 @dataclass(frozen=True)
@@ -889,19 +936,19 @@ class ResponsesShim:
             # streamed to it, precisely so Codex does not try to dispatch tools
             # it does not own), so without this the model would see a
             # conversation in which it never called the tool and would re-issue
-            # the call — re-running its side effects. Pairs are appended at the
-            # tail (never spliced mid-array) so the chat bridge always sees an
-            # assistant(tool_calls) message immediately followed by its tool
-            # result, and are skipped when their call_id is already present.
+            # the call — re-running its side effects. Each pair goes back where
+            # it happened (see `TurnToolState.replay_into`), kept whole so the
+            # chat bridge still sees an assistant(tool_calls) message
+            # immediately followed by its tool result, and is skipped when its
+            # call_id is already present.
             conversation = call_kwargs.get("input")
             if is_agent_turn and isinstance(conversation, list):
-                replay = turn_context.state.replay_items(_call_ids(conversation))
-                if replay:
-                    conversation.extend(replay)
+                replayed = turn_context.state.replay_into(conversation)
+                if replayed:
                     logger.debug(
                         "codex_shim_tool_history_replayed invocation_id=%s items=%d",
                         turn_context.invocation_id,
-                        len(replay),
+                        replayed,
                     )
 
             call_kwargs.update(
@@ -1120,6 +1167,8 @@ class ResponsesShim:
                 # Remember them for the *next* request of this same turn.
                 turn_context.state.record(pairs)
 
+            if is_agent_turn:
+                turn_context.state.anchor_unplaced(_first_call_id(resp))
             resp = _with_total_usage(resp, usage_acc)
             if stream:
                 return StreamingResponse(
@@ -1485,6 +1534,45 @@ def _user_message_texts(items: Any) -> list[str]:
             )
         )
     return texts
+
+
+def _reply_start(conversation: list[Any], call_id: str) -> int | None:
+    """Index where the model reply containing function call ``call_id`` begins.
+
+    Codex records one reply's items contiguously: optional reasoning and
+    assistant text, then its function calls. The reply therefore starts at the
+    call, walked back over those leading items.
+    """
+    for index, item in enumerate(conversation):
+        if (
+            isinstance(item, dict)
+            and item.get("type") == "function_call"
+            and item.get("call_id") == call_id
+        ):
+            break
+    else:
+        return None
+    while index > 0:
+        previous = conversation[index - 1]
+        if not isinstance(previous, dict):
+            break
+        if previous.get("type") == "reasoning" or (
+            previous.get("type") == "message" and previous.get("role") == "assistant"
+        ):
+            index -= 1
+            continue
+        break
+    return index
+
+
+def _first_call_id(response: dict[str, Any]) -> str | None:
+    """``call_id`` of the first function call in a Responses ``output``."""
+    for item in response.get("output") or []:
+        if isinstance(item, dict) and item.get("type") == "function_call":
+            call_id = item.get("call_id")
+            if isinstance(call_id, str) and call_id:
+                return call_id
+    return None
 
 
 def _call_ids(items: list[Any]) -> set[str]:

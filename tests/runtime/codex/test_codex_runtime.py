@@ -979,3 +979,71 @@ async def test_shim_completes_turn_after_transfer_without_second_model_call(
     body = response.json()
     assert body["status"] == "completed"
     assert body["output"][0]["type"] == "message"
+
+
+@pytest.mark.parametrize(
+    ("reported", "expected"),
+    [
+        # What Codex reports for a plain command run through the login shell.
+        ("/bin/zsh -lc 'pwd'", "pwd"),
+        ("/bin/bash -lc 'ls -la && cat a.txt'", "ls -la && cat a.txt"),
+        ("sh -c 'echo hi'", "echo hi"),
+        # Inner quoting and multi-line scripts survive the unwrap intact.
+        (
+            "/bin/zsh -lc \"cat > a.py <<'EOF'\nprint('x')\nEOF\"",
+            "cat > a.py <<'EOF'\nprint('x')\nEOF",
+        ),
+        # A command the model itself wrapped is unwrapped one level only, so
+        # the recorded form still shows what the model actually sent.
+        (
+            "/bin/zsh -lc \"/bin/zsh -lc 'pwd'\"",
+            "/bin/zsh -lc 'pwd'",
+        ),
+        # Not a bare wrapper: left untouched.
+        ("pwd", "pwd"),
+        ("/bin/zsh -lc 'pwd' extra-arg", "/bin/zsh -lc 'pwd' extra-arg"),
+        ("python3 -c 'print(1)'", "python3 -c 'print(1)'"),
+        ("/bin/zsh -lc 'unterminated", "/bin/zsh -lc 'unterminated"),
+        ("", ""),
+    ],
+)
+def test_unwrap_shell_command(reported: str, expected: str) -> None:
+    from veadk.runtime.codex.translate import _unwrap_shell_command
+
+    assert _unwrap_shell_command(reported) == expected
+
+
+def test_recorded_command_is_what_the_model_sent_not_the_shell_wrapper() -> None:
+    """Replayed history must not teach the model to wrap its own commands.
+
+    The recorded ``exec_command`` args end up in the next invocation's prompt.
+    With Codex's wrapper left in, the model copied it into its own commands and
+    Codex wrapped them again (``/bin/zsh -lc "/bin/zsh -lc '...'"``).
+    """
+    item = {
+        "id": "cmd-1",
+        "type": "commandExecution",
+        "command": "/bin/zsh -lc 'python3 analysis/agg.py metrics.csv'",
+        "cwd": "/workspace",
+        "status": "completed",
+        "aggregated_output": "ok\n",
+        "exit_code": 0,
+    }
+    completed = type(
+        "ItemCompletedNotification",
+        (),
+        {"model_dump": lambda self: {"item": item}},
+    )()
+
+    events = notification_to_events(completed, "agent", "inv", active_tool_items=set())
+
+    calls = [
+        part.function_call
+        for event in events
+        for part in (event.content.parts if event.content else [])
+        if part.function_call
+    ]
+    assert len(calls) == 1
+    assert calls[0].name == "exec_command"
+    assert calls[0].args["command"] == "python3 analysis/agg.py metrics.csv"
+    assert calls[0].args["cwd"] == "/workspace"
