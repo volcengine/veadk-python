@@ -16,7 +16,6 @@
 
 import asyncio
 import copy
-import time
 from types import SimpleNamespace
 
 import pytest
@@ -244,21 +243,67 @@ async def test_contended_index_still_allows_authorized_keyword_evidence(
 async def test_shared_remaining_deadline_bounds_optional_index_wait(
     tmp_path, monkeypatch
 ):
+    from veadk.context import hybrid_retriever
+
     monkeypatch.setattr(retrieval, "RETRIEVAL_TIMEOUT", 10.0)
     values = [content("user", source_text(35))]
     embedder = StallAfterCompletedBatch()
     retriever = HybridContextRetriever(tmp_path / "index.sqlite3", embedder)
     scope = scope_for(values, retriever)
-    began = time.monotonic()
-    scope.evidence_retrieval_deadline = began + 0.35
+    before = copy.deepcopy(scope.session)
+    clock = [100.0]
+    scope.evidence_retrieval_deadline = clock[0] + 0.35
+    outer_timeouts, inner_timeouts = [], []
+
+    async def outer_wait(awaitable, *, timeout):
+        outer_timeouts.append(timeout)
+        # A watchdog detects a broken test; the assertions below verify the
+        # production budget without depending on shared-runner scheduling.
+        return await asyncio.wait_for(awaitable, timeout=5)
+
+    async def expire_after_committed_batch(awaitable, *, timeout):
+        inner_timeouts.append(timeout)
+        task = asyncio.create_task(awaitable)
+        try:
+            await asyncio.wait_for(embedder.waiting.wait(), timeout=5)
+            clock[0] += timeout
+            # Exercise real cancellation and cleanup at the optional deadline.
+            return await asyncio.wait_for(task, timeout=0)
+        finally:
+            if not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+
+    for module, wait_for in (
+        (retrieval, outer_wait),
+        (hybrid_retriever, expire_after_committed_batch),
+    ):
+        monkeypatch.setattr(module, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+        monkeypatch.setattr(
+            module,
+            "asyncio",
+            SimpleNamespace(**{**vars(asyncio), "wait_for": wait_for}),
+        )
     try:
         selected = await select_history(scope, values, "car")
-        assert selected and embedder.cancelled
-        assert time.monotonic() - began < 0.65
+        assert selected and "car" in selected_text(values, selected)
+        assert embedder.cancelled and scope.session == before
+        assert retriever.last_status == "timeout_bm25_fallback"
+        assert outer_timeouts == [pytest.approx(0.35)]
+        assert inner_timeouts == [pytest.approx(0.28)]
+        assert clock[0] < scope.evidence_retrieval_deadline
+        assert scope.evidence_retrieval_deadline == pytest.approx(100.35)
+        assert (
+            retriever._store.db.execute("SELECT count(*) FROM vectors").fetchone()[0]
+            == 16
+        )
         # Once the shared budget is exhausted another source cannot renew it.
-        scope.evidence_retrieval_deadline = time.monotonic() - 0.01
+        clock[0] = scope.evidence_retrieval_deadline + 0.01
         calls = len(embedder.requests)
         assert await select_history(scope, values, "background") == []
+        assert scope.evidence_retrieval_status == "timeout"
         assert len(embedder.requests) == calls
+        assert len(outer_timeouts) == len(inner_timeouts) == 1
+        assert scope.evidence_retrieval_deadline == pytest.approx(100.35)
     finally:
         await retriever.close()
