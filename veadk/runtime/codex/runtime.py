@@ -1081,6 +1081,18 @@ class CodexRuntime(BaseRuntime):
                         ctx.invocation_id,
                     )
             raise
+        except GeneratorExit:
+            # The consumer stopped iterating -- typically the caller's task was
+            # cancelled and ADK's Runner closed this generator. That is a
+            # cancellation of the turn, not a failure: stop the Codex turn the
+            # same safe way, and never yield from here.
+            run_status = "cancelled"
+            if turn is not None and completion is not None:
+                with contextlib.suppress(Exception):
+                    await interrupt_turn(
+                        turn, completion=completion, timeout=_TURN_STOP_GRACE_SECONDS
+                    )
+            raise
         except BaseException as e:
             # Read the shim's recorded error *before* the `finally`'s
             # `unregister_turn` drops the turn state. The shim serves backend
