@@ -2,7 +2,7 @@
 
 - **Component ID:** `studio-runtime-diagnostics`
 - **Status:** Draft; proposed changes are governed by the related PRD
-- **Revision:** 2026-09-22
+- **Revision:** 2026-09-30
 - **Chinese version:** [README.zh.md](README.zh.md)
 - **Related PRD:** [MPA Runtime Integration Hardening](../../prd-spec/bugfixes/mpa-runtime-integration/2026-09-12-mpa-runtime-integration-hardening.md)
 - **Owned code:** `frontend/server/runtime_logs.py`, `frontend/src/ui/RuntimeLogsDialog.tsx`, `veadk/cli/runtime_a2a_stream.py`, `frontend/src/adk/tokenUsage.ts`, `frontend/src/ui/TraceDrawer.tsx`, and the Runtime A2A BFF in `veadk/cli/cli_frontend.py`
@@ -56,3 +56,5 @@ CON-8/CON-11 correction (implemented): preserve distinct outer text and reasonin
 - [MPA reasoning snapshot normalization](../../prd-spec/bugfixes/studio-codex-commentary-dedup/2026-09-22-mpa-reasoning-snapshots.md).
 
 - `CON-12`: Only MPA A2A restores the trusted control-plane endpoint prefix `/runtime/[a-z0-9-]+` for a same-origin default `/a2a/jsonrpc` card URL. Already-prefixed URLs, other paths, cross-origin URLs, query/fragment/userinfo are not rewritten. Sending and history restoration use the same resolved address; general agents remain unchanged. See [A2A discovery fix](../../prd-spec/bugfixes/2026-09-23-mpa-a2a-discovery-default.md).
+
+- `CON-13` (implemented): Authorized GET Runtime-proxy `list-apps` prefers a usable Agent Card for control-plane-classified MPA and returns `["a2a-default"]` before ADK probing. General Runtimes and MPA without a usable card retain existing discovery/error behavior. Other requests, authorization, key/header construction and existing sessions are unchanged; reconnect refreshes cached apps, not session migration. See [MPA A2A preference](../../prd-spec/bugfixes/studio-mpa-a2a-preference/2026-09-30-prefer-a2a.md) and `tests/cli/test_frontend_runtime_proxy.py`.

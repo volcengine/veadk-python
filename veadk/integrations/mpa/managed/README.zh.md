@@ -209,4 +209,4 @@ sqlite3 -readonly .adk/mpa-creation.sqlite3 "SELECT task_id,datetime(created,'un
 
 ## Studio Runtime 鉴权默认配置
 
-Flat 创建默认设置 `ENABLE_A2A=true` 和 `DISABLE_JWT_AUTH=true`。绕过旧版 REST 内层 JWT 校验，包括其管理权限检查和 header 身份路径；可信 Studio/网关调用方必须控制身份 header。外层网关 key-auth 和 `A2A_TIP_VERIFY_ENABLED=false` 不变。使用兼容的 MPA 镜像时，`/list-apps` 可能发现 ADK，而不是强制 A2A；该默认值不保证传输兼容性，也不迁移旧会话。仍支持显式 `managed.runtime.env` 覆盖，包括 `DISABLE_JWT_AUTH=false`；引用 Runtime/模板环境保持不变。已有 Runtime 需要显式更新配置并发布；在 Studio 重新连接以刷新发现结果。不启用 `MPA_AGENTKIT_MODE`。本次默认值修改不需要重建前端。
+Flat 创建默认设置 `ENABLE_A2A=true` 和 `DISABLE_JWT_AUTH=true`。绕过旧版 REST 内层 JWT 校验，包括其管理权限检查和 header 身份路径；可信 Studio/网关调用方必须控制身份 header。外层网关 key-auth 和 `A2A_TIP_VERIFY_ENABLED=false` 不变。Studio 对控制面识别的 MPA 优先使用可用 Agent Card，即使 `/list-apps` 同时广告 ADK，也选择 `a2a-default`；普通 Runtime 和无可用卡片的 MPA 保持原发现逻辑。跳过原生会话 Profile 前置查询，不跳过独立管理鉴权，不迁移旧会话。仍支持显式 `managed.runtime.env` 覆盖，包括 `DISABLE_JWT_AUTH=false`；引用 Runtime/模板环境保持不变。已有 Runtime 环境变化需显式更新配置并发布；在 Studio 重新连接以刷新发现结果。不启用 `MPA_AGENTKIT_MODE`。后端发现变化需重启 Studio，不需要重建前端。

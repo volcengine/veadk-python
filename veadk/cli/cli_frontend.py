@@ -11567,7 +11567,7 @@ def _run_frontend_server(
         *,
         is_mpa: bool = False,
     ) -> dict[str, Any] | None:
-        """Return an A2A Agent Card when a Runtime is A2A-only, else None."""
+        """Return a usable A2A Agent Card for Runtime discovery, else None."""
 
         client = httpx.AsyncClient(timeout=httpx.Timeout(5.0, connect=4.0))
         upstream = None
@@ -12792,6 +12792,10 @@ def _run_frontend_server(
         # detail/list navigation deliberately cancels stale probes.
         body = b"" if upstream_method in {"GET", "HEAD"} else await request.body()
         is_mpa = _runtime_agent_category(runtime, _runtime_tags(runtime)) == "mpa"
+        if is_mpa and upstream_method == "GET" and path == "list-apps":
+            a2a_card = await _runtime_a2a_agent_card(endpoint, headers, is_mpa=True)
+            if a2a_card is not None:
+                return JSONResponse([_RUNTIME_A2A_VIRTUAL_APP])
         if upstream_method == "GET" and (
             path == f"web/agent-info/{_RUNTIME_A2A_VIRTUAL_APP}"
             or (is_mpa and path.startswith("web/agent-info/") and path.count("/") == 2)

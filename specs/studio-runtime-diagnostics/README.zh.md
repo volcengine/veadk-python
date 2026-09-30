@@ -2,7 +2,7 @@
 
 - **Component ID：** `studio-runtime-diagnostics`
 - **状态：** 草案；提议变更由关联 PRD 管理
-- **修订日期：** 2026-09-22
+- **修订日期：** 2026-09-30
 - **English version:** [README.md](README.md)
 - **关联 PRD：** [MPA Runtime 集成加固](../../prd-spec/bugfixes/mpa-runtime-integration/2026-09-12-mpa-runtime-integration-hardening.zh.md)
 - **负责代码：** `frontend/server/runtime_logs.py`、`frontend/src/ui/RuntimeLogsDialog.tsx`、`veadk/cli/runtime_a2a_stream.py`、`frontend/src/adk/tokenUsage.ts`、`frontend/src/ui/TraceDrawer.tsx` 以及 `veadk/cli/cli_frontend.py` 中的 Runtime A2A BFF
@@ -56,3 +56,5 @@ CON-8/CON-11 修正（已实现）：保留 sandbox 完成后的不同外层文�
 - [MPA 推理快照归一化](../../prd-spec/bugfixes/studio-codex-commentary-dedup/2026-09-22-mpa-reasoning-snapshots.zh.md).
 
 - `CON-12`：仅 MPA A2A 对同源默认 `/a2a/jsonrpc` 卡片地址补齐可信控制面 endpoint 的 `/runtime/[a-z0-9-]+` 前缀。已经有前缀、其他路径、跨源、查询/片段/用户信息不改写。发送和历史恢复一致使用该地址；通用智能体保持不变。参见 [A2A 发现修复](../../prd-spec/bugfixes/2026-09-23-mpa-a2a-discovery-default.zh.md)。
+
+- `CON-13`（已实现）：已授权 GET Runtime 代理 `list-apps` 对控制面识别的 MPA 优先探测可用 Agent Card，在 ADK 探测前返回 `["a2a-default"]`。普通 Runtime 和无可用卡片的 MPA 保留原发现/错误行为。其他请求、授权、凭据/header 构造和已有会话不变；重新连接刷新缓存应用，不迁移会话。参见 [MPA A2A 优先](../../prd-spec/bugfixes/studio-mpa-a2a-preference/2026-09-30-prefer-a2a.zh.md) 及 `tests/cli/test_frontend_runtime_proxy.py`。

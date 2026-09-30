@@ -4042,11 +4042,116 @@ def test_runtime_proxy_uses_exact_list_item_when_role_get_runtime_is_hidden(
     assert len(list_requests) == 1
 
 
+@pytest.mark.parametrize(
+    "mpa,card_body,card_status,adk_status,expected_apps",
+    [
+        (
+            True,
+            '{"url":"https://runtime.example/a2a/jsonrpc"}',
+            200,
+            200,
+            ["a2a-default"],
+        ),
+        (False, '{"url":"https://runtime.example/a2a/jsonrpc"}', 200, 200, ["default"]),
+        (
+            False,
+            '{"url":"https://runtime.example/a2a/jsonrpc"}',
+            200,
+            404,
+            ["a2a-default"],
+        ),
+        (True, "{}", 404, 200, ["default"]),
+        (True, "{}", 200, 200, ["default"]),
+        (True, "[]", 200, 200, ["default"]),
+        (True, "not-json", 200, 200, ["default"]),
+        (True, "timeout", 200, 200, ["default"]),
+        (True, "{}", 404, 401, None),
+        (True, "{}", 404, 500, None),
+    ],
+)
+def test_runtime_proxy_prefers_a2a_only_for_mpa_discovery(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    mpa: bool,
+    card_body: str,
+    card_status: int,
+    adk_status: int,
+    expected_apps: list[str] | None,
+) -> None:
+    app = _create_frontend_app(monkeypatch, tmp_path)
+    runtime = SimpleNamespace(
+        runtime_id="runtime-1",
+        project_name="default",
+        network_configurations=[
+            SimpleNamespace(endpoint="https://runtime.example", network_type="public")
+        ],
+        authorizer_configuration=SimpleNamespace(
+            key_auth=SimpleNamespace(api_key="runtime-api-key"),
+            custom_jwt_authorizer=None,
+        ),
+        tags=[SimpleNamespace(key="veadk:agent-type", value="mpa")] if mpa else [],
+    )
+    monkeypatch.setattr(
+        "agentkit.sdk.runtime.client.AgentkitRuntimeClient",
+        lambda **kwargs: SimpleNamespace(get_runtime=lambda request: runtime),
+    )
+    paths: list[str] = []
+    real_async_client = httpx.AsyncClient
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        paths.append(request.url.path)
+        assert request.headers["authorization"] == "Bearer runtime-api-key"
+        if request.url.path == "/.well-known/agent-card.json":
+            if card_body == "timeout":
+                raise httpx.ReadTimeout("probe timeout", request=request)
+            status, body = card_status, card_body
+        else:
+            assert request.url.path == "/list-apps"
+            status = adk_status
+            body = '["default"]' if status == 200 else '{"detail":"upstream error"}'
+        return httpx.Response(
+            status,
+            headers={"content-type": "application/json"},
+            stream=httpx.ByteStream(body.encode()),
+        )
+
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda **kwargs: real_async_client(
+            transport=httpx.MockTransport(upstream), **kwargs
+        ),
+    )
+    with TestClient(app) as client:
+        response = client.get("/web/runtime-proxy/runtime-1/list-apps")
+    if expected_apps is None:
+        assert response.status_code == adk_status
+        assert response.json() == {"detail": "upstream error"}
+    else:
+        assert response.status_code == 200
+        assert response.json() == expected_apps
+    card_path = "/.well-known/agent-card.json"
+    if mpa and expected_apps == ["a2a-default"]:
+        assert paths == [card_path]
+    elif mpa:
+        assert paths == [card_path, "/list-apps"]
+    elif adk_status == 404:
+        assert paths == ["/list-apps", card_path]
+    else:
+        assert paths == ["/list-apps"]
+
+
 @pytest.mark.parametrize("endpoint_prefix", ["", "/runtime/runtime-1"])
 @pytest.mark.parametrize("streaming", [False, True, "fallback"])
 @pytest.mark.parametrize(
-    "mpa,info_app",
-    [(False, "a2a-default"), (True, "a2a-default"), (True, "default")],
+    "mpa,info_app,adk_available",
+    [
+        (False, "a2a-default", False),
+        (True, "a2a-default", False),
+        (True, "default", False),
+        (True, "a2a-default", True),
+        (True, "default", True),
+    ],
 )
 def test_runtime_proxy_bridges_a2a_only_runtime_for_studio_chat(
     monkeypatch: pytest.MonkeyPatch,
@@ -4055,6 +4160,7 @@ def test_runtime_proxy_bridges_a2a_only_runtime_for_studio_chat(
     mpa: bool,
     info_app: str,
     endpoint_prefix: str,
+    adk_available: bool,
 ) -> None:
     app = _create_frontend_app(monkeypatch, tmp_path)
     endpoint = "https://runtime.example" + endpoint_prefix
@@ -4172,8 +4278,8 @@ def test_runtime_proxy_bridges_a2a_only_runtime_for_studio_chat(
             url = request["url"]
             if url == endpoint + "/list-apps":
                 return _FakeUpstreamResponse(
-                    status_code=404,
-                    body=b'{"detail":"Not Found"}',
+                    status_code=200 if adk_available else 404,
+                    body=b'["default"]' if adk_available else b'{"detail":"Not Found"}',
                 )
             if url == endpoint + "/.well-known/agent-card.json":
                 return _FakeUpstreamResponse(
