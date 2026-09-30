@@ -203,7 +203,7 @@ sqlite3 -readonly .adk/mpa-creation.sqlite3 "SELECT task_id,datetime(created,'un
 
 ### 初始化元数据延迟
 
-对于已持久化创建 ID/令牌/哈希的托管 Worker，初始化期间缺失 ID/项目/归属标签时，最多观察四次不完整响应，依次等待 5、10、20 秒，处理 CreateTool 返回后元数据稍晚可见的情况。已有值明确冲突仍立即失败；Ready 后缺失字段及终态/未知状态不享受宽限。等待遵循原阶段期限和取消，不会创建另一个 Worker。安全诊断操作标明具体字段（`worker_id`、`worker_project`、`worker_managed_by`、`worker_agent_key`、`worker_agent_binding`、`worker_state`）；`metadata_pending` 表示正在等待，`metadata_missing` 表示有界检查未通过。实际字段值仍保持私有。
+对于已持久化创建 ID/令牌/哈希的托管 Worker，初始化期间缺失 ID/项目/归属标签时，每 5 秒检查，受原阶段期限和取消限制，不设置独立观察次数上限，处理 CreateTool 返回后元数据稍晚可见的情况。已有值明确冲突仍立即失败；Ready 后缺失字段及终态/未知状态不享受宽限。等待不会创建另一个 Worker。安全诊断操作标明具体字段（`worker_id`、`worker_project`、`worker_managed_by`、`worker_agent_key`、`worker_agent_binding`、`worker_state`）；`metadata_pending` 表示正在等待，`metadata_missing` 表示当前状态不能接受必需元数据缺失。元数据诊断 attempt 最大保持 4；Worker API 错误重试保留独立的四次限制。实际字段值仍保持私有。
 
 托管部署接受带 `sslmode` 的 PostgreSQL 注册库 URL，并将该查询参数转换为 MPA Runtime 的 asyncpg 驱动使用的 `ssl`，保留原 TLS 模式。自动准备和手动配置的管理库均适用，无需重新构建镜像。已有未完成部署可以在保持资源身份不变的情况下恢复并应用此转换。
 

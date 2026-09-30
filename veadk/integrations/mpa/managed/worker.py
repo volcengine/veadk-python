@@ -234,25 +234,20 @@ async def _ensure_worker(entry, cloud, options, *, account, region, agent_id, pr
                 "Worker is not ready; inspect it and retry the same agent"
             )
         if missing:
-            incomplete_observations += 1
-            retrying = (
-                incomplete_observations < 4
-                and status
-                in {
-                    None,
-                    "",
-                    "Creating",
-                    "Pending",
-                    "Starting",
-                    "Initializing",
-                    "Provisioning",
-                }
-                and bool(
-                    record.get("worker_managed")
-                    and record.get("worker_id")
-                    and record.get("worker_token")
-                    and record.get("worker_hash")
-                )
+            incomplete_observations = min(incomplete_observations + 1, 4)
+            retrying = status in {
+                None,
+                "",
+                "Creating",
+                "Pending",
+                "Starting",
+                "Initializing",
+                "Provisioning",
+            } and bool(
+                record.get("worker_managed")
+                and record.get("worker_id")
+                and record.get("worker_token")
+                and record.get("worker_hash")
             )
             for operation in missing:
                 report(
@@ -263,7 +258,7 @@ async def _ensure_worker(entry, cloud, options, *, account, region, agent_id, pr
                 )
             if not retrying:
                 raise DeploymentError("Worker ownership metadata is incomplete")
-            await asyncio.sleep(5 * 2 ** (incomplete_observations - 1))
+            await asyncio.sleep(5)
             continue
         if status == "Ready":
             record.update(worker_id=tool_id)
