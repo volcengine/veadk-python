@@ -132,6 +132,7 @@ class DefaultContextRetriever:
         self._ranker = None
         self._embedder = None
         self._initialized = False
+        self._preparation_owner = None
         self.last_status = "not_requested"
 
     def _initialize(self):
@@ -171,10 +172,40 @@ class DefaultContextRetriever:
         # neighbours are useful for previews, but cannot prove a search hit.
         return []
 
+    async def prepare_source(self, *args, deadline):
+        """Use a separate invocation pool; preparation cannot spend query calls."""
+        if not self._config.prepare_index:
+            return {"complete": False, "reason": "disabled"}
+        self._initialize()
+        if self._ranker is None:
+            return {"complete": False, "reason": "no_embedding"}
+        if self._preparation_owner is None:
+            self._preparation_owner = DefaultContextRetriever(
+                self._agent,
+                self._config.model_copy(
+                    update={
+                        "prepare_index": False,
+                        "embedding_max_calls": self._config.index_preparation_max_calls,
+                    }
+                ),
+            )
+            self._preparation_owner._initialize()
+        owner = self._preparation_owner
+        if owner._ranker is None or (
+            owner._embedder.model,
+            owner._embedder.dimension,
+        ) != (self._embedder.model, self._embedder.dimension):
+            raise ValueError("embedding_version_changed")
+        return await owner._ranker.prepare_source(*args, deadline=deadline)
+
     async def close(self):
         try:
-            if self._ranker is not None:
-                await self._ranker.close()
+            try:
+                if self._preparation_owner is not None:
+                    await self._preparation_owner.close()
+            finally:
+                if self._ranker is not None:
+                    await self._ranker.close()
         finally:
             try:
                 close = getattr(self._embedder, "close", None)

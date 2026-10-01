@@ -142,3 +142,13 @@ print(agent.context_compression_status)  # 仅容量和状态，不包含提示�
 执行器和实时音视频不自动获得本 SDK 模型循环的压缩能力，应查看实际能力状态。
 恢复工具只读取当前应用、用户、Session、Agent 和分支授权的原始记录；索引不能代替授权源。
 压缩可能遗漏有用信息，实际质量应以自己的业务题单验证。
+
+### 可选索引准备
+
+已配置在线 embedding 时，可以通过 `Agent(name="assistant", context_compression={"prepare_index": True})`
+在检索前准备本次可用材料的索引。该开关默认关闭。准备阶段每次 invocation 累计最多 60 秒、512 条
+embedding 请求，随后仍使用原有 5 秒共享检索预算和独立 64 条调用池。可分别通过
+`index_preparation_timeout_seconds`、`index_preparation_max_calls` 调整准备上限。
+这会增加冷启动延迟和调用费用；整轮请求总时限不变，准备最多占当时剩余时间的一半。
+超时保留已完成批次、回退词项检索，后续可续建；未完成索引不会当作完整语义索引。
+没有 embedding 配置时不会创建向量索引。显式绑定的自定义检索器仍由调用者准备。

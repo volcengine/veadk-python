@@ -3,7 +3,7 @@
 当前支持 `google-adk>=1.34.0,<2.3.0`，默认安装由依赖解析器选择兼容版本；CI 固定验证 1.34.0、2.1.0、2.2.0 的 Python 3.10 / 3.12 组合。**ADK 2.3 及以上（含 2.9.2）暂不支持**：它们要求 OpenTelemetry ≥1.39，而 AgentKit SDK 0.8.x 要求 ≤1.37。请勿使用 `--no-deps` 强行安装；开启、关闭上下文压缩均遵守此 SDK 依赖范围。
 
 
-日期：2026-09-30。本文对应开发分支 `feat/default-context-compression`，包含默认 BM25 中英文检索和独立 JSON 模型容量配置。当前为开发版本，尚未正式发布；已安装的 PyPI 版本不一定具备本文行为。
+日期：2026-10-01。本文对应开发分支 `feat/default-context-compression`，包含默认 BM25 中英文检索和独立 JSON 模型容量配置。当前为开发版本，尚未正式发布；已安装的 PyPI 版本不一定具备本文行为。
 
 ## 1. 它解决什么问题
 
@@ -114,6 +114,35 @@ SQLite 适合本地开发或单实例加持久卷的场景。部署时要把数�
 
 BM25 按匹配词的区分度、出现次数和片段长度排序，适合日志、订单编号、业务术语和关键词检索。当前不做英文词干还原、同义词扩展或自动翻译：run 与 running 不保证互相召回；仅用英文同义表达查询纯中文材料也不保证有效。
 
+### 4.1 显式开启 embedding，并准备完整索引
+
+更重视长材料中的语义召回时，先在运行环境配置 `MODEL_EMBEDDING_API_KEY`、`MODEL_EMBEDDING_NAME`、`MODEL_EMBEDDING_DIM` 和 `MODEL_EMBEDDING_API_BASE`，再直接创建 Agent：
+
+```python
+from veadk import Agent
+
+agent = Agent(
+    name="assistant",
+    context_compression={
+        "prepare_index": True,
+        "index_path": ".adk/context-index.sqlite3",
+    },
+)
+```
+
+不用解析 Session、手动注册回查工具或编写索引回调。输入触发压缩时，SDK 先准备本次可用材料的索引，再按当前问题挑选证据；后续调用可以复用 SQLite 中已完成的批次。原始记录仍由 Session 保存，索引不是 Session 的替代品。长材料沿用自适应父子切块：准备完成指当前检索层的索引完整，不代表全部子片段已提前计算。
+
+- `prepare_index` 默认关闭；显式开启后仍需要配置 embedding。没有 embedding 时继续使用 BM25，不会下载模型。
+- 准备阶段每次 Agent invocation 累计最多 **60 秒、512 条 embedding 请求**，与检索阶段原有的 **64 条请求、5 秒共享检索预算**分开计算。并发仍为 4；这些都是上限，不是固定消耗。参数分别为 `index_preparation_timeout_seconds`、`index_preparation_max_calls` 和 `embedding_max_calls`。
+- 这是请求内的准备阶段，会增加首次处理长材料的延迟和 embedding 费用；不是后台任务。如果设置整轮 `request_timeout_seconds`，准备阶段最多使用当时剩余时间的一半，不延长总时限。
+- 只处理实际输入中已授权的工具文本或可整理的旧文本历史，最多 8 个来源。工具材料优先，近期对话和未完成工具结果不纳入历史准备。不保证一次完成任意大小的材料；超时或失败回退，后续可续建。
+- 部分索引不会冒充完整语义索引。索引保存材料片段，应放在受控持久目录；原文回查仍须通过 Session 身份和内容校验。
+- 自定义 `use_context_retriever(...)` 的索引准备由调用者管理；该开关只作用于 SDK 默认检索器。
+
+只关闭提前准备：`context_compression={"prepare_index": False}`。关闭所有在线 embedding：`context_compression={"retrieval": "lexical"}`。关闭压缩变换：`context_compression=False`。
+
+该开关解决完整索引的接入问题，不能保证某个固定评测分数。短示例通常不会触发压缩；真实材料达到预算阈值才会执行。
+
 ## 5. 什么时候压缩，需要调参吗
 
 建议先使用默认值，确认业务质量后再调整。
@@ -143,7 +172,7 @@ BM25 按匹配词的区分度、出现次数和片段长度排序，适合日志
 | 文件或目录 | 用途 |
 | --- | --- |
 | veadk/context/config.py | 开关与预算参数 |
-| veadk/context/defaults.py | 默认检索器选择 |
+| veadk/context/defaults.py、veadk/context/index_preparation.py | 默认检索器、独立准备预算与来源校验 |
 | veadk/context/lexical_retriever.py、veadk/context/_hybrid_index.py | 无模型 BM25 检索与分词 |
 | veadk/context/manager.py、veadk/context/summary.py | 请求压缩与旧对话摘要 |
 | veadk/context/model_capacities.json | 模型容量、别名、输出规划和协议配置 |
@@ -151,11 +180,13 @@ BM25 按匹配词的区分度、出现次数和片段长度排序，适合日志
 | veadk/runner.py、veadk/memory/ | Session 与 SQLite 持久化 |
 | tests/context/ | 压缩、预算、检索和原文回查回归 |
 
-容量扩展新增了最大输入限制、默认生成型号及兼容接口别名的离线回归，已纳入强制门禁。5663 Devbox 上 Python 3.10 / ADK 1.34.0 与 Python 3.12 / ADK 2.2.0 的完整门禁各 1,312 项通过、5 项跳过，容量定向回归各 118 项通过；前端全量 1,246 项、生产构建、Ruff、Pyright、pre-commit、打包与安装验证通过，详见[模型覆盖说明](context-compression-model-coverage.zh.md)。本文示例已对照公开 API 核对并完成语法静态检查，本轮未调用真实模型。
+容量扩展新增了最大输入限制、默认生成型号及兼容接口别名的离线回归，已纳入强制门禁。此前已完成容量定向回归、前端全量与生产构建、Ruff、Pyright、pre-commit、打包及安装验证；当前候选的完整门禁结果见下文，详见[模型覆盖说明](context-compression-model-coverage.zh.md)。本文示例已对照公开 API 核对并完成语法静态检查；上述容量与打包验证不调用真实模型。
 
 SQLite 超时恢复回归分别验证预算、真实取消、已完成批次持久化及恢复仅补缺失片段；两个 Python 版本下加入 500ms 异步停顿均通过。生产超时参数未变。
 
 这些属于工程验证，不能替代业务自身的质量评测，也不代表新默认已达到旧 embedding 方案的公开问答分数。Python 3.10 / 3.12 的发布与依赖回归各 10 项通过；基础安装和 eval 扩展均排除已知不兼容的 ADK 版本。远端检查以 [PR #1152](https://github.com/volcengine/veadk-python/pull/1152) 的当前提交为准，完整 Studio 发行与线上业务验收另行执行。
+
+本次索引准备新增 14 项机制回归；Python 3.10 / ADK 1.34.0 与 Python 3.12 / ADK 2.2.0 的完整门禁各 1,320 项通过、5 项跳过，定向 67 项全部通过。三个核心回归已在修复前复现失败。
 
 完整回归入口：`python tests/run_context_compression_gate.py -q`。
 

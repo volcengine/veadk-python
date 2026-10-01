@@ -33,6 +33,7 @@ from .evidence import current_question
 from .history_projection import project_history
 from .history_retrieval import select_history, supplement_summary
 from .history_evidence import install_history_evidence
+from .index_preparation import prepare_request_index
 from .references import archive_history, state_key
 from .runtime import current_scope, is_summary
 from .retrieval import begin_retrieval, prepare_previews
@@ -50,6 +51,8 @@ async def prepare_context(request, model, config, additional_args, *, force=Fals
     scope = current_scope.get()
     owns_budget = scope is not None and not is_summary.get()
     if owns_budget:
+        if not force:
+            await prepare_request_index(request, model, config, additional_args, scope)
         begin_retrieval(scope)
     try:
         await _prepare_with_retrieval(
