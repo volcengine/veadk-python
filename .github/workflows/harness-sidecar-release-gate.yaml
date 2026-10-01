@@ -86,7 +86,8 @@ jobs:
   backend-gate:
     name: Backend gate
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    # Dependency setup must not consume the Sidecar execution time limit.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
@@ -99,9 +100,11 @@ jobs:
             uv.lock
 
       - name: Install Python test dependencies
+        timeout-minutes: 5
         run: python -m pip install -e '.[dev]'
 
       - name: Run Python Sidecar checks in parallel
+        timeout-minutes: 3
         shell: bash
         run: |
           set -euo pipefail
