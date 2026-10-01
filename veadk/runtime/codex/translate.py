@@ -376,6 +376,39 @@ def _content_record(content: Any) -> list[dict[str, Any]]:
     return records
 
 
+def backfill_event_text(event: Any, *, limit: int) -> str:
+    """Render missed events, retaining tool identities and bounded result data.
+
+    Keep the JSON envelope intact when a large payload needs truncation, so a
+    transaction's identity and execution status remain distinguishable from
+    ordinary assistant text. Text-only records preserve the existing format.
+    """
+    records = _content_record(getattr(event, "content", None))
+    lines = []
+    for record in records:
+        if record["type"] == "text":
+            text = record["text"]
+            lines.append(
+                text
+                if len(text) <= limit
+                else f"{text[:limit]}... [truncated {len(text) - limit} chars]"
+            )
+            continue
+        for field in ("args", "response"):
+            if field not in record:
+                continue
+            serialized = json.dumps(record[field], ensure_ascii=False, default=str)
+            if len(serialized) > limit:
+                value = record[field]
+                record[field] = {
+                    "truncated": True,
+                    "status": value.get("status") if isinstance(value, dict) else None,
+                    "preview": serialized[:limit],
+                }
+        lines.append(json.dumps(record, ensure_ascii=False, default=str))
+    return "\n".join(lines).strip()
+
+
 def _safe_filename(value: str) -> str:
     name = os.path.basename(value.replace("\\", "/")).strip()
     return name or "attachment"

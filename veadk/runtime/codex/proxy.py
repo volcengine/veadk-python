@@ -50,6 +50,10 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from litellm import exceptions as litellm_exceptions
 
+from veadk.runtime.codex.execution_control import (
+    CodexToolIterationLimitError,
+    TurnRequests,
+)
 from veadk.utils.logger import get_logger
 
 try:  # OpenTelemetry is optional; the shim must import without it.
@@ -275,7 +279,7 @@ class TurnToolState:
 
     @property
     def iterations(self) -> int:
-        """Tool round-trips consumed so far in this turn."""
+        """Individual ADK tool calls reserved so far in this turn."""
         with self._lock:
             return self._iterations
 
@@ -304,12 +308,12 @@ class TurnToolState:
         with self._lock:
             return [dict(item) for item in self._transcript]
 
-    def consume_iteration(self, budget: int) -> bool:
-        """Reserve one tool round-trip; ``False`` when the turn budget is gone."""
+    def consume_iteration(self, budget: int, count: int = 1) -> bool:
+        """Reserve calls before dispatch; reject a batch that exceeds the budget."""
         with self._lock:
-            if self._iterations >= budget:
+            if self._iterations + count > budget:
                 return False
-            self._iterations += 1
+            self._iterations += count
             return True
 
     def identify_request(
@@ -519,6 +523,7 @@ class ShimTurnContext:
     # first attempt was rejected outright, so it never produced a response).
     on_model_call: Callable[[], None] | None = None
     state: TurnToolState = field(default_factory=TurnToolState)
+    requests: TurnRequests = field(default_factory=TurnRequests)
 
 
 @dataclass
@@ -700,7 +705,7 @@ class ResponsesShim:
         Args:
             specs: ADK tool specs advertised to the backend as ``function`` tools.
             executors: ``name -> async (args, call_id) -> str`` tool executors.
-            max_tool_iterations: Tool round-trip budget for the whole turn.
+            max_tool_iterations: Individual ADK tool call budget for the whole turn.
             invocation_id: ADK invocation id, for logs.
             model_extra_config: The agent's ``model_extra_config``
                 (``extra_headers``/``extra_body``), forwarded to the backend on
@@ -760,8 +765,8 @@ class ResponsesShim:
         )
         return token
 
-    def unregister_turn(self, token: str) -> None:
-        """Remove one invocation's routing state."""
+    def unregister_turn(self, token: str) -> tuple[asyncio.Task, ...]:
+        """Revoke the turn and cancel every request already using its tools."""
         with self._turns_lock:
             context = self._turns.pop(token, None)
         if context is not None:
@@ -770,6 +775,12 @@ class ResponsesShim:
                 context.invocation_id,
                 context.state.iterations,
             )
+            return context.requests.cancel()
+        return ()
+
+    async def close_turn(self, token: str) -> None:
+        """Stop requests before their invocation releases toolsets/workspace."""
+        await TurnRequests.drain(self.unregister_turn(token))
 
     def _turn(self, token: str) -> ShimTurnContext | None:
         with self._turns_lock:
@@ -814,6 +825,10 @@ class ResponsesShim:
                     error_type="authentication_error",
                     message="Unknown or expired Codex invocation token.",
                 )
+            with turn_context.requests.track():
+                return await _responses(request, turn_context)
+
+        async def _responses(request: Request, turn_context: ShimTurnContext) -> Any:
             try:
                 body = await request.json()
             except Exception:  # noqa: BLE001 - malformed client payload
@@ -997,6 +1012,7 @@ class ResponsesShim:
             usage_acc: dict[str, int] = {}
             resp: dict[str, Any] = {}
             while True:
+                turn_context.requests.check_active()
                 # Charge ADK's per-invocation model-call budget here: this is
                 # where the calls actually happen — including on a Codex-internal
                 # pass, which is just as billable and just as capable of looping,
@@ -1030,6 +1046,7 @@ class ResponsesShim:
                             ),
                         )
                 result = await _call_backend_tolerating_reasoning(call_kwargs)
+                turn_context.requests.check_active()
                 resp = _to_dict(result)
                 _accumulate_usage(usage_acc, resp.get("usage"))
                 if max_iters <= 0:
@@ -1049,7 +1066,12 @@ class ResponsesShim:
                 # Budget is per turn, not per request: Codex issues a fresh
                 # request after every native tool call, so a per-request counter
                 # allowed max_iters round-trips each time.
-                if not turn_context.state.consume_iteration(max_iters):
+                if not turn_context.state.consume_iteration(max_iters, len(calls)):
+                    turn_context.state.record_error(
+                        CodexToolIterationLimitError(
+                            f"ADK tool call budget exhausted (max_tool_iterations={max_iters})."
+                        )
+                    )
                     logger.warning(
                         "codex_tool_iteration_limit invocation_id=%s limit=%d",
                         turn_context.invocation_id,
@@ -1060,7 +1082,7 @@ class ResponsesShim:
                         error_type="tool_iteration_limit",
                         message=(
                             "Codex tool iteration budget exhausted "
-                            f"after {max_iters} round(s) this turn."
+                            f"with a limit of {max_iters} call(s) this turn."
                         ),
                         template=_with_total_usage(resp, usage_acc),
                     )
@@ -1098,6 +1120,7 @@ class ResponsesShim:
                     # whose contextvars were snapshotted when the shim first
                     # started, so ADK's `execute_tool` span would otherwise be
                     # an orphan root with a foreign trace_id.
+                    turn_context.requests.check_active()
                     with _otel_scope(turn_context.otel_context):
                         out = await agent_executors[fc["name"]](args, str(cid))
                     return fc, out, _is_transfer_output(out)
@@ -1326,7 +1349,10 @@ class ResponsesShim:
         server, task = self._server, self._task
         self._reset()
         with self._turns_lock:
+            contexts = tuple(self._turns.values())
             self._turns.clear()
+        for context in contexts:
+            context.requests.cancel()
         if server is not None:
             server.should_exit = True
         if task is None:
@@ -1359,7 +1385,10 @@ class ResponsesShim:
         server, task = self._server, self._task
         self._reset()
         with self._turns_lock:
+            contexts = tuple(self._turns.values())
             self._turns.clear()
+        for context in contexts:
+            context.requests.cancel()
         if server is not None:
             server.should_exit = True
             for bound in getattr(server, "servers", None) or ():

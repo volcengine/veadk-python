@@ -1111,7 +1111,7 @@ async def test_direct_transport_stops_the_turn_when_a_tool_needs_confirmation(
 
 
 async def _direct_session(
-    monkeypatch, plan, *, codex_class=None, instruction="Answer."
+    monkeypatch, plan, *, codex_class=None, instruction="Answer.", tools=None
 ):
     """A Runner on one session, on the direct transport, for multi-turn tests.
 
@@ -1134,6 +1134,7 @@ async def _direct_session(
 
     agent = Agent(
         name="resume_agent",
+        tools=tools or [],
         description="A codex resume agent.",
         instruction=instruction,
         model_name="scripted-model",
@@ -1714,3 +1715,102 @@ async def test_turn_outcomes_are_recorded_as_metrics(monkeypatch) -> None:
     for data_points in points.values():
         for point in data_points:
             assert not any("id" in key for key in point.attributes), point.attributes
+
+
+@pytest.mark.asyncio
+async def test_direct_tool_budget_prevents_parallel_side_effects(monkeypatch):
+    from veadk.runtime.codex.execution_control import CodexToolIterationLimitError
+
+    executed = []
+
+    async def write(value: str) -> dict:
+        """Record a simulated business operation."""
+        executed.append(value)
+        return {"written": value}
+
+    _, _, _, error = await _run_direct_turn(
+        monkeypatch,
+        plan=(
+            Round(tool_calls=tuple(("write", {"value": str(i)}) for i in range(5))),
+            Round(text="done"),
+        ),
+        agent_kwargs={
+            "tools": [write],
+            "codex_runtime_config": {
+                "model_transport": "direct",
+                "thread_mode": "ephemeral",
+                "max_tool_iterations": 1,
+            },
+        },
+    )
+    assert isinstance(error, CodexToolIterationLimitError)
+    assert len(executed) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("transport", ["shim", "direct"])
+async def test_callback_selected_model_reaches_backend(monkeypatch, transport):
+    def before(callback_context, llm_request):
+        llm_request.model = "callback-selected-model"
+
+    run = _run_direct_turn if transport == "direct" else _run_turn
+    _, _, backend, error = await run(
+        monkeypatch,
+        plan=(Round(text="done"),),
+        agent_kwargs={"before_model_callback": before},
+    )
+    assert error is None
+    assert (
+        backend.raw_requests[-1]["model"].removeprefix("openai/")
+        == "callback-selected-model"
+    )
+
+
+@pytest.mark.asyncio
+async def test_lost_rollout_save_backfills_completed_tool_transaction(monkeypatch):
+    from veadk.runtime.codex import runtime as runtime_module
+    from veadk.runtime.codex.mcp_bridge import shutdown_bridge
+    from veadk.runtime.codex.thread_store import (
+        InMemoryThreadStore,
+        ThreadStoreConflict,
+    )
+
+    class LosesSecondSave(InMemoryThreadStore):
+        saves = 0
+
+        async def save(self, *args, **kwargs):
+            self.saves += 1
+            if self.saves == 2:
+                raise ThreadStoreConflict("simulated race")
+            return await super().save(*args, **kwargs)
+
+    executions = []
+
+    async def purchase(item: str) -> dict:
+        """Record a purchase and its receipt."""
+        executions.append(item)
+        return {"status": "completed", "transaction_id": "TX123"}
+
+    store = LosesSecondSave()
+    monkeypatch.setattr(runtime_module, "select_thread_store", lambda *_: store)
+    send, backend, _, _ = await _direct_session(
+        monkeypatch,
+        (
+            Round(text="ready"),
+            Round(tool_calls=(("purchase", {"item": "book"}),)),
+            Round(text="finished"),
+            Round(text="already purchased"),
+        ),
+        tools=[purchase],
+    )
+    try:
+        assert await send("prepare") is None
+        assert await send("buy book") is None
+        assert await send("what happened?") is None
+    finally:
+        await shutdown_bridge()
+    restored = json.dumps(backend.raw_requests[-1], default=str)
+    assert "TX123" in restored
+    assert "function_call" in restored and "function_response" in restored
+    assert "completed" in restored
+    assert executions == ["book"]

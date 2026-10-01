@@ -90,12 +90,11 @@ class CodexRuntimeConfig(BaseModel):
         ge=1,
         le=256,
         description=(
-            "ADK tool round-trips the shim may run for the whole Codex turn. "
-            "This budget is per turn, not per backend request: Codex issues one "
-            "request per native tool round, so a per-request counter allowed "
-            "rounds x budget executions. The default is higher than the old "
-            "per-request value so that turns which use an ADK tool after "
-            "several native tool rounds are not cut short."
+            "Maximum ADK/MCP tool calls admitted during one Codex turn, on "
+            "both transports. Parallel calls each count once; execution is "
+            "rejected before exceeding this budget. Native Codex tools are "
+            "not counted. The shim rejects a parallel batch if it cannot "
+            "admit the entire batch."
         ),
     )
     tool_timeout_seconds: float | None = Field(default=120.0, gt=0)

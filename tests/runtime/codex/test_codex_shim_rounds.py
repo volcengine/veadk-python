@@ -1548,3 +1548,144 @@ async def test_adk_pair_falls_back_to_the_tail_when_its_anchor_is_gone(
         "call:call-adk",
         "out:call-adk",
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage", ["backend", "tool", "backend_ignores_cancel"])
+async def test_closing_turn_cancels_and_drains_inflight_requests(monkeypatch, stage):
+    shim = ResponsesShim("https://backend.invalid/v1", "backend-key")
+    entered = asyncio.Event()
+    cleaned = asyncio.Event()
+    executed = []
+    backend_calls = []
+
+    async def executor(args, call_id):
+        executed.append(call_id)
+        if stage == "tool":
+            entered.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                await asyncio.sleep(0)
+                cleaned.set()
+        return "{}"
+
+    async def backend(kwargs):
+        backend_calls.append(kwargs)
+        if stage.startswith("backend"):
+            entered.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cleaned.set()
+                if stage != "backend_ignores_cancel":
+                    raise
+        return _tool_response("write", "r1", "c1")
+
+    monkeypatch.setattr(proxy_module, "_call_backend_tolerating_reasoning", backend)
+    token = shim.register_turn(
+        [{"type": "function", "name": "write", "parameters": {}}],
+        {"write": executor},
+    )
+    other = shim.register_turn([], {})
+    async with _client(shim) as client:
+        request = asyncio.create_task(
+            client.post(
+                "/v1/responses",
+                headers={"Authorization": f"Bearer {token}"},
+                json={"model": "model", "input": [_message("write")], "stream": True},
+            )
+        )
+        try:
+            await asyncio.wait_for(entered.wait(), 2)
+            await asyncio.wait_for(shim.close_turn(token), 2)
+            assert request.done()
+            assert cleaned.is_set()
+            assert len(backend_calls) == 1
+            assert executed == (["c1"] if stage == "tool" else [])
+            assert shim._turn(token) is None
+            assert shim._turn(other) is not None
+        finally:
+            request.cancel()
+            await asyncio.gather(request, return_exceptions=True)
+            await shim.close_turn(other)
+
+
+@pytest.mark.asyncio
+async def test_shim_rejects_parallel_batch_before_exceeding_tool_budget(monkeypatch):
+    from veadk.runtime.codex.execution_control import CodexToolIterationLimitError
+
+    shim = ResponsesShim("https://backend.invalid/v1", "backend-key")
+    executed = []
+
+    async def executor(args, call_id):
+        executed.append(call_id)
+        return "{}"
+
+    async def backend(kwargs):
+        return {
+            "id": "r",
+            "model": "model",
+            "output": [
+                _tool_response("write", str(i), str(i))["output"][0] for i in range(5)
+            ],
+        }
+
+    monkeypatch.setattr(proxy_module, "_call_backend_tolerating_reasoning", backend)
+    token = shim.register_turn(
+        [{"type": "function", "name": "write", "parameters": {}}],
+        {"write": executor},
+        max_tool_iterations=1,
+    )
+    async with _client(shim) as client:
+        response = await client.post(
+            "/v1/responses",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"model": "model", "input": [_message("write")]},
+        )
+    assert response.status_code == 409
+    assert executed == []
+    assert isinstance(shim.turn_error(token), CodexToolIterationLimitError)
+    await shim.close_turn(token)
+
+
+@pytest.mark.asyncio
+async def test_close_turn_drains_requests_on_another_event_loop():
+    from concurrent.futures import Future
+
+    shim = ResponsesShim("https://backend.invalid/v1", "backend-key")
+    token = shim.register_turn([], {})
+    context = shim._turn(token)
+    ready = Future()
+    cleaned = threading.Event()
+
+    async def worker():
+        stop = asyncio.Event()
+
+        async def request():
+            with context.requests.track():
+                ready.set_result((asyncio.get_running_loop(), stop))
+                try:
+                    await asyncio.Event().wait()
+                finally:
+                    await asyncio.sleep(0)
+                    cleaned.set()
+
+        task = asyncio.create_task(request())
+        try:
+            await stop.wait()
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    thread = asyncio.create_task(asyncio.to_thread(asyncio.run, worker()))
+    loop = stop = None
+    try:
+        loop, stop = await asyncio.wait_for(asyncio.wrap_future(ready), 2)
+        await asyncio.wait_for(shim.close_turn(token), 2)
+        assert cleaned.is_set()
+        assert shim._turn(token) is None
+    finally:
+        if loop is not None:
+            loop.call_soon_threadsafe(stop.set)
+        await asyncio.wait_for(thread, 2)

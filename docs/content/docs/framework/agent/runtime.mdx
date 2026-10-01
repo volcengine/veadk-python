@@ -226,7 +226,7 @@ def load_orders(day: str) -> dict:
 | `turn_timeout_seconds` | `1800.0` | 单个 Codex 回合的时间上限（秒），到期后中断回合并抛出 `TimeoutError`；`None` 表示不限。`direct` 传输且 `thread_mode="resume"` 时，同一 Session 的调用在一把 Session 级锁上排队，不设上限的回合会同时阻塞该 Session 之后的所有调用，因此默认给出 30 分钟上限；其余模式同一 Session 的调用可以并发执行。 |
 | `auto_compact_token_limit` | `None` | 历史 token 超过该值时由 Codex 自行压缩（Codex 的 `model_auto_compact_token_limit`），仅 `direct` 传输生效；`None` 沿用 Codex 默认值。 |
 | `thread_mode` | `"resume"` | `resume`：每个 Session 绑定一个 Codex thread，thread 的 rollout 随 Session 一起保存（短期记忆使用数据库时存进同一个库），下一轮在任意实例上恢复该 thread，Codex 保有自己的完整历史，不再注入对话记录；Agent 的 instruction 变化时会新开 thread 并用对话记录引导。`ephemeral`：每次调用新开 thread。仅 `direct` 传输生效，`shim` 始终为 `ephemeral`。 |
-| `max_tool_iterations` | `32` | 整个 Codex turn 内可执行的 ADK/MCP 工具调用上限（1–256），两种传输均生效：`shim` 由转换层计数；`direct` 由 runtime 统计本地 MCP server 在本轮收到的工具调用，超过上限即中断回合并抛出 `CodexToolIterationLimitError`。注意 `direct` 按单次调用计数：模型在一次回复里并行发起的多个调用各计一次，因此同样的上限在 `direct` 下会比按轮计数的 `shim` 更早触发。见下方行为变更说明。 |
+| `max_tool_iterations` | `32` | 整个 Codex turn 可执行的 ADK/MCP 工具调用次数上限（1–256）。两种传输都在执行前扣减配额，并行调用各计一次；不包含 Codex 原生工具。shim 在剩余配额不足时拒绝整个并行批次，direct 逐个拒绝超额调用。超限向调用方抛出 `CodexToolIterationLimitError`。 |
 | `tool_timeout_seconds` | `120.0` | 单个 ADK/MCP 工具调用的超时秒数；设为 `None` 表示不超时。 |
 | `reuse_workspace` | `False` | 仅在同时设置了 `workspace_root` 时生效，而且只值得在单租户场景下开启，见上方 [Workspace 生命周期](#workspace-生命周期)。否则两个字段都别设，让工具调用 `current_workspace()`，见 [Workspace 是数据面](#workspace-是数据面)。 |
 
