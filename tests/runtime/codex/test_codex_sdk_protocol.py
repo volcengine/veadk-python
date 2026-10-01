@@ -41,7 +41,7 @@ from veadk.runtime.codex import translate  # noqa: E402
 
 #: Pin from ``pyproject.toml``. Both string-matched surfaces below are only
 #: meaningful against a known SDK version.
-EXPECTED_SDK_VERSION = "0.1.0b3"
+EXPECTED_SDK_VERSION = "0.159.2"
 
 
 def _turn_notification_names() -> set[str]:
@@ -86,6 +86,18 @@ def test_dispatch_table_covers_every_sdk_notification() -> None:
 def test_sdk_pin_matches_pyproject() -> None:
     """Both dispatch surfaces are string matches against one pinned version."""
     assert importlib.metadata.version("openai-codex") == EXPECTED_SDK_VERSION
+
+
+def test_sdk_pins_matching_codex_binary() -> None:
+    """The Codex binary is pinned transitively by the SDK, not by pyproject.
+
+    ``openai-codex`` declares an exact ``openai-codex-cli-bin`` requirement, and
+    the notifications this runtime dispatches on are emitted by that binary.
+    Guard both the declared pin and what is actually installed.
+    """
+    requirements = importlib.metadata.requires("openai-codex") or []
+    assert f"openai-codex-cli-bin=={EXPECTED_SDK_VERSION}" in requirements, requirements
+    assert importlib.metadata.version("openai-codex-cli-bin") == EXPECTED_SDK_VERSION
 
 
 def _model_by_name(name: str) -> type[BaseModel]:

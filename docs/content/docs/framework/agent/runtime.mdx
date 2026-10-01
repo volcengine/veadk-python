@@ -114,6 +114,19 @@ Codex SDK 内置的审批处理器对每一个 `requestApproval` 通知都回答
 
 `full_access` 和 `reuse_workspace=True` 会放宽不同调用之间的文件系统边界，只应在受信环境中开启。
 
+Codex 执行的命令看不到凭证类环境变量。生成的 Codex 配置固定写入 `[shell_environment_policy]`，从命令环境中排除以下变量：
+
+| 排除模式 | 覆盖的变量 |
+| :--- | :--- |
+| `VEADK_CODEX_*` | runtime 传给 Codex 的配置与本轮令牌。 |
+| `*API_KEY*` | 模型 API Key 等密钥，例如 `MODEL_AGENT_API_KEY`。 |
+| `*SECRET*` | 云账号 Secret Key 等凭证。 |
+| `*TOKEN*` | 各类访问令牌。 |
+
+缺少该策略时，沙箱内执行 `env` 会打印出模型 API Key 与本轮令牌（已在 Codex CLI 0.159 上验证）。命令需要的其他凭证应通过 ADK 工具使用，而不是经由环境变量进入沙箱。
+
+模型请求头同样不会进入沙箱。`direct` 传输下，`model_extra_config.extra_headers` 中名称为 `Authorization`、`Proxy-Authorization`、`Cookie`，或包含 `key`/`token`/`secret`/`password`/`signature`（不区分大小写）的请求头，**不会写入 Codex 的配置文件**：其值经 Codex 的 `env_http_headers` 由环境变量传入，沙箱内的 shell 看不到这些变量。其余请求头作为静态请求头发送。
+
 #### 安全基线组合
 
 把上面几项拼起来，就是在不可信输入下跑 codex 的默认配方。四个设置各挡一个方向，缺一不可：
@@ -209,7 +222,11 @@ def load_orders(day: str) -> dict:
 | :--- | :--- | :--- |
 | `reasoning_effort` | `"medium"` | 推理强度，可选 `minimal`/`low`/`medium`/`high`/`xhigh`。越高越慢、消耗 token 越多。 |
 | `personality` | `"pragmatic"` | Codex 自带的回复风格，可选 `none`/`friendly`/`pragmatic`。 |
-| `max_tool_iterations` | `32` | 整个 Codex turn 内 shim 可执行的 ADK/MCP 工具轮次上限（1–256）。见下方行为变更说明。 |
+| `model_transport` | `"auto"` | Codex 如何访问模型：`direct` 让 Codex 直接调用支持 Responses API 的后端，并通过 runtime 为本轮启动的本地 MCP server 使用 Agent 的工具，工具循环由 Codex 驱动；`shim` 经由进程内 Responses→Chat 转换层，由转换层执行工具，适用于只支持 chat 的后端；`auto` 对火山方舟（`*.volces.com`）、BytePlus（`*.bytepluses.com`）与 `api.openai.com` 选 `direct`，其余选 `shim`；但 Agent 的 `model_extra_config` 含非空 `extra_body` 时，`auto` 仍选 `shim`，因为 `direct` 无法转发请求体。显式指定 `direct` 时 `extra_body` 不会被转发，并记录一条警告。 |
+| `turn_timeout_seconds` | `1800.0` | 单个 Codex 回合的时间上限（秒），到期后中断回合并抛出 `TimeoutError`；`None` 表示不限。`direct` 传输且 `thread_mode="resume"` 时，同一 Session 的调用在一把 Session 级锁上排队，不设上限的回合会同时阻塞该 Session 之后的所有调用，因此默认给出 30 分钟上限；其余模式同一 Session 的调用可以并发执行。 |
+| `auto_compact_token_limit` | `None` | 历史 token 超过该值时由 Codex 自行压缩（Codex 的 `model_auto_compact_token_limit`），仅 `direct` 传输生效；`None` 沿用 Codex 默认值。 |
+| `thread_mode` | `"resume"` | `resume`：每个 Session 绑定一个 Codex thread，thread 的 rollout 随 Session 一起保存（短期记忆使用数据库时存进同一个库），下一轮在任意实例上恢复该 thread，Codex 保有自己的完整历史，不再注入对话记录；Agent 的 instruction 变化时会新开 thread 并用对话记录引导。`ephemeral`：每次调用新开 thread。仅 `direct` 传输生效，`shim` 始终为 `ephemeral`。 |
+| `max_tool_iterations` | `32` | 整个 Codex turn 可执行的 ADK/MCP 工具调用次数上限（1–256）。两种传输都在执行前扣减配额，并行调用各计一次；不包含 Codex 原生工具。shim 在剩余配额不足时拒绝整个并行批次，direct 逐个拒绝超额调用。超限向调用方抛出 `CodexToolIterationLimitError`。 |
 | `tool_timeout_seconds` | `120.0` | 单个 ADK/MCP 工具调用的超时秒数；设为 `None` 表示不超时。 |
 | `reuse_workspace` | `False` | 仅在同时设置了 `workspace_root` 时生效，而且只值得在单租户场景下开启，见上方 [Workspace 生命周期](#workspace-生命周期)。否则两个字段都别设，让工具调用 `current_workspace()`，见 [Workspace 是数据面](#workspace-是数据面)。 |
 
@@ -229,14 +246,14 @@ Codex 自带一份约 20KB、针对自身工具链（`apply_patch`、`update_pla
 同一条通道上还会追加两条更正——Codex 被保留下来的系统提示词描述的工具链，这座桥并不能完整提供。runtime 会在每一轮的 developer instructions 后面追加一段简短的**工具可用性说明**：
 
 - 本次运行没有 `apply_patch`：shim 只转发 `function` 类型的工具，而 Codex 的文件编辑工具不是，所以创建和修改文件要用 `exec_command`（例如 `cat > file <<'EOF'` heredoc）。
-- `request_user_input` 确实被通告了，但没有人能回答它：一次 ADK 调用没有交互通道，调用它只会让这一轮什么都没做就结束。说明里会要求模型用手上已有的信息作判断，并在最终回复里讲清楚缺了什么。
+- （仅 `shim` 传输）`request_user_input` 确实被通告了，但没有人能回答它：一次 ADK 调用没有交互通道，调用它只会让这一轮什么都没做就结束。说明里会要求模型用手上已有的信息作判断，并在最终回复里讲清楚缺了什么。
 
-这两点你不需要再在自己 Agent 的 `instruction` 里手写一遍。
+`direct` 传输在 thread 配置里直接移除了 `request_user_input`（以及 `web_search`、多 agent 等用不到的工具），因此说明里只保留第一条。这些你都不需要再在自己 Agent 的 `instruction` 里手写一遍。
 
 ### Codex 环境变量
 
 <Callout type="warn">
-以下四个环境变量**覆盖** Python 中的 `CodexRuntimeConfig`，而不是作为它的默认值。也就是说，即使代码里写死了 `sandbox="workspace_write"`，部署环境里的 `VEADK_CODEX_SANDBOX=full_access` 依然会生效。这一优先级与大多数配置项相反，在容器/函数计算等由平台注入环境变量的场景中尤其需要注意。
+以下六个环境变量**覆盖** Python 中的 `CodexRuntimeConfig`，而不是作为它的默认值。也就是说，即使代码里写死了 `sandbox="workspace_write"`，部署环境里的 `VEADK_CODEX_SANDBOX=full_access` 依然会生效。这一优先级与大多数配置项相反，在容器/函数计算等由平台注入环境变量的场景中尤其需要注意。
 </Callout>
 
 | 环境变量 | 覆盖的配置项 | 说明 |
@@ -245,6 +262,8 @@ Codex 自带一份约 20KB、针对自身工具链（`apply_patch`、`update_pla
 | `VEADK_CODEX_APPROVAL_MODE` | `approval_mode` | 取值同 `approval_mode` 字段。 |
 | `VEADK_CODEX_WORKSPACE_ROOT` | `workspace_root` | 工作目录绝对路径。 |
 | `VEADK_CODEX_NETWORK_ACCESS` | `network_access` | `1`/`true`/`yes`/`on` 视为开启，其余视为关闭。 |
+| `VEADK_CODEX_MODEL_TRANSPORT` | `model_transport` | `auto`/`direct`/`shim`。 |
+| `VEADK_CODEX_THREAD_MODE` | `thread_mode` | `resume`/`ephemeral`。 |
 
 另有四个用于 Responses→Chat 转换层（shim）的环境变量。它们不参与上面的覆盖规则，只是 shim 自身的调参：
 
@@ -255,6 +274,51 @@ Codex 自带一份约 20KB、针对自身工具链（`apply_patch`、`update_pla
 | `CODEX_SHIM_START_TIMEOUT` | `10` | 等待 shim 的本地 HTTP 服务起来的秒数；超时即判定启动失败并明确报错，而不是让 Codex 一直连不上。 |
 | `CODEX_SHIM_CACHE_MAX` | `8` | 进程内缓存的 shim 实例上限（按后端地址+凭证区分），用于限制多租户进程里的服务与端口数量。 |
 
+另有三个 thread 存储的容量参数，同样不参与覆盖规则，含义见 [限制](#限制)：
+
+| 环境变量 | 默认值 | 说明 |
+| :--- | :--- | :--- |
+| `VEADK_CODEX_MAX_ROLLOUT_BYTES` | `33554432`（32 MiB） | 单个 thread rollout 的大小上限（字节），超过后不再保存。 |
+| `VEADK_CODEX_MEMORY_STORE_MAX_BYTES` | `268435456`（256 MiB） | 短期记忆使用 `local` 后端时，进程内 thread 存储的总字节上限，超出后按最近最少使用淘汰。 |
+| `VEADK_CODEX_MEMORY_STORE_MAX_RECORDS` | `10000` | 同上，进程内 thread 存储的记录数上限。 |
+
+### Codex 运行架构
+
+Codex 负责 Agent 循环、工具循环、沙箱与短期上下文；VeADK 负责 Session 绑定、工具接入、事件转换、策略映射、可观测性与部署。
+
+```mermaid
+flowchart LR
+    R[Runner：Session / 记忆 / 多租户] --> CR[Codex runtime：编排]
+    CR --> TS[(Thread 存储：随 Session 持久化)]
+    CR --> CX[Codex：Agent 循环 / 工具循环 / 沙箱 / 上下文]
+    CX -->|MCP| B[本地 MCP Server：Agent 的工具]
+    CX -->|Responses API| M[模型：方舟 / OpenAI]
+    CX -->|事件流| CR
+    CR -->|ADK Event| R
+```
+
+- **直连（`direct`）**：Codex 直接调用支持 Responses API 的模型，Agent 的函数工具与 MCP 工具经 runtime 为本轮启动的本地 MCP server 交给 Codex，由 Codex 驱动工具循环。
+- **会话连续性（`thread_mode="resume"`）**：每个 Session 绑定一个 Codex thread，thread 随 Session 持久化，下一轮可在任意实例上恢复，模型看到的是 Codex 自己的完整历史，而不是回放的对话记录。
+- **恢复重试**：恢复 thread 遇到瞬时错误（服务繁忙 / 过载、传输已关闭）时，按退避有限次重试，仍失败才退回到用对话记录引导的新 thread；thread 不存在或参数无效时立即退回。已开始的回合从不重试，因为其中的工具可能已产生副作用。
+- **转向（steer）**：`await runner.steer(session_id, "改用 pandas")` 把补充指令加入正在进行的回合，不会新开回合；回合须在当前进程中运行，否则返回 `False`。
+- **回合超时**：`turn_timeout_seconds`（默认 1800 秒）到期后中断回合，调用方收到 `TimeoutError`。
+- **上下文压缩**：`auto_compact_token_limit` 交由 Codex 在 token 超过阈值时自行压缩历史。
+
+| 后端 | 状态 | 说明 |
+| :--- | :--- | :--- |
+| 本地（`local`） | 已支持 | Codex 以子进程运行在 Agent 所在实例，thread 随 Session 持久化，适用于多实例无状态部署。 |
+| 托管（`managed`） | 规划中 | Codex 回合在托管服务中运行，VeADK 只负责 Session 绑定与事件转换；接口保持不变。 |
+
+#### 限制
+
+| 方面 | 说明 |
+| :--- | :--- |
+| Workspace 持久化 | Workspace 不跨实例、不跨重启保留。thread（对话）可在任意实例上恢复，但 workspace 默认是实例本地的临时目录；恢复后的回合发现 workspace 为空时，模型会被告知之前回合的文件可能已丢失，需要时重新生成。Workspace 持久化在规划中。 |
+| 并发 | 同一进程内，同一 Session 的调用串行执行（`direct` + `resume`）。跨实例没有租约：两个实例并发运行同一 Session 时可能都会执行工具，后保存的 rollout 被拒绝，该回合在下一次恢复时依据 Session 对话记录交还给 thread。工具副作用不能重复执行时，应把同一 Session 在同一时刻只路由到一个实例。 |
+| `max_llm_calls` | `direct` 传输下为尽力而为：配额在每次模型调用完成后扣减，回合被中断前可能仍有一次在途请求发出。需要请求前的硬上限时使用 `model_transport="shim"`。 |
+| Rollout 大小 | 单个 thread 的 rollout 有大小上限（默认 32 MiB，`VEADK_CODEX_MAX_ROLLOUT_BYTES`），超出后不再保存，下一轮依据 Session 对话记录新开 thread。短期记忆使用 `local` 后端时，进程内 thread 存储按最近最少使用淘汰，上限见 [Codex 环境变量](#codex-环境变量)。 |
+| 滚动升级 | 数据库中的 thread 记录存放在 `veadk_codex_threads` 表中，每条记录带表结构版本号。旧版本实例遇到新版本写入的记录时，不读取也不覆盖，本轮新开 thread，并记录指标 `outcome=incompatible`。 |
+
 ### Codex 可观测性
 
 Codex 原生生命周期和 ADK Function/MCP 工具调用都会转换为 ADK Event。运行日志使用稳定的 `codex_*` 事件名，并包含 `invocation_id`、`call_id`、`tool`、`status`、`duration_ms` 等可归因字段。日志不会记录工具参数、工具结果、API Token、凭证或后端地址；Token Usage 通过 `codex_event_type=token_usage` 事件及对应日志提供。
@@ -262,8 +326,22 @@ Codex 原生生命周期和 ADK Function/MCP 工具调用都会转换为 ADK Eve
 此外：
 
 - **`call_llm` span**：ADK 的 `call_llm` span 本由它自己的 LLM flow 打开，而该 flow 已被 codex 替换，因此 runtime 会自行打开一个同名 span，并在回合结束时写入 prompt、响应与 token 用量。VeADK 的整条遥测链路——内存 exporter 的 Session 索引、Trace 上报、Portal 指标、以及基于 Trace 的评测——因此都能看到 codex 回合。注意粒度：**每回合一个 span**，而不是每次内层模型调用一个。
+- **`veadk.codex.*` span 属性**：`call_llm` span 还记录 `transport`、`thread_id`、`turn_id`、`thread_resumed`、`model`、`sandbox`、`approval_mode`、`tool_count`、`status` 与 `duration_ms`，不包含提示词、工具参数或密钥。
 - **`usage_metadata`**：整轮的 token 用量汇总后，只挂在**每回合一个的合并后终态 Event** 上（而不是逐条事件累加），避免下游做求和统计时重复计数。
-- **`RunConfig(max_llm_calls=...)` 会被强制执行**：shim 在每一次真实的后端模型调用前扣减配额。超限时 Codex 侧收到一个 `429 llm_calls_limit`（而不是它会重试的 500——重试会把本回合的工具副作用重跑一遍），回合结束后 runtime 再向调用方重新抛出 `LlmCallsLimitExceededError`，而不是返回 Codex 勉强拼出的半截答案。
+- **`RunConfig(max_llm_calls=...)` 会被强制执行**：shim 在每一次真实的后端模型调用前扣减配额。超限时 Codex 侧收到一个 `429 llm_calls_limit`（而不是它会重试的 500——重试会把本回合的工具副作用重跑一遍），回合结束后 runtime 再向调用方重新抛出 `LlmCallsLimitExceededError`，而不是返回 Codex 勉强拼出的半截答案。`direct` 传输下没有 shim，Codex 在发起模型请求前也不发出任何通知，runtime 改为在每次模型调用完成后扣减配额：超出配额的那次调用会完成，此时可能已有一次请求在途，它会随回合中断而中止；之后不会再有新的调用。
+
+#### 指标
+
+runtime 通过进程的 OpenTelemetry MeterProvider 上报以下指标；未配置 MeterProvider 时为空操作。属性均为低基数，不包含用户、Session 或 thread ID。
+
+| 指标 | 类型 | 单位 | 属性 | 说明 |
+| :--- | :--- | :--- | :--- | :--- |
+| `veadk.codex.thread.resume` | Counter | 1 | `outcome`：`resumed`/`new_thread`/`instructions_changed`/`retried_then_resumed`/`fallback_after_error`/`store_error`/`incompatible` | thread 恢复结果。 |
+| `veadk.codex.thread.save` | Counter | 1 | `outcome`：`saved`/`conflict`/`failed`/`skipped`/`cancelled`/`too_large` | rollout 保存结果。 |
+| `veadk.codex.turn` | Counter | 1 | `status`：`completed`/`failed`/`cancelled`/`transferred`/`timeout`；`transport`：`direct`/`shim` | 回合数。 |
+| `veadk.codex.turn.duration` | Histogram | s | 同 `veadk.codex.turn` | 回合耗时。 |
+| `veadk.codex.turn.startup` | Histogram | s | `transport` | 从调用开始到 Codex 回合开始的耗时。 |
+| `veadk.codex.turn.tokens` | Counter | token | `transport`；`kind`：`input`/`output`/`cached_input`/`reasoning_output` | 回合 token 用量。 |
 
 ## 支持矩阵
 
@@ -290,7 +368,7 @@ Codex 原生生命周期和 ADK Function/MCP 工具调用都会转换为 ADK Eve
 | :--- | :--- |
 | `model_name=[主, 备...]` | 只使用第一个模型，fallback 链不生效。 |
 | `model_provider`（非 `openai`） | 运行时始终以 OpenAI 兼容协议访问 `model_api_base`。 |
-| `model_extra_config` | 仅对 `piagent` 成立。**codex 会转发它**：`extra_headers` 与 `extra_body`（含 VeADK 默认的请求加密与 prompt 缓存配置）由 shim 原样带到后端请求上，与 `adk` 路径一致。 |
+| `model_extra_config` | 仅对 `piagent` 成立。**codex 会转发它**：`extra_headers` 与 `extra_body`（含 VeADK 默认的请求加密与 prompt 缓存配置）由 shim 原样带到后端请求上，与 `adk` 路径一致。`direct` 传输只转发 `extra_headers`；含非空 `extra_body` 时 `auto` 会留在 `shim`，见 [Codex 执行参数](#codex-执行参数)。 |
 | `enable_responses` / `enable_responses_cache` | 不使用 Ark Responses API，`previous_response_id` 续接与响应缓存均不生效。 |
 | `example_store` | 由 `ExampleTool.process_llm_request` 注入，外部运行时不调用该钩子，few-shot 示例不会进入 prompt。 |
 | `knowledgebase` | **知识库被静默禁用。** 同样由 `LoadKnowledgebaseTool.process_llm_request` 注入使用说明，外部运行时不调用，模型不知道知识库的存在，检索不会被触发。 |

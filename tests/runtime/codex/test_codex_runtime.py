@@ -979,3 +979,347 @@ async def test_shim_completes_turn_after_transfer_without_second_model_call(
     body = response.json()
     assert body["status"] == "completed"
     assert body["output"][0]["type"] == "message"
+
+
+@pytest.mark.parametrize(
+    ("reported", "expected"),
+    [
+        # What Codex reports for a plain command run through the login shell.
+        ("/bin/zsh -lc 'pwd'", "pwd"),
+        ("/bin/bash -lc 'ls -la && cat a.txt'", "ls -la && cat a.txt"),
+        ("sh -c 'echo hi'", "echo hi"),
+        # Inner quoting and multi-line scripts survive the unwrap intact.
+        (
+            "/bin/zsh -lc \"cat > a.py <<'EOF'\nprint('x')\nEOF\"",
+            "cat > a.py <<'EOF'\nprint('x')\nEOF",
+        ),
+        # A command the model itself wrapped is unwrapped one level only, so
+        # the recorded form still shows what the model actually sent.
+        (
+            "/bin/zsh -lc \"/bin/zsh -lc 'pwd'\"",
+            "/bin/zsh -lc 'pwd'",
+        ),
+        # Not a bare wrapper: left untouched.
+        ("pwd", "pwd"),
+        ("/bin/zsh -lc 'pwd' extra-arg", "/bin/zsh -lc 'pwd' extra-arg"),
+        ("python3 -c 'print(1)'", "python3 -c 'print(1)'"),
+        ("/bin/zsh -lc 'unterminated", "/bin/zsh -lc 'unterminated"),
+        ("", ""),
+    ],
+)
+def test_unwrap_shell_command(reported: str, expected: str) -> None:
+    from veadk.runtime.codex.translate import _unwrap_shell_command
+
+    assert _unwrap_shell_command(reported) == expected
+
+
+def test_recorded_command_is_what_the_model_sent_not_the_shell_wrapper() -> None:
+    """Replayed history must not teach the model to wrap its own commands.
+
+    The recorded ``exec_command`` args end up in the next invocation's prompt.
+    With Codex's wrapper left in, the model copied it into its own commands and
+    Codex wrapped them again (``/bin/zsh -lc "/bin/zsh -lc '...'"``).
+    """
+    item = {
+        "id": "cmd-1",
+        "type": "commandExecution",
+        "command": "/bin/zsh -lc 'python3 analysis/agg.py metrics.csv'",
+        "cwd": "/workspace",
+        "status": "completed",
+        "aggregated_output": "ok\n",
+        "exit_code": 0,
+    }
+    completed = type(
+        "ItemCompletedNotification",
+        (),
+        {"model_dump": lambda self: {"item": item}},
+    )()
+
+    events = notification_to_events(completed, "agent", "inv", active_tool_items=set())
+
+    calls = [
+        part.function_call
+        for event in events
+        for part in (event.content.parts if event.content else [])
+        if part.function_call
+    ]
+    assert len(calls) == 1
+    assert calls[0].name == "exec_command"
+    assert calls[0].args["command"] == "python3 analysis/agg.py metrics.csv"
+    assert calls[0].args["cwd"] == "/workspace"
+
+
+def test_turn_usage_reports_this_turn_not_the_resumed_threads_total() -> None:
+    """A resumed thread's usage `total` includes every earlier turn.
+
+    Reported as-is, turn 2 would be charged turn 1's tokens again, and every
+    consumer that sums usage per turn (telemetry, cost limits) double counts.
+    """
+    from veadk.runtime.codex.runtime import _turn_usage
+
+    baseline: dict = {}
+    # First update of turn 2: the thread had used 50k before this call.
+    first = _turn_usage(
+        {
+            "last": {"input_tokens": 10_000, "output_tokens": 100},
+            "total": {"input_tokens": 60_000, "output_tokens": 600},
+        },
+        baseline,
+    )
+    second = _turn_usage(
+        {
+            "last": {"input_tokens": 12_000, "output_tokens": 50},
+            "total": {"input_tokens": 72_000, "output_tokens": 650},
+        },
+        baseline,
+    )
+
+    assert first["total"] == {"input_tokens": 10_000, "output_tokens": 100}
+    assert second["total"] == {"input_tokens": 22_000, "output_tokens": 150}
+
+
+def test_turn_usage_on_a_fresh_thread_is_the_threads_total() -> None:
+    from veadk.runtime.codex.runtime import _turn_usage
+
+    baseline: dict = {}
+    update = {
+        "last": {"input_tokens": 5, "output_tokens": 1},
+        "total": {"input_tokens": 5, "output_tokens": 1},
+    }
+    assert _turn_usage(update, baseline)["total"] == update["total"]
+
+
+def _text_event(author: str, text: str, invocation_id: str) -> Event:
+    return Event(
+        author=author,
+        invocation_id=invocation_id,
+        content=types.Content(role="model", parts=[types.Part(text=text)]),
+    )
+
+
+def test_resumed_turn_is_told_what_others_said_since_its_last_reply() -> None:
+    """A resumed thread only knows its own turns.
+
+    Whatever the user or another agent said while this agent was not running
+    has to be handed over, or the thread answers as if it never happened;
+    anything the thread already saw must not be repeated.
+    """
+    from veadk.runtime.codex.runtime import _turns_since_own, _with_backfill
+
+    events = [
+        _text_event("user", "hello", "inv-1"),
+        _text_event("codex_agent", "hi, I can help", "inv-1"),
+        _text_event("user", "ask the billing agent", "inv-2"),
+        _text_event("billing_agent", "invoice INV-7 is overdue", "inv-2"),
+        _text_event("user", "codex, summarize", "inv-3"),
+    ]
+    ctx = SimpleNamespace(invocation_id="inv-3", session=SimpleNamespace(events=events))
+
+    lines = _turns_since_own(ctx, "codex_agent")
+
+    assert lines == [
+        "user: ask the billing agent",
+        "billing_agent: invoice INV-7 is overdue",
+    ]
+    prompt = _with_backfill("codex, summarize", lines)
+    assert "invoice INV-7 is overdue" in prompt
+    assert "hi, I can help" not in prompt
+    assert prompt.endswith("codex, summarize")
+    assert _with_backfill("same", []) == "same"
+
+
+def test_backfill_is_bounded() -> None:
+    """A long gap or a huge message must not blow up the resumed prompt."""
+    from veadk.runtime.codex import runtime as rt
+
+    events = [_text_event("codex_agent", "earlier reply", "inv-0")]
+    events += [
+        _text_event("user", f"message {i} " + "x" * 10_000, f"inv-{i + 1}")
+        for i in range(rt._BACKFILL_MAX_MESSAGES + 10)
+    ]
+    ctx = SimpleNamespace(
+        invocation_id="inv-now", session=SimpleNamespace(events=events)
+    )
+
+    lines = rt._turns_since_own(ctx, "codex_agent")
+
+    assert len(lines) == rt._BACKFILL_MAX_MESSAGES + 1
+    assert lines[0] == "(10 earlier messages omitted)"
+    assert all(len(line) < rt._BACKFILL_MAX_CHARS + 100 for line in lines)
+    assert "message 59" in lines[-1]
+
+
+@pytest.mark.asyncio
+async def test_saving_the_rollout_does_not_swallow_cancellation(tmp_path) -> None:
+    """The save runs in the runtime's `finally`; swallowing a cancellation
+    there would break the caller's cancel and hold the session lock longer."""
+    from veadk.runtime.codex import runtime as rt
+    from veadk.runtime.codex.thread_store import ThreadKey
+
+    class _CancellingStore:
+        async def save(self, *args, **kwargs):
+            raise asyncio.CancelledError
+
+    rollout_path = (
+        tmp_path / "sessions/2026/09/30/rollout-2026-09-30T00-00-00-"
+        "01a0f000-0000-7000-8000-000000000001.jsonl"
+    )
+    rollout_path.parent.mkdir(parents=True)
+    rollout_path.write_text("{}\n")
+
+    with pytest.raises(asyncio.CancelledError):
+        await rt._save_thread(
+            _CancellingStore(),
+            ThreadKey(app_name="a", user_id="u", session_id="s", agent_name="g"),
+            str(tmp_path),
+            "01a0f000-0000-7000-8000-000000000001",
+            "hash",
+            None,
+            SimpleNamespace(invocation_id="inv"),
+        )
+
+
+def test_default_ark_config_does_not_force_the_shim() -> None:
+    """VeADK's default Ark `extra_body` (caching) is dropped on Responses anyway.
+
+    If it counted as a body to forward, every Ark agent would fall back to the
+    shim and the direct transport would never be used by default.
+    """
+    from veadk import Agent
+    from veadk.runtime.codex.runtime import _model_extra_body
+
+    base = "https://ark.cn-beijing.volces.com/api/v3"
+    default = Agent(
+        name="a",
+        runtime="codex",
+        model_name="m",
+        model_api_base=base,
+        model_api_key="k",
+    )
+    custom = Agent(
+        name="b",
+        runtime="codex",
+        model_name="m",
+        model_api_base=base,
+        model_api_key="k",
+        model_extra_config={"extra_body": {"thinking": {"type": "disabled"}}},
+    )
+
+    assert _model_extra_body(default) == {}
+    assert _model_extra_body(custom) == {"thinking": {"type": "disabled"}}
+
+
+@pytest.mark.asyncio
+async def test_corrupt_thread_record_is_discarded_so_the_next_save_succeeds(
+    tmp_path: Path,
+) -> None:
+    """A record that fails its integrity check must not pin the session.
+
+    A turn that cannot load its thread starts a new one and saves it with
+    ``expected_version=None`` ("must not exist yet"). If the corrupt record
+    were left in the store, that save -- and every later one -- would conflict,
+    so the session would silently run on throwaway threads forever. Loading
+    therefore deletes the record and reports "no thread".
+    """
+    from veadk.runtime.codex.rollout_io import Rollout
+    from veadk.runtime.codex.runtime import _load_thread
+    from veadk.runtime.codex.thread_store import LocalDirThreadStore
+    from veadk.runtime.codex.thread_store import ThreadKey
+    from veadk.runtime.codex.thread_store import ThreadStoreCorrupt
+
+    tid = "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b"
+    relpath = f"sessions/2026/09/30/rollout-2026-09-30T10-00-00-{tid}.jsonl"
+    rollout = Rollout(thread_id=tid, relpath=relpath, data=b"turn1\n")
+    key = ThreadKey(app_name="app", user_id="u1", session_id="s1", agent_name="a")
+    store = LocalDirThreadStore(tmp_path / "threads")
+    await store.save(key, tid, rollout, "h", expected_version=None)
+    path, _ = store._paths(key)
+    header, _, _payload = path.read_bytes().partition(b"\n")
+    path.write_bytes(header + b"\nnot gzip")
+    with pytest.raises(ThreadStoreCorrupt):
+        await store.load(key)
+
+    ctx = SimpleNamespace(invocation_id="inv-corrupt")
+    assert await _load_thread(store, key, ctx) is None
+
+    assert await store.load(key) is None, "the corrupt record was left in place"
+    assert await store.save(key, tid, rollout, "h", expected_version=None) == 1
+
+
+def test_backfill_includes_a_parent_agent_in_the_same_invocation() -> None:
+    """Transfer keeps the invocation id, so the parent's words live in the
+    current invocation; filtering the whole invocation out lost them."""
+    from veadk.runtime.codex.runtime import _turns_since_own
+
+    events = [
+        _text_event("user", "earlier question", "inv-1"),
+        _text_event("codex_agent", "earlier answer", "inv-1"),
+        _text_event("user", "fix the build", "inv-2"),
+        _text_event("router", "Handing this to codex: the CI log says X", "inv-2"),
+    ]
+    ctx = SimpleNamespace(invocation_id="inv-2", session=SimpleNamespace(events=events))
+
+    lines = _turns_since_own(ctx, "codex_agent", covered_invocation_id="inv-1")
+
+    assert lines == ["router: Handing this to codex: the CI log says X"]
+
+
+def test_resume_on_an_empty_workspace_warns_the_model(tmp_path) -> None:
+    """The thread survives a new instance; its files do not."""
+    from veadk.runtime.codex.runtime import _with_backfill, _workspace_is_empty
+
+    assert _workspace_is_empty(str(tmp_path))
+    (tmp_path / "plan.md").write_text("x")
+    assert not _workspace_is_empty(str(tmp_path))
+
+    prompt = _with_backfill("continue", [], workspace_reset=True)
+    assert "working directory was reset" in prompt
+    assert prompt.endswith("continue")
+    assert _with_backfill("continue", []) == "continue"
+
+
+def test_resume_backfill_uses_branch_filtered_events():
+    from veadk.runtime.codex.runtime import _turns_since_own
+
+    saved = _text_event("codex_agent", "saved", "saved")
+    visible = _text_event("helper", "visible result", "later")
+    hidden = _text_event("sibling", "other branch secret", "sibling")
+    seen = []
+
+    def get_events(*, current_branch):
+        seen.append(current_branch)
+        return [saved, visible]
+
+    ctx = SimpleNamespace(
+        invocation_id="now",
+        _get_events=get_events,
+        session=SimpleNamespace(events=[saved, visible, hidden]),
+    )
+    lines = _turns_since_own(ctx, "codex_agent", "saved")
+    assert lines == ["helper: visible result"]
+    assert seen == [True]
+
+
+def test_resume_backfill_keeps_tool_envelope_when_result_is_large():
+    from veadk.runtime.codex.translate import backfill_event_text
+    from google.adk.events import Event
+
+    event = Event(
+        author="agent",
+        content=types.Content(
+            parts=[
+                types.Part(
+                    function_response=types.FunctionResponse(
+                        id="call-1",
+                        name="purchase",
+                        response={"status": "completed", "data": "x" * 10000},
+                    ),
+                )
+            ]
+        ),
+    )
+    record = json.loads(backfill_event_text(event, limit=200))
+    assert record["id"] == "call-1" and record["name"] == "purchase"
+    assert record["response"]["status"] == "completed"
+    assert record["response"]["truncated"] is True
+    assert len(record["response"]["preview"]) == 200

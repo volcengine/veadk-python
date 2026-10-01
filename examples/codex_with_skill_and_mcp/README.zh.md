@@ -39,7 +39,7 @@ Beijing: sunny, 28°C. Have a nice day!
 Codex 接管了整轮（而不是 ADK 的 LLM flow），且只会说 Responses API——所以两个工具走不同的路：
 
 - **Skill** → 被物化到 Codex 的磁盘 skill 目录（`$CODEX_HOME/skills/<name>/SKILL.md`），由 Codex 原生 skill 机制发现。与后端无关。
-- **MCP 工具** → 不能直接交给 Codex（它会把 MCP 工具以 `namespace` 类型呈现给模型，而 chat 后端不认），所以由 runtime 的 Responses shim 把它们当普通 `function` 工具喂给后端、并**自己执行**，对 Codex 不可见。
+- **MCP 工具** → 作为 Codex 自己的工具交给它。后端支持 Responses API（火山方舟、OpenAI）时，Codex 直接调用模型，并通过 runtime 为本轮启动的本地 MCP server 调用 agent 的工具，由 Codex 驱动工具循环；后端只支持 chat 时，由 runtime 的 Responses shim 居中并**自己执行**工具。用 `CodexRuntimeConfig(model_transport=...)`（`auto` / `direct` / `shim`）选择，`auto` 对方舟和 OpenAI 选直连。
 
 这些都由 runtime 处理——Agent 代码就是普通的工具挂载。
 
@@ -57,7 +57,7 @@ python examples/codex_with_skill_and_mcp/main.py
 
 ## 说明
 
-- 工具由 runtime 的 shim 调度，但调用、结果、状态变更、确认和鉴权都会作为标准 ADK 事件进入 Session/Trace/UI。
+- 工具在 runtime 中执行（经 MCP bridge 或 shim），调用、结果、状态变更、确认和鉴权都会作为标准 ADK 事件进入 Session/Trace/UI。
 - 支持静态鉴权（header / bearer token / ve-identity workload token）以及工具执行中触发的 ADK 交互式鉴权；MCP toolset 在列举工具前触发的鉴权仍取决于对应 ADK/MCP 客户端能力。
 - `runtime="codex"` 是**沙箱执行运行时**，不是 ADK 执行流程的等价替代品。`Agent` 上有一部分配置在它下面会**直接报错**（`sub_agents`、`output_schema`、`planner`、`code_executor`、`system_instruction` 以外的 `generate_content_config`、`include_contents="none"`、`enable_supervisor`，以及显式传入的 `model=`），另一部分会被丢弃并告警（`knowledgebase`、`example_store`、`skills_mode` 等）。详见[支持矩阵](../../docs/content/docs/framework/agent/runtime.mdx#支持矩阵)。
 - 注意本例依赖的区别：ADK 的 `SkillToolset` 会被桥接进 Codex 原生 skill 系统，但 VeADK 自己的 `Agent(skills_mode=...)` **不会**——后者只会告警且不生效。
