@@ -45,6 +45,11 @@ class ContextCompressionConfig(BaseModel):
     retrieval: Literal["auto", "lexical"] = "auto"
     index_path: str = Field(default=".adk/context-index.sqlite3", min_length=1)
     embedding_max_calls: int = Field(default=64, ge=1, le=512, strict=True)
+    # Explicit quality mode: bounded source preparation before query retrieval.
+    # Requires configured embedding; no model or new network work by default.
+    prepare_index: bool = False
+    index_preparation_max_calls: int = Field(default=512, ge=1, le=512, strict=True)
+    index_preparation_timeout_seconds: float = Field(default=60, gt=0, le=120)
     # Experimental read-first protocol, disabled until live quality is proven.
     verify_sources: bool = False
     context_window: int | None = Field(default=None, gt=0)

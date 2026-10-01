@@ -105,3 +105,15 @@ SQLite requires persistent storage for restart recovery and is not shared across
 instances. Use a shared Session database for multiple instances. Reads are scoped
 to authorized original Session records, never authorized merely by an index entry.
 Validate compressed-answer quality on representative business cases.
+
+### Optional index preparation
+
+With online embeddings configured, use `Agent(name="assistant", context_compression={"prepare_index": True})`
+to prepare authorized source indexes before retrieval. This opt-in stage has a cumulative limit of
+60 seconds and 512 embedding requests per invocation. The existing shared five-second retrieval
+budget and separate 64-call pool still apply. Configure preparation limits with
+`index_preparation_timeout_seconds` and `index_preparation_max_calls`.
+Preparation adds cold-start latency and embedding cost. It uses at most half the remaining explicit
+turn timeout and never extends that deadline. Completed batches persist; incomplete indexes fall
+back to lexical retrieval and may resume later. No embedding configuration means no vector index.
+Explicitly bound custom retrievers retain their caller-managed preparation lifecycle.

@@ -53,6 +53,9 @@ class ContextScope:
     evidence_rankings: dict = field(default_factory=dict, repr=False)
     evidence_retrieval_status: str = "not_requested"
     evidence_retrieval_deadline: float | None = None
+    index_preparation_remaining: float | None = None
+    index_preparation_status: str = "not_requested"
+    index_preparation_results: list[dict] = field(default_factory=list, repr=False)
 
 
 current_scope: ContextVar[ContextScope | None] = ContextVar(
