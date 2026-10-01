@@ -21,7 +21,7 @@ source spans and the SDK preview budget, not a mocked final answer.
 
 import asyncio
 from dataclasses import replace
-import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -114,22 +114,89 @@ class WaitForChildren(CoarsePreference):
 
 
 @pytest.mark.asyncio
-async def test_child_timeout_keeps_whole_source_lexical_route_and_joins_work(tmp_path):
+@pytest.mark.parametrize("parent_elapsed", [0.1, 0.2])
+async def test_child_timeout_keeps_whole_source_lexical_route_and_joins_work(
+    tmp_path, monkeypatch, parent_elapsed
+):
+    from veadk.context import hierarchical_retriever
+
     text = document()
     embedder = WaitForChildren()
     retriever = HierarchicalContextRetriever(tmp_path / "index.sqlite3", embedder)
+    clock = [100.0]
+    timeouts = []
+    original_search = hierarchical_retriever.search
+    parent_candidates = []
+
+    async def omit_tail_from_parent_candidates(store, *args, **kwargs):
+        found, status = await original_search(store, *args, **kwargs)
+        if store is retriever._parents:
+            # Exercise a real parent miss, independently of later rank tuning.
+            # Keep the real embeddings/search and exact stored source spans.
+            found = [chunk for chunk in found if chunk.end <= text.index(RENEWAL)]
+            parent_candidates.extend(found)
+        return found, status
+
+    async def stage_wait(awaitable, timeout):
+        timeouts.append(timeout)
+        if len(timeouts) == 1:
+            return await asyncio.wait_for(awaitable, timeout=5)
+        if len(timeouts) == 2:
+            result = await asyncio.wait_for(awaitable, timeout=5)
+            clock[0] += parent_elapsed
+            return result
+        task = asyncio.create_task(awaitable)
+        try:
+            await asyncio.wait_for(embedder.entered.wait(), timeout=5)
+            clock[0] += timeout
+            return await asyncio.wait_for(task, timeout=0)
+        finally:
+            if not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+
+    # Expire the child stage after it starts, independently of host scheduling
+    # during parent ingestion. Record production budgets and perform real task
+    # cancellation; the five-second watchdog only prevents a hung test.
+    monkeypatch.setattr(
+        hierarchical_retriever, "time", SimpleNamespace(monotonic=lambda: clock[0])
+    )
+    monkeypatch.setattr(
+        hierarchical_retriever,
+        "asyncio",
+        SimpleNamespace(**{**vars(asyncio), "wait_for": stage_wait}),
+    )
+    monkeypatch.setattr(
+        hierarchical_retriever, "search", omit_tail_from_parent_candidates
+    )
     try:
         spans = await retriever.rank_with_deadline(
-            IDENTITY, "record", text, QUESTION, deadline=time.monotonic() + 0.5
+            IDENTITY, "record", text, QUESTION, deadline=100.5
+        )
+        assert timeouts == [
+            pytest.approx(0.5),
+            pytest.approx(0.375),
+            pytest.approx((0.5 - parent_elapsed) * 0.9),
+        ]
+        assert clock[0] < 100.5
+        assert parent_candidates and all(
+            RENEWAL not in chunk.text for chunk in parent_candidates
         )
         assert embedder.entered.is_set() and embedder.cancelled
         assert retriever.last_status == "parent_semantic_child_lexical"
         preview = _preview(_matches(text, spans, 1800, preview=True))
         assert LOCATION in preview and RENEWAL in preview
         assert len(preview.encode()) <= 1800
-        assert all(
+        children = retriever._store.chunks(Scope(*IDENTITY))
+        assert children and all(
             retriever._store.vector(Scope(*IDENTITY), chunk, embedder.model, 2) is None
-            for chunk in retriever._store.chunks(Scope(*IDENTITY))
+            for chunk in children
+        )
+        assert (
+            retriever._parents.read(
+                Scope(*IDENTITY), "record", digest(text), 0, len(text)
+            )
+            == text
         )
     finally:
         await retriever.close()
