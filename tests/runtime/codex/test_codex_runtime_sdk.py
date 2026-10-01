@@ -68,6 +68,9 @@ class _FakeShim:
     def unregister_turn(self, token):
         self.unregistered.append(token)
 
+    async def close_turn(self, token):
+        self.unregister_turn(token)
+
     def turn_marker(self, token):
         # Mirrors the real shim: an opaque per-turn marker the runtime embeds
         # in the Codex prompt, and "" for a token the shim does not know.

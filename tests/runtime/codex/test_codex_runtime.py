@@ -1276,3 +1276,50 @@ def test_resume_on_an_empty_workspace_warns_the_model(tmp_path) -> None:
     assert "working directory was reset" in prompt
     assert prompt.endswith("continue")
     assert _with_backfill("continue", []) == "continue"
+
+
+def test_resume_backfill_uses_branch_filtered_events():
+    from veadk.runtime.codex.runtime import _turns_since_own
+
+    saved = _text_event("codex_agent", "saved", "saved")
+    visible = _text_event("helper", "visible result", "later")
+    hidden = _text_event("sibling", "other branch secret", "sibling")
+    seen = []
+
+    def get_events(*, current_branch):
+        seen.append(current_branch)
+        return [saved, visible]
+
+    ctx = SimpleNamespace(
+        invocation_id="now",
+        _get_events=get_events,
+        session=SimpleNamespace(events=[saved, visible, hidden]),
+    )
+    lines = _turns_since_own(ctx, "codex_agent", "saved")
+    assert lines == ["helper: visible result"]
+    assert seen == [True]
+
+
+def test_resume_backfill_keeps_tool_envelope_when_result_is_large():
+    from veadk.runtime.codex.translate import backfill_event_text
+    from google.adk.events import Event
+
+    event = Event(
+        author="agent",
+        content=types.Content(
+            parts=[
+                types.Part(
+                    function_response=types.FunctionResponse(
+                        id="call-1",
+                        name="purchase",
+                        response={"status": "completed", "data": "x" * 10000},
+                    ),
+                )
+            ]
+        ),
+    )
+    record = json.loads(backfill_event_text(event, limit=200))
+    assert record["id"] == "call-1" and record["name"] == "purchase"
+    assert record["response"]["status"] == "completed"
+    assert record["response"]["truncated"] is True
+    assert len(record["response"]["preview"]) == 200

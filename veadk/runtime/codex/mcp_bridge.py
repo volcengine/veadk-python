@@ -59,6 +59,7 @@ from mcp.server.lowlevel import Server
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from mcp.server.transport_security import TransportSecuritySettings
 
+from veadk.runtime.codex.execution_control import CodexToolIterationLimitError
 from veadk.utils.logger import get_logger
 
 try:  # OpenTelemetry is optional; the bridge must import without it.
@@ -116,6 +117,8 @@ class _Turn:
     executors: dict[str, Executor]
     invocation_id: str
     otel_context: Any
+    max_tool_iterations: int | None = None
+    on_error: Callable[[Exception], Awaitable[None]] | None = None
     state: BridgeTurnState = field(default_factory=BridgeTurnState)
     # JSON-RPC request id -> slot, so `notifications/cancelled` can find it.
     slots: dict[str, "_CallSlot"] = field(default_factory=dict)
@@ -246,6 +249,8 @@ class McpBridge:
         *,
         invocation_id: str = "",
         otel_context: Any = None,
+        max_tool_iterations: int | None = None,
+        on_error: Callable[[Exception], Awaitable[None]] | None = None,
     ) -> str:
         """Register one turn's tools and return a fresh bearer token for it."""
         tools: list[types.Tool] = []
@@ -266,6 +271,8 @@ class McpBridge:
             executors=dict(executors),
             invocation_id=invocation_id,
             otel_context=otel_context,
+            max_tool_iterations=max_tool_iterations,
+            on_error=on_error,
         )
         with self._turns_lock:
             self._turns[_token_key(token)] = turn
@@ -366,7 +373,30 @@ class McpBridge:
         call_id = _call_id_from_meta(req.params.meta) or f"call_{uuid.uuid4().hex}"
         args = dict(req.params.arguments or {})
         slot = slot if slot is not None else _CallSlot()
-        turn.state.calls += 1
+        # Admission must happen before creating the executor task: interrupting
+        # Codex after receiving a call event cannot undo a business operation.
+        error = None
+        notify_error = False
+        with self._turns_lock:
+            if (
+                turn.max_tool_iterations is not None
+                and turn.state.calls >= turn.max_tool_iterations
+            ):
+                error = CodexToolIterationLimitError(
+                    f"ADK tool call budget exhausted (max_tool_iterations={turn.max_tool_iterations})."
+                )
+                if not any(
+                    isinstance(e, CodexToolIterationLimitError)
+                    for e in turn.state.errors
+                ):
+                    turn.state.errors.append(error)
+                    notify_error = True
+            else:
+                turn.state.calls += 1
+        if error is not None:
+            if notify_error and turn.on_error is not None:
+                await turn.on_error(error)
+            return _text_result(str(error), is_error=True)
         started = time.monotonic()
 
         async def _run() -> str:
