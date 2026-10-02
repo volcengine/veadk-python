@@ -38,7 +38,12 @@ from .operations import count_unique, search
 from .read_projection import compact_pages
 from .references import register, resolve, saved_references
 from .runtime import current_scope
-from .retrieval import prepared_preview, search_original
+from .retrieval import (
+    MAX_PREVIEW_SOURCES,
+    extend_prepared_preview,
+    prepared_preview,
+    search_original,
+)
 from .search_budget import (
     ALIAS_GUIDANCE,
     SEARCH_FIELDS,
@@ -233,7 +238,14 @@ def _compression_candidates(request, scope, config):
 
 
 def compact_tool_results(
-    request, scope, config, *, references=None, attach_reader=True, compact_reads=True
+    request,
+    scope,
+    config,
+    *,
+    references=None,
+    attach_reader=True,
+    compact_reads=True,
+    request_budget=None,
 ):
     refs = saved_references(scope)
     refs.update(references or {})
@@ -241,6 +253,7 @@ def compact_tool_results(
         return refs
     scope.restored_references.clear()
     question = current_question(request.contents)
+    expandable = []
     for (
         parent,
         field,
@@ -323,24 +336,66 @@ def compact_tool_results(
                 "Use operation='read' for exact case-sensitive text or a character offset. "
                 f"Operations: {operations}. Verify omitted details in the original."
             )
-        parent[field] = (
-            preview
-            + f"\n[{'Lossless projection' if lossless else 'Preview only'}; original text has {len(text)} characters. "
+        suffix = (
+            f"\n[{'Lossless projection' if lossless else 'Preview only'}; original text has {len(text)} characters. "
             + guidance
             + "]"
         )
+        parent[field] = preview + suffix
+        if (
+            not lossless
+            and exact_overview is None
+            and not source.get("record_format")
+            and len(expandable) < MAX_PREVIEW_SOURCES
+        ):
+            expandable.append((parent, field, text, source, preview_limit, suffix))
         if not lossless:
             scope.lossy_references.add(handle)
     if compact_reads:
         compact_read_results(request.contents, scope, refs, config)
     if refs and attach_reader:
         _attach_reader(request, scope, config, refs)
+    if request_budget is not None and config.tool_result_max_bytes >= 16000:
+        _expand_tool_previews(
+            request, scope, config, question, expandable, request_budget
+        )
     from .tool_lookup_preview import build_tool_lookup_previews
 
     scope.tool_lookup_previews = build_tool_lookup_previews(
         scope, request.contents, refs, config
     )
     return refs
+
+
+def _expand_tool_previews(request, scope, config, question, candidates, ceiling):
+    """Use spare target space only after the real reader envelope is present."""
+    from .budget import count_input, request_payload
+
+    for index, (parent, field, text, source, previous_maximum, suffix) in enumerate(
+        candidates
+    ):
+        remaining = ceiling - count_input(request_payload(request), config)
+        share = int(remaining // (len(candidates) - index))
+        old = parent[field]
+        # A second smaller proposal covers escaping overhead without an
+        # unbounded search or another retrieval/model call.
+        for gain in (share, share // 2):
+            if gain < 256:
+                break
+            maximum = min(
+                config.tool_result_max_bytes,
+                len(text.encode()) // 2,
+                previous_maximum + gain,
+            )
+            preview = extend_prepared_preview(
+                scope, source, text, question, previous_maximum, maximum
+            )
+            if preview is None:
+                continue
+            parent[field] = preview + suffix
+            if count_input(request_payload(request), config) <= ceiling:
+                break
+            parent[field] = old
 
 
 def _find_original(scope, response, path, text):

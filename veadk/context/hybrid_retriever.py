@@ -35,7 +35,7 @@ from ._hybrid_index import (
     ranges,
     search,
 )
-from .query_focus import focus_query, weighted_rrf
+from .query_focus import focus_query, supplemental_question, weighted_rrf
 
 
 class HybridContextRetriever:
@@ -198,7 +198,7 @@ class HybridContextRetriever:
                 )
             )
         ranked = bm25_rank(chunks, query)
-        focused = focus_query(query)
+        focused = supplemental_question(query) or focus_query(query)
         if focused != query:
             ranked = weighted_rrf([(bm25_rank(chunks, focused), 1.0), (ranked, 0.25)])
         self.last_status = "timeout_bm25_fallback"

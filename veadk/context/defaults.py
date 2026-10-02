@@ -228,6 +228,17 @@ async def invocation_retriever(agent, config):
         yield supplied
         return
     owner = DefaultContextRetriever(agent, config)
+    if (
+        config.rerank
+        and config.retrieval != "lexical"
+        and os.getenv("MODEL_EMBEDDING_API_KEY")
+    ):
+        from .model_reranking import ModelEvidenceSelector
+        from .reranking import EvidenceRerankingRetriever
+
+        owner = EvidenceRerankingRetriever(
+            owner, ModelEvidenceSelector(getattr(agent, "model", None), config)
+        )
     try:
         yield owner
     finally:

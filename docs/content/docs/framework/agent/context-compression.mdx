@@ -143,12 +143,19 @@ print(agent.context_compression_status)  # 仅容量和状态，不包含提示�
 恢复工具只读取当前应用、用户、Session、Agent 和分支授权的原始记录；索引不能代替授权源。
 压缩可能遗漏有用信息，实际质量应以自己的业务题单验证。
 
-### 可选索引准备
+### 默认索引准备与模型重排
 
-已配置在线 embedding 时，可以通过 `Agent(name="assistant", context_compression={"prepare_index": True})`
-在检索前准备本次可用材料的索引。该开关默认关闭。准备阶段每次 invocation 累计最多 60 秒、512 条
+已配置在线 embedding 时，直接创建 `Agent(name="assistant")`，即默认开启
+`prepare_index=True` 和 `rerank=True`：在检索前准备本次可用材料的索引，并重排候选证据。准备阶段每次 invocation 累计最多 60 秒、512 条
 embedding 请求，随后仍使用原有 5 秒共享检索预算和独立 64 条调用池。可分别通过
 `index_preparation_timeout_seconds`、`index_preparation_max_calls` 调整准备上限。
 这会增加冷启动延迟和调用费用；整轮请求总时限不变，准备最多占当时剩余时间的一半。
 超时保留已完成批次、回退词项检索，后续可续建；未完成索引不会当作完整语义索引。
 没有 embedding 配置时不会创建向量索引。显式绑定的自定义检索器仍由调用者准备。
+
+重排和历史摘要沿用 Agent 自己的模型、地址与认证；方舟 Chat / Responses 辅助请求关闭 thinking，主回答配置不变。
+重排只输出合法候选 ID，不改写原文；超时或无效结果回退原顺序。默认每 invocation 最多 8 次、单次 4 秒、输出 256 tokens，
+输入另有 `reranking_input_limit=40000` 保守估算上限，并受模型容量及剩余检索/整轮时间约束。
+通过 `context_compression={"prepare_index": False}` 或 `{"rerank": False}` 可独立关闭。
+无 embedding 或 `retrieval="lexical"` 时不启用默认模型重排。不能确认关闭 thinking 的辅助模型配置不会切换到其他模型；
+重排回退，摘要返回受控错误。详情见开发者入门文档。

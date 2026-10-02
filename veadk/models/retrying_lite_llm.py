@@ -42,7 +42,7 @@ from veadk.context.budget import (
 from veadk.context.client import BudgetedLiteLLMClient
 from veadk.context.config import resolve_config
 from veadk.context.manager import prepare_context, recover_context
-from veadk.context.runtime import is_summary
+from veadk.context.runtime import is_auxiliary
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -154,7 +154,7 @@ class RetryingLiteLlm(LiteLlm):
         stream: bool = False,
     ) -> AsyncGenerator[LlmResponse, None]:
         ledger = AttemptLedger(
-            1 if is_summary.get() else self._context_config.max_model_attempts,
+            1 if is_auxiliary() else self._context_config.max_model_attempts,
             self._context_config.request_timeout_seconds,
             summary_timeout=self._context_config.summary_time_budget_seconds,
         )
@@ -213,7 +213,7 @@ class RetryingLiteLlm(LiteLlm):
                         yield response
                 return
             except Exception as error:
-                if emitted or is_summary.get():
+                if emitted or is_auxiliary():
                     raise
                 if (
                     isinstance(error, ContextBudgetError)

@@ -77,7 +77,7 @@ from veadk.context.budget import (
 )
 from veadk.context.config import resolve_config
 from veadk.context.manager import prepare_context, recover_context
-from veadk.context.runtime import is_summary
+from veadk.context.runtime import is_auxiliary
 from veadk.utils.adk_compat import (
     get_previous_interaction_id,
     llm_request_has_field,
@@ -800,7 +800,7 @@ class ArkLlm(Gemini):
         from veadk.context.attempts import next_with_deadline
 
         ledger = AttemptLedger(
-            1 if is_summary.get() else self._context_config.max_model_attempts,
+            1 if is_auxiliary() else self._context_config.max_model_attempts,
             self._context_config.request_timeout_seconds,
             summary_timeout=self._context_config.summary_time_budget_seconds,
         )
@@ -847,7 +847,7 @@ class ArkLlm(Gemini):
             except Exception as error:
                 if (
                     not emitted
-                    and not is_summary.get()
+                    and not is_auxiliary()
                     and not recovered
                     and self._context_config.mode != "off"
                     and isinstance(error, ContextBudgetError)
@@ -877,7 +877,7 @@ class ArkLlm(Gemini):
                             READ_CONTEXT_TOOL
                         ]
                     continue
-                if emitted or is_summary.get() or not is_context_overflow(error):
+                if emitted or is_auxiliary() or not is_context_overflow(error):
                     raise
                 if recovered or self._context_config.mode == "off":
                     raise ContextBudgetError("provider_context_limit") from None
@@ -937,7 +937,7 @@ class ArkLlm(Gemini):
         streaming response has reached the caller, switching models would mix
         chunks from two responses, so the original error is propagated.
         """
-        models = [self.model, *((self.fallbacks or []) if not is_summary.get() else [])]
+        models = [self.model, *((self.fallbacks or []) if not is_auxiliary() else [])]
 
         for index, model in enumerate(models):
             attempt_args = copy.deepcopy(responses_args)
@@ -1030,17 +1030,16 @@ class ArkLlm(Gemini):
         responses_args = request_reorganization_by_ark(
             responses_args, enable_responses_cache=self.enable_responses_cache
         )
-        if is_summary.get():
+        if is_auxiliary():
             responses_args.pop("tools", None)
             responses_args.pop("tool_choice", None)
             responses_args.pop("context_management", None)
-            from veadk.context.budget import model_limits
+            from veadk.context.auxiliary import disable_thinking
 
-            if model_limits(model).get("ark_thinking_controls"):
-                responses_args["reasoning"] = {"effort": "minimal"}
+            responses_args = disable_thinking(responses_args, ark_responses=True)
         check_payload(responses_args, policy)
         ledger = current_attempts.get() or AttemptLedger(
-            1 if is_summary.get() else policy.max_model_attempts,
+            1 if is_auxiliary() else policy.max_model_attempts,
             policy.request_timeout_seconds,
             summary_timeout=policy.summary_time_budget_seconds,
         )

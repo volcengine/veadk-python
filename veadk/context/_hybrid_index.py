@@ -449,16 +449,21 @@ async def search(
         raise ValueError("invalid_query")
     chunks = store.chunks(scope, source)
     lexical = bm25_rank(chunks, query, top)
-    from .query_focus import focus_query, weighted_rrf
+    from .query_focus import focus_query, supplemental_question, weighted_rrf
 
     focused = focus_query(query) if focus_questions else query
-    focused_lexical = bm25_rank(chunks, focused, top) if focused != query else lexical
+    supplement = supplemental_question(query) if focus_questions else None
+    lexical_query = supplement or focused
+    focused_lexical = (
+        bm25_rank(chunks, lexical_query, top) if lexical_query != query else lexical
+    )
     lexical_fallback = (
         weighted_rrf([(focused_lexical, 1.0), (lexical, 0.25)])
-        if focused != query
+        if lexical_query != query
         else lexical
     )
     dense = []
+    question_dense = []
     degraded = False
     reason = None
     if mode != "bm25" and chunks:
@@ -471,26 +476,51 @@ async def search(
             if any(v is None for v in vectors):
                 raise EmbeddingUnavailable("incomplete_index")
             encode_query = getattr(embedder, "embed_query", embedder.embed)
-            query_vectors = await asyncio.wait_for(encode_query([focused]), timeout)
+            queries = [focused, supplement] if supplement else [focused]
+            query_vectors = await asyncio.wait_for(encode_query(queries), timeout)
             if (embedder.model, embedder.dimension) != (model, dimension):
                 raise ValueError("embedding_version_changed")
-            if len(query_vectors) != 1:
+            if len(query_vectors) != len(queries):
                 raise ValueError("embedding_count")
             q = normalize(query_vectors[0], dimension)
             dense = sorted(
                 [(i, sum(a * b for a, b in zip(q, v))) for i, v in enumerate(vectors)],
                 key=lambda pair: (-pair[1], pair[0]),
             )[:top]
+            if supplement:
+                extra = normalize(query_vectors[1], dimension)
+                question_dense = sorted(
+                    [
+                        (i, sum(a * b for a, b in zip(extra, v)))
+                        for i, v in enumerate(vectors)
+                    ],
+                    key=lambda pair: (-pair[1], pair[0]),
+                )[:top]
         except (asyncio.TimeoutError, ValueError, EmbeddingUnavailable) as exc:
             degraded = True
             reason = type(exc).__name__
     ranked = (
         lexical_fallback
         if mode == "bm25" or degraded
-        else dense
+        else (
+            distribution_fusion([(dense, 1.0), (question_dense, 3.0)])
+            if supplement
+            else dense
+        )
         if mode == "dense"
         else (
-            distribution_fusion([(dense, 3.0), (focused_lexical, 1.0), (lexical, 0.25)])
+            distribution_fusion(
+                [
+                    (dense, 1.0),
+                    (question_dense, 3.0),
+                    (focused_lexical, 1.0),
+                    (lexical, 0.25),
+                ]
+            )
+            if supplement
+            else distribution_fusion(
+                [(dense, 3.0), (focused_lexical, 1.0), (lexical, 0.25)]
+            )
             if focused != query
             else distribution_fusion([(lexical, 1.0), (dense, 1.0)])
         )

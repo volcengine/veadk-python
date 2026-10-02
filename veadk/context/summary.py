@@ -17,7 +17,6 @@
 from __future__ import annotations
 
 import asyncio
-import copy
 import json
 from bisect import bisect_left
 from collections.abc import Callable
@@ -363,16 +362,9 @@ async def summarize(
     # Extraction owns its explicit total limit. Main-answer limits can have
     # different provider semantics and must neither override it nor conflict
     # with it. Clone arguments per call; Agents may share a model concurrently.
-    summary_model = model
-    additional = getattr(model, "_additional_args", None)
-    if additional and any(
-        additional.get(key) is not None
-        for key in ("max_tokens", "max_completion_tokens", "max_output_tokens")
-    ):
-        summary_model = model.model_copy()
-        summary_model._additional_args = copy.deepcopy(additional)
-        for key in ("max_tokens", "max_completion_tokens", "max_output_tokens"):
-            summary_model._additional_args.pop(key, None)
+    from .auxiliary import extraction_model
+
+    summary_model = extraction_model(model)
 
     async def collect():
         texts = []

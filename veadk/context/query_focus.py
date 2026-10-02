@@ -19,7 +19,7 @@ from __future__ import annotations
 import re
 
 
-def focus_query(query: str) -> str:
+def _question_focus(query: str, *, keep_references: bool) -> str:
     """Keep complete standalone question lines, or retain the original query.
 
     No field names, task templates or dataset vocabulary are recognized.
@@ -46,13 +46,36 @@ def focus_query(query: str) -> str:
         return query
     if len(focused.encode()) > 2048:
         return query
-    if re.search(
+    if keep_references and re.search(
         r"\b(it|its|they|them|their|he|him|his|she|her|these|those|this|that|"
         r"above|previous|former|latter|same)\b|它|他们|她们|上述|前述|前者|后者|该|其|这些|那些",
         focused,
         re.IGNORECASE,
     ):
         return query
+    return focused
+
+
+def focus_query(query: str) -> str:
+    """Focus standalone questions; preserve ambiguous references verbatim."""
+    return _question_focus(query, keep_references=True)
+
+
+def supplemental_question(query: str) -> str | None:
+    """Add a bounded question view without replacing its antecedent context.
+
+    Only long requests dominated by surrounding text qualify. The original
+    query remains a separate ranking component. Quoted/code questions and
+    trailing qualifications keep the conservative single-query path.
+    """
+    focused = _question_focus(query, keep_references=False)
+    if (
+        len(query.encode()) < 512
+        or focused == query
+        or len(focused.encode()) * 4 > len(query.encode())
+        or focus_query(query) != query
+    ):
+        return None
     return focused
 
 

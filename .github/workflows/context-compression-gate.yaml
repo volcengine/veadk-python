@@ -23,6 +23,8 @@ on:
       - 'tests/agent/**'
       - 'tests/cli/test_generated_agent_backend_codegen*.py'
       - 'evaluations/context_compression/**'
+      - 'examples/18_context_compression/**'
+      - 'veadk_tutorial.ipynb'
       - 'tests/models/**'
       - 'tests/run_context_compression_gate.py'
       - 'tests/test_context_release_gate.py'

@@ -26,6 +26,7 @@ from .defaults import DefaultContextRetriever
 from .evidence import repeated_projection
 from .history import eligible_prefix_end
 from .references import archive_history, handle, identity, resolve
+from .reranking import EvidenceRerankingRetriever
 from .retrieval import MAX_PREVIEW_SOURCES, MAX_SOURCE_BYTES
 from .tool_results import _compression_candidates
 
@@ -68,7 +69,8 @@ def _sources(request, scope, config, available, history_pressure):
 async def prepare_request_index(request, model, config, additional_args, scope):
     """Preparation has its own cumulative invocation budget, inside turn time.
 
-    Explicitly supplied retrievers retain their caller-owned ingestion lifecycle.
+    Custom retrievers retain their caller-owned ingestion lifecycle. Built-in
+    reranking wrappers preserve native delegates' preparation lifecycle.
     Completed batches survive in SQLite; partial indexes never count as complete.
     Failure is optional, caller cancellation and exhausted turn budgets are not.
     """
@@ -78,7 +80,13 @@ async def prepare_request_index(request, model, config, additional_args, scope):
         or config.mode == "off"
         or config.retrieval == "lexical"
         or scope.compression_owner == "legacy_harness"
-        or not isinstance(owner, DefaultContextRetriever)
+        or not (
+            isinstance(owner, DefaultContextRetriever)
+            or (
+                isinstance(owner, EvidenceRerankingRetriever)
+                and owner.uses_default_preparation
+            )
+        )
         or request.previous_interaction_id
     ):
         return

@@ -31,6 +31,8 @@ class ContextScope:
     branch: str
     pending_state: dict = field(default_factory=dict)
     summary_calls: int = 0
+    reranking_calls: int = 0
+    reranking_status: str = "not_requested"
     retrieval_calls: int = 0
     retrieval_results: int = 0
     retrieval_page_bytes: int = 8000
@@ -62,3 +64,9 @@ current_scope: ContextVar[ContextScope | None] = ContextVar(
     "veadk_context_scope", default=None
 )
 is_summary: ContextVar[bool] = ContextVar("veadk_context_summary", default=False)
+is_reranking: ContextVar[bool] = ContextVar("veadk_context_reranking", default=False)
+
+
+def is_auxiliary() -> bool:
+    """Auxiliary model calls never recursively compress, use tools or retry."""
+    return is_summary.get() or is_reranking.get()

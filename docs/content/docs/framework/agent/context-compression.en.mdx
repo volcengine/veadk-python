@@ -106,10 +106,10 @@ instances. Use a shared Session database for multiple instances. Reads are scope
 to authorized original Session records, never authorized merely by an index entry.
 Validate compressed-answer quality on representative business cases.
 
-### Optional index preparation
+### Default index preparation and evidence reranking
 
-With online embeddings configured, use `Agent(name="assistant", context_compression={"prepare_index": True})`
-to prepare authorized source indexes before retrieval. This opt-in stage has a cumulative limit of
+With online embeddings configured, `Agent(name="assistant")` defaults to `prepare_index=True` and
+`rerank=True`: prepare authorized source indexes and rerank retrieved evidence. Preparation has a cumulative limit of
 60 seconds and 512 embedding requests per invocation. The existing shared five-second retrieval
 budget and separate 64-call pool still apply. Configure preparation limits with
 `index_preparation_timeout_seconds` and `index_preparation_max_calls`.
@@ -117,3 +117,12 @@ Preparation adds cold-start latency and embedding cost. It uses at most half the
 turn timeout and never extends that deadline. Completed batches persist; incomplete indexes fall
 back to lexical retrieval and may resume later. No embedding configuration means no vector index.
 Explicitly bound custom retrievers retain their caller-managed preparation lifecycle.
+
+Reranking and historical summaries use the Agent's own model, endpoint, and authentication.
+Ark Chat / Responses auxiliary requests disable thinking without changing main-answer settings.
+The selector returns validated passage IDs only; timeouts and invalid results preserve the baseline ordering.
+Limits are eight calls per invocation, four seconds per call, and 256 output tokens, bounded by remaining retrieval/turn time.
+`reranking_input_limit=40000` independently limits estimated auxiliary input and cannot exceed the model's capacity.
+Set `context_compression={"prepare_index": False}` or `{"rerank": False}` to disable each feature separately.
+Without embeddings, or with `retrieval="lexical"`, default model reranking stays inactive.
+Unsupported thinking controls never silently switch models: reranking falls back and summaries return a controlled error.

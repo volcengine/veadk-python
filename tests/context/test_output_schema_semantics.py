@@ -264,11 +264,10 @@ async def test_summary_schema_never_replaces_business_schema(wire, adapter, as_d
     assert "Summary of earlier conversation" in json.dumps(main[history_key])
     assert main[history_key][-1] == baseline[history_key][-1]
     assert main["thinking"] == {"type": "enabled"}
-    if adapter is RetryingLiteLlm:
-        assert summary["thinking"] == {"type": "disabled"}
-    else:
-        # Responses uses reasoning.effort, unlike Chat's thinking.type control.
-        assert summary["reasoning"] == {"effort": "minimal"}
+    assert summary["thinking"] == {"type": "disabled"}
+    if adapter is ArkLlm:
+        # Minimal still reasons; auxiliary Responses must explicitly disable it.
+        assert summary.get("reasoning") is None
         assert main["reasoning"] == {"effort": "medium"}
     assert request == original
     assert model._additional_args == additional

@@ -140,7 +140,12 @@ async def test_two_selected_groups_do_not_share_the_wrong_date():
         (FACT_A, DATE_A, 25, 10),
         (FACT_B, DATE_B, 79, 60),
     ):
-        assert needle in text and text.count(date) == 1
+        # The original source record remains once, and this selected block
+        # quotes it once more. Check the exact association, not only presence.
+        assert needle in text and text.count(date) == 2
+        selected = text.split(f"[message {index},", 1)[1].split("\n[message ", 1)[0]
+        assert needle in selected and date in selected
+        assert (DATE_B if date == DATE_A else DATE_A) not in selected
         line = next(
             line for line in text.splitlines() if line.startswith(f"[message {index},")
         )
