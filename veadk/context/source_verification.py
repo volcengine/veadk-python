@@ -21,7 +21,7 @@ always wins. Unsupported routes retain the existing behavior.
 
 from __future__ import annotations
 
-from .runtime import current_scope, is_summary
+from .runtime import current_scope, is_auxiliary
 
 READER = "veadk_read_context"
 
@@ -31,7 +31,7 @@ def source_verification_choice(payload, config):
     if (
         not config.verify_sources
         or config.mode != "auto"
-        or is_summary.get()
+        or is_auxiliary()
         or scope is None
         or not scope.source_verification_allowed
         or scope.source_verification_attempted

@@ -69,9 +69,10 @@ def install(monkeypatch):
     return embeddings
 
 
-def test_preparation_is_explicit_and_bounded():
+def test_preparation_defaults_on_and_is_bounded():
     policy = ContextCompressionConfig()
-    assert policy.prepare_index is False
+    assert policy.prepare_index is True
+    assert ContextCompressionConfig(prepare_index=False).prepare_index is False
     assert policy.embedding_max_calls == 64
     for update in [
         {"index_preparation_max_calls": 513},

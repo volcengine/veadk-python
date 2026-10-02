@@ -40,7 +40,7 @@ from ._hybrid_index import (
     search,
 )
 from .hybrid_retriever import HybridContextRetriever
-from .query_focus import focus_query, weighted_rrf
+from .query_focus import focus_query, supplemental_question, weighted_rrf
 
 
 PARENT_VERSION = "hierarchical-parent-char1400-overlap120-v1"
@@ -98,11 +98,13 @@ def parent_ranges(text):
 
 
 class _QueryReuse:
-    """One invocation, one exact query, one model revision and dimension."""
+    """One invocation and at most two exact queries, scoped to model identity."""
 
     def __init__(self, embedder, query):
         self.inner = embedder
         self.query = query
+        supplement = supplemental_question(query)
+        self.queries = [query, supplement] if supplement else [query]
         self.cached = None
 
     @property
@@ -123,16 +125,16 @@ class _QueryReuse:
 
     async def embed_query(self, texts):
         identity = (self.model, self.dimension)
-        if texts == [self.query] and self.cached and self.cached[0] == identity:
-            return [list(self.cached[1])]
+        if texts == self.queries and self.cached and self.cached[0] == identity:
+            return [list(vector) for vector in self.cached[1]]
         encode = getattr(self.inner, "embed_query", self.inner.embed)
         vectors = await encode(texts)
         if (
-            texts == [self.query]
-            and len(vectors) == 1
+            texts == self.queries
+            and len(vectors) == len(self.queries)
             and (self.model, self.dimension) == identity
         ):
-            self.cached = (identity, list(vectors[0]))
+            self.cached = (identity, tuple(tuple(vector) for vector in vectors))
         return vectors
 
 
@@ -202,7 +204,7 @@ class HierarchicalContextRetriever(HybridContextRetriever):
         if len(chunks) > MAX_CHUNKS:
             raise ValueError("index_scope_limit")
         lexical = bm25_rank(chunks, query)
-        focused = focus_query(query)
+        focused = supplemental_question(query) or focus_query(query)
         if focused != query:
             lexical = weighted_rrf([(bm25_rank(chunks, focused), 1.0), (lexical, 0.25)])
         if parents is not None:

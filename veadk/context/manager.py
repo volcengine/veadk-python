@@ -35,7 +35,7 @@ from .history_retrieval import select_history, supplement_summary
 from .history_evidence import install_history_evidence
 from .index_preparation import prepare_request_index
 from .references import archive_history, state_key
-from .runtime import current_scope, is_summary
+from .runtime import current_scope, is_auxiliary
 from .retrieval import begin_retrieval, prepare_previews
 from .search_budget import tool_serialization_overhead
 from .summary import MAX_CONTINUATION_BYTES, SUMMARY_PROTOCOL_VERSION, summarize_history
@@ -49,7 +49,7 @@ from .verification_preview import build_lookup_previews
 
 async def prepare_context(request, model, config, additional_args, *, force=False):
     scope = current_scope.get()
-    owns_budget = scope is not None and not is_summary.get()
+    owns_budget = scope is not None and not is_auxiliary()
     if owns_budget:
         if not force:
             await prepare_request_index(request, model, config, additional_args, scope)
@@ -75,7 +75,7 @@ async def _prepare_with_retrieval(
     await _prepare_context(request, model, config, additional_args, force=force)
     scope = current_scope.get()
     if (
-        is_summary.get()
+        is_auxiliary()
         or scope is None
         or scope.compression_owner != "builtin"
         or config.mode == "off"
@@ -115,7 +115,7 @@ async def _prepare_with_retrieval(
 
 
 async def _prepare_context(request, model, config, additional_args, *, force=False):
-    if is_summary.get():
+    if is_auxiliary():
         return
     scope = current_scope.get()
     if scope:
@@ -187,6 +187,11 @@ async def _prepare_context(request, model, config, additional_args, *, force=Fal
         config,
         references=cached.get("references") if cached else None,
         compact_reads=False,
+        request_budget=(
+            min(available, int(budget.available * config.target_ratio))
+            if not force
+            else None
+        ),
     )
     if not force:
         restore_fitting_originals(request, scope, config, available)

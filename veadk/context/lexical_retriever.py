@@ -19,7 +19,7 @@ import math
 import time
 
 from ._hybrid_index import MAX_CHUNKS, MAX_SOURCE_BYTES, Chunk, Scope, bm25_rank, ranges
-from .query_focus import focus_query, weighted_rrf
+from .query_focus import focus_query, supplemental_question, weighted_rrf
 
 
 async def rank_lexical(identity, reference, text, query, *, deadline):
@@ -53,7 +53,7 @@ async def rank_lexical(identity, reference, text, query, *, deadline):
         )
     check_deadline()
     ranked = bm25_rank(chunks, query, deadline=deadline)
-    focused = focus_query(query)
+    focused = supplemental_question(query) or focus_query(query)
     if focused != query:
         ranked = weighted_rrf(
             [(bm25_rank(chunks, focused, deadline=deadline), 1.0), (ranked, 0.25)]

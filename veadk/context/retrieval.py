@@ -25,6 +25,7 @@ from .evidence import current_question, evidence_preview, repeated_projection
 from .context_windows import context_window
 from .references import digest, handle, identity, resolve
 from .runtime import context_retriever
+from .reranking import EvidenceOrder
 
 MAX_PREVIEW_SOURCES = 8
 MAX_SOURCE_BYTES = 2_000_000
@@ -94,6 +95,8 @@ async def _rank(scope, source, text, query, *, original_search=False):
             call,
             timeout=timeout,
         )
+        ordered = spans.validate(text) if isinstance(spans, EvidenceOrder) else None
+        spans = ordered.ranked if ordered is not None else spans
         if not isinstance(spans, (list, tuple)) or len(spans) > 100:
             raise ValueError("invalid_ranges")
         checked = []
@@ -112,7 +115,7 @@ async def _rank(scope, source, text, query, *, original_search=False):
             scope.evidence_retrieval_status = "source_expired"
             return None
         scope.evidence_retrieval_status = "selected" if checked else "empty"
-        return checked or None
+        return ordered if ordered is not None else checked or None
     except Exception:
         # Optional ranker failures cannot expose provider response/credentials.
         # asyncio cancellation remains outside Exception and is not swallowed.
@@ -156,14 +159,25 @@ async def prepare_previews(request, scope, config):
         scope.evidence_retrieval_status = "timeout"
 
 
-def _matches(text, ranked, maximum, *, preview):
-    selected = []
-    for start, end in ranked:
-        # Keep a bounded amount of the same original paragraph around a hit.
-        # If it cannot fit, the verified ranked span remains eligible as-is.
-        expanded = context_window(text, start, end)
-        choices = [expanded] if expanded == (start, end) else [expanded, (start, end)]
-        for span in choices:
+def _matches(text, ranked, maximum, *, preview, retained=()):
+    if isinstance(ranked, EvidenceOrder):
+        ordered = ranked.validate(text)
+        baseline = _matches(
+            text, ordered.baseline, maximum, preview=preview, retained=retained
+        )
+        baseline_size = (
+            len(_preview(baseline).encode())
+            if preview
+            else sum(len(match["text"].encode()) for match in baseline)
+        )
+        maximum = min(maximum, baseline_size)
+        ranked = ordered.ranked
+    selected = list(retained)
+    # Admit distinct ranked evidence before spending on optional surrounding
+    # lines. Otherwise a high-ranked hit's expansion can evict a later fact.
+    for expand in (False, True):
+        for start, end in ranked:
+            span = context_window(text, start, end) if expand else (start, end)
             trial = []
             for a, b in sorted([*selected, span]):
                 if trial and a <= trial[-1][1]:
@@ -178,7 +192,6 @@ def _matches(text, ranked, maximum, *, preview):
             )
             if size <= maximum:
                 selected = trial
-                break
     return [{"offset": a, "end": b, "text": text[a:b]} for a, b in selected]
 
 
@@ -196,6 +209,44 @@ def prepared_preview(scope, source, text, query, maximum):
         if matches:
             return _preview(matches)
     return evidence_preview(text, query, maximum)
+
+
+def extend_prepared_preview(scope, source, text, query, previous_maximum, maximum):
+    """Add cached original ranges while retaining every previously selected span.
+
+    This never starts retrieval or supplies synthesized text. The caller still
+    measures the entire serialized request, including wrappers and tool schema.
+    """
+    ranked = scope.evidence_rankings.get(_key(scope, source, query)) if scope else None
+    if not ranked or maximum <= previous_maximum or resolve(scope, source) != text:
+        return None
+    previous = _matches(text, ranked, previous_maximum, preview=True)
+    if not previous:
+        return None
+    if isinstance(ranked, EvidenceOrder):
+        # Compare the expanded projection with the unmodified baseline, including
+        # the baseline's own previously retained spans. Never rerun the selector.
+        ordered = ranked.validate(text)
+        baseline_previous = _matches(
+            text, ordered.baseline, previous_maximum, preview=True
+        )
+        baseline = _matches(
+            text,
+            ordered.baseline,
+            maximum,
+            preview=True,
+            retained=[(m["offset"], m["end"]) for m in baseline_previous],
+        )
+        maximum = min(maximum, len(_preview(baseline).encode()))
+        ranked = ordered.ranked
+    matches = _matches(
+        text,
+        ranked,
+        maximum,
+        preview=True,
+        retained=[(m["offset"], m["end"]) for m in previous],
+    )
+    return _preview(matches) if matches != previous else None
 
 
 async def search_original(scope, source, text, query, maximum):

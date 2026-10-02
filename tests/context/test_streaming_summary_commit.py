@@ -102,29 +102,42 @@ async def test_stream_summary_cache_is_committed_then_reused_after_restart(tmp_p
 async def test_cancelling_summary_stream_does_not_commit_partial_projection(tmp_path):
     service, fetch, _source, count, _original = await setup(tmp_path)
     try:
-        # The first summary is triggered after eleven background turns in this
-        # fixed, independently bounded fixture. Cancel its visible answer.
-        for turn in range(10):
-            client = Client("chatter")
-            await collect(
-                runner(service, client, fetch),
-                f"Progress note {turn}: "
-                + "Temporary background; preserve archived source. " * 22,
+
+        class HoldFirstSummary(Client):
+            async def acompletion(self, **kwargs):
+                # Hold the answer following an actual summary, regardless of
+                # how many turns the active projection budget can retain.
+                if self.summary_requests:
+                    self.mode = "hold"
+                return await super().acompletion(**kwargs)
+
+        task = None
+        for turn in range(36):
+            before = await service.get_session(**IDENTITY)
+            client = HoldFirstSummary("chatter")
+            task = asyncio.create_task(
+                collect(
+                    runner(service, client, fetch),
+                    f"Progress note {turn}: "
+                    + "Temporary background; preserve archived source. " * 22,
+                )
             )
-            assert not client.summary_requests
-        before = await service.get_session(**IDENTITY)
-        client = Client("hold")
-        task = asyncio.create_task(
-            collect(
-                runner(service, client, fetch),
-                "Progress note 10: "
-                + "Temporary background; preserve archived source. " * 22,
-            )
-        )
-        async with timeout(4):
-            while not client.streams:
-                await asyncio.sleep(0)
-            await client.streams[-1].blocked.wait()
+            try:
+                async with timeout(4):
+                    while not task.done() and not (
+                        client.streams and client.streams[-1].blocked.is_set()
+                    ):
+                        await asyncio.sleep(0)
+            except BaseException:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+                raise
+            if client.summary_requests:
+                assert client.streams[-1].blocked.is_set() and not task.done()
+                break
+            await task
+        else:
+            pytest.fail("fixture did not trigger an actual summary")
         assert client.summary_requests
         task.cancel()
         with pytest.raises(asyncio.CancelledError):

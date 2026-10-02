@@ -3,7 +3,7 @@
 当前支持 `google-adk>=1.34.0,<2.3.0`，默认安装由依赖解析器选择兼容版本；CI 固定验证 1.34.0、2.1.0、2.2.0 的 Python 3.10 / 3.12 组合。**ADK 2.3 及以上（含 2.9.2）暂不支持**：它们要求 OpenTelemetry ≥1.39，而 AgentKit SDK 0.8.x 要求 ≤1.37。请勿使用 `--no-deps` 强行安装；开启、关闭上下文压缩均遵守此 SDK 依赖范围。
 
 
-日期：2026-10-01。本文对应开发分支 `feat/default-context-compression`，包含默认 BM25 中英文检索和独立 JSON 模型容量配置。当前为开发版本，尚未正式发布；已安装的 PyPI 版本不一定具备本文行为。
+日期：2026-10-02。本文对应开发分支 `feat/default-context-compression`，包含默认 BM25 中英文检索和独立 JSON 模型容量配置。当前为开发版本，尚未正式发布；已安装的 PyPI 版本不一定具备本文行为。
 
 ## 1. 它解决什么问题
 
@@ -12,7 +12,7 @@
 两个边界需要特别注意：
 
 - 压缩对象是发给模型的输入，Session 中的原始记录始终完整保存。旧材料在模型输入里变成证据、摘要和来源引用；业务需要细节时，模型可以调用 veadk_read_context 搜索或分页读取原文，不必每轮强制回查。但可以回查不等于回答质量完全无损。
-- 默认检索是轻量 BM25，无需 embedding 模型，也不需要下载任何模型。BM25 只负责挑选原文证据；历史摘要和 Agent 回答仍然由 LLM 完成。
+- 未配置 embedding 时使用轻量 BM25，无需 embedding 模型，也不需要下载任何模型。BM25 只负责挑选原文证据；历史摘要和 Agent 回答仍然由 LLM 完成。
 
 ## 2. 三分钟接入
 
@@ -94,6 +94,10 @@ if __name__ == "__main__":
 
 两轮对话内容很短，通常不会触发压缩，目的只是展示接入方式和会话复用。接入真实的长材料或工具结果后，SDK 按预算自动决定是否压缩，业务代码不需要每轮主动调用。
 
+需要实际触发压缩时，运行[长工具结果教学案例](../examples/18_context_compression/README.zh.md)：直接用 `Agent`、`Runner` 和 SQLite，对 430 条合成库存记录连续提问。案例设置教学预算 `input_limit=16000`；生产中先省略此覆盖，使用模型容量与默认比例。完整原文保存在 `.adk/compression-demo.db`。
+
+[主教程 Notebook](../veadk_tutorial.ipynb) 也包含默认接入、embedding 自动开启准备/重排和独立关闭示例。
+
 ### 3.2 重启后如何继续同一会话
 
 保持同一个数据库、app_name、user_id、session_id 和 Agent 身份，即可继续原会话。线上服务应按登录用户和会话分别设置 ID。如果重启后只是想继续提问，直接执行后续的 runner.run(...) 即可，不需要重新写入第一轮材料。
@@ -114,7 +118,7 @@ SQLite 适合本地开发或单实例加持久卷的场景。部署时要把数�
 
 BM25 按匹配词的区分度、出现次数和片段长度排序，适合日志、订单编号、业务术语和关键词检索。当前不做英文词干还原、同义词扩展或自动翻译：run 与 running 不保证互相召回；仅用英文同义表达查询纯中文材料也不保证有效。
 
-### 4.1 显式开启 embedding，并准备完整索引
+### 4.1 配置 embedding，自动准备索引并重排证据
 
 更重视长材料中的语义召回时，先在运行环境配置 `MODEL_EMBEDDING_API_KEY`、`MODEL_EMBEDDING_NAME`、`MODEL_EMBEDDING_DIM` 和 `MODEL_EMBEDDING_API_BASE`，再直接创建 Agent：
 
@@ -123,23 +127,42 @@ from veadk import Agent
 
 agent = Agent(
     name="assistant",
-    context_compression={
-        "prepare_index": True,
-        "index_path": ".adk/context-index.sqlite3",
-    },
+    model_name="doubao-seed-2-1-pro-260628",  # 换成你的业务模型
+    # 已配置 embedding 后，prepare_index=True、rerank=True 自动生效。
 )
 ```
 
 不用解析 Session、手动注册回查工具或编写索引回调。输入触发压缩时，SDK 先准备本次可用材料的索引，再按当前问题挑选证据；后续调用可以复用 SQLite 中已完成的批次。原始记录仍由 Session 保存，索引不是 Session 的替代品。长材料沿用自适应父子切块：准备完成指当前检索层的索引完整，不代表全部子片段已提前计算。
 
-- `prepare_index` 默认关闭；显式开启后仍需要配置 embedding。没有 embedding 时继续使用 BM25，不会下载模型。
+- `prepare_index=True` 和 `rerank=True` 为默认值：配置 embedding 后自动生效。没有 embedding 时继续使用 BM25，不建向量索引，也不调用默认模型重排。仅创建 Agent 或处理短请求不会启动索引准备。
 - 准备阶段每次 Agent invocation 累计最多 **60 秒、512 条 embedding 请求**，与检索阶段原有的 **64 条请求、5 秒共享检索预算**分开计算。并发仍为 4；这些都是上限，不是固定消耗。参数分别为 `index_preparation_timeout_seconds`、`index_preparation_max_calls` 和 `embedding_max_calls`。
 - 这是请求内的准备阶段，会增加首次处理长材料的延迟和 embedding 费用；不是后台任务。如果设置整轮 `request_timeout_seconds`，准备阶段最多使用当时剩余时间的一半，不延长总时限。
 - 只处理实际输入中已授权的工具文本或可整理的旧文本历史，最多 8 个来源。工具材料优先，近期对话和未完成工具结果不纳入历史准备。不保证一次完成任意大小的材料；超时或失败回退，后续可续建。
 - 部分索引不会冒充完整语义索引。索引保存材料片段，应放在受控持久目录；原文回查仍须通过 Session 身份和内容校验。
 - 自定义 `use_context_retriever(...)` 的索引准备由调用者管理；该开关只作用于 SDK 默认检索器。
 
-只关闭提前准备：`context_compression={"prepare_index": False}`。关闭所有在线 embedding：`context_compression={"retrieval": "lexical"}`。关闭压缩变换：`context_compression=False`。
+独立关闭方式：
+
+```python
+# 保留在线检索与重排，只关闭提前准备。
+agent = Agent(name="assistant", context_compression={"prepare_index": False})
+# 保留索引准备与在线检索，只关闭模型重排。
+agent = Agent(name="assistant", context_compression={"rerank": False})
+# 固定用 BM25，关闭默认在线检索与模型重排。
+agent = Agent(name="assistant", context_compression={"retrieval": "lexical"})
+# 关闭压缩变换，容量检查仍生效。
+agent = Agent(name="assistant", context_compression=False)
+```
+
+### 4.2 重排和摘要用哪个模型
+
+两者沿用 **当前 Agent 的业务模型、服务地址和认证**，没有单独固定为评测时的 Flash 模型。重排只让模型返回候选片段 ID，SDK 校验 ID 后调整原文片段顺序；模型不能编造原文或改写来源。历史摘要也沿用当前模型。辅助请求不携带业务工具、业务输出格式、服务端会话链或模型 fallback，不递归触发压缩。
+
+方舟 Chat 和 Responses 的摘要、重排请求都会设置 `thinking.type=disabled`。这只作用于辅助请求，主回答的 thinking 配置保持不变。服务商协议必须支持明确关闭 thinking；不支持或无法确认关闭方式的思考配置不会被偷偷改成另一个模型：重排回退原检索结果，摘要返回受控错误。自定义 `BaseLlm` 适配器不自动获得默认模型重排。
+
+重排每次 invocation 最多 **8 次模型调用**，单次最多 **4 秒**，输出最多 **256 tokens**，并受剩余检索时间与整轮时限约束。可用 `reranking_max_calls`、`reranking_timeout_seconds` 调整。辅助请求输入另设 `reranking_input_limit=40000` 的保守估算上限，仍必须符合该模型真实容量；它与主请求 `input_limit` 分别约束不同请求。重排超时、异常、非法 ID 或容量不明时回退原候选顺序，取消请求则终止并清理任务。原文始终保留在 Session 中。
+
+索引准备、重排和摘要会增加相应调用量、费用和延迟；上述数字是上限，并非每轮固定消耗。
 
 该开关解决完整索引的接入问题，不能保证某个固定评测分数。短示例通常不会触发压缩；真实材料达到预算阈值才会执行。
 
@@ -175,10 +198,12 @@ agent = Agent(
 | veadk/context/defaults.py、veadk/context/index_preparation.py | 默认检索器、独立准备预算与来源校验 |
 | veadk/context/lexical_retriever.py、veadk/context/_hybrid_index.py | 无模型 BM25 检索与分词 |
 | veadk/context/manager.py、veadk/context/summary.py | 请求压缩与旧对话摘要 |
+| veadk/context/model_reranking.py、veadk/context/auxiliary.py | 用户模型重排、辅助参数隔离与 thinking 关闭 |
 | veadk/context/model_capacities.json | 模型容量、别名、输出规划和协议配置 |
 | veadk/context/model_capacity.py | 配置加载、校验与精确查询 |
 | veadk/runner.py、veadk/memory/ | Session 与 SQLite 持久化 |
 | tests/context/ | 压缩、预算、检索和原文回查回归 |
+| examples/18_context_compression/、veadk_tutorial.ipynb | 直接 Agent/Runner 教学和两轮压缩案例 |
 
 容量扩展新增了最大输入限制、默认生成型号及兼容接口别名的离线回归，已纳入强制门禁。此前已完成容量定向回归、前端全量与生产构建、Ruff、Pyright、pre-commit、打包及安装验证；当前候选的完整门禁结果见下文，详见[模型覆盖说明](context-compression-model-coverage.zh.md)。本文示例已对照公开 API 核对并完成语法静态检查；上述容量与打包验证不调用真实模型。
 
@@ -186,7 +211,7 @@ SQLite 超时恢复回归分别验证预算、真实取消、已完成批次持�
 
 这些属于工程验证，不能替代业务自身的质量评测，也不代表新默认已达到旧 embedding 方案的公开问答分数。Python 3.10 / 3.12 的发布与依赖回归各 10 项通过；基础安装和 eval 扩展均排除已知不兼容的 ADK 版本。远端检查以 [PR #1152](https://github.com/volcengine/veadk-python/pull/1152) 的当前提交为准，完整 Studio 发行与线上业务验收另行执行。
 
-本次索引准备新增 14 项机制回归；Python 3.10 / ADK 1.34.0 与 Python 3.12 / ADK 2.2.0 的完整门禁各 1,320 项通过、5 项跳过，定向 67 项全部通过。三个核心回归已在修复前复现失败。
+2026-10-02 默认接入与教学新增 36 项回归；Python 3.10 / ADK 1.34.0 与 Python 3.12 / ADK 2.2.0 的完整门禁各 **1,447 项通过、5 项跳过**，专项各 **132 项通过**，pre-commit 通过。旧版上的 4 个默认行为/用户模型缺口已用回归复现。教学回归通过真实 Runner 和合成 HTTP 响应验证输入确实缩短、来源引用可用、SQLite 完整保存原工具结果；该回归已纳入强制门禁，示例和 Notebook 修改也会触发 CI。测试在授权 5663 Devbox 隔离目录使用合成请求、禁用网络执行，不调用真实模型；上述结果不代表真实模型回答质量。PR 的合并与远端检查状态以当前提交页面为准。
 
 完整回归入口：`python tests/run_context_compression_gate.py -q`。
 
