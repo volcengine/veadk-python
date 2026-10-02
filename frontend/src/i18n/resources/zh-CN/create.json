@@ -1,4 +1,20 @@
 {
+  "contextCompression": {
+    "title": "自动压缩上下文",
+    "autoHint": "接近输入上限时保留相关证据，旧片段改为来源引用；原始会话完整保存，需要时可回查。",
+    "offHint": "不自动整理上下文；容量已知时仍检查超限。",
+    "capacity": "容量与压缩阈值",
+    "capacityHint": "容量无法识别时需填写上下文窗口和输出预留。请使用模型或部署的正式上限；切换模型后重新确认。",
+    "context_window": "上下文窗口（token）",
+    "input_limit": "最大输入（token，可选）",
+    "output_reserve": "输出预留（token）",
+    "automatic": "使用模型容量信息",
+    "invalid": "容量必须是正整数；比例须大于 0 且不超过 100%，并满足压缩目标 < 开始压缩 ≤ 旧对话整理阈值。",
+    "ratioHint": "按可用输入预算计算。默认达到 80% 开始压缩，目标为 60%；达到 95% 时允许整理旧对话。比例是触发与目标，不保证每次固定节省。",
+    "trigger_ratio": "开始压缩（%）",
+    "target_ratio": "压缩目标（%）",
+    "summary_trigger_ratio": "旧对话整理阈值（%）"
+  },
   "common": {
     "back": "返回",
     "cancel": "取消",

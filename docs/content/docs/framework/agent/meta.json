@@ -1,4 +1,12 @@
 {
   "title": "智能体",
-  "pages": ["index", "model", "responses-api", "runtime", "advanced", "skills"]
+  "pages": [
+    "index",
+    "model",
+    "responses-api",
+    "context-compression",
+    "runtime",
+    "advanced",
+    "skills"
+  ]
 }

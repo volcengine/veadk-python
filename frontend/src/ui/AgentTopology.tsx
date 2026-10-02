@@ -270,6 +270,11 @@ export function AgentInfoPanel({
             {info.name || t("agentTopology.unnamedAgent")}
           </h2>
           {modelName && <span title={modelName}>{modelName}</span>}
+          {info.contextCompression && (
+            <span>{t(`agentTopology.contextCompression.${info.contextCompression.state}`, {
+              defaultValue: t("agentTopology.contextCompression.unknown"),
+            })}</span>
+          )}
         </div>
         {info.description && (
           <p className="topo-description" title={info.description}>

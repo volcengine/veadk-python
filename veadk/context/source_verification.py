@@ -1,0 +1,71 @@
+# Copyright (c) 2025 Beijing Volcano Engine Technology Co., Ltd. and/or its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Opt-in, bounded source check at the final LiteLLM boundary.
+
+This is an experimental allowlist, not a claim of provider compatibility or
+evidence sufficiency. One read can miss facts. Explicit caller configuration
+always wins. Unsupported routes retain the existing behavior.
+"""
+
+from __future__ import annotations
+
+from .runtime import current_scope, is_auxiliary
+
+READER = "veadk_read_context"
+
+
+def source_verification_choice(payload, config):
+    scope = current_scope.get()
+    if (
+        not config.verify_sources
+        or config.mode != "auto"
+        or is_auxiliary()
+        or scope is None
+        or not scope.source_verification_allowed
+        or scope.source_verification_attempted
+        or scope.retrieval_calls
+        or not (scope.lossy_references - scope.restored_references)
+        or payload.get("stream")
+        or payload.get("model") != "openai/deepseek-v4-1-flash-260910"
+        or not isinstance(payload.get("api_base"), str)
+        or payload.get("api_base", "").rstrip("/")
+        != "https://ark.cn-beijing.volces.com/api/v3"
+    ):
+        return None
+    extra = payload.get("extra_body") or {}
+    if not isinstance(extra, dict) or extra.get("thinking") != {"type": "disabled"}:
+        return None
+    # ADK always includes response_format=None. A concrete schema is owned by
+    # the caller; for tool choice even explicit None/auto retains ownership.
+    if (
+        payload.get("response_format") is not None
+        or extra.get("response_format") is not None
+    ):
+        return None
+    if any(
+        key in container
+        for container in (payload, extra)
+        for key in ("tool_choice", "function_call", "functions")
+    ):
+        return None
+    if not any(
+        isinstance(tool, dict)
+        and tool.get("type") == "function"
+        and isinstance(tool.get("function"), dict)
+        and tool["function"].get("name") == READER
+        for tool in payload.get("tools") or []
+    ):
+        return None
+    return {"type": "function", "function": {"name": READER}}

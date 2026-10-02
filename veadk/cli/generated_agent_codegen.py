@@ -52,6 +52,7 @@ from veadk.tools.builtin_tools.create_agent.models import (
     CreateAgentsInput,
     LegacyCreateAgentsInput,
 )
+from veadk.version import VERSION
 
 _PYTHON_LICENSE_HEADER = """# Copyright (c) 2025 Beijing Volcano Engine Technology Co., Ltd. and/or its affiliates.
 #
@@ -72,7 +73,11 @@ _AGENTKIT_BASE_IMAGES = {
     "volcengine": "agentkit-prod-public-cn-beijing.cr.volces.com/base/py-simple:python3.12-bookworm-slim-latest",
     "byteplus": "agentkit-prod-public-ap-southeast-1.cr.bytepluses.com/base/py-simple:python3.12-bookworm-slim-latest",
 }
-_VEADK_VERSION = "1.1.13"
+# Generated kwargs must be supported by the installed SDK. An older hard-coded
+# pin silently loses new APIs when a generated project is built elsewhere.
+# Release builds pin their exact distribution version; local development builds
+# require the corresponding candidate wheel/source when testing generated code.
+_VEADK_VERSION = VERSION
 _VOLCENGINE_PYPI_INDEXES = (
     "https://mirrors.cloud.tencent.com/pypi/simple",
     "https://pypi.mirrors.ustc.edu.cn/simple",
@@ -347,6 +352,28 @@ class HarnessSidecarIntent(BaseModel):
         return studio_harness_intent_payload(value)
 
 
+class StudioContextCompressionConfig(BaseModel):
+    """The capacity controls exposed by Studio; SDK owns execution policy."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
+
+    mode: Literal["auto", "off"] = "auto"
+    context_window: int | None = Field(default=None, gt=0, strict=True)
+    input_limit: int | None = Field(default=None, gt=0, strict=True)
+    output_reserve: int | None = Field(default=None, gt=0, strict=True)
+    verify_sources: bool | None = Field(default=None, strict=True)
+    trigger_ratio: float | None = Field(default=None, gt=0, le=1, strict=True)
+    summary_trigger_ratio: float | None = Field(default=None, gt=0, le=1, strict=True)
+    target_ratio: float | None = Field(default=None, gt=0, lt=1, strict=True)
+
+    @model_validator(mode="after")
+    def validate_thresholds(self):
+        from veadk.context.config import ContextCompressionConfig
+
+        ContextCompressionConfig.model_validate(self.model_dump(exclude_none=True))
+        return self
+
+
 class AgentDraft(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -364,6 +391,10 @@ class AgentDraft(BaseModel):
     modelFallbacks: list[str | ModelFallbackEndpointDraft] = Field(default_factory=list)
     modelProvider: str = ""
     modelApiBase: str = ""
+    # All creation paths, including missing/template policies, share the SDK default.
+    contextCompression: StudioContextCompressionConfig = Field(
+        default_factory=StudioContextCompressionConfig
+    )
     tools: list[str] = Field(default_factory=list)
     skills: list[str] = Field(default_factory=list)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
@@ -1053,6 +1084,7 @@ def _build_agent(acc: _Acc, draft: AgentDraft, var_name: str) -> str:
         f"name={_py_str(_agent_name(acc, draft, var_name))}",
         f"description={_py_str(draft.description or draft.name or 'A VeADK agent.')}",
         f"instruction=INSTRUCTION_{var_name.upper()}",
+        f"context_compression={draft.contextCompression.model_dump(exclude_none=True)!r}",
     ]
     instruction = draft.instruction or "You are a helpful assistant."
     if draft.dynamicAgentDelegation:

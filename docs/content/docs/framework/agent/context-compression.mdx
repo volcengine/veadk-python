@@ -1,0 +1,161 @@
+---
+title: 上下文压缩
+description: 默认保存完整会话，按需压缩模型输入并回查原文
+---
+
+普通 `veadk.Agent` 和 Studio 新生成的标准 Agent 默认开启可恢复上下文压缩。
+达到输入预算的 80% 时开始整理长材料和工具结果，目标为 60%；达到 95% 时允许整理旧对话。
+模型输入保留当前问题相关证据，其余旧片段改为来源引用。模型需要细节时自行调用
+`veadk_read_context` 搜索或分页读取原文，不会每次强制回查。
+
+## 默认使用
+
+```python
+from veadk import Agent, Runner
+
+agent = Agent(name="assistant")
+runner = Runner(agent=agent, app_name="my_app", user_id="user")
+# 在现有异步应用中：await runner.run("你的问题", session_id="session")
+```
+
+未指定 Session 后端时，Runner 将完整会话保存在当前项目 `.adk/session.db`。
+重新启动后，用相同应用、用户和 Session ID 可继续会话。压缩只改变发给模型的输入，
+不会用摘要覆盖数据库原文。已显式配置的 Session 后端保持有效；内存后端不保证重启恢复。
+SQLite 适合本地或单实例持久卷，多实例应使用共享数据库 Session 后端。
+
+完整多轮示例和三种开关用法见仓库文档 `docs/context-compression-developer-guide.zh.md`；
+JSON 字段与维护方法见 `docs/context-compression-capacity-config.zh.md`。
+
+## 配置输入上限和阈值
+
+```python
+agent = Agent(
+    name="assistant",
+    context_compression={
+        "mode": "auto",
+        "context_window": 64000,
+        "input_limit": 48000,
+        "output_reserve": 8000,
+        "trigger_ratio": 0.8,
+        "target_ratio": 0.6,
+        "summary_trigger_ratio": 0.95,
+    },
+)
+```
+
+| 字段 | 含义 |
+| --- | --- |
+| `context_window` | 模型或部署的上下文总上限。已知模型可自动识别；自定义端点需要配置。 |
+| `input_limit` | 开发者设置的最大输入预算。实际值还受模型上限、输出预留和安全余量约束。 |
+| `output_reserve` | 规划输入时为输出预留的空间，不会单独设置生成长度上限。 |
+| `trigger_ratio` | 何时开始压缩，默认 0.8。 |
+| `target_ratio` | 压缩后的目标比例，默认 0.6。 |
+| `summary_trigger_ratio` | 何时允许整理旧对话，默认 0.95。 |
+
+比例基于可用输入预算，必须满足 `0 < target_ratio < trigger_ratio <= summary_trigger_ratio <= 1`。
+它们不是固定压缩率；近期问题、系统指令、工具调用配对、签名和必要证据会影响实际缩减量。
+完整请求会再次检查容量。无法安全缩到上限以内时返回明确的预算错误，避免盲目截断。
+当前估算采用保守 UTF-8 字节上界，因此填写 token 容量时可能比服务端实际计数更早触发。
+图片等媒体没有可靠容量估计时还需提供 `media_token_reserve`，不能保证所有图片超限都自动恢复。
+
+Studio 两种创建界面的模型设置均提供开关和上述阈值，比例显示为百分数。
+草稿、YAML、嵌套 LLM Agent 和生成 Python 使用同一配置；修改后需要重新生成项目。
+
+## 模型容量从哪里来
+
+容量数据维护在 `veadk/context/model_capacities.json`，每个版本记录总窗口、最大输入、
+最大输出、官方来源和核实日期。当前覆盖方舟 Seed / DeepSeek / GLM、OpenAI、Claude、Gemini，
+按明确的 provider 和模型 ID 匹配；例如 Seed 2.1 Pro `260628` 为 256,000，`260915` 为 1,024,000。
+
+新增或更新容量只需修改 JSON 的 `models` 条目，不需要改 Python 模型分支。
+文件采用 `schema_version: 1`，每项完整填写容量、输出规划、协议开关、别名和来源；
+`model_capacity.py` 只负责读取、校验和查询。数据随 SDK 安装包交付，加载不依赖工作目录，
+不会联网下载或自动读取项目同名文件；修改后需重新构建/安装并重启应用。
+缺失文件、重复名称、无效类型或不合理容量会明确报配置错误，不静默退回猜测值。
+
+当前没有实时查询方舟容量：公开版本配置接口尚未定义完整的输入、输出及共享窗口契约。
+SDK 优先查经核实的内置表，再查随 LiteLLM 安装的本地精确条目，不下载目录或按模型家族猜容量。
+显式 `context_window` 可以缩小已知上限；不能突破已知更小容量。
+
+两个本地表都未覆盖且没有显式容量时，在发送前抛出 `ContextBudgetError`，
+错误码为 `model_capacity_required`，并给出配置指引；备用模型缺少容量时报
+`fallback_capacity_required`。未知 `ep-...` 接入点必须按该部署的实际限制配置，
+不能继承另一接入点的窗口。只配置 `input_limit` 不能代替模型总窗口。
+
+```python
+# 私有部署示例：这些容量值必须由部署方核实后填写。
+agent = Agent(
+    name="private_assistant",
+    model_name="ep-your-deployment",
+    model_provider="openai",
+    context_compression={
+        "context_window": 64000,
+        "output_reserve": 8192,
+    },
+)
+```
+
+默认规划预留与模型最大输出是两回事。表内默认预留为 16,384 tokens；
+明确的模型输出参数和方舟回答/思维链语义还会影响实际预算。
+Gemini 只公布输入/输出上限时，保守地将输入上限也作为共享预算上限，不将两者相加。
+容量识别不代表所有模型的服务权限、媒体或参数兼容性均已实测。
+
+## 检索与开销
+
+未显式配置 `MODEL_EMBEDDING_API_KEY` 时，默认用纯 Python BM25 选择原文证据：
+英文按词、中文按字符二元组匹配，不携带模型权重、不下载模型，也不启动推理进程。
+默认词法路径按需计算，不创建向量索引；短输入不会触发检索。
+
+```python
+from veadk import Agent
+
+agent = Agent(name="assistant")  # 无在线 embedding 配置：默认无模型 BM25
+agent = Agent(name="assistant", context_compression={"retrieval": "lexical"})
+```
+
+`lexical` 强制不使用 embedding，即使环境中已有在线 embedding 配置。
+`auto` 下只有显式 `MODEL_EMBEDDING_API_KEY` 才会启用在线混合检索；模型、维度和地址
+通过 `MODEL_EMBEDDING_NAME`、`MODEL_EMBEDDING_DIM`、`MODEL_EMBEDDING_API_BASE` 配置。
+不会自动复用 Agent 的模型密钥，也不会因 Studio 自动填入模型名就调用 embedding。
+
+在线路径按需把可重建的向量索引保存在 `.adk/context-index.sqlite3`，后续复用；
+大材料自动使用分层索引。检索共享 5 秒预算，单来源最多 2 MB、查询最多 8 KiB；
+无模型路径覆盖完整来源的分段并检查截止时间，失败或预算不足时回退原有证据选择。
+在线默认每次调用最多 64 条 embedding 请求、4 路并发。
+
+BM25 适合关键词、日志和编号检索，同义改写和跨语言语义检索弱于 embedding，
+不能把之前混合检索的质量分数直接当作此默认路径的成绩。
+`veadk_read_context` 的 `search` 保留原文词法命中语义；原始 Session、来源引用和按需回查不变。
+本功能只影响上下文证据检索，不替换知识库或长期记忆配置。摘要仍由 LLM 生成。
+
+已有 `use_context_retriever(...)` 自定义绑定优先，由调用者负责关闭；
+SDK 默认检索器会在每次调用结束时释放其拥有的资源。
+
+## 关闭和能力状态
+
+```python
+agent = Agent(name="assistant", context_compression=False)
+print(agent.context_compression_status)  # 仅容量和状态，不包含提示词或凭证。
+```
+
+关闭后不改变模型输入，但容量准入仍然生效，未知容量也会在发送前报错。自定义 BaseLlm 适配器、外部 `codex`／`piagent`
+执行器和实时音视频不自动获得本 SDK 模型循环的压缩能力，应查看实际能力状态。
+恢复工具只读取当前应用、用户、Session、Agent 和分支授权的原始记录；索引不能代替授权源。
+压缩可能遗漏有用信息，实际质量应以自己的业务题单验证。
+
+### 默认索引准备与模型重排
+
+已配置在线 embedding 时，直接创建 `Agent(name="assistant")`，即默认开启
+`prepare_index=True` 和 `rerank=True`：在检索前准备本次可用材料的索引，并重排候选证据。准备阶段每次 invocation 累计最多 60 秒、512 条
+embedding 请求，随后仍使用原有 5 秒共享检索预算和独立 64 条调用池。可分别通过
+`index_preparation_timeout_seconds`、`index_preparation_max_calls` 调整准备上限。
+这会增加冷启动延迟和调用费用；整轮请求总时限不变，准备最多占当时剩余时间的一半。
+超时保留已完成批次、回退词项检索，后续可续建；未完成索引不会当作完整语义索引。
+没有 embedding 配置时不会创建向量索引。显式绑定的自定义检索器仍由调用者准备。
+
+重排和历史摘要沿用 Agent 自己的模型、地址与认证；方舟 Chat / Responses 辅助请求关闭 thinking，主回答配置不变。
+重排只输出合法候选 ID，不改写原文；超时或无效结果回退原顺序。默认每 invocation 最多 8 次、单次 4 秒、输出 256 tokens，
+输入另有 `reranking_input_limit=40000` 保守估算上限，并受模型容量及剩余检索/整轮时间约束。
+通过 `context_compression={"prepare_index": False}` 或 `{"rerank": False}` 可独立关闭。
+无 embedding 或 `retrieval="lexical"` 时不启用默认模型重排。不能确认关闭 thinking 的辅助模型配置不会切换到其他模型；
+重排回退，摘要返回受控错误。详情见开发者入门文档。

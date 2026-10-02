@@ -5,11 +5,14 @@ on:
   workflow_dispatch:
 
 jobs:
+  context-compression-gate:
+    uses: ./.github/workflows/context-compression-gate.yaml
+
   harness-sidecar-release-gate:
     uses: ./.github/workflows/harness-sidecar-release-gate.yaml
 
   build:
-    needs: harness-sidecar-release-gate
+    needs: [harness-sidecar-release-gate, context-compression-gate]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

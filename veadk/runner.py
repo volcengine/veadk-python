@@ -375,8 +375,9 @@ class Runner(ADKRunner):
             agent (google.adk.agents.base_agent.BaseAgent | veadk.agent.Agent):
                 The agent instance used to run interactions.
             short_term_memory (ShortTermMemory | None): Optional short-term memory; if
-                not provided and no external `session_service` is supplied, an in-memory
-                session service will be created.
+                not provided and no external `session_service` is supplied, SQLite
+                at ``./.adk/session.db`` preserves the project's sessions. Pass
+                ``ShortTermMemory(backend="local")`` for in-memory sessions.
             app_name (str): Application name. Defaults to `veadk_default_app`.
             user_id (str): Default user ID. Defaults to `veadk_default_user`.
             upload_inline_data_to_tos (bool): Whether to enable inline media upload. Defaults to `False`.
@@ -426,10 +427,13 @@ class Runner(ADKRunner):
                     f"Use session service {session_service} from short term memory."
                 )
             else:
-                logger.warning(
-                    "No short term memory or session service provided, use an in-memory one instead."
+                logger.info(
+                    "No session storage configured; using project SQLite at .adk/session.db."
                 )
-                short_term_memory = ShortTermMemory()
+                short_term_memory = ShortTermMemory(
+                    backend="sqlite",
+                    local_database_path=os.path.join(os.getcwd(), ".adk", "session.db"),
+                )
                 self.short_term_memory = short_term_memory
                 session_service = short_term_memory.session_service
 
