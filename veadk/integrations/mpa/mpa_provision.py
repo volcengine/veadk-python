@@ -36,6 +36,7 @@ SECRET_ENV_KEYS: frozenset[str] = frozenset(
         "FEISHU_APP_SECRET",
         "CHANNEL_STATE_ENCRYPTION_KEY",
         "CODEX_MCP_RUNTIME_API_KEY",
+        "MCP_TOKEN_SECRET",
     }
 )
 

@@ -17,6 +17,7 @@
 import asyncio
 import copy
 import re
+import secrets
 from unittest.mock import AsyncMock
 from contextlib import asynccontextmanager
 
@@ -89,6 +90,7 @@ class Registry:
 class Databases:
     def __init__(self):
         self.key = ""
+        self.mcp_key = ""
         self.seeded = []
         self.check = AsyncMock()
         self.close = AsyncMock()
@@ -102,6 +104,10 @@ class Databases:
     async def encryption_key(self, name, *, existing_key=""):
         assert not existing_key or existing_key == self.key
         return self.key
+
+    async def mcp_token_secret(self, name, *, preferred=""):
+        self.mcp_key = preferred.strip() or self.mcp_key or secrets.token_hex(32)
+        return self.mcp_key
 
     async def seed_runtime(self, name, agent_id, runtime_id):
         self.seeded.append((name, agent_id, runtime_id))
@@ -237,6 +243,9 @@ def test_create_and_repeat_deployment_preserve_only_legacy_channel_key(legacy):
         if legacy:
             databases.key = Fernet.generate_key().decode()
         first = await svc.deploy(template())
+        secret = env_map(cloud.runtimes["r-agent"])["MCP_TOKEN_SECRET"]
+        assert len(bytes.fromhex(secret)) == 32
+        assert secret not in str(first) and secret not in str(registry.row)
         cloud.runtimes["r-agent"]["Tags"].append(
             {"Key": "sys:tag:createdBy", "Value": "cloud-owner"}
         )
@@ -247,6 +256,7 @@ def test_create_and_repeat_deployment_preserve_only_legacy_channel_key(legacy):
         env = env_map(cloud.runtimes["r-agent"])
         assert env["PGDATABASE"] == database_name("account", "cn-beijing", "agent-one")
         assert env["AGENTKIT_RUNTIME_ID"] == "r-agent"
+        assert env["MCP_TOKEN_SECRET"] == secret
         assert (
             env["SKILL_SPACE_ID"]
             == first["skill_space_id"]
@@ -262,6 +272,7 @@ def test_create_and_repeat_deployment_preserve_only_legacy_channel_key(legacy):
         await svc.deploy(changed)
         assert len(cloud.creates) == 1 and len(cloud.updates) == 2
         assert len(cloud.space_creates) == 1
+        assert env_map(cloud.runtimes["r-agent"])["MCP_TOKEN_SECRET"] == secret
         assert (
             env_map(cloud.runtimes["r-agent"]).get("CHANNEL_STATE_ENCRYPTION_KEY", "")
             == databases.key
@@ -283,6 +294,10 @@ def test_lost_create_response_reuses_client_token_and_rejects_changed_retry():
         await svc.deploy(template())
         assert len(cloud.runtimes) == 1
         assert cloud.creates[0]["ClientToken"] == cloud.creates[1]["ClientToken"]
+        assert (
+            env_map(cloud.creates[0])["MCP_TOKEN_SECRET"]
+            == env_map(cloud.creates[1])["MCP_TOKEN_SECRET"]
+        )
 
     asyncio.run(run())
 
@@ -321,6 +336,7 @@ def test_reference_template_does_not_copy_agent_or_bot_credentials():
         {"Key": k, "Value": "reference-secret"}
         for k in [
             "CHANNEL_STATE_ENCRYPTION_KEY",
+            "MCP_TOKEN_SECRET",
             "FEISHU_APP_ID",
             "FEISHU_APP_SECRET",
             "AGENTKIT_RUNTIME_ID",
@@ -335,6 +351,70 @@ def test_reference_template_does_not_copy_agent_or_bot_credentials():
     assert env_map(result)["MPA_AGENT_ID"] == "another-agent"
     assert "reference-secret" not in str(result)
     assert result["NetworkConfiguration"]["EnablePrivateNetwork"]
+
+
+@pytest.mark.parametrize("configured", [None, "", " \t ", "test-explicit-mcp-secret"])
+def test_managed_mcp_secret_prefers_explicit_then_current(configured):
+    async def run():
+        svc, registry, cloud, databases = deployer()
+        requested = template()
+        if configured is not None:
+            requested["Envs"].append({"Key": "MCP_TOKEN_SECRET", "Value": configured})
+        await svc.deploy(requested)
+        first = env_map(cloud.runtimes["r-agent"])["MCP_TOKEN_SECRET"]
+        if configured and configured.strip():
+            assert first == configured
+        # The active target Runtime wins over an absent/blank template value,
+        # even when the saved bootstrap database value is older.
+        cloud.runtimes["r-agent"]["Envs"] = [
+            item
+            for item in cloud.runtimes["r-agent"]["Envs"]
+            if item["Key"] != "MCP_TOKEN_SECRET"
+        ] + [{"Key": "MCP_TOKEN_SECRET", "Value": "test-active-mcp-secret"}]
+        await svc.deploy(requested)
+        expected = (
+            configured
+            if configured and configured.strip()
+            else "test-active-mcp-secret"
+        )
+        assert env_map(cloud.runtimes["r-agent"])["MCP_TOKEN_SECRET"] == expected
+        assert databases.mcp_key == expected
+        assert expected not in str(registry.row)
+
+    asyncio.run(run())
+
+
+def test_managed_mcp_secret_storage_failure_prevents_runtime_creation():
+    async def run():
+        svc, _, cloud, databases = deployer()
+        databases.mcp_token_secret = AsyncMock(
+            side_effect=RuntimeError("storage unavailable")
+        )
+        with pytest.raises(RuntimeError, match="storage unavailable"):
+            await svc.deploy(template())
+        assert not cloud.creates and not cloud.updates
+
+    asyncio.run(run())
+
+
+def test_changed_secret_on_unfinished_retry_does_not_poison_original_request():
+    async def run():
+        svc, _, cloud, databases = deployer()
+        cloud.lose_create_response = True
+        with pytest.raises(TimeoutError):
+            await svc.deploy(template())
+        original = databases.mcp_key
+        changed = template()
+        changed["Envs"].append(
+            {"Key": "MCP_TOKEN_SECRET", "Value": "test-changed-mcp-secret"}
+        )
+        with pytest.raises(DeploymentError, match="unfinished"):
+            await svc.deploy(changed)
+        assert databases.mcp_key == original
+        await svc.deploy(template())
+        assert env_map(cloud.runtimes["r-agent"])["MCP_TOKEN_SECRET"] == original
+
+    asyncio.run(run())
 
 
 def test_lost_skill_space_response_recovers_without_duplicate_or_blind_retry():

@@ -234,6 +234,7 @@ def template_from_runtime(runtime, agent_id):
         "AGENTKIT_RUNTIME_ID",
         "A2A_PUBLIC_URL",
         "CODEX_MCP_RUNTIME_API_KEY",
+        "MCP_TOKEN_SECRET",
         "MODEL_AGENT_CLIENT_REQ_ID",
         "CHANNEL_STATE_ENCRYPTION_KEY",
         "FEISHU_APP_ID",
@@ -462,6 +463,16 @@ class AgentRuntimeDeployer:
                 env.pop("OTEL_SERVICE_NAME", None)
             if key:
                 env["CHANNEL_STATE_ENCRYPTION_KEY"] = key
+            stored_mcp_secret = await self.databases.mcp_token_secret(name)
+            env["MCP_TOKEN_SECRET"] = (
+                source_env.get("MCP_TOKEN_SECRET", "").strip()
+                or (
+                    env_map(current).get("MCP_TOKEN_SECRET", "").strip()
+                    if current
+                    else ""
+                )
+                or stored_mcp_secret
+            )
             desired = {
                 **template,
                 "Name": current["Name"] if current else agent_id,
@@ -534,6 +545,10 @@ class AgentRuntimeDeployer:
             if record.get("pending") and record.get("request_hash") != digest:
                 raise DeploymentError(
                     "An unfinished deployment has different inputs; resume its original configuration first"
+                )
+            if env["MCP_TOKEN_SECRET"] != stored_mcp_secret:
+                await self.databases.mcp_token_secret(
+                    name, preferred=env["MCP_TOKEN_SECRET"]
                 )
             record.update(pending=True, request_hash=digest)
             await entry.save(record)

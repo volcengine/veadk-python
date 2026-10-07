@@ -116,3 +116,7 @@ canonical per-session path:
 `/sandbox-session/tool-{tool_id}/session-{session_id}/`. It MUST fail closed if
 the Runtime flag is enabled but the bucket is absent. Existing
 Sessions and externally supplied Tools are not mutated.
+
+## Persistent MCP signing secret
+
+Runtime provisioning injects `MCP_TOKEN_SECRET` before CreateRuntime/UpdateRuntime. A nonblank explicit value wins; otherwise the target Runtime's existing nonblank value is retained, or 32 random bytes are generated as 64 hex characters. Caller-owned environment mappings are unchanged. Endpoint/API Key finalization reuses the same value. Blank values count as missing. Explicit values are masked in dry-run output. The Runtime stores the key in environment configuration, and provisioning results do not expose it. Existing deployments change only on explicit redeployment. See the [secret provisioning design](../../prd-spec/bugfixes/mpa-runtime-mcp-secret/2026-10-07-persistent-mcp-secret.md) and the managed retry boundary in [Studio creation](../studio-mpa-creation/README.md).

@@ -25,6 +25,7 @@ from veadk.integrations.mpa.mpa_provision import (
     derive_claw_space_id,
     generate_mpa_agent_id,
     mask_secret,
+    redact_env_for_display,
     tool_name_for_agent,
     validate_mpa_agent_id,
     workload_identity_name,
@@ -233,6 +234,17 @@ def test_mask_secret_hides_middle() -> None:
     # Very short secrets are fully masked.
     assert set(mask_secret("ab")) == {"*"}
     assert "CODEX_MCP_RUNTIME_API_KEY" in SECRET_ENV_KEYS
+
+
+def test_mcp_secret_is_masked_in_environment_preview():
+    secret = "test-explicit-mcp-secret"
+    env = build_runtime_env(
+        _params(extra_env={"MCP_TOKEN_SECRET": secret}),
+        public_endpoint="https://runtime.example.com",
+    )
+    assert "MCP_TOKEN_SECRET" in SECRET_ENV_KEYS
+    assert env["MCP_TOKEN_SECRET"] == secret
+    assert secret not in str(redact_env_for_display(env))
 
 
 def test_runtime_jwt_bypass_default_and_explicit_override() -> None:

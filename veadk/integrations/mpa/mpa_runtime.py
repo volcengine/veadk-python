@@ -246,11 +246,25 @@ def provision_runtime(
 
     runtime_id = _find_runtime_by_name(client, name)
     reused = bool(runtime_id)
+    envs = dict(envs)
+    mcp_secret = envs.get("MCP_TOKEN_SECRET", "").strip()
     minimum_version: int | None = None
     if reused:
         # Converge an explicitly named retry to the requested image, Tool, and
         # env rather than creating a duplicate or accepting stale config.
         current = client.get_runtime(rt.GetRuntimeRequest(runtime_id=runtime_id))
+        if not mcp_secret:
+            mcp_secret = next(
+                (
+                    item.value.strip()
+                    for item in (getattr(current, "envs", None) or [])
+                    if item.key == "MCP_TOKEN_SECRET"
+                    and item.value
+                    and item.value.strip()
+                ),
+                "",
+            )
+        envs["MCP_TOKEN_SECRET"] = mcp_secret or secrets.token_hex(32)
         minimum_version = int(getattr(current, "current_version_number", 0) or 0)
         client.update_runtime(
             rt.UpdateRuntimeRequest(
@@ -268,6 +282,7 @@ def provision_runtime(
             )
         )
     else:
+        envs["MCP_TOKEN_SECRET"] = mcp_secret or secrets.token_hex(32)
         create = client.create_runtime(
             rt.CreateRuntimeRequest(
                 Name=name,
