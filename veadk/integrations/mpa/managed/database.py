@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import secrets
 import uuid
 from contextlib import asynccontextmanager
 
@@ -278,6 +279,42 @@ class AgentDatabaseProvisioner:
         record.setdefault("client_token", str(uuid.uuid4()))
         await entry.save(record)
         return name
+
+    async def mcp_token_secret(self, name: str, *, preferred: str = "") -> str:
+        """Persist the signing secret before cloud creation, including retries."""
+        engine = postgres_engine(self.runtime_url(name))
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(
+                    text(
+                        "CREATE TABLE IF NOT EXISTS mpa_deployment_settings "
+                        "(name TEXT PRIMARY KEY, value TEXT NOT NULL)"
+                    )
+                )
+                value = preferred.strip() or secrets.token_hex(32)
+                replacement = (
+                    "EXCLUDED.value"
+                    if preferred.strip()
+                    else (
+                        "CASE WHEN btrim(mpa_deployment_settings.value) = '' "
+                        "THEN EXCLUDED.value ELSE mpa_deployment_settings.value END"
+                    )
+                )
+                key = await conn.scalar(
+                    text(
+                        "INSERT INTO mpa_deployment_settings (name, value) "
+                        "VALUES ('mcp_token_secret', :value) "
+                        "ON CONFLICT (name) DO UPDATE SET value = "
+                        + replacement
+                        + " RETURNING value"
+                    ),
+                    {"value": value},
+                )
+                if not key or not key.strip():
+                    raise DeploymentError("Stored MCP signing secret is empty")
+                return key
+        finally:
+            await engine.dispose()
 
     async def encryption_key(self, name: str, *, existing_key: str = "") -> str:
         """Recover an old channel key for legacy reads; never generate a new one."""

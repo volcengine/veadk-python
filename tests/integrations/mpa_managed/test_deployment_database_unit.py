@@ -65,6 +65,48 @@ class Engine:
     begin = connect
 
 
+@pytest.mark.parametrize("preferred", ["", "test-current-mcp-secret"])
+def test_mcp_secret_is_atomically_persisted_and_connection_disposed(
+    db_factory, preferred
+):
+    async def run():
+        db, engine = db_factory(scalars=[preferred or "test-stored-mcp-secret"])
+        result = await db.mcp_token_secret("business", preferred=preferred)
+        assert result == (preferred or "test-stored-mcp-secret")
+        sql, params = engine.conn.sql[-1]
+        assert "ON CONFLICT" in sql and "RETURNING value" in sql
+        if preferred:
+            assert params["value"] == preferred
+            assert "EXCLUDED.value" in sql
+        else:
+            assert len(bytes.fromhex(params["value"])) == 32
+            assert "mpa_deployment_settings.value" in sql
+        engine.dispose.assert_awaited_once()
+
+    asyncio.run(run())
+
+
+def test_mcp_secret_database_error_propagates_and_disposes_connection(db_factory):
+    async def run():
+        db, engine = db_factory(scalars=[RuntimeError("database unavailable")])
+        with pytest.raises(RuntimeError, match="database unavailable"):
+            await db.mcp_token_secret("business")
+        engine.dispose.assert_awaited_once()
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("stored", [None, "", " \t "])
+def test_mcp_secret_rejects_empty_database_result(db_factory, stored):
+    async def run():
+        db, engine = db_factory(scalars=[stored])
+        with pytest.raises(mod.DeploymentError, match="MCP signing secret is empty"):
+            await db.mcp_token_secret("business")
+        engine.dispose.assert_awaited_once()
+
+    asyncio.run(run())
+
+
 @pytest.fixture
 def db_factory(monkeypatch):
     def make(*, row=None, scalars=()):

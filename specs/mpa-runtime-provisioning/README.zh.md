@@ -106,3 +106,7 @@ stdin 在内存中传递，不得进入 sessionStorage、任务 SQLite 或任务
 `/sandbox-session/tool-{tool_id}/session-{session_id}/` 设置
 `CreateSessionRequest.TosMountPoints`。如果 Runtime 开关已启用但 bucket 缺失，必须
 关闭式失败。已有 Session 和外部指定 Tool 不做变更。
+
+## 固定 MCP 签名密钥
+
+Runtime 创建在 CreateRuntime/UpdateRuntime 前注入 `MCP_TOKEN_SECRET`。显式非空值优先；否则保留目标 Runtime 已有非空值，或生成 32 随机字节并编码为 64 位十六进制字符串。不修改调用方的环境变量字典。地址/API Key 回填沿用同一值。空白值视为未配置。dry-run 输出对显式值脱敏。Runtime 将密钥保存于环境变量配置，创建返回值不暴露密钥。存量部署仅在显式重新部署时变更。参见[密钥创建设计](../../prd-spec/bugfixes/mpa-runtime-mcp-secret/2026-10-07-persistent-mcp-secret.zh.md)及 [Studio 创建](../studio-mpa-creation/README.zh.md)的托管重试边界。

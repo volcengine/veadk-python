@@ -117,3 +117,7 @@ CON-10 元数据可见性：区分初始化元数据缺失和显式冲突。具�
 ### 托管沙箱模板命名 (CON-3)
 
 新托管沙箱模板使用去掉两端空白、将所有 `-` 替换为 `_` 的智能体 ID（例如 `mi-example` → `mi_example`）。已有 worker ID 仍为权威绑定，不重命名。变更前未完成的创建意图，仅在完整旧请求与已存 worker_hash 匹配时保留哈希名称，并保留 ClientToken。其他请求变更和无关同名资源仍报错。作用域所有权标签及 Runtime ToolId 绑定不变。
+
+## 托管 MCP 签名密钥
+
+每个托管 MPA Runtime 均配置 `MCP_TOKEN_SECRET`。显式模板环境变量非空值优先于目标 Runtime 值，后者优先于 Agent 专属 PostgreSQL `mpa_deployment_settings` 表中的 `mcp_token_secret`。全部缺失时生成 32 随机字节、编码为 64 位十六进制字符串，并在云创建前持久化。原子插入或保留已有值确保不确定创建结果的重试稳定。仅在校验未完成请求摘要后同步显式值/当前值，避免被拒绝的变更重试破坏原请求。数据库失败终止创建并释放连接。参考 Runtime 模板排除源 Agent 密钥；显式 JSON 模板可配置密钥。回填沿用密钥，正常返回值及共享非敏感部署登记记录不包含密钥。不新增前端字段或自动迁移存量部署。参见[双语设计](../../prd-spec/bugfixes/mpa-runtime-mcp-secret/2026-10-07-persistent-mcp-secret.zh.md)。
