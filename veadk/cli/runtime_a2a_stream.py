@@ -47,7 +47,7 @@ class A2AStreamDecoder:
         self._usage_snapshots: dict[str, dict[str, int]] = {}
         self._terminal_state = ""
         self._sandbox_final_answers: dict[str, set[str]] = {}
-        self._projected_sandbox_ids: set[tuple[str, str]] = set()
+        self._projected_sandbox_ids: set[tuple[str, str, str, str]] = set()
 
     def feed(self, chunk: str | bytes) -> list[dict[str, Any]]:
         text = (
@@ -133,7 +133,12 @@ class A2AStreamDecoder:
             if is_sandbox and isinstance(item_metadata, Mapping):
                 source_id = str(item_metadata.get("sourceEventId") or "")
                 if source_id and task_id != "unknown":
-                    sandbox_key = (task_id, source_id)
+                    sandbox_key = (
+                        task_id,
+                        str(item.get("invocationId") or ""),
+                        str(item_metadata.get("eventType") or ""),
+                        source_id,
+                    )
                     if sandbox_key in self._projected_sandbox_ids:
                         continue
                     self._projected_sandbox_ids.add(sandbox_key)
@@ -435,6 +440,16 @@ def _frame_payload(frame: str) -> dict[str, Any] | None:
 def _a2a_event_id(result: Mapping[str, Any]) -> str:
     artifact = result.get("artifact")
     if not isinstance(artifact, Mapping):
+        return ""
+    # MPA frames can bundle new events with replayed parts, and one source ID
+    # can produce both usage and completion. Deduplicate these per event in
+    # project(), rather than dropping the whole frame using its first part.
+    if any(
+        isinstance(part, Mapping)
+        and isinstance(part.get("metadata"), Mapping)
+        and part["metadata"].get("schemaVersion") == "mpa.sandbox-event.v1"
+        for part in artifact.get("parts") or []
+    ):
         return ""
     for part in artifact.get("parts") or []:
         if not isinstance(part, Mapping):

@@ -261,6 +261,88 @@ def test_decoder_deduplicates_replayed_a2a_events():
     assert decoder.feed(frame) == []
 
 
+@pytest.mark.parametrize("through_feed", [False, True])
+@pytest.mark.parametrize("usage_first", [False, True])
+def test_mpa_shared_source_id_preserves_usage_and_final(through_feed, usage_first):
+    decoder = A2AStreamDecoder(mpa_a2a=True)
+    usage = _mpa_artifact("usage.updated", {"totalTokens": 100}, event_id="shared")
+    final = _mpa_artifact(
+        "invocation.completed", {"finalMessage": "Final answer."}, event_id="shared"
+    )
+    events = [usage, final] if usage_first else [final, usage]
+    output = []
+    for event in events * 2:
+        frames = decoder.feed(_frame(event)) if through_feed else [{"result": event}]
+        for frame in frames:
+            output.extend(decoder.project(frame["result"], author="default"))
+    assert [item["customMetadata"]["eventType"] for item in output] == [
+        event["artifact"]["parts"][0]["data"]["eventType"] for event in events
+    ]
+    assert len({item["id"] for item in output}) == 2
+    assert (
+        sum(item.get("usageMetadata", {}).get("totalTokenCount", 0) for item in output)
+        == 100
+    )
+    assert decoder.project(_outer_result(), author="default") == []
+
+
+def test_mpa_multipart_replay_retains_new_part_and_invocation():
+    decoder = A2AStreamDecoder(mpa_a2a=True)
+
+    def consume(event):
+        return [
+            item
+            for frame in decoder.feed(_frame(event))
+            for item in decoder.project(frame["result"], author="default")
+        ]
+
+    first = _mpa_artifact(
+        "tool.call", {"name": "read", "commandId": "cmd"}, event_id="shared"
+    )
+    final = _mpa_artifact(
+        "invocation.completed", {"finalMessage": "Done."}, event_id="shared"
+    )
+    assert len(consume(first)) == 1
+    combined = {
+        **first,
+        "artifact": {
+            **first["artifact"],
+            "parts": first["artifact"]["parts"] + final["artifact"]["parts"],
+        },
+    }
+    assert consume(combined)[0]["turnComplete"] is True
+    assert consume(combined) == []
+    final["artifact"]["parts"][0]["data"]["invocationId"] = "another-invocation"
+    assert len(consume(final)) == 1
+    assert len(consume({**final, "taskId": "another-task"})) == 1
+
+
+@pytest.mark.parametrize("event_type", ["invocation.failed", "invocation.cancelled"])
+def test_mpa_usage_does_not_hide_same_id_terminal_failure(event_type):
+    decoder = A2AStreamDecoder(mpa_a2a=True)
+    output = []
+    for event in [
+        _mpa_artifact("usage.updated", {"totalTokens": 10}, event_id="shared"),
+        _mpa_artifact(event_type, {"message": "Interrupted"}, event_id="shared"),
+    ]:
+        for frame in decoder.feed(_frame(event)):
+            output.extend(decoder.project(frame["result"], author="default"))
+    assert [item["customMetadata"]["eventType"] for item in output] == [
+        "usage.updated",
+        event_type,
+    ]
+
+
+def test_mpa_missing_source_ids_are_not_deduplicated():
+    decoder = A2AStreamDecoder(mpa_a2a=True)
+    event = _mpa_artifact("message.delta", {"text": "Repeat"})
+    event["artifact"]["parts"][0]["data"]["eventId"] = ""
+    for _ in range(2):
+        frames = decoder.feed(_frame(event))
+        assert len(frames) == 1
+        assert len(decoder.project(frames[0]["result"], author="default")) == 1
+
+
 def test_maps_sandbox_tool_and_text_delta_to_studio_events():
     envelope = {
         "kind": "artifact-update",

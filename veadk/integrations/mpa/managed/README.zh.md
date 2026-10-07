@@ -39,6 +39,18 @@ managed:
 仓库测试不执行线上迁移或云资源分配。限制和验证情况参见[自动 PG 设计](../../../../prd-spec/features/mpa-space-scoped-resources/2026-09-23-auto-pg-workspaces.zh.md)。
 
 
+## 共享网络与网关准备
+
+Studio 不固定已有 VPC/子网/APIG ID。准备 PostgreSQL 后，按核验后的账号和地域，
+读取 `mpa_admin_workspace/mpa_admin_db` 的 `mpa_account_network` 和
+`mpa_account_apig`。已登记资源经校验后复用；缺失的 VPC/子网及 APIG/IM Gateway
+在部署 Runtime 前创建并保存，后续智能体复用相同记录。账号锁和持久化创建意图
+保护并发请求及重试，避免重复创建。
+
+已有记录（包括此前接管的资源）保持不变。本次不迁移已有智能体，也不替换配额
+耗尽的 VPC。配额或权限错误仍报告失败；提高配额或迁移共享网络属于独立操作。
+重启本地 Studio（云端则重新部署）后加载新默认配置。CLI 显式网络/APIG 接管仍受支持。
+
 ## CLI YAML 与手动 / 旧模式服务端配置
 
 1. 复制[示例 YAML](../../../../prd-spec/features/mpa-agent-oneclick-provision/mpa-create.config.example.yaml) 到私有的 `mpa-create.config.yaml`。填写后的配置不要进入 Git。
@@ -53,7 +65,7 @@ managed:
 
 ## 在 Studio 使用
 
-新执行 `veadk studio deploy` 后，托管创建会从服务端 VeFaaS 环境自动复用该 Studio 的 UserPool、客户端、Identity 地域和 `/oauth/callback`。Studio 无需创建 YAML，直接使用代码内置的北京地域账号、VPC/子网、APIG、Runtime/worker 镜像及模型默认值；模型 API Key 仍从 `VEADK_MPA_CONFIG_MODEL_AGENT_API_KEY` 读取。独立 CLI YAML 若显式填写不同的 `user-pool-name`、`user-pool-client-name`、`identity-callback-url`、`identity-region` 或对应的 `managed.runtime.env` 值，配置检查会在云写入前失败。此前部署的 Studio 须重新部署才能获得这些值。没有 Studio 环境值的独立 `veadk mpa provision` 仍使用显式 YAML。共享 PostgreSQL Workspace 在后续创建 MPA 时才准备，并非部署时的 Identity 存储。
+新执行 `veadk studio deploy` 后，托管创建会从服务端 VeFaaS 环境自动复用该 Studio 的 UserPool、客户端、Identity 地域和 `/oauth/callback`。Studio 无需创建 YAML，直接使用代码内置的北京地域账号、Runtime/worker 镜像及模型默认值；模型 API Key 仍从 `VEADK_MPA_CONFIG_MODEL_AGENT_API_KEY` 读取。独立 CLI YAML 若显式填写不同的 `user-pool-name`、`user-pool-client-name`、`identity-callback-url`、`identity-region` 或对应的 `managed.runtime.env` 值，配置检查会在云写入前失败。此前部署的 Studio 须重新部署才能获得这些值。没有 Studio 环境值的独立 `veadk mpa provision` 仍使用显式 YAML。共享 PostgreSQL Workspace 在后续创建 MPA 时才准备，并非部署时的 Identity 存储。
 
 选择**智能体 → MPA 智能体 → 创建 MPA 智能体**。三步依次填写基础信息、PostgreSQL 自动准备说明，以及可选的 OpenViking 服务地址/资源 ID/API Key。生成的智能体 ID 为只读。PG 步骤提供[火山引擎 AIDAP 控制台](https://console.volcengine.com/aidap/region:aidap+cn-beijing/)入口；服务端在提交后取得 Workspace 连接。OpenViking 步骤提供[上下文管理控制台](https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing/ov-6689fabdf032294/context-management?accountId=default&userId=default&projectName=default)入口；该页面地址不是要填写的服务地址。PG 凭据仍由服务端配置。同时填写 OpenViking 地址、资源 ID 和遮罩的 API Key 时，注入 `OPENVIKING_URL`、`OPENVIKING_RESOURCE_ID`、`OPENVIKING_API_KEY` 和 `OPENVIKING_USER=default`。三项全空时不注入这些变量，模板或参考 Runtime 中的旧值也不会继承。密钥不保存到浏览器草稿或任务 SQLite，浏览器重启后须重新填写。查看资源计划后在第三步提交。流程依次准备账号网络/APIG/IM Gateway、worker、独立业务库和 Skill Space，然后部署并检查 Runtime 和应用就绪状态。成功后刷新列表。
 
@@ -210,3 +222,7 @@ sqlite3 -readonly .adk/mpa-creation.sqlite3 "SELECT task_id,datetime(created,'un
 ## Studio Runtime 鉴权默认配置
 
 Flat 创建默认设置 `ENABLE_A2A=true` 和 `DISABLE_JWT_AUTH=true`。绕过旧版 REST 内层 JWT 校验，包括其管理权限检查和 header 身份路径；可信 Studio/网关调用方必须控制身份 header。外层网关 key-auth 和 `A2A_TIP_VERIFY_ENABLED=false` 不变。Studio 对控制面识别的 MPA 优先使用可用 Agent Card，即使 `/list-apps` 同时广告 ADK，也选择 `a2a-default`；普通 Runtime 和无可用卡片的 MPA 保持原发现逻辑。跳过原生会话 Profile 前置查询，不跳过独立管理鉴权，不迁移旧会话。仍支持显式 `managed.runtime.env` 覆盖，包括 `DISABLE_JWT_AUTH=false`；引用 Runtime/模板环境保持不变。已有 Runtime 环境变化需显式更新配置并发布；在 Studio 重新连接以刷新发现结果。不启用 `MPA_AGENTKIT_MODE`。后端发现变化需重启 Studio，不需要重建前端。
+
+### 托管沙箱模板命名
+
+新托管沙箱模板使用去掉两端空白、将所有 `-` 替换为 `_` 的智能体 ID（例如 `mi-example` → `mi_example`）。已有 worker ID 仍为权威绑定，不重命名。变更前未完成的创建意图，仅在完整旧请求与已存 worker_hash 匹配时保留哈希名称，并保留 ClientToken。其他请求变更和无关同名资源仍报错。作用域所有权标签及 Runtime ToolId 绑定不变。
