@@ -18,6 +18,7 @@ import type {
   MessageFeedbackState,
 } from "./adk/client";
 import { i18n } from "./i18n/runtime";
+import { addTokenUsage, EMPTY_SESSION_TOKEN_USAGE } from "./adk/tokenUsage";
 import type { A2uiMessage } from "./a2ui/types";
 import type { SandboxTokenUsage } from "./adk/sandbox";
 import type { ProjectFile } from "./create/project";
@@ -116,7 +117,14 @@ export type Block = {
   | { kind: "turn-summary"; value: DevelopmentTurnMetrics }
   | { kind: "diff"; text: string; done: boolean }
   | { kind: "progress"; text: string }
-  | { kind: "thinking"; text: string; done: boolean }
+  | { kind: "activity-source"; label: string }
+  | {
+      kind: "thinking";
+      reasoningSegmentId?: string;
+      text: string;
+      done: boolean;
+      thoughtKind?: "reasoning" | "thought";
+    }
   | { kind: "text"; text: string }
   | {
       kind: "tool";
@@ -127,6 +135,7 @@ export type Block = {
       done: boolean;
       status?: "running" | "completed" | "failed";
       defaultOpen?: boolean;
+      source?: "codex-sandbox" | "studio" | "runtime";
       codexActivity?: CodexSandboxActivity;
       progressText?: string;
     }
@@ -171,10 +180,15 @@ export interface Acc {
 }
 
 export interface TurnMeta {
+  a2aStatus?: string;
   author?: string;
   localId?: string;
   streaming?: boolean;
   tokens?: number;
+  /** MPA A2A request usage deltas keyed by source/event identity. */
+  mpaUsage?: Record<string, number>;
+  /** Nonempty sandbox final, used only by the MPA A2A presentation view. */
+  mpaFinalAnswer?: string;
   ts?: number; // epoch seconds
   eventId?: string;
   invocationId?: string;
@@ -206,6 +220,7 @@ export function emptyAcc(): Acc {
 }
 
 const MAX_PENDING_CODEX_PROGRESS = 64;
+const MAX_SEEN_EVENT_IDS = 2_048;
 
 function applyCodexProgressToTool(
   blocks: Block[],
@@ -221,7 +236,10 @@ function applyCodexProgressToTool(
     if (block.kind !== "tool" || block.name !== progress.toolName) continue;
     if (block.callId === progress.requestId) {
       if (block.done) return "completed";
-      block.codexActivity = applyCodexSandboxProgress(block.codexActivity, progress);
+      block.codexActivity = applyCodexSandboxProgress(
+        block.codexActivity,
+        progress,
+      );
       block.status = progress.terminalStatus ?? "running";
       if (progress.terminalStatus) block.done = true;
       return "applied";
@@ -237,7 +255,10 @@ function applyCodexProgressToTool(
   if (fallbackIndex >= 0) {
     const block = blocks[fallbackIndex];
     if (block.kind !== "tool") return "unmatched";
-    block.codexActivity = applyCodexSandboxProgress(block.codexActivity, progress);
+    block.codexActivity = applyCodexSandboxProgress(
+      block.codexActivity,
+      progress,
+    );
     block.status = progress.terminalStatus ?? "running";
     if (progress.terminalStatus) block.done = true;
     return "applied";
@@ -250,10 +271,13 @@ function codexResponseStatus(response: unknown): "completed" | "failed" {
     return "completed";
   }
   const result = response as Record<string, unknown>;
-  const status = typeof result.status === "string" ? result.status.toLowerCase() : "";
+  const status =
+    typeof result.status === "string" ? result.status.toLowerCase() : "";
   if (
-    result.ok === false
-    || ["error", "failed", "denied", "declined", "cancelled", "timeout"].includes(status)
+    result.ok === false ||
+    ["error", "failed", "denied", "declined", "cancelled", "timeout"].includes(
+      status,
+    )
   ) {
     return "failed";
   }
@@ -261,7 +285,8 @@ function codexResponseStatus(response: unknown): "completed" | "failed" {
 }
 
 function codexDirectAnswer(response: unknown): string {
-  if (!response || typeof response !== "object" || Array.isArray(response)) return "";
+  if (!response || typeof response !== "object" || Array.isArray(response))
+    return "";
   const result = response as Record<string, unknown>;
   if (result.ok !== true || typeof result.message !== "string") return "";
   return result.message.trim();
@@ -282,6 +307,136 @@ export interface AssistantEventProjection {
 const fnCall = (p: AdkPart) => p.functionCall ?? p.function_call;
 const fnResp = (p: AdkPart) => p.functionResponse ?? p.function_response;
 
+function eventMetadata(ev: AdkEvent): Record<string, unknown> {
+  const metadata = ev.customMetadata ?? ev.custom_metadata;
+  return metadata && typeof metadata === "object" && !Array.isArray(metadata)
+    ? (metadata as Record<string, unknown>)
+    : {};
+}
+
+function nestedMetadata(
+  metadata: Record<string, unknown>,
+  key: string,
+): Record<string, unknown> {
+  const value = metadata[key];
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function metadataString(metadata: Record<string, unknown>, key: string): string {
+  const value = metadata[key];
+  return typeof value === "string" ? value : "";
+}
+
+function mpaMetadata(ev: AdkEvent): Record<string, unknown> {
+  return nestedMetadata(eventMetadata(ev), "mpa");
+}
+
+function mpaEventType(ev: AdkEvent): string {
+  const metadata = eventMetadata(ev);
+  const mpa = mpaMetadata(ev);
+  return (
+    metadataString(metadata, "eventType") ||
+    metadataString(metadata, "event_type") ||
+    metadataString(mpa, "eventType") ||
+    metadataString(mpa, "event_type") ||
+    metadataString(mpa, "kind")
+  );
+}
+
+function isMpaSandboxEvent(ev: AdkEvent): boolean {
+  const metadata = eventMetadata(ev);
+  const mpa = mpaMetadata(ev);
+  return (
+    metadataString(metadata, "source") === "sandbox" ||
+    metadataString(mpa, "source") === "sandbox"
+  );
+}
+
+function isMpaUsageEvent(ev: AdkEvent): boolean {
+  const eventType = mpaEventType(ev);
+  return eventType === "usage.updated" || eventType === "usage";
+}
+
+function isFinalAlreadyEmittedSandboxResponse(ev: AdkEvent): boolean {
+  return (ev.content?.parts ?? []).some((part) => {
+    const response = fnResp(part);
+    const payload = response?.response;
+    return (
+      response?.name === "sandbox_task" &&
+      payload &&
+      typeof payload === "object" &&
+      !Array.isArray(payload) &&
+      (payload as Record<string, unknown>).finalAlreadyEmitted === true
+    );
+  });
+}
+
+function completeSandboxTaskBlocks(blocks: Block[]) {
+  for (const block of blocks) {
+    if (block.kind !== "tool" || block.name !== "sandbox_task" || block.done) {
+      continue;
+    }
+    block.done = true;
+    block.status = "completed";
+  }
+}
+
+function toolNamesMatch(left: string, right: string): boolean {
+  if (left === right) return true;
+  const commandAliases = new Set([
+    "exec_command",
+    "commandExecution",
+    "command_execution",
+    "Run command",
+  ]);
+  return commandAliases.has(left) && commandAliases.has(right);
+}
+
+function toolResponseState(
+  response: unknown,
+  partial = false,
+): { done: boolean; status: "running" | "completed" | "failed" } {
+  const responseStatus =
+    response && typeof response === "object"
+      ? String((response as Record<string, unknown>).status ?? "").toLowerCase()
+      : "";
+  const failed =
+    ["failed", "error", "cancelled", "denied", "timeout"].includes(
+      responseStatus,
+    ) || (response as Record<string, unknown> | undefined)?.ok === false;
+  const running = ["running", "started", "working"].includes(
+    responseStatus,
+  );
+  return {
+    done: failed || !(partial || running),
+    status: failed ? "failed" : partial || running ? "running" : "completed",
+  };
+}
+
+export function flattenCodexActivityBlocks(blocks: Block[]): Block[] {
+  return blocks.flatMap((block) => {
+    if (
+      block.kind !== "tool" ||
+      block.name !== "delegate_to_codex_sandbox" ||
+      !block.codexActivity?.items.length
+    )
+      return [block];
+    return [
+      {
+        kind: "activity-source" as const,
+        label: block.codexActivity.title || "Codex Sandbox",
+      },
+      ...block.codexActivity.items.map(({ block: child }) =>
+        child.kind === "tool"
+          ? { ...child, source: "codex-sandbox" as const }
+          : child,
+      ),
+    ];
+  });
+}
+
 function transferAgentName(args: unknown): string {
   if (!args || typeof args !== "object") return "";
   const record = args as Record<string, unknown>;
@@ -301,18 +456,20 @@ export function attachmentsFromParts(parts: AdkPart[]): AttachmentView[] {
   const files: AttachmentView[] = [];
   for (const [index, p] of parts.entries()) {
     const metadata = (p.partMetadata ?? p.part_metadata) as
-      | Record<string, unknown>
-      | undefined;
-    const transport = metadata?.veadkTransport as Record<string, unknown> | undefined;
+      Record<string, unknown> | undefined;
+    const transport = metadata?.veadkTransport as
+      Record<string, unknown> | undefined;
     if (transport?.hidden === true) continue;
     const stored = metadata?.veadkMedia as Record<string, unknown> | undefined;
     if (typeof stored?.uri === "string") {
       files.push({
         id: String(stored.id ?? stored.uri),
-        mimeType: typeof stored.mimeType === "string" ? stored.mimeType : undefined,
+        mimeType:
+          typeof stored.mimeType === "string" ? stored.mimeType : undefined,
         uri: stored.uri,
         name: typeof stored.name === "string" ? stored.name : undefined,
-        sizeBytes: typeof stored.sizeBytes === "number" ? stored.sizeBytes : undefined,
+        sizeBytes:
+          typeof stored.sizeBytes === "number" ? stored.sizeBytes : undefined,
       });
       continue;
     }
@@ -342,9 +499,9 @@ export function attachmentsFromParts(parts: AdkPart[]): AttachmentView[] {
 
 function visiblePartText(part: AdkPart): string | undefined {
   const metadata = (part.partMetadata ?? part.part_metadata) as
-    | Record<string, unknown>
-    | undefined;
-  const transport = metadata?.veadkTransport as Record<string, unknown> | undefined;
+    Record<string, unknown> | undefined;
+  const transport = metadata?.veadkTransport as
+    Record<string, unknown> | undefined;
   return transport?.hideText === true ? undefined : part.text;
 }
 
@@ -357,7 +514,9 @@ const AGENT_NODE_TYPES = new Set<AgentNodeType>([
 ]);
 
 /** Restore slash-skill and @agent selections persisted in part metadata. */
-export function invocationFromParts(parts: AdkPart[]): FrontendInvocation | undefined {
+export function invocationFromParts(
+  parts: AdkPart[],
+): FrontendInvocation | undefined {
   for (const part of parts) {
     const raw = (part.partMetadata ?? part.part_metadata)?.veadkInvocation;
     if (!raw || typeof raw !== "object") continue;
@@ -367,10 +526,15 @@ export function invocationFromParts(parts: AdkPart[]): FrontendInvocation | unde
           if (!item || typeof item !== "object") return [];
           const skill = item as Record<string, unknown>;
           return typeof skill.name === "string"
-            ? [{
+            ? [
+                {
                 name: skill.name,
-                description: typeof skill.description === "string" ? skill.description : "",
-              }]
+                  description:
+                    typeof skill.description === "string"
+                      ? skill.description
+                      : "",
+                },
+              ]
             : [];
         })
       : [];
@@ -388,9 +552,12 @@ export function invocationFromParts(parts: AdkPart[]): FrontendInvocation | unde
       ) {
         targetAgent = {
           name: target.name,
-          description: typeof target.description === "string" ? target.description : "",
+          description:
+            typeof target.description === "string" ? target.description : "",
           type: type as AgentNodeType,
-          path: target.path.filter((item): item is string => typeof item === "string"),
+          path: target.path.filter(
+            (item): item is string => typeof item === "string",
+          ),
         };
       }
     }
@@ -406,24 +573,55 @@ function appendAttachments(blocks: Block[], files: AttachmentView[]) {
   else blocks.push({ kind: "attachment", files });
 }
 
-function appendArtifacts(blocks: Block[], files: { filename: string; version: number }[]) {
+function appendArtifacts(
+  blocks: Block[],
+  files: { filename: string; version: number }[],
+) {
   if (!files.length) return;
   const last = blocks[blocks.length - 1];
   if (last?.kind === "artifact") {
     for (const file of files) {
-      if (!last.files.some((item) =>
-        item.filename === file.filename && item.version === file.version
-      )) last.files.push(file);
+      if (
+        !last.files.some(
+          (item) =>
+            item.filename === file.filename && item.version === file.version,
+        )
+      )
+        last.files.push(file);
     }
     return;
   }
   blocks.push({ kind: "artifact", files });
 }
 
-function appendText(blocks: Block[], kind: "thinking" | "text", text: string) {
+function appendText(
+  blocks: Block[],
+  kind: "thinking" | "text",
+  text: string,
+  thoughtKind?: "reasoning" | "thought",
+) {
   const last = blocks[blocks.length - 1];
-  if (last && last.kind === kind) last.text += text;
-  else blocks.push(kind === "thinking" ? { kind, text, done: false } : { kind, text });
+  if (
+    last &&
+    last.kind === kind &&
+    (last.kind !== "thinking" || last.thoughtKind === thoughtKind)
+  )
+    last.text += text;
+  else
+    blocks.push(
+      kind === "thinking"
+        ? { kind, text, done: false, thoughtKind }
+        : { kind, text },
+    );
+}
+
+function thoughtKindOf(event: AdkEvent): "reasoning" | "thought" {
+  const metadata = event.customMetadata ?? event.custom_metadata;
+  if (metadata && typeof metadata === "object") {
+    const value = (metadata as Record<string, unknown>).thoughtKind;
+    if (value === "reasoning" || value === "thought") return value;
+  }
+  return "reasoning";
 }
 
 function closeThinking(blocks: Block[]) {
@@ -431,10 +629,26 @@ function closeThinking(blocks: Block[]) {
 }
 
 /** Apply one ADK event to a turn accumulator, returning a new accumulator. */
-export function applyEvent(acc: Acc, ev: AdkEvent): Acc {
+export function applyEvent(acc: Acc, ev: AdkEvent, options: { mpaA2a?: boolean } = {}): Acc {
   const blocks = acc.blocks.map((b) => ({ ...b }));
   let liveStart = acc.liveStart;
   let pendingCodexProgress = acc.pendingCodexProgress.slice();
+  if (isMpaUsageEvent(ev) && !options.mpaA2a) {
+    return { blocks, liveStart, pendingCodexProgress };
+  }
+  if (isFinalAlreadyEmittedSandboxResponse(ev)) {
+    // The Runtime has already streamed the sandbox answer and uses this
+    // wrapper response only as the parent tool's completion signal. Preserve
+    // those live answer deltas while closing the parent activity card. Keep
+    // the preview replaceable by a later persisted sandbox final event.
+    completeSandboxTaskBlocks(blocks);
+    closeThinking(blocks);
+    return {
+      blocks,
+      liveStart,
+      pendingCodexProgress,
+    };
+  }
   const parts = ev.content?.parts ?? [];
   const progressUpdates = parts.flatMap((part) => {
     const progress = parseBranchCompareProgress(
@@ -453,14 +667,20 @@ export function applyEvent(acc: Acc, ev: AdkEvent): Acc {
       for (let index = blocks.length - 1; index >= 0; index -= 1) {
         const block = blocks[index];
         if (
-          block.kind !== "tool"
-          || block.done
-          || block.name !== progress.toolName
-          || (progress.requestId && block.callId && block.callId !== progress.requestId)
+          block.kind !== "tool" ||
+          block.done ||
+          block.name !== progress.toolName ||
+          (progress.requestId &&
+            block.callId &&
+            block.callId !== progress.requestId)
         ) {
           continue;
         }
-        block.response = applyBranchCompareProgress(block.args, block.response, progress);
+        block.response = applyBranchCompareProgress(
+          block.args,
+          block.response,
+          progress,
+        );
         block.status = "running";
         break;
       }
@@ -468,8 +688,9 @@ export function applyEvent(acc: Acc, ev: AdkEvent): Acc {
     for (const progress of codexProgressUpdates) {
       const outcome = applyCodexProgressToTool(blocks, progress);
       if (outcome === "unmatched") {
-        pendingCodexProgress = [...pendingCodexProgress, progress]
-          .slice(-MAX_PENDING_CODEX_PROGRESS);
+        pendingCodexProgress = [...pendingCodexProgress, progress].slice(
+          -MAX_PENDING_CODEX_PROGRESS,
+        );
       }
     }
     return { blocks, liveStart, pendingCodexProgress };
@@ -480,22 +701,49 @@ export function applyEvent(acc: Acc, ev: AdkEvent): Acc {
     // Streaming delta: append into the live-preview region.
     for (const p of parts) {
       const text = visiblePartText(p);
+      const segmentId = options.mpaA2a && p.thought
+        ? metadataString(eventMetadata(ev), "reasoningSegmentId") : "";
+      if (segmentId && typeof text === "string" && text) {
+        const previous = blocks.find((block) =>
+          block.kind === "thinking" && block.reasoningSegmentId === segmentId);
+        if (previous?.kind === "thinking") previous.text += text;
+        else blocks.push({ kind: "thinking", text, done: false,
+          thoughtKind: thoughtKindOf(ev), reasoningSegmentId: segmentId });
+        continue;
+      }
       if (typeof text === "string" && text)
-        appendText(blocks, p.thought ? "thinking" : "text", text);
+        appendText(
+          blocks,
+          p.thought ? "thinking" : "text",
+          text,
+          p.thought ? thoughtKindOf(ev) : undefined,
+        );
     }
     return { blocks, liveStart, pendingCodexProgress };
   }
 
   // Consolidated / final event: drop the live preview and append authoritative
   // content (merging consecutive same-kind text parts into one block).
+  // MPA finals can contain only the answer, without earlier outer/worker reasoning.
+  // Keep that reasoning unless this event explicitly supplies its replacement.
+  const preservedThinking = options.mpaA2a &&
+    !parts.some((part) => part.thought && visiblePartText(part))
+    ? blocks.slice(liveStart).filter((block) => block.kind === "thinking")
+    : [];
   blocks.length = liveStart;
+  blocks.push(...preservedThinking);
   for (const p of parts) {
     const fc = fnCall(p);
     const fr = fnResp(p);
     const files = attachmentsFromParts([p]);
     const text = visiblePartText(p);
     if (typeof text === "string" && text) {
-      appendText(blocks, p.thought ? "thinking" : "text", text);
+      appendText(
+        blocks,
+        p.thought ? "thinking" : "text",
+        text,
+        p.thought ? thoughtKindOf(ev) : undefined,
+      );
     } else if (files.length) {
       closeThinking(blocks);
       appendAttachments(blocks, files);
@@ -508,13 +756,17 @@ export function applyEvent(acc: Acc, ev: AdkEvent): Acc {
           ev.actions?.transfer_to_agent ||
           i18n.t("app:common.unknownAgent");
         blocks.push({ kind: "agent-transfer", agentName, done: false });
+      } else if (fc.name === "sandbox_task" && isMpaSandboxEvent(ev)) {
+        continue;
       } else if (fc.name === REQUEST_EUC) {
         // MCP/tool OAuth: render a dedicated auth card instead of a tool row.
         const args = (fc.args ?? {}) as Record<string, any>;
         const authConfig = args.authConfig ?? args.auth_config ?? args;
         // functionCallId looks like "_adk_toolset_auth_McpToolset"; surface the
         // toolset name so the card can say what is being authorized.
-        const rawId = String(args.functionCallId ?? args.function_call_id ?? "");
+        const rawId = String(
+          args.functionCallId ?? args.function_call_id ?? "",
+        );
         const label = rawId.replace(/^_adk_toolset_auth_/, "") || undefined;
         blocks.push({
           kind: "auth",
@@ -525,6 +777,23 @@ export function applyEvent(acc: Acc, ev: AdkEvent): Acc {
           done: false,
         });
       } else {
+        const existingTool = fc.id
+          ? [...blocks]
+              .reverse()
+              .find(
+                (block: Block) =>
+                  block.kind === "tool" && block.callId === fc.id,
+              )
+          : undefined;
+        if (existingTool?.kind === "tool") {
+          existingTool.name = fc.name ?? existingTool.name;
+          existingTool.args = fc.args ?? existingTool.args;
+          if (existingTool.response === undefined) {
+            existingTool.done = false;
+            existingTool.status = "running";
+          }
+          continue;
+        }
         const toolBlock: Extract<Block, { kind: "tool" }> = {
           kind: "tool",
           name: fc.name ?? "",
@@ -537,8 +806,8 @@ export function applyEvent(acc: Acc, ev: AdkEvent): Acc {
           const stillPending: CodexSandboxProgress[] = [];
           for (const progress of pendingCodexProgress) {
             if (
-              progress.toolName === toolBlock.name
-              && progress.requestId === toolBlock.callId
+              progress.toolName === toolBlock.name &&
+              progress.requestId === toolBlock.callId
             ) {
               applyCodexProgressToTool(blocks, progress);
             } else {
@@ -569,33 +838,63 @@ export function applyEvent(acc: Acc, ev: AdkEvent): Acc {
           }
         }
       }
+      let matchedTool = false;
       for (let i = blocks.length - 1; i >= 0; i--) {
         const b = blocks[i];
-        const isCodexTool = b.kind === "tool" && b.name === "delegate_to_codex_sandbox";
+        const isCodexTool =
+          b.kind === "tool" && b.name === "delegate_to_codex_sandbox";
         if (
-          b.kind === "tool"
-          && (!b.done || isCodexTool)
-          && b.name === fr.name
-          && (!fr.id || !b.callId || b.callId === fr.id)
+          b.kind === "tool" &&
+          (!b.done || isCodexTool || Boolean(fr.id && b.callId === fr.id)) &&
+          ((Boolean(fr.id) && Boolean(b.callId) && b.callId === fr.id) ||
+            ((!fr.id || !b.callId) && toolNamesMatch(b.name, fr.name ?? "")))
         ) {
           const previousAnswer = isCodexTool
             ? codexDirectAnswer(b.response)
             : "";
-          b.done = true;
+          const responseState = toolResponseState(
+            fr.response,
+            ev.partial === true,
+          );
+          b.done = responseState.done;
           b.response = fr.response;
+          b.status = responseState.status;
           if (isCodexTool) {
             b.codexActivity = hydrateCodexSandboxActivity(
               b.codexActivity,
               fr.response,
             );
-            b.status = codexResponseStatus(fr.response);
+            b.status =
+              responseState.status === "running"
+                ? "running"
+                : codexResponseStatus(fr.response);
             const answer = codexDirectAnswer(fr.response);
             if (answer && answer !== previousAnswer) {
               appendText(blocks, "text", answer);
             }
           }
+          matchedTool = true;
           break;
         }
+      }
+      if (
+        !matchedTool &&
+        fr.name !== TRANSFER_AGENT_TOOL &&
+        fr.name !== REQUEST_EUC &&
+        fr.name !== A2UI_TOOL
+      ) {
+        const responseState = toolResponseState(
+          fr.response,
+          ev.partial === true,
+        );
+        blocks.push({
+          kind: "tool",
+          name: fr.name ?? "",
+          callId: fr.id,
+          response: fr.response,
+          done: responseState.done,
+          status: responseState.status,
+        });
       }
       if (fr.name === A2UI_TOOL) {
         const msgs = (fr.response?.[VALIDATED_JSON_KEY] as A2uiMessage[]) ?? [];
@@ -611,8 +910,14 @@ export function applyEvent(acc: Acc, ev: AdkEvent): Acc {
   if (artifactDelta) {
     appendArtifacts(
       blocks,
-      Object.entries(artifactDelta).map(([filename, version]) => ({ filename, version })),
+      Object.entries(artifactDelta).map(([filename, version]) => ({
+        filename,
+        version,
+      })),
     );
+  }
+  if (isMpaSandboxEvent(ev) && mpaEventType(ev) === "invocation.completed") {
+    completeSandboxTaskBlocks(blocks);
   }
   closeThinking(blocks); // a consolidated thinking segment is complete
   liveStart = blocks.length;
@@ -621,6 +926,7 @@ export function applyEvent(acc: Acc, ev: AdkEvent): Acc {
 
 function completesAssistantResponse(ev: AdkEvent, blocks: Block[]): boolean {
   if (ev.partial === true) return false;
+  if (isFinalAlreadyEmittedSandboxResponse(ev)) return true;
   const parts = ev.content?.parts ?? [];
   const hasFinalAnswerPart = parts.some((part) => {
     const text = visiblePartText(part);
@@ -631,26 +937,42 @@ function completesAssistantResponse(ev: AdkEvent, blocks: Block[]): boolean {
   });
   const hasA2ui = parts.some((part) => {
     const response = fnResp(part);
-    return response?.name === A2UI_TOOL &&
+    return (
+      response?.name === A2UI_TOOL &&
       Array.isArray(response.response?.[VALIDATED_JSON_KEY]) &&
-      response.response[VALIDATED_JSON_KEY].length > 0;
+      response.response[VALIDATED_JSON_KEY].length > 0
+    );
   });
   const artifactDelta = ev.actions?.artifactDelta ?? ev.actions?.artifact_delta;
-  const hasArtifact = Boolean(artifactDelta && Object.keys(artifactDelta).length > 0);
-  const agentEnded = Boolean(
-    ev.actions?.endOfAgent ?? ev.actions?.end_of_agent ?? ev.actions?.escalate
+  const hasArtifact = Boolean(
+    artifactDelta && Object.keys(artifactDelta).length > 0,
   );
-  const hasAnswerBlock = blocks.some((block) =>
+  const agentEnded = Boolean(
+    ev.actions?.endOfAgent ?? ev.actions?.end_of_agent ?? ev.actions?.escalate,
+  );
+  const hasAnswerBlock = blocks.some(
+    (block) =>
     block.kind === "text" ||
     block.kind === "attachment" ||
     block.kind === "artifact" ||
     block.kind === "a2ui" ||
-    block.kind === "delivery"
+      block.kind === "delivery",
   );
-  return hasFinalAnswerPart || hasA2ui || hasArtifact || (agentEnded && hasAnswerBlock);
+  return (
+    hasFinalAnswerPart ||
+    hasA2ui ||
+    hasArtifact ||
+    (agentEnded && hasAnswerBlock)
+  );
+}
+
+function a2aStatusOf(ev: AdkEvent): string | undefined {
+  const status = (ev.customMetadata ?? ev.custom_metadata)?.a2aStatus;
+  return typeof status === "string" ? status : undefined;
 }
 
 function eventAffectsAssistantTurn(ev: AdkEvent): boolean {
+  if (a2aStatusOf(ev)) return true;
   const artifactDelta = ev.actions?.artifactDelta ?? ev.actions?.artifact_delta;
   if (artifactDelta && Object.keys(artifactDelta).length > 0) return true;
   return (ev.content?.parts ?? []).some((part) =>
@@ -658,9 +980,66 @@ function eventAffectsAssistantTurn(ev: AdkEvent): boolean {
       visiblePartText(part) ||
       attachmentsFromParts([part]).length > 0 ||
       fnCall(part) ||
-      fnResp(part)
-    )
+      fnResp(part),
+    ),
   );
+}
+
+/** Reconcile an authoritative outer snapshot, never a sandbox/token delta. */
+function reconcileMpaA2aReasoningSnapshot(acc: Acc, ev: AdkEvent): Acc {
+  const metadata = eventMetadata(ev);
+  const parts = ev.content?.parts ?? [];
+  if (
+    ev.partial !== false ||
+    metadata.projectionSource !== "a2a-artifact" ||
+    isMpaSandboxEvent(ev) ||
+    !parts.length ||
+    ev.actions ||
+    !parts.every((part) => part.thought && typeof part.text === "string" &&
+      !fnCall(part) && !fnResp(part) && attachmentsFromParts([part]).length === 0)
+  ) return acc;
+  const previous = acc.blocks[acc.blocks.length - 1];
+  const snapshot = parts.map((part) => part.text).join("").trim();
+  if (
+    previous?.kind !== "thinking" ||
+    !previous.text.trim() ||
+    !snapshot.startsWith(previous.text.trim())
+  ) return acc;
+  // Re-open only this adjacent snapshot's preview range. Other activity is kept.
+  return { ...acc, liveStart: acc.blocks.length - 1 };
+}
+
+/** MPA A2A can split one user request into outer and sandbox assistant turns. */
+export function shouldShowEmptyAssistantResponse(
+  turns: Turn[],
+  index: number,
+  hasVisibleContent: (turn: Turn) => boolean,
+  options: {
+    mpaA2a: boolean;
+    turnIsStreaming: boolean;
+    requestIsStreaming: boolean;
+  },
+): boolean {
+  const turn = turns[index];
+  if (!turn || turn.role !== "assistant" || options.turnIsStreaming || hasVisibleContent(turn)) {
+    return false;
+  }
+  if (!options.mpaA2a) return true;
+  let start = index;
+  while (start > 0 && turns[start - 1].role !== "user") start -= 1;
+  let end = index + 1;
+  while (end < turns.length && turns[end].role !== "user") end += 1;
+  if (end === turns.length && options.requestIsStreaming) return false;
+  const fragments = turns.slice(start, end);
+  if (fragments.some(hasVisibleContent)) return false;
+  // Empty status placeholders are not rendered, so anchor the notice to the
+  // last renderable fragment rather than a trailing heartbeat-only turn.
+  return !turns.slice(index + 1, end).some((fragment) => fragment.blocks.length > 0);
+}
+
+function isUserEchoEvent(ev: AdkEvent): boolean {
+  if (ev.author !== "user" && ev.content?.role !== "user") return false;
+  return !(ev.content?.parts ?? []).some((part) => fnCall(part) || fnResp(part));
 }
 
 /** Keep one mutable stream accumulator per active Agent response. Parallel
@@ -671,10 +1050,31 @@ function eventAffectsAssistantTurn(ev: AdkEvent): boolean {
 export function createAssistantEventProjector(
   localIdPrefix = "adk-stream",
   initialTurn?: Turn,
+  options: { mpaA2a?: boolean } = {},
 ) {
   let sequence = 0;
   const active = new Map<string, ActiveAssistantTurn>();
+  const seenEventIds = new Set<string>();
+  const eventIdOrder: string[] = [];
   let seededKey: string | undefined;
+  let latestMpaTurn: Turn | undefined;
+  let mpaUsage = { ...initialTurn?.meta?.mpaUsage };
+
+  const recordMpaUsage = (ev: AdkEvent): boolean => {
+    if (!options.mpaA2a || !(ev.usageMetadata ?? ev.usage_metadata)) return false;
+    const count = addTokenUsage(EMPTY_SESSION_TOKEN_USAGE, ev).current.totalTokenCount;
+    if (!count) return false;
+    const metadata = eventMetadata(ev);
+    const key = JSON.stringify([
+      metadata.source ?? "outer",
+      metadata.requestId ?? "",
+      ev.invocationId ?? ev.invocation_id ?? "",
+      ev.id || JSON.stringify(ev.usageMetadata ?? ev.usage_metadata),
+    ]);
+    if (Object.prototype.hasOwnProperty.call(mpaUsage, key)) return false;
+    mpaUsage = { ...mpaUsage, [key]: count };
+    return true;
+  };
 
   const keyFor = (author: string, invocationId: string) =>
     `${invocationId}\u0000${author}`;
@@ -682,7 +1082,8 @@ export function createAssistantEventProjector(
   if (initialTurn?.role === "assistant") {
     const author = initialTurn.meta?.author ?? "";
     const invocationId = initialTurn.meta?.invocationId ?? "";
-    const localId = initialTurn.meta?.localId ?? `${localIdPrefix}-${sequence++}`;
+    const localId =
+      initialTurn.meta?.localId ?? `${localIdPrefix}-${sequence++}`;
     const acc = emptyAcc();
     acc.blocks = initialTurn.blocks;
     acc.liveStart = initialTurn.blocks.length;
@@ -701,10 +1102,65 @@ export function createAssistantEventProjector(
 
   return {
     project(ev: AdkEvent): AssistantEventProjection {
-      const author = ev.author && ev.author !== "user" ? ev.author : "";
+      if (isUserEchoEvent(ev)) {
+        return {
+          turn: { role: "assistant", blocks: [] },
+          completed: false,
+          ignored: true,
+        };
+      }
+      const usageChanged = recordMpaUsage(ev);
+      // Usage is metadata, including deltas arriving after the final answer.
+      // Update the existing fragment; never manufacture a new empty reply.
+      if (
+        options.mpaA2a && !eventAffectsAssistantTurn(ev) &&
+        !ev.content?.parts?.length
+      ) {
+        if (usageChanged && latestMpaTurn) {
+          latestMpaTurn = {
+            ...latestMpaTurn,
+            meta: { ...latestMpaTurn.meta, mpaUsage },
+          };
+          return { turn: latestMpaTurn, completed: false };
+        }
+        return { turn: { role: "assistant", blocks: [] }, completed: false, ignored: true };
+      }
+      if (isMpaUsageEvent(ev) && !options.mpaA2a) {
+        return {
+          turn: { role: "assistant", blocks: [] },
+          completed: false,
+          ignored: true,
+        };
+      }
+      if (ev.id && seenEventIds.has(ev.id)) {
+        return {
+          turn: { role: "assistant", blocks: [] },
+          completed: false,
+          ignored: true,
+        };
+      }
+      if (ev.id) {
+        seenEventIds.add(ev.id);
+        eventIdOrder.push(ev.id);
+        if (eventIdOrder.length > MAX_SEEN_EVENT_IDS) {
+          seenEventIds.delete(eventIdOrder.shift()!);
+        }
+      }
+      const rawAuthor = ev.author && ev.author !== "user" ? ev.author : "";
       const invocationId = ev.invocationId ?? ev.invocation_id ?? "";
-      const key = keyFor(author, invocationId);
+      let author = isMpaSandboxEvent(ev) ? "" : rawAuthor;
+      let key = keyFor(author, invocationId);
       let state = active.get(key);
+      if (!state && isMpaSandboxEvent(ev) && invocationId) {
+        const existing = [...active.entries()].find(([candidate]) =>
+          candidate.startsWith(`${invocationId}\u0000`)
+        );
+        if (existing) {
+          key = existing[0];
+          state = existing[1];
+          author = state.meta.author ?? "";
+        }
+      }
       if (!state && seededKey) {
         const seeded = active.get(seededKey);
         if (seeded && (!seeded.meta.author || seeded.meta.author === author)) {
@@ -712,6 +1168,18 @@ export function createAssistantEventProjector(
           seededKey = undefined;
           state = seeded;
         }
+      }
+      // The MPA live stream can omit the persisted sandbox
+      // `invocation.completed` event and finish with only the wrapper response.
+      // Use that response to close the active parent tool. During history
+      // replay the completed sandbox event has already closed the turn, so the
+      // same wrapper response must remain ignored to avoid a duplicate card.
+      if (!state && isFinalAlreadyEmittedSandboxResponse(ev)) {
+        return {
+          turn: { role: "assistant", blocks: [] },
+          completed: false,
+          ignored: true,
+        };
       }
       if (!state && !eventAffectsAssistantTurn(ev)) {
         return {
@@ -725,11 +1193,18 @@ export function createAssistantEventProjector(
         state = {
           acc: emptyAcc(),
           localId,
-          meta: { author: author || undefined, invocationId: invocationId || undefined },
+          meta: {
+            author: author || undefined,
+            invocationId: invocationId || undefined,
+          },
         };
       }
 
-      state.acc = applyEvent(state.acc, ev);
+      state.acc = applyEvent(
+        options.mpaA2a ? reconcileMpaA2aReasoningSnapshot(state.acc, ev) : state.acc,
+        ev,
+        options,
+      );
       const usage = ev.usageMetadata ?? ev.usage_metadata;
       const completed = completesAssistantResponse(ev, state.acc.blocks);
       state.meta = {
@@ -737,7 +1212,15 @@ export function createAssistantEventProjector(
         author: author || state.meta.author,
         localId: state.localId,
         streaming: !completed,
+        a2aStatus: a2aStatusOf(ev),
         tokens: usage?.totalTokenCount || state.meta.tokens,
+        ...(options.mpaA2a ? {
+          mpaUsage,
+          mpaFinalAnswer: isMpaSandboxEvent(ev) && mpaEventType(ev) === "invocation.completed"
+            ? (ev.content?.parts ?? []).filter((part) => !part.thought)
+              .map((part) => visiblePartText(part) ?? "").join("").trim() || undefined
+            : state.meta.mpaFinalAnswer,
+        } : {}),
         ts: ev.timestamp || state.meta.ts,
         invocationId: invocationId || state.meta.invocationId,
         eventId: completed && ev.id ? ev.id : state.meta.eventId,
@@ -747,20 +1230,32 @@ export function createAssistantEventProjector(
         blocks: state.acc.blocks,
         meta: state.meta,
       };
-      if (completed) {
+      const awaitsPersistedSandboxFinal =
+        completed && isFinalAlreadyEmittedSandboxResponse(ev);
+      if (completed && !awaitsPersistedSandboxFinal) {
         active.delete(key);
         seededKey = undefined;
       } else {
+        // Keep the terminal wrapper state addressable until transport finish.
+        // Some stored/replayed streams can still deliver the authoritative
+        // sandbox invocation.completed event immediately after the wrapper.
         active.set(key, state);
       }
+      if (options.mpaA2a) latestMpaTurn = turn;
       return { turn, completed };
     },
 
     finish(): Turn[] {
       const turns = [...active.values()].map((state): Turn => ({
         role: "assistant",
-        blocks: state.acc.blocks,
-        meta: { ...state.meta, streaming: false },
+        blocks: state.acc.blocks.map((block) =>
+          block.kind === "thinking" ? { ...block, done: true } : block
+        ),
+        meta: {
+          ...state.meta,
+          streaming: false,
+          ...(options.mpaA2a ? { mpaUsage } : {}),
+        },
       }));
       active.clear();
       return turns;
@@ -768,7 +1263,10 @@ export function createAssistantEventProjector(
   };
 }
 
-export function upsertProjectedAssistantTurn(turns: Turn[], projected: Turn): Turn[] {
+export function upsertProjectedAssistantTurn(
+  turns: Turn[],
+  projected: Turn,
+): Turn[] {
   const localId = projected.meta?.localId;
   if (!localId) return [...turns, projected];
   const index = turns.findIndex((turn) => turn.meta?.localId === localId);
@@ -782,9 +1280,13 @@ export function upsertProjectedAssistantTurn(turns: Turn[], projected: Turn): Tu
 export function eventsToTurns(
   events: AdkEvent[],
   sessionState: Record<string, unknown> = {},
+  options: { mpaA2a?: boolean } = {},
 ): Turn[] {
   let turns: Turn[] = [];
-  let projector = createAssistantEventProjector("adk-history");
+  let historySegment = 0;
+  const nextProjector = () =>
+    createAssistantEventProjector(`adk-history-${historySegment++}`, undefined, options);
+  let projector = nextProjector();
   for (const ev of events) {
     // Classify by author only: function-response events are authored by the
     // agent but carry content.role === "user", so a role-based check would
@@ -799,7 +1301,10 @@ export function eventsToTurns(
           if (turns[i].role !== "assistant") continue;
           for (let j = turns[i].blocks.length - 1; j >= 0; j--) {
             const b = turns[i].blocks[j];
-            if (b.kind === "auth") { b.done = true; break; }
+            if (b.kind === "auth") {
+              b.done = true;
+              break;
+            }
           }
           break;
         }
@@ -822,6 +1327,7 @@ export function eventsToTurns(
       if (files.length) blocks.push({ kind: "attachment", files });
       if (text) blocks.push({ kind: "text", text });
       turns.push({ role: "user", blocks, meta: { ts: ev.timestamp } });
+      projector = nextProjector();
     } else {
       const projection = projector.project(ev);
       if (!projection.ignored) {

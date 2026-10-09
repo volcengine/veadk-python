@@ -1,3 +1,5 @@
+import { MpaCronTasks } from "./MpaCronTasks";
+import type { MpaRuntime } from "../adk/mpaCronTasks";
 import {
   useCallback,
   useEffect,
@@ -77,6 +79,7 @@ import { CronJobFinalAnswer } from "./CronJobFinalAnswer";
 import "./CronJobs.css";
 
 interface CronJobsProps {
+  selectedRuntime?: MpaRuntime;
   cloudProvider: CloudProvider;
 }
 
@@ -560,7 +563,8 @@ function JobDetail({
   );
 }
 
-export function CronJobs({ cloudProvider }: CronJobsProps) {
+export function CronJobs({ cloudProvider, selectedRuntime }: CronJobsProps) {
+  const [source, setSource] = useState("studio");
   useTranslation("cronjobs");
   const [jobs, setJobs] = useState<CronJob[]>([]);
   const [runtimes, setRuntimes] = useState<CloudRuntime[]>([]);
@@ -745,6 +749,11 @@ export function CronJobs({ cloudProvider }: CronJobsProps) {
         title={cronText("page.title")}
       />
       <ResourceToolbar>
+        <ResourceTabs idPrefix="cronjobs-source" ariaLabel={cronText("mpa.source")} value={source}
+          items={[{id: "studio", label: cronText("mpa.studio")}, {id: "runtime", label: cronText("mpa.title")}]} onChange={setSource} />
+      </ResourceToolbar>
+      {source === "runtime" ? <ResourceResults><MpaCronTasks runtime={selectedRuntime} /></ResourceResults> : <>
+      <ResourceToolbar>
         <ResourceTabs
           idPrefix="cronjobs-filter"
           ariaLabel={cronText("page.filterLabel")}
@@ -761,6 +770,7 @@ export function CronJobs({ cloudProvider }: CronJobsProps) {
       <ResourceResults aria-label={cronText("page.listLabel")}>
         {loading && jobs.length === 0 ? <ResourceLoadingState /> : error ? <EmptyMessage className="cronjobs-state" fill="none"><EmptyMessage.Icon color="danger"><Clock /></EmptyMessage.Icon><EmptyMessage.Title color="danger">{cronText("page.loadFailed")}</EmptyMessage.Title><EmptyMessage.Description>{error}</EmptyMessage.Description><EmptyMessage.ActionRow><Button type="button" color="secondary" variant="outline" size="lg" pill={false} onClick={() => void load()}><ArrowRotateCw />{cronText("actions.retry")}</Button></EmptyMessage.ActionRow></EmptyMessage> : <JobList jobs={visibleJobs} canCreate={!loading && runtimes.length > 0} onCreate={() => setDrawerJob(null)} onSelect={(job) => setSelectedId(job.jobId)} />}
       </ResourceResults>
+      </>}
       {drawerJob !== undefined ? <Drawer job={drawerJob} runtimes={runtimes} cloudProvider={cloudProvider} busy={busyAction.endsWith(":save")} onClose={() => setDrawerJob(undefined)} onSubmit={submitDrawer} /> : null}
     </ResourcePageShell>
   );

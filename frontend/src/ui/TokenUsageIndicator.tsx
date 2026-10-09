@@ -98,6 +98,13 @@ export function TokenUsageIndicator({
         { kind: "remaining" as const, tokens: composition.remainingTokens },
       ]
     : [];
+  const detailRows = [
+    [t("tokenUsage.details.input"), usage.current.promptTokenCount, usage.cumulative.promptTokenCount],
+    [t("tokenUsage.details.output"), usage.current.candidatesTokenCount, usage.cumulative.candidatesTokenCount],
+    [t("tokenUsage.details.reasoning"), usage.current.thoughtsTokenCount, usage.cumulative.thoughtsTokenCount],
+    [t("tokenUsage.details.cache"), usage.current.cachedContentTokenCount, usage.cumulative.cachedContentTokenCount],
+    [t("tokenUsage.details.total"), usage.current.totalTokenCount, usage.cumulative.totalTokenCount],
+  ] as const;
 
   return (
     <div
@@ -226,6 +233,20 @@ export function TokenUsageIndicator({
         )}
         <div className="token-usage-tooltip__model" title={modelLabel}>
           {modelLabel}
+        </div>
+        <div className="token-usage-detail">
+          <div className="token-usage-detail__head">
+            <span>{t("tokenUsage.category")}</span>
+            <span>{t("tokenUsage.currentTurn")}</span>
+            <span>{t("tokenUsage.sessionTotal")}</span>
+          </div>
+          {detailRows.map(([label, current, cumulative]) => (
+            <div className="token-usage-detail__row" key={label}>
+              <span>{label}</span>
+              <strong>{integerFormat.format(current)}</strong>
+              <strong>{integerFormat.format(cumulative)}</strong>
+            </div>
+          ))}
         </div>
       </div>
     </div>

@@ -27,6 +27,9 @@ const PHASE_KEYS: Record<string, string> = {
   publish: "client.deploymentProgress.publishing",
   evaluation: "client.deploymentProgress.evaluating",
   update: "client.deploymentProgress.updating",
+  profile_applying: "client.deploymentProgress.applyingMpaProfile",
+  smoke_running: "client.deploymentProgress.runningMpaSmoke",
+  runnable: "client.deploymentProgress.mpaReady",
   complete: "client.deploymentProgress.completing",
   github: "client.deploymentProgress.github",
 };

@@ -227,12 +227,12 @@ test("refreshes selection context when a streaming reply finishes", () => {
   assert.match(selectionContextSync, /responseAnnotationContextsRef\.current = contexts/);
   assert.match(
     selectionContextSync,
-    /assistantTurnIsStreaming\([\s\S]*?turn,[\s\S]*?index,[\s\S]*?turns\.length,[\s\S]*?activeConversationBusy,[\s\S]*?presentingStream/,
+    /assistantTurnIsStreaming\([\s\S]*?turn,[\s\S]*?index,[\s\S]*?transcriptTurns\.length,[\s\S]*?activeConversationBusy,[\s\S]*?presentingStream/,
   );
   assert.match(selectionContextSync, /enabled: Boolean\(/);
   assert.match(
     selectionContextSync,
-    /\[\s*activeConversationBusy,[\s\S]*?presentingStream,[\s\S]*?responseAnnotationRuntimeAvailable,[\s\S]*?turns,[\s\S]*?\]/,
+    /\[\s*activeConversationBusy,[\s\S]*?presentingStream,[\s\S]*?responseAnnotationRuntimeAvailable,[\s\S]*?transcriptTurns,[\s\S]*?\]/,
   );
 });
 
@@ -245,7 +245,7 @@ test("submits the annotation as a bad-case feedback sample", () => {
   assert.match(appSource, /cloudProvider !== "byteplus"/);
   assert.match(
     appSource,
-    /const turnIsStreaming = assistantTurnIsStreaming\([\s\S]*?turn,[\s\S]*?i,[\s\S]*?turns\.length/,
+    /const turnIsStreaming = assistantTurnIsStreaming\([\s\S]*?turn,[\s\S]*?i,[\s\S]*?transcriptTurns\.length/,
   );
   assert.match(appSource, /!turnIsStreaming/);
   assert.match(clientSource, /const comment = args\.comment \?\? ""/);

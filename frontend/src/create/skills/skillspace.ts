@@ -69,12 +69,13 @@ export interface SkillSpacePageOptions {
   page: number;
   pageSize: number;
   project?: string;
+  signal?: AbortSignal;
 }
 
-async function jfetch<T>(url: string): Promise<T> {
+async function jfetch<T>(url: string, signal?: AbortSignal): Promise<T> {
   const res = await fetch(withAuth(url), {
     headers: withLocaleHeaders(withLocalUser({ accept: "application/json" })),
-    signal: requestSignal(undefined, DEFAULT_REQUEST_TIMEOUT_MS),
+    signal: requestSignal(signal, DEFAULT_REQUEST_TIMEOUT_MS),
   });
   if (!res.ok) {
     throw await skillApiErrorFromResponse(
@@ -123,6 +124,7 @@ export async function listSkillsInSpacePage(
   if (options.project) params.set("project", options.project);
   return jfetch<SkillSpacePage<SkillSpaceSkill>>(
     `/web/skill-spaces/${encodeURIComponent(spaceId)}/skills?${params.toString()}`,
+    options.signal,
   );
 }
 

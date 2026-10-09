@@ -1470,7 +1470,15 @@ def test_volcengine_studio_update_repairs_missing_snapshot_tools_and_oauth_callb
             "web_origin": "https://studio.example.com",
             "dismiss_login_page_enabled": False,
             "skip_consent_enabled": True,
-        }
+        },
+        {
+            "user_pool_uid": "legacy-user-pool",
+            "client_uid": "legacy-user-pool-client",
+            "callback_url": "https://studio.example.com/oauth/callback",
+            "web_origin": "https://studio.example.com",
+            "dismiss_login_page_enabled": False,
+            "skip_consent_enabled": True,
+        },
     ]
     assert len(code_tools) == 1
     assert code_tools[0]["enable_snapshot"] is True
@@ -2052,7 +2060,8 @@ def test_release_failure_includes_status_when_logs_are_empty(
     assert "未发现可下载的 FaaS 数据面日志链接。" in message
     assert "最终 VeFaaS 状态" in message
     assert "runtime start failed" in message
-    assert "sensitive-token-value" in message
+    assert "sensitive-token-value" not in message
+    assert "******" in message
 
 
 def test_release_failure_downloads_linked_log_before_redaction(
@@ -2115,10 +2124,11 @@ def test_release_failure_downloads_linked_log_before_redaction(
     assert "内容:" in message
     assert "pip install failed" in message
     assert "missing distribution" in message
-    assert raw_url in message
-    assert "raw-token-secret" in message
-    assert "sensitive-token-value" in message
-    assert "be37d28bd7cf12e90" in message
+    assert "step-c4183.log" in message
+    assert raw_url not in message
+    assert "raw-token-secret" not in message
+    assert "sensitive-token-value" not in message
+    assert "be37d28bd7cf12e90" not in message
 
 
 def test_release_failure_uses_byteplus_labels_for_linked_logs(
@@ -2169,9 +2179,10 @@ def test_release_failure_uses_byteplus_labels_for_linked_logs(
     assert "Control Plane Logs" in message
     assert "FaaS Data Plane Logs" in message
     assert "Final VeFaaS Status" in message
-    assert raw_url in message
-    assert "raw-token-secret" in message
-    assert "sensitive-token-value" in message
+    assert "step-c4183.log" in message
+    assert raw_url not in message
+    assert "raw-token-secret" not in message
+    assert "sensitive-token-value" not in message
 
 
 def test_update_application_code_bundle_preserves_unspecified_sandbox_tool(

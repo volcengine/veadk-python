@@ -189,9 +189,9 @@ test("environments are mounted dynamically after a Session exists", () => {
   assert.match(appSource, /if \(!valid\) throw new Error\(appText\("errors\.environmentExpired"\)\)/);
   assert.match(appSource, /setEnvironmentMountsBySession\(\(current\) => \(\{/);
   assert.match(appSource, /ENVIRONMENT_STUDIO_TOOL_IDS = \[[\s\S]*?"list_envs"[\s\S]*?"get_env_manifest"[\s\S]*?"execute_in_sandbox"[\s\S]*?"delegate_to_codex_sandbox"/);
-  assert.match(appSource, /selections\.length > 0[\s\S]*?ENVIRONMENT_STUDIO_TOOL_IDS[\s\S]*?selectedIds\.filter/);
-  assert.match(appSource, /const visibleStudioTools = studioToolCapabilities\?\.tools\.filter/);
-  assert.match(appSource, /managedStudioToolIds=\{selectedEnvironmentMounts\.length > 0/);
+  assert.match(appSource, /environmentMounts\.length > 0 && studioToolRuntime[\s\S]*?ENVIRONMENT_STUDIO_TOOL_IDS/);
+  assert.doesNotMatch(appSource, /const visibleStudioTools = studioToolCapabilities\?\.tools\.filter/);
+  assert.doesNotMatch(appSource, /managedStudioToolIds=\{selectedEnvironmentMounts\.length > 0/);
   assert.match(appSource, /environmentMounts: studioToolRuntime && environmentMounts\.length > 0/);
   assert.doesNotMatch(appSource, /environmentsLocked/);
 });
@@ -268,8 +268,8 @@ test("environment picker stays in Agent info below skills", () => {
   assert.doesNotMatch(pickerSource, /固定已添加的环境|环境集合已固定/);
   assert.match(railSource, /<ModuleTitle title=\{t\("agentTopology\.environment"\)\}/);
   assert.match(railSource, /<SessionEnvironmentPicker/);
-  assert.match(railSource, /tool\.custom && tool\.removable/);
-  assert.match(railSource, /!managedIds\.has\(tool\.id\)/);
+  assert.doesNotMatch(railSource, /tool\.custom && tool\.removable/);
+  assert.doesNotMatch(railSource, /!managedIds\.has\(tool\.id\)/);
   assert.ok(
     railSource.indexOf('title={t("agentTopology.environment")}') >
       railSource.indexOf('title={t("agentTopology.skills")}'),

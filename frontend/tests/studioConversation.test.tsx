@@ -38,6 +38,7 @@ const auth: Extract<Block, { kind: "auth" }> = { kind: "auth", callId: "auth", l
 it("maps every Studio Block kind in order while retaining identities and state", () => {
   const all: Block[] = [
     { kind: "progress", text: "准备查询" },
+    { kind: "activity-source", label: "主智能体" },
     { kind: "thinking", text: "检查数据范围", done: true },
     { kind: "text", text: "正文" },
     { kind: "tool", name: "query", args: { q: 1 }, response: { rows: 2 }, done: false, status: "completed", defaultOpen: true },
@@ -53,13 +54,13 @@ it("maps every Studio Block kind in order while retaining identities and state",
   const turn: Turn = { role: "assistant", blocks: all, meta: { localId: "local", eventId: "event", author: "主智能体", streaming: true, tokens: 123 } };
   const message = fromStudioTurns([turn])[0];
   expect(message).toMatchObject({ id: "local", role: "assistant", name: "主智能体", status: "running", tokens: 123 });
-  expect(message.blocks?.map(block => block.type)).toEqual(["reasoning", "reasoning", "markdown", "tool", "plan", "handoff", "custom", "files", "files", "custom", "custom", "authorization"]);
+  expect(message.blocks?.map(block => block.type)).toEqual(["reasoning", "custom", "reasoning", "markdown", "tool", "plan", "handoff", "custom", "files", "files", "custom", "custom", "authorization"]);
   expect(message.blocks?.map(block => block.id)).toEqual(all.map((_, index) => `local:${index}`));
   expect(message.blocks?.[0]).toMatchObject({ status: "running" });
-  expect(message.blocks?.[1]).toMatchObject({ status: "complete", content: "检查数据范围" });
-  expect(message.blocks?.[3]).toMatchObject({ status: "complete", input: '{\n  "q": 1\n}', output: '{\n  "rows": 2\n}', defaultOpen: true });
-  expect(message.blocks?.[4]).toMatchObject({ items: [{ status: "pending" }, { status: "running" }, { status: "complete" }, { status: "error" }] });
-  expect(message.blocks?.[5]).toMatchObject({ fromAgent: "主智能体", toAgent: "分析智能体", status: "running" });
+  expect(message.blocks?.[2]).toMatchObject({ status: "complete", content: "检查数据范围" });
+  expect(message.blocks?.[4]).toMatchObject({ status: "complete", input: '{\n  "q": 1\n}', output: '{\n  "rows": 2\n}', defaultOpen: true });
+  expect(message.blocks?.[5]).toMatchObject({ items: [{ status: "pending" }, { status: "running" }, { status: "complete" }, { status: "error" }] });
+  expect(message.blocks?.[6]).toMatchObject({ fromAgent: "主智能体", toAgent: "分析智能体", status: "running" });
   expect(fromStudioTurns([{ role: "user", blocks: [{ kind: "text", text: "问题" }], meta: { eventId: "user" } }, { role: "system", blocks: [] }]).map(item => [item.id, item.role])).toEqual([["user", "user"], ["turn-1", "system"]]);
 });
 

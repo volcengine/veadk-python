@@ -99,7 +99,7 @@ test("BytePlus feedback buttons are visible but do not submit evaluation feedbac
 test("chat feedback row has no evaluation case shortcut", () => {
   assert.doesNotMatch(appSource, /const openCurrentAgentCases/);
   assert.match(appSource, /feedbackCasePreview=\{feedbackCasePreview\}/);
-  assert.match(appSource, /previousUserTurnText\(turns, i\)/);
+  assert.match(appSource, /previousUserTurnText\(transcriptTurns, i\)/);
   assert.match(appSource, /rateAssistantTurn\(\s*turn,\s*feedbackRating === "good" \? null : "good",\s*feedbackInput,\s*\)/);
   assert.match(appSource, /rateAssistantTurn\(\s*turn,\s*feedbackRating === "bad" \? null : "bad",\s*feedbackInput,\s*\)/);
 });

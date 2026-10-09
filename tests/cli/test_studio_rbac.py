@@ -21,6 +21,7 @@ import json
 import logging
 import re
 import time
+import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Event
@@ -37,6 +38,7 @@ from fastapi.testclient import TestClient
 from veadk.cli.cli_frontend import (
     _adapt_migration_model_envs,
     _anchor_environment_registry,
+    _build_mpa_identity_runtime_env,
     _create_runtime_with_description_fallback,
     _is_malformed_runtime_description_error,
     _mcp_deployment_error_detail,
@@ -60,6 +62,48 @@ from veadk.cli.studio_rbac import (
     runtime_attribution,
     runtime_belongs_to,
 )
+
+
+def _mpa_p0_compat_manifest(**overrides: object) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "schemaVersion": 1,
+        "veadkRevision": "a" * 40,
+        "runtimeRevision": "b" * 40,
+        "runtimeImageDigest": "sha256:" + "c" * 64,
+        "mpaProfileSchemaVersion": 1,
+        "agentkitSdkVersion": "0.8.5",
+        "runtimeExecutionCapability": "urn:veadk:mpa:execution:v1",
+        "sessionExecutionConfigSchemaVersion": 1,
+        "workerProtocol": "codex",
+        "workerRequiredEndpoints": [
+            "/health",
+            "/ready",
+            "/v1/sessions",
+            "/v1/sessions/{session_id}/turns",
+            "/v1/sessions/{session_id}/events",
+        ],
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_build_mpa_identity_runtime_env_uses_studio_callback_origin() -> None:
+    assert _build_mpa_identity_runtime_env(
+        user_pool_name=" studio-userpool ",
+        user_pool_client_name=" studio-client ",
+        oauth2_redirect_uri=("https://studio.example.com/oauth2/callback?ignored=true"),
+    ) == {
+        "IDENTITY_STARTUP_ENABLED": "true",
+        "MPA_USER_POOL_NAME": "studio-userpool",
+        "MPA_USER_POOL_CLIENT_NAME": "studio-client",
+        "IDENTITY_CALLBACK_URL": "https://studio.example.com/oauth/callback",
+    }
+    with pytest.raises(ValueError, match="configuration is incomplete"):
+        _build_mpa_identity_runtime_env(
+            user_pool_name="",
+            user_pool_client_name="studio-client",
+            oauth2_redirect_uri="https://studio.example.com/oauth2/callback",
+        )
 
 
 @pytest.mark.parametrize("provider", ["volcengine", "byteplus"])
@@ -360,8 +404,11 @@ def _create_studio_app(
     auth_mode: str = "frontend",
     admins: str | None = None,
     developers: str | None = None,
+    oauth2_user_pool: str | None = None,
+    oauth2_user_pool_client: str | None = None,
     oauth2_user_pool_uid: str | None = None,
     oauth2_user_pool_client_uid: str | None = None,
+    oauth2_redirect_uri: str | None = None,
     oauth2_provider_label: str | None = None,
     provider: str = "volcengine",
     identity_initializer: Any | None = None,
@@ -405,11 +452,11 @@ def _create_studio_app(
         port=8765,
         dev=True,
         vite=True,
-        oauth2_user_pool=None,
-        oauth2_user_pool_client=None,
+        oauth2_user_pool=oauth2_user_pool,
+        oauth2_user_pool_client=oauth2_user_pool_client,
         oauth2_user_pool_uid=oauth2_user_pool_uid,
         oauth2_user_pool_client_uid=oauth2_user_pool_client_uid,
-        oauth2_redirect_uri=None,
+        oauth2_redirect_uri=oauth2_redirect_uri,
         oauth2_provider=None,
         oauth2_provider_label=oauth2_provider_label,
         auth_mode=auth_mode,
@@ -829,6 +876,152 @@ def test_project_handoff_pairing_authorizes_only_terminal_session_routes(
     assert "/web/sandbox/codex-project-handoff/sessions" in captured["exempt_paths"]
     assert "/web/sandbox/codex-project-handoff/sessions/" in captured["exempt_prefixes"]
     assert "/web/sandbox/codex-project-handoff/pairings" not in captured["exempt_paths"]
+    assert "/oauth/callback" in captured["exempt_paths"]
+
+
+def test_mpa_runtime_resolver_loads_runtime_details_before_matching(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from frontend.server.mpa_identity_callback import (
+        MpaCallbackTarget,
+        MpaIdentityCallbackError,
+    )
+    from veadk.auth.middleware.oauth2_auth import OAuth2Config
+
+    captured: dict[str, Any] = {}
+    requests: list[tuple[str, str]] = []
+    mode = {"value": "success"}
+    runtime_summary = SimpleNamespace(
+        runtime_id="runtime-1",
+        envs=[],
+        tags=[SimpleNamespace(key="veadk:agent-type", value="mpa")],
+    )
+    runtime_detail = SimpleNamespace(
+        runtime_id="runtime-1",
+        envs=[SimpleNamespace(key="MPA_AGENT_ID", value="mi-agent1")],
+        network_configurations=[
+            SimpleNamespace(
+                endpoint="https://runtime.example.com",
+                network_type="public",
+            )
+        ],
+        authorizer_configuration=SimpleNamespace(
+            key_auth=SimpleNamespace(api_key="runtime-api-key"),
+            custom_jwt_authorizer=None,
+        ),
+    )
+
+    class _FakeRuntimeClient:
+        def __init__(self, **kwargs: Any) -> None:
+            self.region = kwargs["region"]
+
+        def list_runtimes(self, _request: Any) -> SimpleNamespace:
+            requests.append(("list", self.region))
+            if mode["value"] == "duplicate":
+                return SimpleNamespace(
+                    agent_kit_runtimes=[runtime_summary, runtime_summary],
+                    next_token="",
+                )
+            return SimpleNamespace(
+                agent_kit_runtimes=[runtime_summary],
+                next_token="",
+            )
+
+        def get_runtime(self, request: Any) -> SimpleNamespace:
+            requests.append(("get", request.runtime_id))
+            if mode["value"] in {"missing", "failure"}:
+                raise RuntimeError("detail unavailable")
+            return runtime_detail
+
+    class _FakeIdentityClient:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        def list_identity_providers(self, pool_uid: str) -> list[dict[str, object]]:
+            assert pool_uid == "pool-current"
+            return [
+                {
+                    "uid": "provider-1",
+                    "connection_type": "OAuth",
+                    "enabled": True,
+                }
+            ]
+
+    monkeypatch.setattr(
+        OAuth2Config,
+        "from_veidentity",
+        lambda **_: SimpleNamespace(
+            cookie_secure=True,
+            logout_redirect_url="/",
+            end_session_url=None,
+            issuer="https://identity.example.com",
+        ),
+    )
+    monkeypatch.setattr(
+        "veadk.auth.middleware.oauth2_auth.setup_oauth2",
+        lambda *_, **__: object(),
+    )
+    monkeypatch.setattr(
+        "frontend.server.mpa_identity_callback.mount_mpa_identity_callback",
+        lambda *_, **kwargs: captured.update(kwargs),
+    )
+    monkeypatch.setattr(
+        "agentkit.sdk.runtime.client.AgentkitRuntimeClient",
+        _FakeRuntimeClient,
+    )
+    monkeypatch.setattr(
+        "veadk.integrations.ve_identity.identity_client.IdentityClient",
+        _FakeIdentityClient,
+    )
+    monkeypatch.setattr(
+        "veadk.cli.cli_frontend._runtime_regions",
+        lambda *_: ["cn-beijing"],
+    )
+
+    _create_studio_app(
+        monkeypatch,
+        tmp_path,
+        oauth2_user_pool_uid="pool-current",
+        oauth2_user_pool_client_uid="studio-client",
+    )
+    hosted_callback = asyncio.run(captured["hosted_callback_resolver"]("provider-1"))
+    credentials = asyncio.run(
+        captured["runtime_credentials_resolver"](MpaCallbackTarget("mi-agent1"))
+    )
+
+    assert hosted_callback == (
+        "https://identity.example.com/login/generic_oauth/callback"
+    )
+    assert credentials.endpoint_origin == "https://runtime.example.com"
+    assert credentials.api_key == "runtime-api-key"
+    assert requests == [("list", "cn-beijing"), ("get", "runtime-1")]
+
+    mode["value"] = "duplicate"
+    with pytest.raises(MpaIdentityCallbackError, match="not unique"):
+        asyncio.run(
+            captured["runtime_credentials_resolver"](MpaCallbackTarget("mi-agent1"))
+        )
+
+    mode["value"] = "missing"
+    monkeypatch.setattr(
+        "veadk.cli.cli_frontend.is_agentkit_resource_not_found",
+        lambda _: True,
+    )
+    with pytest.raises(MpaIdentityCallbackError, match="not found"):
+        asyncio.run(
+            captured["runtime_credentials_resolver"](MpaCallbackTarget("mi-agent1"))
+        )
+
+    mode["value"] = "failure"
+    monkeypatch.setattr(
+        "veadk.cli.cli_frontend.is_agentkit_resource_not_found",
+        lambda _: False,
+    )
+    with pytest.raises(RuntimeError, match="detail unavailable"):
+        asyncio.run(
+            captured["runtime_credentials_resolver"](MpaCallbackTarget("mi-agent1"))
+        )
 
 
 def test_github_app_webhook_bypasses_studio_sso(
@@ -3505,16 +3698,28 @@ def test_runtime_detail_proxy_and_delete_enforce_role_and_owner(
         assert runtime_detail.json()["endpoint"] == "https://runtime.example.com"
         assert runtime_detail.json()["authType"] == "key_auth"
         assert runtime_detail.json()["envs"] == [
-            {"key": "MCP_VISIBLE_AUTH_TOKEN", "value": "visible-secret"}
+            {
+                "key": "MCP_VISIBLE_AUTH_TOKEN",
+                "value": "",
+                "sensitive": True,
+                "configured": True,
+            }
         ]
+        assert "visible-secret" not in runtime_detail.text
         viewer_runtime_detail = client.get(
             "/web/runtime-detail?runtimeId=runtime-viewer&region=cn-beijing",
             headers=viewer_headers,
         )
         assert viewer_runtime_detail.status_code == 200
         assert viewer_runtime_detail.json()["envs"] == [
-            {"key": "VIEWER_VISIBLE_TOKEN", "value": "viewer-secret"}
+            {
+                "key": "VIEWER_VISIBLE_TOKEN",
+                "value": "",
+                "sensitive": True,
+                "configured": True,
+            }
         ]
+        assert "viewer-secret" not in viewer_runtime_detail.text
         assert "runtime-key" not in runtime_detail.text
         revealed_key = client.post(
             "/web/runtime-api-key/reveal?runtimeId=runtime-developer&region=cn-beijing",
@@ -3585,6 +3790,310 @@ def test_runtime_detail_proxy_and_delete_enforce_role_and_owner(
         )
 
     assert deleted == ["runtime-developer", "runtime-other"]
+
+
+def test_mpa_runtime_delete_blocks_active_sessions_before_runtime_delete(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from agentkit.sdk.runtime.client import AgentkitRuntimeClient
+
+    runtime = _runtime_with_public_endpoint(_runtime("runtime-mpa-delete", "developer"))
+    runtime.tags.append(SimpleNamespace(key="veadk:agent-type", value="mpa"))
+    deleted: list[str] = []
+    runtime_requests: list[tuple[str, str]] = []
+
+    def get_runtime(_self: Any, request: Any) -> SimpleNamespace:
+        assert request.runtime_id == runtime.runtime_id
+        return runtime
+
+    def delete_runtime(_self: Any, request: Any) -> None:
+        deleted.append(request.runtime_id)
+
+    class RuntimeAsyncClient:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> "RuntimeAsyncClient":
+            return self
+
+        async def __aexit__(self, *_args: Any) -> None:
+            return None
+
+        async def request(
+            self, method: str, url: str, **_kwargs: Any
+        ) -> _RuntimeJsonResponse:
+            runtime_requests.append((method, url))
+            if url.endswith("/api/v1/agents/runtime-mpa-delete/profile-status"):
+                return _RuntimeJsonResponse(
+                    {"operationId": "op-1", "status": "applied"}
+                )
+            if url.endswith("/api/v1/sessions"):
+                return _RuntimeJsonResponse(
+                    {
+                        "sessions": [
+                            {"sessionId": "session-running", "status": "running"}
+                        ]
+                    }
+                )
+            raise AssertionError(f"unexpected Runtime request {method} {url}")
+
+    monkeypatch.setattr(AgentkitRuntimeClient, "get_runtime", get_runtime)
+    monkeypatch.setattr(AgentkitRuntimeClient, "delete_runtime", delete_runtime)
+    monkeypatch.setattr("httpx.AsyncClient", RuntimeAsyncClient)
+    app = _create_studio_app(monkeypatch, tmp_path, developers="developer")
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/web/delete-runtime",
+            headers={"X-VeADK-Local-User": "developer"},
+            json={
+                "runtimeId": runtime.runtime_id,
+                "region": "cn-beijing",
+                "agentCategory": "mpa",
+            },
+        )
+
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"]["blockers"] == ["active_sessions"]
+    assert response.json()["detail"]["sessionCounts"]["active"] == 1
+    assert deleted == []
+    assert [method for method, _url in runtime_requests] == ["GET", "GET"]
+
+
+def test_mpa_runtime_delete_cleans_idle_sessions_then_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from agentkit.sdk.runtime.client import AgentkitRuntimeClient
+
+    runtime = _runtime_with_public_endpoint(
+        _runtime("runtime-mpa-idle-delete", "developer")
+    )
+    runtime.tags.append(SimpleNamespace(key="veadk:agent-type", value="mpa"))
+    deleted: list[str] = []
+    runtime_requests: list[tuple[str, str]] = []
+
+    def get_runtime(_self: Any, request: Any) -> SimpleNamespace:
+        assert request.runtime_id == runtime.runtime_id
+        return runtime
+
+    def delete_runtime(_self: Any, request: Any) -> None:
+        deleted.append(request.runtime_id)
+
+    class RuntimeAsyncClient:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> "RuntimeAsyncClient":
+            return self
+
+        async def __aexit__(self, *_args: Any) -> None:
+            return None
+
+        async def request(
+            self, method: str, url: str, **_kwargs: Any
+        ) -> _RuntimeJsonResponse:
+            runtime_requests.append((method, url))
+            if url.endswith("/api/v1/agents/runtime-mpa-idle-delete/profile-status"):
+                return _RuntimeJsonResponse(
+                    {"operationId": "op-1", "status": "applied"}
+                )
+            if url.endswith("/api/v1/sessions"):
+                return _RuntimeJsonResponse(
+                    {
+                        "sessions": [
+                            {"sessionId": "session-idle", "status": "idle"},
+                            {"sessionId": "session-gone", "status": "completed"},
+                        ]
+                    }
+                )
+            if url.endswith("/api/v1/sessions/session-idle"):
+                return _RuntimeJsonResponse({}, status_code=204)
+            if url.endswith("/api/v1/sessions/session-gone"):
+                return _RuntimeJsonResponse(
+                    {"detail": {"code": "session_not_found"}}, status_code=404
+                )
+            raise AssertionError(f"unexpected Runtime request {method} {url}")
+
+    monkeypatch.setattr(AgentkitRuntimeClient, "get_runtime", get_runtime)
+    monkeypatch.setattr(AgentkitRuntimeClient, "delete_runtime", delete_runtime)
+    monkeypatch.setattr("httpx.AsyncClient", RuntimeAsyncClient)
+    app = _create_studio_app(monkeypatch, tmp_path, developers="developer")
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/web/delete-runtime",
+            headers={"X-VeADK-Local-User": "developer"},
+            json={
+                "runtimeId": runtime.runtime_id,
+                "region": "cn-beijing",
+                "agentCategory": "mpa",
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"success": True}
+    assert deleted == [runtime.runtime_id]
+    assert [method for method, _url in runtime_requests] == [
+        "GET",
+        "GET",
+        "DELETE",
+        "DELETE",
+    ]
+
+
+def test_mpa_runtime_delete_ignores_recovered_retryable_operation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from agentkit.sdk.runtime.client import AgentkitRuntimeClient
+    from frontend.server.mpa.operations import MpaLifecycleOperation
+
+    runtime = _runtime_with_public_endpoint(
+        _runtime("runtime-mpa-recovered-delete", "developer")
+    )
+    runtime.tags.append(SimpleNamespace(key="veadk:agent-type", value="mpa"))
+    deleted: list[str] = []
+    runtime_requests: list[tuple[str, str]] = []
+
+    class OperationService:
+        async def list_active(self, _owner_id: str) -> list[MpaLifecycleOperation]:
+            return [
+                MpaLifecycleOperation.model_validate(
+                    {
+                        "operationId": "mpaop-recovered",
+                        "operationKind": "create",
+                        "ownerId": "developer",
+                        "targetKey": "runtime-mpa-recovered-delete",
+                        "idempotencyKeyHash": "idem-hash",
+                        "requestHash": "request-hash",
+                        "stage": "smoke_running",
+                        "status": "failed_retryable",
+                        "mpaInstanceId": "runtime-mpa-recovered-delete",
+                        "runtimeId": runtime.runtime_id,
+                        "runtimeRegion": "cn-beijing",
+                        "safeErrorCode": "runtime_unavailable",
+                        "createdAt": "2026-09-15T00:00:00Z",
+                        "updatedAt": "2026-09-15T00:00:00Z",
+                    }
+                )
+            ]
+
+    def get_runtime(_self: Any, request: Any) -> SimpleNamespace:
+        assert request.runtime_id == runtime.runtime_id
+        return runtime
+
+    def delete_runtime(_self: Any, request: Any) -> None:
+        deleted.append(request.runtime_id)
+
+    class RuntimeAsyncClient:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> "RuntimeAsyncClient":
+            return self
+
+        async def __aexit__(self, *_args: Any) -> None:
+            return None
+
+        async def request(
+            self, method: str, url: str, **_kwargs: Any
+        ) -> _RuntimeJsonResponse:
+            runtime_requests.append((method, url))
+            if url.endswith(
+                "/api/v1/agents/runtime-mpa-recovered-delete/profile-status"
+            ):
+                return _RuntimeJsonResponse(
+                    {"operationId": "op-1", "status": "applied"}
+                )
+            if url.endswith("/api/v1/sessions"):
+                return _RuntimeJsonResponse(
+                    {"sessions": [{"sessionId": "session-idle", "status": "idle"}]}
+                )
+            if url.endswith("/api/v1/sessions/session-idle"):
+                return _RuntimeJsonResponse({}, status_code=204)
+            raise AssertionError(f"unexpected Runtime request {method} {url}")
+
+    monkeypatch.setattr(AgentkitRuntimeClient, "get_runtime", get_runtime)
+    monkeypatch.setattr(AgentkitRuntimeClient, "delete_runtime", delete_runtime)
+    monkeypatch.setattr("httpx.AsyncClient", RuntimeAsyncClient)
+    monkeypatch.setattr(
+        "frontend.server.mpa.create_operation_service",
+        lambda **_kwargs: OperationService(),
+    )
+    app = _create_studio_app(monkeypatch, tmp_path, developers="developer")
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/web/delete-runtime",
+            headers={"X-VeADK-Local-User": "developer"},
+            json={
+                "runtimeId": runtime.runtime_id,
+                "region": "cn-beijing",
+                "agentCategory": "mpa",
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"success": True}
+    assert deleted == [runtime.runtime_id]
+    assert [method for method, _url in runtime_requests] == [
+        "GET",
+        "GET",
+        "DELETE",
+    ]
+
+
+def test_delete_runtime_ignores_untrusted_mpa_category_for_general_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from agentkit.sdk.runtime.client import AgentkitRuntimeClient
+
+    runtime = _runtime_with_public_endpoint(
+        _runtime("runtime-general-delete", "developer")
+    )
+    deleted: list[str] = []
+
+    def get_runtime(_self: Any, request: Any) -> SimpleNamespace:
+        assert request.runtime_id == runtime.runtime_id
+        return runtime
+
+    def delete_runtime(_self: Any, request: Any) -> None:
+        deleted.append(request.runtime_id)
+
+    class RuntimeAsyncClient:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> "RuntimeAsyncClient":
+            return self
+
+        async def __aexit__(self, *_args: Any) -> None:
+            return None
+
+        async def request(self, *_args: Any, **_kwargs: Any) -> _RuntimeJsonResponse:
+            raise AssertionError("general Runtime delete must not call MPA data plane")
+
+    monkeypatch.setattr(AgentkitRuntimeClient, "get_runtime", get_runtime)
+    monkeypatch.setattr(AgentkitRuntimeClient, "delete_runtime", delete_runtime)
+    monkeypatch.setattr("httpx.AsyncClient", RuntimeAsyncClient)
+    app = _create_studio_app(monkeypatch, tmp_path, developers="developer")
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/web/delete-runtime",
+            headers={"X-VeADK-Local-User": "developer"},
+            json={
+                "runtimeId": runtime.runtime_id,
+                "region": "cn-beijing",
+                "agentCategory": "mpa",
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    assert deleted == [runtime.runtime_id]
 
 
 def test_runtime_proxy_list_fallback_still_enforces_runtime_owner(
@@ -4583,11 +5092,19 @@ def test_runtime_update_capability_distinguishes_incompatible_and_network_errors
     with TestClient(app) as client:
 
         def capability(request_params: dict[str, Any]) -> Any:
-            return client.get(
-                "/web/runtime-update-capability",
-                params=request_params,
-                headers=headers,
-            )
+            deadline = time.monotonic() + 2.0
+            while True:
+                response = client.get(
+                    "/web/runtime-update-capability",
+                    params=request_params,
+                    headers=headers,
+                )
+                if response.status_code != 202:
+                    return response
+                assert response.json()["recoveryStatus"] == "preparing"
+                if time.monotonic() >= deadline:
+                    pytest.fail("Runtime update capability remained pending")
+                time.sleep(0.01)
 
         incompatible = capability(params)
         mode = "agent-unsupported"
@@ -5241,6 +5758,338 @@ def test_update_deployment_rejects_missing_stale_or_wrong_base_snapshot(
     assert launch_calls == []
 
 
+def test_mpa_update_rejects_incompatible_manifest_before_launch(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from agentkit.sdk.runtime.client import AgentkitRuntimeClient
+
+    runtime = _runtime_with_public_endpoint(
+        _runtime("runtime-mpa-preflight", "developer", managed=False)
+    )
+    runtime.current_version_number = 3
+    runtime.status = "Ready"
+    runtime.role_name = "runtime-role"
+    runtime.tags.append(SimpleNamespace(key="veadk:agent-type", value="mpa"))
+    launch_calls: list[dict[str, Any]] = []
+
+    monkeypatch.setattr(
+        AgentkitRuntimeClient,
+        "get_runtime",
+        lambda _self, _request: runtime,
+    )
+    monkeypatch.setattr(
+        "agentkit.toolkit.sdk.launch",
+        lambda **kwargs: launch_calls.append(kwargs),
+    )
+
+    class RuntimeAsyncClient:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> "RuntimeAsyncClient":
+            return self
+
+        async def __aexit__(self, *_args: Any) -> None:
+            return None
+
+        async def request(
+            self,
+            _method: str,
+            url: str,
+            **_kwargs: Any,
+        ) -> _RuntimeJsonResponse:
+            if url.endswith("/list-apps"):
+                return _RuntimeJsonResponse(["mpa-agent"])
+            assert url.endswith("/web/agent-info/mpa-agent")
+            return _RuntimeJsonResponse(
+                {
+                    "name": "mpa-agent",
+                    "draft": {
+                        "name": "mpa-agent",
+                        "instruction": "Published instruction",
+                    },
+                }
+            )
+
+    monkeypatch.setattr("httpx.AsyncClient", RuntimeAsyncClient)
+    app = _create_studio_app(monkeypatch, tmp_path, developers="developer")
+    headers = {"X-VeADK-Local-User": "developer"}
+
+    with TestClient(app) as client:
+        capability = client.get(
+            "/web/runtime-update-capability",
+            params={
+                "runtimeId": runtime.runtime_id,
+                "region": "cn-beijing",
+                "appName": "mpa-agent",
+                "currentVersion": 3,
+            },
+            headers=headers,
+        )
+        response = client.post(
+            "/web/deploy-agentkit",
+            headers=headers,
+            json={
+                "name": "mpa-agent",
+                "runtimeId": runtime.runtime_id,
+                "appName": "mpa-agent",
+                "agentCategory": "mpa",
+                "mpaCompatibilityManifest": _mpa_p0_compat_manifest(
+                    workerProtocol="codex-v2"
+                ),
+                "updateEtag": capability.json()["etag"],
+                "baseRuntimeVersion": 3,
+                "files": [{"path": "app.py", "content": "app = object()\n"}],
+                "config": {"region": "cn-beijing", "projectName": "default"},
+            },
+        )
+
+    assert capability.status_code == 200
+    assert response.status_code == 409
+    assert response.json()["detail"] == {
+        "code": "mpa_compatibility_preflight_failed",
+        "status": "incompatible",
+        "errorCode": "worker_protocol_incompatible",
+        "message": (
+            "MPA Runtime compatibility preflight failed before making changes: "
+            "worker_protocol_incompatible"
+        ),
+    }
+    assert launch_calls == []
+
+
+def test_mpa_deploy_without_trusted_owner_fails_before_cloud_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    launch_calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        "agentkit.toolkit.sdk.launch",
+        lambda **kwargs: launch_calls.append(kwargs),
+    )
+    app = _create_studio_app(monkeypatch, tmp_path)
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.post(
+            "/web/deploy-agentkit",
+            json={
+                "name": "mpa-agent",
+                "agentCategory": "mpa",
+                "createEvaluationSets": False,
+                "files": [{"path": "app.py", "content": "app = object()\n"}],
+                "config": {"region": "cn-beijing", "projectName": "default"},
+            },
+        )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == (
+        "Studio identity is required for MPA deployment"
+    )
+    assert launch_calls == []
+
+
+def test_managed_mpa_creation_without_trusted_owner_is_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    app = _create_studio_app(monkeypatch, tmp_path)
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/web/mpa-creation/config",
+            params={"region": "cn-beijing"},
+        )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == ("Studio identity is required for MPA creation")
+
+
+def test_mpa_update_allows_compatible_manifest_to_reach_launch(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from agentkit.sdk.runtime.client import AgentkitRuntimeClient
+    from veadk.auth.middleware.oauth2_auth import OAuth2Config
+
+    runtime = _runtime_with_public_endpoint(
+        _runtime("runtime-mpa-compatible", "developer", managed=False)
+    )
+    runtime.current_version_number = 3
+    runtime.status = "Ready"
+    runtime.role_name = "runtime-role"
+    runtime.tags.append(SimpleNamespace(key="veadk:agent-type", value="mpa"))
+    update_requests: list[Any] = []
+    captured_config: dict[str, Any] = {}
+    runtime_tag_sync_calls: list[dict[str, Any]] = []
+
+    def get_runtime(_self: Any, _request: Any) -> SimpleNamespace:
+        runtime.current_version_number = 4 if update_requests else 3
+        return runtime
+
+    def update_runtime(_self: Any, request: Any) -> SimpleNamespace:
+        update_requests.append(request)
+        return SimpleNamespace(runtime_id=runtime.runtime_id)
+
+    def launch(**kwargs: Any) -> SimpleNamespace:
+        captured_config.update(
+            yaml.safe_load(Path(kwargs["config_file"]).read_text(encoding="utf-8"))
+        )
+        AgentkitRuntimeClient.update_runtime(
+            object(),
+            SimpleNamespace(tags=[], apmplus_enable=False),
+        )
+        return SimpleNamespace(
+            success=True,
+            error=None,
+            deploy_result=SimpleNamespace(
+                endpoint_url="https://runtime.example.test",
+                metadata={
+                    "runtime_id": runtime.runtime_id,
+                    "runtime_name": runtime.name,
+                    "runtime_endpoint": "https://runtime.example.test",
+                    "runtime_apikey": "test-only-api-key",
+                },
+            ),
+        )
+
+    monkeypatch.setattr(AgentkitRuntimeClient, "get_runtime", get_runtime)
+    monkeypatch.setattr(AgentkitRuntimeClient, "update_runtime", update_runtime)
+    monkeypatch.setattr("agentkit.toolkit.sdk.launch", launch)
+    monkeypatch.setattr(
+        "veadk.cli.cli_frontend._sync_volcengine_runtime_tags",
+        lambda **kwargs: runtime_tag_sync_calls.append(kwargs),
+    )
+    monkeypatch.setattr(
+        "veadk.auth.veauth.ark_veauth.get_ark_token",
+        lambda **_kwargs: "test-only-model-key",
+    )
+    monkeypatch.setattr(
+        OAuth2Config,
+        "from_veidentity",
+        lambda **_: SimpleNamespace(
+            cookie_secure=True,
+            logout_redirect_url="/",
+            end_session_url=None,
+            issuer="https://identity.example.com",
+        ),
+    )
+    monkeypatch.setattr(
+        "veadk.auth.middleware.oauth2_auth.setup_oauth2",
+        lambda *_, **__: object(),
+    )
+
+    class FakeIdentityClient:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        def get_user_pool_resource_names(
+            self,
+            user_pool_uid: str,
+            client_uid: str,
+        ) -> tuple[str, str]:
+            assert (user_pool_uid, client_uid) == ("pool-current", "client-current")
+            return "studio-userpool", "studio-client"
+
+    monkeypatch.setattr(
+        "veadk.integrations.ve_identity.identity_client.IdentityClient",
+        FakeIdentityClient,
+    )
+
+    class RuntimeAsyncClient:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> "RuntimeAsyncClient":
+            return self
+
+        async def __aexit__(self, *_args: Any) -> None:
+            return None
+
+        async def request(
+            self,
+            _method: str,
+            url: str,
+            **_kwargs: Any,
+        ) -> _RuntimeJsonResponse:
+            if url.endswith("/list-apps"):
+                return _RuntimeJsonResponse(["mpa-agent"])
+            assert url.endswith("/web/agent-info/mpa-agent")
+            return _RuntimeJsonResponse(
+                {
+                    "name": "mpa-agent",
+                    "draft": {
+                        "name": "mpa-agent",
+                        "instruction": "Published instruction",
+                    },
+                }
+            )
+
+    monkeypatch.setattr("httpx.AsyncClient", RuntimeAsyncClient)
+    app = _create_studio_app(
+        monkeypatch,
+        tmp_path,
+        developers="developer",
+        oauth2_user_pool_uid="pool-current",
+        oauth2_user_pool_client_uid="client-current",
+        oauth2_redirect_uri="https://studio.example.com/oauth2/callback",
+    )
+    headers = {"X-VeADK-Local-User": "developer"}
+
+    with TestClient(app) as client:
+        capability = client.get(
+            "/web/runtime-update-capability",
+            params={
+                "runtimeId": runtime.runtime_id,
+                "region": "cn-beijing",
+                "appName": "mpa-agent",
+                "currentVersion": 3,
+            },
+            headers=headers,
+        )
+        with client.stream(
+            "POST",
+            "/web/deploy-agentkit",
+            headers=headers,
+            json={
+                "name": "mpa-agent",
+                "runtimeId": runtime.runtime_id,
+                "appName": "mpa-agent",
+                "agentCategory": "mpa",
+                "mpaCompatibilityManifest": _mpa_p0_compat_manifest(),
+                "updateEtag": capability.json()["etag"],
+                "baseRuntimeVersion": 3,
+                "createEvaluationSets": False,
+                "files": [{"path": "app.py", "content": "app = object()\n"}],
+                "config": {"region": "cn-beijing", "projectName": "default"},
+            },
+        ) as response:
+            frames = [
+                json.loads(line.removeprefix("data: "))
+                for line in response.iter_lines()
+                if line.startswith("data: ")
+            ]
+
+    assert capability.status_code == 200
+    assert response.status_code == 200
+    assert frames[-1]["success"] is True
+    assert frames[-1]["runtimeId"] == runtime.runtime_id
+    assert len(update_requests) == 1
+    runtime_envs = captured_config["launch_types"]["cloud"]["runtime_envs"]
+    assert runtime_envs["MPA_USER_POOL_NAME"] == "studio-userpool"
+    assert runtime_envs["MPA_USER_POOL_CLIENT_NAME"] == "studio-client"
+    assert runtime_envs["IDENTITY_CALLBACK_URL"] == (
+        "https://studio.example.com/oauth/callback"
+    )
+    assert len(runtime_tag_sync_calls) == 1
+    runtime_tags = runtime_tag_sync_calls[0]["tags"]
+    assert runtime_tags["veadk:agent-type"] == "mpa"
+    assert runtime_tags["veadk:managed"] == "true"
+    assert runtime_tags["veadk:provisioner"] == "studio-mpa"
+    assert runtime_tags["veadk:owner"] == "developer"
+    assert runtime_tags["veadk:mpa-instance-id"] == runtime.runtime_id
+
+
 def test_update_deployment_rechecks_runtime_identity_before_update(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -5328,6 +6177,8 @@ def test_update_deployment_rechecks_runtime_identity_before_update(
                 "name": "selected-agent",
                 "runtimeId": runtime.runtime_id,
                 "appName": "selected-agent",
+                "agentCategory": "mpa",
+                "mpaCompatibilityManifest": _mpa_p0_compat_manifest(),
                 "updateEtag": capability.json()["etag"],
                 "baseRuntimeVersion": 3,
                 "createEvaluationSets": False,

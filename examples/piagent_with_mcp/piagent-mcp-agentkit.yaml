@@ -17,18 +17,18 @@ launch_types:
     cr_namespace_name: agentkit
     cr_repo_name: piagent-with-mcp
     cr_auto_create_instance_type: Micro
-    cr_image_full_url: agentkit-platform-2107625663-cn-beijing.cr.volces.com/agentkit/piagent-with-mcp:20260715155044
+    cr_image_full_url: <registry>/<namespace>/piagent-with-mcp:<tag>
     build_timeout: 3600
     cp_workspace_name: agentkit-cli-workspace
     cp_pipeline_name: piagent-with-mcp
-    cp_pipeline_id: f472fcdc6f4848fe8889c0855caaa2d0
-    runtime_id: r-yeqksmpybko2eybtg5z8
+    cp_pipeline_id: <pipeline-id>
+    runtime_id: <runtime-id>
     runtime_name: piagent-with-mcp
-    runtime_role_name: AgentKit_Runtime_Default_ServiceRole_j1gzh8c
+    runtime_role_name: <runtime-role-name>
     runtime_auth_type: key_auth
-    runtime_apikey_name: API-KEY-da6ikern
-    runtime_apikey: BNwxzuKr9hoKhJwJgm2laluVs_yN_BIfzQKN
+    runtime_apikey_name: <runtime-api-key-name>
+    runtime_apikey: <runtime-api-key>
     runtime_jwt_allowed_clients: []
-    runtime_endpoint: https://scd6b76f5sagn55rj2dh1.apigateway-cn-beijing.volceapi.com
+    runtime_endpoint: <runtime-endpoint>
 docker_build:
   platform: linux/amd64

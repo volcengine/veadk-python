@@ -1,84 +1,19 @@
-import { useEffect, useRef, useState, type RefObject } from "react";
-import type { TFunction } from "i18next";
+import { useEffect, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
-import { Maximize2, X } from "lucide-react";
+import { X } from "lucide-react";
 import type {
   AgentInfo,
-  AgentNode,
   SessionEnvironmentMountSelection,
-  StudioBffTool,
   StudioEnvironment,
   StudioWorkspace,
 } from "../adk/client";
-import { AgentBuildCanvas } from "../create/AgentBuildCanvas";
-import {
-  modelConfigurationFromRuntime,
-  modelNameFromRuntime,
-} from "../create/runtimeModelName";
-import { emptyDraft, type AgentDraft } from "../create/types";
-import {
-  studioToolLabel,
-  StudioToolDialog,
-} from "./StudioToolDialog";
+import { SkillSpacePicker } from "../create/SkillSpacePicker";
+import type { SelectedSkill } from "../create/skills/types";
+import { modelNameFromRuntime } from "../create/runtimeModelName";
 import { TextShimmer } from "./text-shimmer/TextShimmer";
 import { SessionEnvironmentPicker } from "./SessionEnvironmentPicker";
-
-function totalNodes(node: AgentNode): number {
-  return 1 + node.children.reduce((count, child) => count + totalNodes(child), 0);
-}
-
-function nodeId(node: AgentNode): string {
-  return node.id || node.name;
-}
-
-/** Older generated runtimes exposed only Python variable names. Keep those
- * identifiers for event matching, but do not leak them into the UI. */
-function legacyDisplayName(node: AgentNode, isRoot: boolean, t: TFunction): string {
-  const id = nodeId(node);
-  if (node.id && node.name && node.name !== id) return node.name;
-  if (isRoot && id === "agent") return t("agentTopology.mainAgent");
-  const subAgent = /^agent_sub_(\d+)$/.exec(id);
-  return subAgent
-    ? t("agentTopology.subAgent", { index: subAgent[1] })
-    : node.name || id;
-}
-
-function normalizeLegacyNames(
-  node: AgentNode,
-  t: TFunction,
-  isRoot = true,
-): AgentNode {
-  return {
-    ...node,
-    id: nodeId(node),
-    name: legacyDisplayName(node, isRoot, t),
-    children: node.children.map((child) => normalizeLegacyNames(child, t, false)),
-  };
-}
-
-function graphNodeToCanvasDraft(node: AgentNode): AgentDraft {
-  const fallback = emptyDraft();
-  const runtimeModel = modelConfigurationFromRuntime(node.model);
-  return {
-    ...fallback,
-    name: node.name,
-    description: node.description,
-    instruction: node.instruction || fallback.instruction,
-    agentType: node.type,
-    modelName: runtimeModel.modelName,
-    modelProvider: runtimeModel.modelProvider,
-    tools: node.tools ?? [],
-    skills: (node.skills ?? []).map((skill) => skill.name),
-    subAgents: node.children.map(graphNodeToCanvasDraft),
-  };
-}
-
-function uniqueValues(values: string[]): string[] {
-  return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
-}
-
-const INTERNAL_AGENT_TOOL_NAMES = new Set(["StudioExternalToolset"]);
+import type { BoundSkillState } from "./mpa-agent-info/MpaAgentInfoRail";
 
 function uniqueSkills(skills: AgentInfo["skills"]): AgentInfo["skills"] {
   return [
@@ -112,21 +47,15 @@ function ModuleTitle({ title, count }: ModuleTitleProps) {
   );
 }
 
-interface AgentInfoPanelProps {
-  appName: string;
+export interface AgentInfoPanelProps {
+  boundSkills?: BoundSkillState;
+  onRefresh?: () => void;
+  onOpenSkill?: (index: number) => void;
   info: AgentInfo | null;
   loading: boolean;
-  activeAgent: string;
-  seenAgents: Set<string>;
-  execPath?: string[];
   variant?: "rail" | "drawer";
-  studioTools?: StudioBffTool[];
-  selectedStudioToolIds?: readonly string[];
-  managedStudioToolIds?: readonly string[];
-  studioToolsLoading?: boolean;
-  studioToolsDisabled?: boolean;
-  studioToolsUnavailableReason?: string;
-  onStudioToolsChange?: (selectedIds: string[]) => void;
+  selectedSessionSkills?: readonly SelectedSkill[];
+  onSessionSkillsChange?: (skills: SelectedSkill[]) => void;
   environments?: StudioEnvironment[];
   workspaces?: StudioWorkspace[];
   selectedEnvironments?: readonly SessionEnvironmentMountSelection[];
@@ -145,17 +74,14 @@ interface AgentInfoPanelProps {
  * right whitespace. The parent owns metadata loading so this display component
  * never issues a duplicate `/web/agent-info` request. */
 export function AgentInfoPanel({
-  appName,
   info,
   loading,
+  boundSkills,
+  onRefresh,
+  onOpenSkill,
   variant = "rail",
-  studioTools = [],
-  selectedStudioToolIds = [],
-  managedStudioToolIds = [],
-  studioToolsLoading = false,
-  studioToolsDisabled = false,
-  studioToolsUnavailableReason = "",
-  onStudioToolsChange,
+  selectedSessionSkills = [],
+  onSessionSkillsChange,
   environments = [],
   workspaces = [],
   selectedEnvironments = [],
@@ -167,26 +93,7 @@ export function AgentInfoPanel({
   onEnvironmentsRefresh,
 }: AgentInfoPanelProps) {
   const { t } = useTranslation("workspaceTools");
-  const [dialog, setDialog] = useState<"tool" | null>(null);
-  const [canvasExpanded, setCanvasExpanded] = useState(false);
-  const expandCanvasRef = useRef<HTMLButtonElement>(null);
-  const closeCanvas = () => {
-    setCanvasExpanded(false);
-    window.requestAnimationFrame(() => expandCanvasRef.current?.focus());
-  };
-  useEffect(() => {
-    if (!canvasExpanded) return;
-    const previousOverflow = document.body.style.overflow;
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") closeCanvas();
-    };
-    document.body.style.overflow = "hidden";
-    document.addEventListener("keydown", handleKeyDown);
-    return () => {
-      document.body.style.overflow = previousOverflow;
-      document.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [canvasExpanded]);
+  const [dialog, setDialog] = useState<"skill" | null>(null);
   if (loading && !info) {
     return (
       <aside
@@ -202,61 +109,19 @@ export function AgentInfoPanel({
   }
   if (!info) return null;
   const modelName = modelNameFromRuntime(info.model);
-
-  const graph = normalizeLegacyNames(
-    info.graph ?? {
-      id: info.name,
-      name: info.name,
-      description: info.description,
-      type: info.type ?? "llm",
-      model: modelName,
-      tools: info.tools,
-      skills: info.skills,
-      path: [info.name],
-      mentionable: false,
-      children: [],
-    },
-    t,
-  );
-  const baseTools = uniqueValues(info.tools)
-    .filter((name) => !INTERNAL_AGENT_TOOL_NAMES.has(name))
-    .map((name) => ({
-      id: `base:tool:${name}`,
-      name,
-      label: studioToolLabel(name, t),
-      custom: false,
-      removable: false,
-    }));
-  const baseToolNames = new Set(baseTools.map((tool) => tool.name));
-  const selectedIds = new Set(selectedStudioToolIds);
-  const managedIds = new Set(managedStudioToolIds);
-  const selectedStudioTools = studioTools
-    .filter((tool) => selectedIds.has(tool.id) && !baseToolNames.has(tool.id))
-    .map((tool) => ({
-      id: `studio:tool:${tool.id}`,
-      name: tool.id,
-      label: studioToolLabel(tool.id, t, tool.name),
-      custom: true,
-      removable: !managedIds.has(tool.id),
-    }));
-  const tools = [...baseTools, ...selectedStudioTools];
-  const skills = uniqueSkills(info.skills);
-  const canCustomize = Boolean(onStudioToolsChange);
-  const canvasDraft = graphNodeToCanvasDraft(graph);
-  const renderCanvas = (key: string) => (
-    <AgentBuildCanvas
-      key={key}
-      draft={canvasDraft}
-      direction="horizontal"
-      selectedPath={[]}
-      onSelect={() => undefined}
-      onAdd={() => undefined}
-      onInsert={() => undefined}
-      onDelete={() => undefined}
-      readOnly
-      interactivePreview
-    />
-  );
+  const isMpa = info.agentCategory === "mpa";
+  const documentStatus = info.mpa?.agentsMdStatus ?? "unsupported";
+  const agentsInstruction = isMpa
+    ? info.mpa?.agentsMd ?? ""
+    : info.graph?.instruction ?? info.draft?.instruction ?? "";
+  const skills = isMpa ? boundSkills?.skills ?? [] : uniqueSkills([
+    ...info.skills,
+    ...selectedSessionSkills.map((skill) => ({ name: skill.name, description: skill.description ?? "" })),
+  ]);
+  const skillError = boundSkills?.error;
+  const errorKey = skillError === "forbidden" ? "accessDenied"
+    : skillError === "unsupported" ? "skillsUnsupported"
+    : skillError === "degraded" ? "skillsDegraded" : "loadFailed";
 
   return (
     <>
@@ -276,72 +141,39 @@ export function AgentInfoPanel({
             {info.description}
           </p>
         )}
+        {onRefresh && (
+          <button type="button" className="topo-refresh" onClick={onRefresh}
+            disabled={loading || boundSkills?.loading}>
+            {t("agentTopology.refresh")}
+          </button>
+        )}
       </section>
 
       <div className="topo-module-stack">
-        <section className="topo-module-card topo-tools-card" aria-label={t("agentTopology.tools")}>
-          <ModuleTitle
-            title={t("agentTopology.tools")}
-            count={tools.length}
-          />
+        <section className="topo-module-card topo-agents-md-card" aria-label={t("agentTopology.agentsMd")}>
+          <ModuleTitle title={t("agentTopology.agentsMd")} />
           <div
-            className="topo-module-scroll topo-tools-scroll"
+            className="topo-module-scroll topo-agents-md-scroll"
             role="region"
-            aria-label={t("agentTopology.toolList")}
+            aria-label={t("agentTopology.agentsMd")}
             tabIndex={0}
           >
-            {tools.length > 0 ? (
-              <div className="topo-tool-list">
-                {tools.map((tool) => (
-                  <div key={tool.id} className="topo-tool" title={tool.name}>
-                    <span className="topo-capability-title">
-                      <span className="topo-capability-copy">
-                        <span className="topo-capability-name">{tool.label}</span>
-                        <code>{tool.name}</code>
-                      </span>
-                      {tool.custom && <span className="topo-custom-badge">{t("agentTopology.studioTool")}</span>}
-                    </span>
-                    {tool.custom && tool.removable && (
-                      <button
-                        type="button"
-                        className="topo-remove-capability"
-                        aria-label={t("agentTopology.removeTool", { name: tool.name })}
-                        title={t("agentTopology.remove")}
-                        disabled={studioToolsDisabled}
-                        onClick={() => onStudioToolsChange?.(
-                          selectedStudioToolIds.filter((id) => id !== tool.name),
-                        )}
-                      >
-                        ×
-                      </button>
-                    )}
-                  </div>
-                ))}
+            {isMpa && documentStatus !== "ready" ? (
+              <div className="topo-data-error" role="status">
+                {t(`agentTopology.${documentStatus === "forbidden" ? "accessDenied" : documentStatus === "unsupported" ? "documentUnsupported" : "loadFailed"}`)}
               </div>
+            ) : agentsInstruction.trim() ? (
+              <pre className="topo-agents-md-content">{agentsInstruction}</pre>
             ) : (
               <div className="topo-empty">{t("agentTopology.notConfigured")}</div>
             )}
           </div>
-          {canCustomize && (
-            <div className="topo-capability-add-dock">
-              <button
-                type="button"
-                className="topo-capability-add-slot"
-                aria-label={t("agentTopology.addStudioTool")}
-                disabled={studioToolsDisabled}
-                onClick={() => setDialog("tool")}
-              >
-                <span aria-hidden="true">＋</span>
-              <span>{t("agentTopology.addStudioToolHere")}</span>
-              </button>
-            </div>
-          )}
         </section>
 
         <section className="topo-module-card topo-skills-card" aria-label={t("agentTopology.skills")}>
           <ModuleTitle
             title={t("agentTopology.skills")}
-            count={info.skillsPreviewSupported ? skills.length : undefined}
+            count={isMpa ? boundSkills?.complete ? skills.length : undefined : info.skillsPreviewSupported ? skills.length : undefined}
           />
           <div
             className="topo-module-scroll topo-skills-scroll"
@@ -349,18 +181,22 @@ export function AgentInfoPanel({
             aria-label={t("agentTopology.skillList")}
             tabIndex={0}
           >
-            {!info.skillsPreviewSupported ? (
+            {isMpa && boundSkills?.loading && !skills.length ? (
+              <TextShimmer as="span">{t("agentTopology.loadingSkills")}</TextShimmer>
+            ) : !isMpa && !info.skillsPreviewSupported ? (
               <div className="topo-empty">{t("agentTopology.previewUnsupported")}</div>
             ) : skills.length > 0 ? (
               <div className="topo-skill-list">
-                {skills.map((skill) => (
+                {skills.map((skill, index) => (
                   <div
-                    key={`${skill.name}:${skill.description}`}
+                    key={`${skill.name}:${skill.description}:${index}`}
                     className="topo-skill"
                     title={skill.description || skill.name}
                   >
                     <div className="topo-skill-title">
-                      <span className="topo-skill-name">{skill.name}</span>
+                      {isMpa && onOpenSkill && boundSkills?.skills[index]?.skillId && !boundSkills.skills[index].lookupByName ? (
+                      <button type="button" className="topo-skill-name topo-skill-open" onClick={() => onOpenSkill(index)}>{skill.name}</button>
+                    ) : <span className="topo-skill-name">{skill.name}</span>}
                     </div>
                     {skill.description && (
                       <span className="topo-skill-description">
@@ -370,10 +206,26 @@ export function AgentInfoPanel({
                   </div>
                 ))}
               </div>
-            ) : (
-              <div className="topo-empty">{t("agentTopology.notConfigured")}</div>
-            )}
+            ) : !skillError ? (
+              <div className="topo-empty">{t(isMpa ? info.mpa?.skillSpaces.length ? "agentTopology.noBoundSkills" : "agentTopology.noBoundSpace" : "agentTopology.notConfigured")}</div>
+            ) : null}
+            {skillError && <div className="topo-data-error" role="status">{t(`agentTopology.${errorKey}`)}</div>}
+            {isMpa && boundSkills?.loading && skills.length > 0 && <span role="status">{t("agentTopology.loadingSkills")}</span>}
           </div>
+          {!isMpa && onSessionSkillsChange && (
+            <div className="topo-capability-add-dock">
+              <button
+                type="button"
+                className="topo-capability-add-slot"
+                aria-label={t("agentTopology.addSkill")}
+                disabled={environmentsDisabled}
+                onClick={() => setDialog("skill")}
+              >
+                <span aria-hidden="true">＋</span>
+                <span>{t("agentTopology.addSkillHere")}</span>
+              </button>
+            </div>
+          )}
         </section>
 
         {(onEnvironmentsChange || selectedEnvironments.length > 0) && (
@@ -392,69 +244,41 @@ export function AgentInfoPanel({
             />
           </section>
         )}
-
-        <section className="topo-module-card topo-topology" aria-label={t("agentTopology.agentCanvas")}>
-          <div className="topo-canvas-heading">
-            <ModuleTitle title={t("agentTopology.topology")} count={totalNodes(graph)} />
-            <button
-              ref={expandCanvasRef}
-              type="button"
-              className="topo-canvas-expand"
-              aria-label={t("agentTopology.viewCanvasFullscreen")}
-              title={t("agentTopology.viewFullscreen")}
-              onClick={() => setCanvasExpanded(true)}
-            >
-              <Maximize2 aria-hidden="true" />
-            </button>
-          </div>
-          <div className="topo-canvas-preview" role="region" aria-label={t("agentTopology.executionCanvas")}>
-            {renderCanvas(`conversation-canvas:${appName}`)}
-          </div>
-        </section>
       </div>
-      {dialog === "tool" && onStudioToolsChange && (
-        <StudioToolDialog
-          agentName={info.name}
-          tools={studioTools.filter((tool) =>
-            !baseToolNames.has(tool.id) && !managedIds.has(tool.id)
-          )}
-          selectedIds={selectedStudioToolIds}
-          loading={studioToolsLoading}
-          disabled={studioToolsDisabled}
-          unavailableReason={studioToolsUnavailableReason}
-          onChange={onStudioToolsChange}
-          onClose={() => setDialog(null)}
-        />
-      )}
-    </aside>
-    {canvasExpanded && createPortal(
-      <section
-        className="topo-canvas-dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-label={t("agentTopology.fullscreenExecutionCanvas")}
-      >
-        <header className="topo-canvas-dialog-header">
-          <div>
-            <strong>{t("agentTopology.executionCanvas")}</strong>
-            <span>{info.name}</span>
-          </div>
+      {dialog === "skill" && onSessionSkillsChange && createPortal(
+        <div className="studio-tool-dialog-layer">
           <button
             type="button"
-            aria-label={t("agentTopology.closeFullscreenCanvas")}
-            title={t("agentTopology.close")}
-            onClick={closeCanvas}
-            autoFocus
-          >
-            <X aria-hidden="true" />
-          </button>
-        </header>
-        <div className="topo-canvas-dialog-body">
-          {renderCanvas(`conversation-canvas-fullscreen:${appName}`)}
-        </div>
-      </section>,
-      document.body,
-    )}
+            className="studio-tool-dialog-scrim"
+            aria-label={t("agentTopology.close")}
+            onClick={() => setDialog(null)}
+          />
+          <section className="studio-tool-dialog" role="dialog" aria-modal="true">
+            <header className="studio-tool-dialog-head is-iconless">
+              <div>
+                <h2>{t("agentTopology.addSkill")}</h2>
+                <p>{t("agentTopology.skillMountNextTurn")}</p>
+              </div>
+              <button
+                type="button"
+                className="studio-tool-dialog-close"
+                aria-label={t("agentTopology.close")}
+                onClick={() => setDialog(null)}
+              >
+                <X aria-hidden="true" />
+              </button>
+            </header>
+            <div className="studio-tool-dialog-body">
+              <SkillSpacePicker
+                selected={[...selectedSessionSkills]}
+                onChange={onSessionSkillsChange}
+              />
+            </div>
+          </section>
+        </div>,
+        document.body,
+      )}
+    </aside>
     </>
   );
 }
@@ -476,19 +300,8 @@ function CloseIcon() {
 }
 
 export function AgentInfoDrawer({
-  appName,
   info,
   loading,
-  activeAgent,
-  seenAgents,
-  execPath,
-  studioTools,
-  selectedStudioToolIds,
-  managedStudioToolIds,
-  studioToolsLoading,
-  studioToolsDisabled,
-  studioToolsUnavailableReason,
-  onStudioToolsChange,
   environments,
   workspaces,
   selectedEnvironments,
@@ -501,19 +314,8 @@ export function AgentInfoDrawer({
   onClose,
   returnFocusRef,
 }: {
-  appName: string;
   info: AgentInfo | null;
   loading: boolean;
-  activeAgent: string;
-  seenAgents: Set<string>;
-  execPath: string[];
-  studioTools?: StudioBffTool[];
-  selectedStudioToolIds?: readonly string[];
-  managedStudioToolIds?: readonly string[];
-  studioToolsLoading?: boolean;
-  studioToolsDisabled?: boolean;
-  studioToolsUnavailableReason?: string;
-  onStudioToolsChange?: (selectedIds: string[]) => void;
   environments?: StudioEnvironment[];
   workspaces?: StudioWorkspace[];
   selectedEnvironments?: readonly SessionEnvironmentMountSelection[];
@@ -573,19 +375,8 @@ export function AgentInfoDrawer({
         <div className="agent-info-drawer-body">
           {info || loading ? (
             <AgentInfoPanel
-              appName={appName}
               info={info}
               loading={loading}
-              activeAgent={activeAgent}
-              seenAgents={seenAgents}
-              execPath={execPath}
-              studioTools={studioTools}
-              selectedStudioToolIds={selectedStudioToolIds}
-              managedStudioToolIds={managedStudioToolIds}
-              studioToolsLoading={studioToolsLoading}
-              studioToolsDisabled={studioToolsDisabled}
-              studioToolsUnavailableReason={studioToolsUnavailableReason}
-              onStudioToolsChange={onStudioToolsChange}
               environments={environments}
               workspaces={workspaces}
               selectedEnvironments={selectedEnvironments}
