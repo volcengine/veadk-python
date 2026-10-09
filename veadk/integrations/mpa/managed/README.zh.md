@@ -76,7 +76,7 @@ AgentKit 返回的 Runtime 子网 ID 顺序可能不同。创建和重试接受�
 
 新执行 `veadk studio deploy` 后，托管创建会从服务端 VeFaaS 环境自动复用该 Studio 的 UserPool、客户端、Identity 地域和 `/oauth/callback`。Studio 无需创建 YAML，直接使用代码内置的北京地域账号、Runtime/worker 镜像及模型默认值；模型 API Key 仍从 `VEADK_MPA_CONFIG_MODEL_AGENT_API_KEY` 读取。独立 CLI YAML 若显式填写不同的 `user-pool-name`、`user-pool-client-name`、`identity-callback-url`、`identity-region` 或对应的 `managed.runtime.env` 值，配置检查会在云写入前失败。此前部署的 Studio 须重新部署才能获得这些值。没有 Studio 环境值的独立 `veadk mpa provision` 仍使用显式 YAML。共享 PostgreSQL Workspace 在后续创建 MPA 时才准备，并非部署时的 Identity 存储。
 
-选择**智能体 → MPA 智能体 → 创建 MPA 智能体**。三步依次填写基础信息、PostgreSQL 自动准备说明，以及可选的 OpenViking 服务地址/资源 ID/API Key。填写 Runtime 名称（4–64 个 ASCII 字母、数字、下划线或连字符）。服务端生成智能体 ID 并注入 Agent 和 Worker，不再显示 ID 输入框。新创建使用下文的公开镜像查询默认值，并可手动覆盖镜像。已提交任务重试保留原镜像选择。已有 Runtime 不会被重命名或自动升级。PG 步骤提供[火山引擎 AIDAP 控制台](https://console.volcengine.com/aidap/region:aidap+cn-beijing/)入口；服务端在提交后取得 Workspace 连接。OpenViking 步骤提供[上下文管理控制台](https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing/ov-6689fabdf032294/context-management?accountId=default&userId=default&projectName=default)入口；该页面地址不是要填写的服务地址。PG 凭据仍由服务端配置。同时填写 OpenViking 地址、资源 ID 和遮罩的 API Key 时，注入 `OPENVIKING_URL`、`OPENVIKING_RESOURCE_ID`、`OPENVIKING_API_KEY` 和 `OPENVIKING_USER=default`。三项全空时不注入这些变量，模板或参考 Runtime 中的旧值也不会继承。密钥不保存到浏览器草稿或任务 SQLite，浏览器重启后须重新填写。查看资源计划后在第三步提交。流程依次准备账号网络/APIG/IM Gateway、worker、独立业务库和 Skill Space，然后部署并检查 Runtime 和应用就绪状态。成功后刷新列表。
+选择**智能体 → MPA 智能体 → 创建 MPA 智能体**。三步依次填写基础信息、PostgreSQL 自动准备说明，以及可选的 OpenViking 服务地址/资源 ID/API Key。填写 Runtime 名称（4–64 个 ASCII 字母、数字、下划线或连字符）。服务端生成智能体 ID 并注入 Agent 和 Worker，不再显示 ID 输入框。新创建使用 `agentkit-platform-2112682748-cn-beijing.cr.volces.com/mpa/mpa_agent:latest` 和 `agentkit-platform-2112682748-cn-beijing.cr.volces.com/mpa/mpa_codex_worker:latest`，不再显示镜像输入框。已提交任务重试保留原镜像选择。已有 Runtime 不会被重命名或自动升级。PG 步骤提供[火山引擎 AIDAP 控制台](https://console.volcengine.com/aidap/region:aidap+cn-beijing/)入口；服务端在提交后取得 Workspace 连接。OpenViking 步骤提供[上下文管理控制台](https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing/ov-6689fabdf032294/context-management?accountId=default&userId=default&projectName=default)入口；该页面地址不是要填写的服务地址。PG 凭据仍由服务端配置。同时填写 OpenViking 地址、资源 ID 和遮罩的 API Key 时，注入 `OPENVIKING_URL`、`OPENVIKING_RESOURCE_ID`、`OPENVIKING_API_KEY` 和 `OPENVIKING_USER=default`。三项全空时不注入这些变量，模板或参考 Runtime 中的旧值也不会继承。密钥不保存到浏览器草稿或任务 SQLite，浏览器重启后须重新填写。查看资源计划后在第三步提交。流程依次准备账号网络/APIG/IM Gateway、worker、独立业务库和 Skill Space，然后部署并检查 Runtime 和应用就绪状态。成功后刷新列表。
 
 最初的配置检查是本地校验，**不代表**真实权限或连通性已通过。提交后、创建资源前会检查云账号和数据库权限；后续各云步骤检查自身响应。关闭窗口可让创建继续，显式取消才停止编排。在同一浏览器会话重新打开可恢复进度。窗口支持键盘、多行中文输入、两种主题和窄窗口。
 
@@ -208,7 +208,7 @@ pg-channel-binding: require
 
 ### 在 Studio 创建时填写镜像
 
-弹窗从公开仓库 `agentkit-platform-2112682748-cn-beijing.cr.volces.com/agentkit/agentkit_mpa_agent_studio` 和 `agentkit-platform-2112682748-cn-beijing.cr.volces.com/agentkit/agentkit_mpa_codex_worker_studio` 预填最新 Linux/amd64 构建的 **MPA 镜像**和 **Worker 镜像**。最新按镜像 config 构建时间判断，不按标签名或推送时间。自动默认值显示为不可变的 `@sha256:` 引用。可以手动替换任意输入；清空则在首次提交时解析最新默认值。公开查询不需要部署账号的仓库管理权限，失败明确展示且不回退。首次实际镜像在重试/重开时保持不变，即使仓库发布新版本或暂时不可用。提交后锁定输入，已有请求不能修改镜像。显式 CLI YAML 镜像配置保持独立，不自动查询。镜像拉取权限和应用兼容性仍由管理员负责。
+新的 Studio 请求使用上文的服务端 latest 镜像默认值，弹窗不再提供镜像输入框。已经提交的旧请求重试时保持原镜像选择。旧 API 客户端及 CLI/YAML 配置仍可指定容器镜像，沿用原有校验和访问要求。改变镜像标签不会升级运行中的智能体。
 
 ### Worker 重试与失败诊断
 
@@ -234,7 +234,7 @@ Flat 创建默认设置 `ENABLE_A2A=true` 和 `DISABLE_JWT_AUTH=true`。绕过�
 
 ### 托管沙箱模板命名
 
-新托管沙箱模板使用去掉两端空白、将所有 `-` 替换为 `_` 的智能体 ID（例如 `mi-example` → `mi_example`）。已有 worker ID 仍为权威绑定，不重命名。变更前未完成的创建意图，仅在完整旧请求与已存 worker_hash 匹配时保留哈希名称，并保留 ClientToken。其他请求变更和无关同名资源仍报错。作用域所有权标签及 Runtime ToolId 绑定不变。
+新的 Studio 名称请求直接使用经过校验的手填 Runtime 名称作为沙箱模板 Name（4–64 个 ASCII 字母、数字、连字符或下划线）。未提供名称的旧 CLI 请求仍使用去除首尾空白、将 `-` 替换为 `_` 的智能体 ID。内部智能体 ID、数据库/技能空间/渠道标识、作用域归属标签及 Runtime ToolId 绑定不变。已有 worker ID 为权威绑定，不重命名。新的未完成意图在部署 JSON 中保存 `worker_name`，拒绝后续名称变化。没有该字段的旧意图，仅在完整候选请求与已存 worker_hash 匹配时重放标准化 ID 名称或哈希名称，保留 ClientToken。其他请求变化及无关同名资源仍报错。
 
 ### 自动准备 MPA 运行角色
 
@@ -263,3 +263,5 @@ managed:
 ```
 
 `managed.worker.env` 接受大写字符串键及完整服务端环境变量引用，覆盖可选且可访问 `reference-id` 中已过滤的环境设置。智能体/Runtime/Tool/技能空间绑定、继承的渠道/Runtime 凭据及控制库地址为保留字段。显式参考模板缺失仍报错。`existing-id` 不允许环境设置，因为不会更新已有 Tool。密钥不进入配置摘要/repr 或部署记录；使用服务端引用，不提交实际值。模型凭据由 Runtime 按会话下发，不从旧 Tool 复制。
+
+新的名称 MPA 部署使用 `Skills for MPA agent <runtime_name>` 作为技能空间描述，便于在云控制台辨认手填名称。生成的空间 Name、display_name 标签、内部智能体 ID 及绑定保持不变。已有空间保留原描述；升级前待完成请求按原描述准确恢复，其他输入变化仍报错。不提供 Runtime 名称的调用保留内部 ID 描述。

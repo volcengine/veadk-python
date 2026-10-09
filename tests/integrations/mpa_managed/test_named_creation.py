@@ -78,9 +78,10 @@ def test_new_creation_generates_owner_scoped_id_and_latest_images(routes):
         assert re.fullmatch(r"mi-[0-9a-f]{24}", payload["agentId"])
         ids.append(payload["agentId"])
         assert "runtimeImage" not in payload and "workerImage" not in payload
+        registry = "agentkit-platform-2112682748-cn-beijing.cr.volces.com/mpa"
         assert call.kwargs["images"] == {
-            field: f"registry.example/{field}@sha256:" + "a" * 64
-            for field in ("runtimeImage", "workerImage")
+            "runtimeImage": f"{registry}/mpa_agent:latest",
+            "workerImage": f"{registry}/mpa_codex_worker:latest",
         }
     assert ids[0] == ids[1]
     assert len(set(ids)) == 3

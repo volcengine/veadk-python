@@ -390,6 +390,7 @@ async def provision(
                 region=profile.region,
                 agent_id=agent_id,
                 project=template.get("ProjectName") or "default",
+                runtime_name=runtime_name,
             )
         env.update(AGENTKIT_TOOL_ID=tool_id, AGENTKIT_TOOL_REGION=profile.region)
         template["ToolId"] = tool_id

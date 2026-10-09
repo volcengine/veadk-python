@@ -17,17 +17,12 @@
 from __future__ import annotations
 
 
-STUDIO_IMAGE_REPOSITORIES = {
-    "runtimeImage": "agentkit-platform-2112682748-cn-beijing.cr.volces.com/agentkit/agentkit_mpa_agent_studio",
-    "workerImage": "agentkit-platform-2112682748-cn-beijing.cr.volces.com/agentkit/agentkit_mpa_codex_worker_studio",
-}
-
-
 def studio_profile_values() -> dict:
     """Return a fresh Beijing profile; secrets remain server environment values."""
     region = "cn-beijing"
     role = "IDRoleForArkClawShareAgent"
     model = "doubao-seed-2-0-pro-260215"
+    registry = "agentkit-platform-2112682748-cn-beijing.cr.volces.com/mpa"
     return {
         "region": region,
         "model-provider": "openai",
@@ -47,7 +42,7 @@ def studio_profile_values() -> dict:
             "database-admin-url-env": "DEPLOYMENT_DATABASE_ADMIN_URL",
             "shared-database-url-env": "SHARED_APIG_DATABASE_URL",
             "runtime": {
-                "image": f"{STUDIO_IMAGE_REPOSITORIES['runtimeImage']}:studio-a1f9627-20260923-172555",
+                "image": f"{registry}/mpa_agent:latest",
                 "role-name": role,
                 "cpu-milli": 2000,
                 "memory-mb": 4096,
@@ -85,10 +80,7 @@ def studio_profile_values() -> dict:
                 },
             },
             "worker": {
-                "image": (
-                    f"{STUDIO_IMAGE_REPOSITORIES['workerImage']}:"
-                    "20260921-master-81f3496-160404"
-                ),
+                "image": f"{registry}/mpa_codex_worker:latest",
                 "role-name": role,
             },
             "timeout-seconds": 1800,

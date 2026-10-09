@@ -428,6 +428,7 @@ class AgentRuntimeDeployer:
                 region=self.region,
                 agent_id=agent_id,
                 project_name=template.get("ProjectName") or "",
+                runtime_name=runtime_name,
                 configured_id=source_env.get("SKILL_SPACE_ID", "").strip(),
                 current_id=env_map(current).get("SKILL_SPACE_ID", "").strip()
                 if current

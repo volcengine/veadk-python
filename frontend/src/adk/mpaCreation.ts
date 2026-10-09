@@ -74,10 +74,7 @@ async function request<T>(
       withLocalUser({ "Content-Type": "application/json" }),
     ),
     body: body === undefined ? undefined : JSON.stringify(body),
-    signal: requestSignal(
-      signal,
-      path.startsWith("config?") || path === "tasks" ? 75_000 : DEFAULT_REQUEST_TIMEOUT_MS,
-    ),
+    signal: requestSignal(signal, DEFAULT_REQUEST_TIMEOUT_MS),
   });
   if (!response.ok) {
     const value = await response.json().catch(() => ({}));
@@ -90,9 +87,9 @@ async function request<T>(
   }
   return response.json() as Promise<T>;
 }
-export const getMpaCreationConfig = (region: string, signal: AbortSignal, requestId?: string) =>
+export const getMpaCreationConfig = (region: string, signal: AbortSignal) =>
   request<MpaCreationConfig>(
-    `config?region=${encodeURIComponent(region)}${requestId ? `&requestId=${encodeURIComponent(requestId)}` : ""}`,
+    `config?region=${encodeURIComponent(region)}`,
     signal,
   );
 export const startMpaCreation = (

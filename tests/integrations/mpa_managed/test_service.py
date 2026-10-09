@@ -40,8 +40,15 @@ from tests.integrations.mpa_managed.test_agent_deployment import (
 @pytest.mark.parametrize("split_workspaces", [False, True])
 @pytest.mark.parametrize("openviking", [False, True])
 @pytest.mark.parametrize("studio_runtime_owner", [None, "studio-user"])
+@pytest.mark.parametrize("runtime_name", ["", "Support-Agent_01"])
 def test_network_gateway_worker_precede_runtime(
-    monkeypatch, source, image, split_workspaces, openviking, studio_runtime_owner
+    monkeypatch,
+    source,
+    image,
+    split_workspaces,
+    openviking,
+    studio_runtime_owner,
+    runtime_name,
 ):
     async def run():
         entry = Registry()
@@ -176,6 +183,8 @@ def test_network_gateway_worker_precede_runtime(
 
         async def worker(*a, **kw):
             assert events == ["identity", "gateway"]
+            assert kw["runtime_name"] == runtime_name
+            assert kw["agent_id"] == "mi-123456789abc"
             events.append("worker")
             return "t-one"
 
@@ -192,6 +201,10 @@ def test_network_gateway_worker_precede_runtime(
 
         async def create(request):
             assert events == ["identity", "gateway", "worker"]
+            assert request["Name"] == (runtime_name or "mi-123456789abc")
+            assert cloud.space_creates[0]["Description"] == (
+                "Skills for MPA agent " + (runtime_name or "mi-123456789abc")
+            )
             assert request["ToolId"] == "t-one"
             runtime_tags = {
                 item["Key"]: item["Value"] for item in request.get("Tags", [])
@@ -268,9 +281,9 @@ def test_network_gateway_worker_precede_runtime(
             agent_id="mi-123456789abc",
             owner="owner-hash-a",
             studio_runtime_owner=studio_runtime_owner,
-            runtime_name="support-agent",
+            runtime_name=runtime_name,
         )
-        assert cloud.creates[0]["Name"] == "support-agent"
+        assert cloud.creates[0]["Name"] == (runtime_name or "mi-123456789abc")
         assert result["runtime_id"] == "r-agent"
         assert result["gateway_id"] == "gw-one"
         assert cloud.runtimes[result["runtime_id"]]["ToolId"] == "t-one"

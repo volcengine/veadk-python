@@ -1637,7 +1637,7 @@ With `managed.postgres` configured, the PG step uses a shared business Workspace
 
 配置 `managed.postgres` 后，PG 步骤使用共享业务 Workspace，每个 MPA 保留独立业务库。账号/地域共享资源记录存入 `mpa_admin_workspace/mpa_admin_db`。设置 `managed.postgres.mode: auto` 后，由部署 STS 创建/复用两个 Workspace，PG 步骤无需填写连接信息；仍兼容手动配置。参见[配置和注册库迁移说明](../veadk/integrations/mpa/managed/README.zh.md)。
 
-The MPA creation dialog asks for a Runtime name (4–64 ASCII letters, digits, underscores or hyphens) and description. The server generates the stable Agent ID; the ID is not shown as an input. Fresh requests resolve the newest public MPA/Worker images; editable image inputs allow manual overrides. Submitted legacy drafts retain their original request and images for retry. Existing Runtimes are unchanged. See [managed creation](../veadk/integrations/mpa/managed/README.md).
+The MPA creation dialog asks for a Runtime name (4–64 ASCII letters, digits, underscores or hyphens) and description. The server generates the stable Agent ID; neither ID nor image inputs are shown. Fresh requests use the built-in `mpa/mpa_agent:latest` and `mpa/mpa_codex_worker:latest` images. Submitted legacy drafts retain their original request and images for retry. Existing Runtimes are unchanged. See [managed creation](../veadk/integrations/mpa/managed/README.md).
 
 The dialog now uses three steps: basics (required Runtime name and description), automatic PostgreSQL preparation, and optional OpenViking HTTPS URL/resource ID/API Key. It links to the relevant Volcengine console pages. The server obtains PostgreSQL Workspace connections through deployment credentials. OpenViking is enabled only when the HTTPS URL, resource ID and masked API Key are all entered; leaving all three blank omits its four Runtime variables, including any values inherited from a template or reference Runtime. The key is never saved in browser drafts or task SQLite. Only the final step submits; nonsecret draft choices and request identity survive reopening in the same browser session. See the [creation contract](../specs/studio-mpa-creation/README.md).
 
@@ -1647,7 +1647,7 @@ After a confirmed failure or cancellation, the dialog retains the old task for s
 
 失败或取消后，创建弹窗保留原任务供同 ID 重试；点击“新建另一个智能体”会生成新的请求 UUID 和空白名称并返回第一步，服务端在提交时派生新智能体 ID。该操作只替换浏览器草稿，不会删除上次创建的云资源。运行中或提交结果不明时不能切换到新身份。
 
-MPA 创建弹窗填写 Runtime 名称（4–64 个 ASCII 字母、数字、下划线或连字符）和描述。服务端生成稳定的智能体 ID，不再显示 ID 输入框。新请求解析公开仓库最新的 MPA/Worker 镜像，保留镜像输入框供手动覆盖。已提交旧草稿保留原请求和镜像用于重试。现有 Runtime 不变。参见[托管创建说明](../veadk/integrations/mpa/managed/README.zh.md)。
+MPA 创建弹窗填写 Runtime 名称（4–64 个 ASCII 字母、数字、下划线或连字符）和描述。服务端生成稳定的智能体 ID，不再显示 ID 和镜像输入框。新请求使用内置 `mpa/mpa_agent:latest` 和 `mpa/mpa_codex_worker:latest` 镜像。已提交旧草稿保留原请求和镜像用于重试。现有 Runtime 不变。参见[托管创建说明](../veadk/integrations/mpa/managed/README.zh.md)。
 
 MPA A2A responses now group adjacent assistant fragments into one reply with a single action row. Copy/share include the grouped response; feedback remains attached to the final answer event, and the trace entry retains the session timeline through the latest fragment. Reported request tokens are deduplicated by usage source/event, including trailing usage updates. General-agent rendering is unchanged.
 
@@ -1794,7 +1794,7 @@ With `managed.postgres` configured, the PG step uses a shared business Workspace
 
 配置 `managed.postgres` 后，PG 步骤使用共享业务 Workspace，每个 MPA 保留独立业务库。账号/地域共享资源记录存入 `mpa_admin_workspace/mpa_admin_db`。设置 `managed.postgres.mode: auto` 后，由部署 STS 创建/复用两个 Workspace，PG 步骤无需填写连接信息；仍兼容手动配置。参见[配置和注册库迁移说明](../veadk/integrations/mpa/managed/README.zh.md)。
 
-The MPA creation dialog asks for a Runtime name (4–64 ASCII letters, digits, underscores or hyphens) and description. The server generates the stable Agent ID; the ID is not shown as an input. Fresh requests resolve the newest public MPA/Worker images; editable image inputs allow manual overrides. Submitted legacy drafts retain their original request and images for retry. Existing Runtimes are unchanged. See [managed creation](../veadk/integrations/mpa/managed/README.md).
+The MPA creation dialog asks for a Runtime name (4–64 ASCII letters, digits, underscores or hyphens) and description. The server generates the stable Agent ID; neither ID nor image inputs are shown. Fresh requests use the built-in `mpa/mpa_agent:latest` and `mpa/mpa_codex_worker:latest` images. Submitted legacy drafts retain their original request and images for retry. Existing Runtimes are unchanged. See [managed creation](../veadk/integrations/mpa/managed/README.md).
 
 The dialog now uses three steps: basics (required Runtime name and description), automatic PostgreSQL preparation, and optional OpenViking HTTPS URL/resource ID/API Key. It links to the relevant Volcengine console pages. The server obtains PostgreSQL Workspace connections through deployment credentials. OpenViking is enabled only when the HTTPS URL, resource ID and masked API Key are all entered; leaving all three blank omits its four Runtime variables, including any values inherited from a template or reference Runtime. The key is never saved in browser drafts or task SQLite. Only the final step submits; nonsecret draft choices and request identity survive reopening in the same browser session. See the [creation contract](../specs/studio-mpa-creation/README.md).
 
@@ -1804,7 +1804,7 @@ After a confirmed failure or cancellation, the dialog retains the old task for s
 
 失败或取消后，创建弹窗保留原任务供同 ID 重试；点击“新建另一个智能体”会生成新的请求 UUID 和空白名称并返回第一步，服务端在提交时派生新智能体 ID。该操作只替换浏览器草稿，不会删除上次创建的云资源。运行中或提交结果不明时不能切换到新身份。
 
-MPA 创建弹窗填写 Runtime 名称（4–64 个 ASCII 字母、数字、下划线或连字符）和描述。服务端生成稳定的智能体 ID，不再显示 ID 输入框。新请求解析公开仓库最新的 MPA/Worker 镜像，保留镜像输入框供手动覆盖。已提交旧草稿保留原请求和镜像用于重试。现有 Runtime 不变。参见[托管创建说明](../veadk/integrations/mpa/managed/README.zh.md)。
+MPA 创建弹窗填写 Runtime 名称（4–64 个 ASCII 字母、数字、下划线或连字符）和描述。服务端生成稳定的智能体 ID，不再显示 ID 和镜像输入框。新请求使用内置 `mpa/mpa_agent:latest` 和 `mpa/mpa_codex_worker:latest` 镜像。已提交旧草稿保留原请求和镜像用于重试。现有 Runtime 不变。参见[托管创建说明](../veadk/integrations/mpa/managed/README.zh.md)。
 
 MPA A2A responses now group adjacent assistant fragments into one reply with a single action row. Copy/share include the grouped response; feedback remains attached to the final answer event, and the trace entry retains the session timeline through the latest fragment. Reported request tokens are deduplicated by usage source/event, including trailing usage updates. General-agent rendering is unchanged.
 

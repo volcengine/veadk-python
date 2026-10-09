@@ -201,7 +201,7 @@ it("edits the Runtime name and navigates the three creation steps", async () => 
   expect(field("name").value).toBe("test-agent");
   expect(field("name").disabled).toBe(false);
   expect(document.querySelector('input[name="agentId"]')).toBeNull();
-  expect(field("runtimeImage")).not.toBeNull();
+  expect(document.querySelector('input[name="runtimeImage"]')).toBeNull();
   await act(async () => button("next").click());
   expect(document.body.textContent).toContain("myAgents.mpaCreate.pgHost");
   expect(
@@ -247,7 +247,7 @@ it("restores an unsubmitted name and request after reopening", async () => {
       .requestId,
   ).toBe(requestId);
 });
-it("removes browser-owned IDs but preserves editable image choices from unsubmitted drafts", async () => {
+it("removes hidden IDs and image overrides from unsubmitted legacy drafts", async () => {
   const requestId = "12345678-90ab-4cde-8f01-23456789abcd";
   sessionStorage.setItem(
     "mpa-create:cn-beijing",
@@ -274,8 +274,8 @@ it("removes browser-owned IDs but preserves editable image choices from unsubmit
     sessionStorage.getItem("mpa-create:cn-beijing")!,
   ).input;
   expect(draft.agentId).toBeUndefined();
-  expect(draft.runtimeImage).toBe("registry.example/old:v1");
-  expect(draft.workerImage).toBe("registry.example/old-worker:v1");
+  expect(draft.runtimeImage).toBeUndefined();
+  expect(draft.workerImage).toBeUndefined();
   expect(draft.requestId).toBe(requestId);
 });
 it("keeps a submitted short ID unchanged for task retry", async () => {
@@ -536,7 +536,7 @@ it("navigates restored submitted settings without unlocking or changing identity
   await act(async () => steps()[0].click());
   expect(field("name").value).toBe("mi-saved");
   expect(field("name").disabled).toBe(true);
-  expect(field("runtimeImage").disabled).toBe(true);
+  expect(document.querySelector('input[name="runtimeImage"]')).toBeNull();
   await act(async () => steps()[1].click());
   expect(field("pgHost").disabled).toBe(true);
   await act(async () => steps()[2].click());
@@ -789,7 +789,7 @@ it("shows the registry migration prerequisite without asking for PG inputs", asy
   expect(button("submit").disabled).toBe(true);
 });
 
-it("requires a Runtime name and keeps server-generated IDs with selectable images", async () => {
+it("requires a Runtime name and omits browser-owned IDs and images", async () => {
   vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
     configured: true,
     region: "cn-beijing",
@@ -799,7 +799,7 @@ it("requires a Runtime name and keeps server-generated IDs with selectable image
   await mount(false);
   expect(field("name").value).toBe("");
   expect(button("next").disabled).toBe(true);
-  for (const removed of ["agentId"]) {
+  for (const removed of ["agentId", "runtimeImage", "workerImage"]) {
     expect(document.querySelector(`input[name="${removed}"]`)).toBeNull();
   }
   await edit("name", "  support-agent  ");
@@ -808,8 +808,8 @@ it("requires a Runtime name and keeps server-generated IDs with selectable image
   const request = vi.mocked(api.startMpaCreation).mock.calls[0][0];
   expect(request.name).toBe("support-agent");
   expect(request.agentId).toBeUndefined();
-  expect(request.runtimeImage).toBe("registry.example/old:v1");
-  expect(request.workerImage).toBe("");
+  expect(request.runtimeImage).toBeUndefined();
+  expect(request.workerImage).toBeUndefined();
 });
 
 it("keeps composition and multiline description input from submitting the wizard", async () => {
@@ -923,68 +923,6 @@ it("keeps disabled and loading appearance consistent across shared Button varian
   }
 });
 
-it("prefills both images and submits edits or an intentionally cleared default", async () => {
-  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
-    configured: true,
-    region: "cn-beijing",
-    runtimeImage: "registry.example/mpa:v1",
-    workerImage: "registry.example/worker:v1",
-  });
-  vi.mocked(api.startMpaCreation).mockReturnValue(new Promise(() => {}));
-  await mount();
-  expect(field("runtimeImage").value).toBe("registry.example/mpa:v1");
-  expect(field("workerImage").value).toBe("registry.example/worker:v1");
-  await edit("runtimeImage", "registry.example/mpa:custom");
-  await edit("workerImage", "");
-  await goToFinal();
-  await act(async () => submitButton().click());
-  expect(vi.mocked(api.startMpaCreation).mock.calls[0][0]).toMatchObject({
-    runtimeImage: "registry.example/mpa:custom",
-    workerImage: "",
-  });
-  expect(button("previousStep")).toBeDefined();
-});
-it("blocks malformed image references but allows empty values", async () => {
-  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
-    configured: true,
-    region: "cn-beijing",
-  });
-  await mount();
-  await edit("runtimeImage", "https://repo?token=private");
-  expect(button("next").disabled).toBe(true);
-  expect(field("runtimeImage").getAttribute("aria-invalid")).toBe("true");
-  await edit("runtimeImage", "");
-  await goToFinal();
-  expect(submitButton().disabled).toBe(false);
-});
-it("does not replace saved or cleared image choices when config reloads after a lost response", async () => {
-  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
-    configured: true,
-    region: "cn-beijing",
-    runtimeImage: "registry.example/mpa:v1",
-    workerImage: "registry.example/worker:v1",
-  });
-  vi.mocked(api.startMpaCreation).mockRejectedValue(new Error("Response lost"));
-  await mount();
-  await edit("runtimeImage", "");
-  await edit("workerImage", "registry.example/worker:custom");
-  await goToFinal();
-  await act(async () => submitButton().click());
-  const original = vi.mocked(api.startMpaCreation).mock.calls[0][0];
-  await act(async () => root.render(null));
-  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
-    configured: true,
-    region: "cn-beijing",
-    runtimeImage: "registry.example/mpa:v2",
-  });
-  await mount();
-  const saved = JSON.parse(sessionStorage.getItem("mpa-create:cn-beijing")!);
-  expect(saved.input.runtimeImage).toBe("");
-  expect(saved.input.workerImage).toBe("registry.example/worker:custom");
-  await act(async () => submitButton().click());
-  expect(vi.mocked(api.startMpaCreation).mock.calls[1][0]).toEqual(original);
-});
-
 it("preserves the runtime role stage and actionable IAM error for retry", async () => {
   const input = {
     region: "cn-beijing",
@@ -1018,31 +956,4 @@ it("preserves the runtime role stage and actionable IAM error for retry", async 
   expect(
     JSON.parse(sessionStorage.getItem("mpa-create:cn-beijing")!).input.agentId,
   ).toBe(input.agentId);
-});
-
-it("passes the recovering request identity to config inspection", async () => {
-  const requestId = "11111111-1111-4111-8111-111111111111";
-  sessionStorage.setItem(
-    "mpa-create:cn-beijing",
-    JSON.stringify({
-      input: {
-        requestId,
-        agentId: "mi-test",
-        region: "cn-beijing",
-        description: "",
-      },
-      submitted: true,
-      step: 2,
-    }),
-  );
-  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
-    configured: true,
-    region: "cn-beijing",
-  });
-  await mount();
-  expect(api.getMpaCreationConfig).toHaveBeenCalledWith(
-    "cn-beijing",
-    expect.any(AbortSignal),
-    requestId,
-  );
 });

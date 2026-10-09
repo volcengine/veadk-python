@@ -1629,7 +1629,7 @@
       "tosCredentials": "凭证仅用于本次创建，不会保存在浏览器恢复数据或创建任务记录中。",
       "runtimeImage": "MPA 镜像",
       "workerImage": "Worker 镜像",
-      "imageDefault": "留空自动选择公开仓库的最新镜像",
+      "imageDefault": "留空使用配置文件中的默认镜像",
       "imageInvalid": "请输入有效的镜像地址，不要包含网址、空格或登录凭据。",
       "title": "创建 MPA 智能体",
       "agentId": "智能体 ID",

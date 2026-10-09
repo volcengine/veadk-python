@@ -169,15 +169,6 @@ class CreationTasks:
             **json.loads(row["payload"]),
         }
 
-    def request_images(self, owner: str, request_id: str) -> dict | None:
-        """Read a prior request snapshot without resolving new registry defaults."""
-        with self.db() as db:
-            row = db.execute(
-                "SELECT images FROM tasks WHERE owner=? AND request=?",
-                (owner, request_id),
-            ).fetchone()
-        return json.loads(row["images"]) if row is not None else None
-
     async def start(
         self,
         owner,

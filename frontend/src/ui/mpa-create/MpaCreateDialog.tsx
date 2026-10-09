@@ -16,7 +16,6 @@ import {
 } from "../../adk/mpaCreation";
 import "../../components/composites/ModalButton/ModalButton.css";
 import "./MpaCreateDialog.css";
-import { validCreationImage } from "../../adk/mpaCreationImages";
 import { runtimeNameProblem } from "../../create/runtimeName";
 import { validOpenViking, validPgTarget } from "../../adk/mpaCreationResources";
 
@@ -60,6 +59,8 @@ function initial(region: string): {
         name: typeof saved.input.name === "string" ? saved.input.name : "",
       };
       delete draft.agentId;
+      delete draft.runtimeImage;
+      delete draft.workerImage;
       return { ...saved, input: withoutTosCredentials(draft) };
     }
   } catch {
@@ -113,9 +114,6 @@ export function MpaCreateDialog({
         t(`validation.runtimeName.${problem}`, { ns: "create" }),
       );
   const nameValid = !nameError;
-  const imagesValid =
-    validCreationImage(input.runtimeImage) &&
-    validCreationImage(input.workerImage);
   const autoPg = config?.postgresMode === "auto";
   const pgValid = autoPg
     ? !input.pgHost && !input.pgPort
@@ -170,7 +168,7 @@ export function MpaCreateDialog({
   useEffect(() => {
     const controller = new AbortController();
     setLoading(true);
-    void getMpaCreationConfig(region, controller.signal, input.requestId)
+    void getMpaCreationConfig(region, controller.signal)
       .then((value) => {
         if (!controller.signal.aborted) {
           setConfig(value);
@@ -182,8 +180,6 @@ export function MpaCreateDialog({
           ) {
             setInput((previous) => ({
               ...previous,
-              runtimeImage: previous.runtimeImage ?? value.runtimeImage ?? "",
-              workerImage: previous.workerImage ?? value.workerImage ?? "",
               pgHost:
                 value.postgresMode === "auto"
                   ? ""
@@ -203,7 +199,7 @@ export function MpaCreateDialog({
         if (!controller.signal.aborted) setLoading(false);
       });
     return () => controller.abort();
-  }, [region, revision, t, input.requestId]);
+  }, [region, revision, t]);
   useEffect(() => {
     if (!taskId) return;
     const controller = new AbortController();
@@ -241,7 +237,6 @@ export function MpaCreateDialog({
       lock.current ||
       !config?.configured ||
       !nameValid ||
-      !imagesValid ||
       !pgValid ||
       !openvikingValid ||
       !tosValid ||
@@ -309,8 +304,6 @@ export function MpaCreateDialog({
   function startAnotherAgent() {
     const nextInput: MpaCreationInput = {
       ...freshInput(region),
-      runtimeImage: config?.runtimeImage ?? "",
-      workerImage: config?.workerImage ?? "",
       pgHost: autoPg ? "" : (config?.pgHost ?? ""),
       pgPort: autoPg ? "" : (config?.pgPort ?? ""),
     };
@@ -376,9 +369,7 @@ export function MpaCreateDialog({
                             busy ||
                             (index > step &&
                               !submitted &&
-                              (!nameValid ||
-                                !imagesValid ||
-                                (index === 2 && !pgValid)))
+                              (!nameValid || (index === 2 && !pgValid)))
                           }
                           onClick={() => setStep(index)}
                         >
@@ -437,50 +428,6 @@ export function MpaCreateDialog({
                       />
                     </label>
 
-                    {(["runtimeImage", "workerImage"] as const).map((field) => (
-                      <label key={field}>
-                        {t(key(field))}
-                        <input
-                          name={field}
-                          value={
-                            submitted
-                              ? (task?.images?.[field] ?? input[field] ?? "")
-                              : (input[field] ?? "")
-                          }
-                          maxLength={1024}
-                          placeholder={t(key("imageDefault"))}
-                          disabled={
-                            loading || busy || submitted || !config?.configured
-                          }
-                          autoComplete="off"
-                          spellCheck={false}
-                          aria-invalid={!validCreationImage(input[field])}
-                          aria-describedby={`mpa-${field}-help`}
-                          onChange={(event) =>
-                            setInput((previous) => ({
-                              ...previous,
-                              [field]: event.target.value,
-                            }))
-                          }
-                        />
-                        <p
-                          id={`mpa-${field}-help`}
-                          role={
-                            !validCreationImage(input[field])
-                              ? "alert"
-                              : undefined
-                          }
-                        >
-                          {t(
-                            key(
-                              validCreationImage(input[field])
-                                ? "imageDefault"
-                                : "imageInvalid",
-                            ),
-                          )}
-                        </p>
-                      </label>
-                    ))}
                     <section
                       className="mpa-create-plan"
                       aria-label={t(key("plan"))}
@@ -759,7 +706,7 @@ export function MpaCreateDialog({
                       <Button
                         disabled={
                           busy ||
-                          (step === 0 && (!nameValid || !imagesValid)) ||
+                          (step === 0 && !nameValid) ||
                           (step === 1 && !pgValid)
                         }
                         onClick={() => setStep((previous) => previous + 1)}
@@ -773,7 +720,6 @@ export function MpaCreateDialog({
                           loading ||
                           !config?.configured ||
                           !nameValid ||
-                          !imagesValid ||
                           !pgValid ||
                           !openvikingValid ||
                           !tosValid
