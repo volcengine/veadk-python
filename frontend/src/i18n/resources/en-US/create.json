@@ -1,4 +1,20 @@
 {
+  "contextCompression": {
+    "title": "Automatic context compression",
+    "autoHint": "Keep relevant evidence near the input limit and replace older content with source references. Complete original sessions remain available for lookup when needed.",
+    "offHint": "Keep context unchanged. Known capacity limits are still checked.",
+    "capacity": "Capacity and compression thresholds",
+    "capacityHint": "If capacity is unknown, enter the context window and output reserve using documented model or deployment limits. Review these values when changing models.",
+    "context_window": "Context window (tokens)",
+    "input_limit": "Maximum input (tokens, optional)",
+    "output_reserve": "Output reserve (tokens)",
+    "automatic": "Use model capacity information",
+    "invalid": "Capacities must be positive integers. Percentages must be above 0 and at most 100%, with target < start ≤ history threshold.",
+    "ratioHint": "Percent of the available input budget. Defaults: start at 80%, target 60%, allow history compaction at 95%. These are thresholds and targets, not a guaranteed saving.",
+    "trigger_ratio": "Start compression (%)",
+    "target_ratio": "Compression target (%)",
+    "summary_trigger_ratio": "History compaction threshold (%)"
+  },
   "common": {
     "back": "Back",
     "cancel": "Cancel",

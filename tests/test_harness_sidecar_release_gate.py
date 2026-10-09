@@ -32,6 +32,25 @@ def _run_script(job: dict[str, object]) -> str:
     )
 
 
+def test_backend_setup_does_not_consume_sidecar_execution_budget() -> None:
+    jobs = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]
+    backend = jobs["backend-gate"]
+    steps = {step.get("name"): step for step in backend["steps"]}
+    install = steps["Install Python test dependencies"]
+    checks = steps["Run Python Sidecar checks in parallel"]
+
+    # Package downloads are not part of the Sidecar execution performance
+    # contract. Bound each phase, with room for checkout/setup and cleanup.
+    assert install.get("timeout-minutes") == 5
+    assert checks.get("timeout-minutes") == 3
+    assert 10 <= backend["timeout-minutes"] <= 15
+    assert backend["timeout-minutes"] >= (
+        install["timeout-minutes"] + checks["timeout-minutes"] + 2
+    )
+    assert not backend.get("continue-on-error", False)
+    assert not checks.get("continue-on-error", False)
+
+
 def test_sidecar_release_gate_runs_backend_and_frontend_in_parallel() -> None:
     workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
     jobs = workflow["jobs"]
@@ -42,7 +61,7 @@ def test_sidecar_release_gate_runs_backend_and_frontend_in_parallel() -> None:
     aggregate = jobs["gate"]
     assert "needs" not in backend
     assert "needs" not in frontend
-    assert backend["timeout-minutes"] == 3
+    assert backend["timeout-minutes"] == 10
     assert frontend["timeout-minutes"] == 3
     assert set(aggregate["needs"]) == {"backend-gate", "frontend-gate"}
     assert aggregate["if"] == "${{ always() }}"

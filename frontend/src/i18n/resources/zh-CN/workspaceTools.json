@@ -278,6 +278,15 @@
     "unnamed": "（未命名）"
   },
   "agentTopology": {
+    "contextCompression": {
+      "configured": "上下文自动压缩：已配置",
+      "compression_disabled": "上下文自动压缩：关闭",
+      "needs_configuration": "上下文保护：需配置模型容量",
+      "invalid_configuration": "上下文保护：容量配置无效",
+      "unsupported_model_adapter": "上下文保护：当前模型适配器不支持",
+      "unsupported_runtime": "上下文保护：当前运行时不支持",
+      "unknown": "上下文保护：状态未知"
+    },
     "mainAgent": "主 Agent",
     "subAgent": "子 Agent {{index}}",
     "itemCount_one": "{{count}} 项",

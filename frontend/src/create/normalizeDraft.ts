@@ -16,6 +16,7 @@ import {
   normalizeHarnessSidecarIntent,
 } from "./harnessSidecarOptions";
 import { normalizeDraftModelNames } from "./modelFallbacks";
+import { normalizeContextCompression } from "./contextCompression";
 
 const STM_IDS = new Set(["local", "sqlite", "mysql", "postgresql"]);
 const LTM_IDS = new Set([
@@ -181,6 +182,7 @@ function parseSubAgents(
       maxIterations: asMaxIterations(so.maxIterations),
       a2aUrl: asString(so.a2aUrl),
       modelName: modelNames.modelName,
+      contextCompression: normalizeContextCompression(so.contextCompression),
       modelFallbacks: modelNames.modelFallbacks,
       modelSource:
         so.modelSource === "custom" || so.modelSource === "ark"
@@ -337,6 +339,7 @@ export function normalizeDraft(raw: unknown): AgentDraft {
     maxIterations: asMaxIterations(o.maxIterations),
     a2aUrl: asString(o.a2aUrl),
     modelName: modelNames.modelName,
+    contextCompression: normalizeContextCompression(o.contextCompression),
     modelFallbacks: modelNames.modelFallbacks,
     modelSource:
       o.modelSource === "custom" || o.modelSource === "ark"

@@ -4000,6 +4000,7 @@ def _run_frontend_server(
             "tools": [_tool_label(t) for t in _agent_visible_tools(agent)],
             "skills": agent_skill_summaries(agent),
             "components": agent_component_summaries(agent),
+            **agent_context_metadata(agent),
             "path": list(path),
             "mentionable": mode not in ("task", "single_turn"),
             "children": children,
@@ -4379,6 +4380,8 @@ def _run_frontend_server(
         system_info_codex_model_env_states[kind] = state
         raise HTTPException(status_code=404, detail=detail)
 
+    from veadk.context.status import agent_context_metadata
+
     @app.get("/web/agent-info/{app_name}")
     async def _web_agent_info(app_name: str):
         try:
@@ -4390,6 +4393,7 @@ def _run_frontend_server(
             "description": getattr(agent, "description", "") or "",
             "type": _agent_type(agent),
             "model": _model_name(getattr(agent, "model", "")),
+            **agent_context_metadata(agent),
             "tools": [_tool_label(t) for t in _agent_visible_tools(agent)],
             "skills": agent_skill_summaries(agent),
             "components": agent_component_summaries(agent),
