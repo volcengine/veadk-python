@@ -502,6 +502,7 @@ def test_runtime_identity_and_oauth_preflights_run_in_parallel(
 
     role_started = Event()
     oauth_started = Event()
+    identity_client = object()
     policy = StudioAccessPolicy.from_csv(None, None)
 
     def initialize_roles(**_kwargs: Any) -> SimpleNamespace:
@@ -517,6 +518,7 @@ def test_runtime_identity_and_oauth_preflights_run_in_parallel(
         )
 
     def initialize_oauth(**_kwargs: Any) -> SimpleNamespace:
+        assert _kwargs["identity_client"] is identity_client
         oauth_started.set()
         assert role_started.wait(timeout=1), "Role preflight did not start in parallel"
         return SimpleNamespace(
@@ -526,6 +528,11 @@ def test_runtime_identity_and_oauth_preflights_run_in_parallel(
         )
 
     monkeypatch.setenv("OAUTH2_CLIENT_SECRET", "existing-secret")
+    # Keep SDK import and client setup outside the preflight timing assertion
+    monkeypatch.setattr(
+        "veadk.integrations.ve_identity.identity_client.IdentityClient",
+        lambda **_kwargs: identity_client,
+    )
     monkeypatch.setattr(OAuth2Config, "from_veidentity", initialize_oauth)
     monkeypatch.setattr(
         "veadk.auth.middleware.oauth2_auth.setup_oauth2",

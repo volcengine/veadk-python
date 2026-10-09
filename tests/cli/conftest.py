@@ -15,11 +15,23 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 
 from tests.cli.provider_environment import preserve_cli_provider_environment
+
+
+@pytest.fixture(autouse=True)
+def _isolate_studio_task_database(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Keep parallel app startups from migrating the same local task database"""
+    monkeypatch.setenv(
+        "VEADK_STUDIO_TASK_DB", str(tmp_path / "development-runs.sqlite3")
+    )
 
 
 @pytest.fixture(autouse=True)

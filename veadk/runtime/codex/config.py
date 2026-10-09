@@ -90,15 +90,56 @@ class CodexRuntimeConfig(BaseModel):
         ge=1,
         le=256,
         description=(
-            "ADK tool round-trips the shim may run for the whole Codex turn. "
-            "This budget is per turn, not per backend request: Codex issues one "
-            "request per native tool round, so a per-request counter allowed "
-            "rounds x budget executions. The default is higher than the old "
-            "per-request value so that turns which use an ADK tool after "
-            "several native tool rounds are not cut short."
+            "Maximum ADK/MCP tool calls admitted during one Codex turn, on "
+            "both transports. Parallel calls each count once; execution is "
+            "rejected before exceeding this budget. Native Codex tools are "
+            "not counted. The shim rejects a parallel batch if it cannot "
+            "admit the entire batch."
         ),
     )
     tool_timeout_seconds: float | None = Field(default=120.0, gt=0)
+    turn_timeout_seconds: float | None = Field(
+        default=1800.0,
+        gt=0,
+        description=(
+            "Upper bound for one Codex turn. Past it the turn is interrupted "
+            "and the invocation fails with a TimeoutError. Bounded by default: "
+            "a turn that never ends would also block its session's later "
+            "invocations, which queue behind it. None means no bound."
+        ),
+    )
+    auto_compact_token_limit: int | None = Field(
+        default=None,
+        gt=0,
+        description=(
+            "Token count at which Codex compacts the thread's history itself "
+            "(Codex's own summarization; its `model_auto_compact_token_limit`). "
+            "Direct transport only. None keeps Codex's default."
+        ),
+    )
+    model_transport: Literal["auto", "direct", "shim"] = Field(
+        default="auto",
+        description=(
+            "How Codex reaches the model. 'direct' points Codex at the model "
+            "endpoint's own Responses API; 'shim' routes it through VeADK's "
+            "in-process Responses-to-chat shim, which also executes ADK tools. "
+            "'auto' picks 'direct' only for hosts known to serve the OpenAI "
+            "Responses API compatibly (Volcengine Ark, BytePlus ModelArk, "
+            "api.openai.com) and 'shim' for everything else."
+        ),
+    )
+    thread_mode: Literal["resume", "ephemeral"] = Field(
+        default="resume",
+        description=(
+            "'resume' keeps one Codex thread per session: the thread's rollout "
+            "is stored alongside the session (in its database when the "
+            "short-term memory is database-backed) and resumed on the next "
+            "turn, so Codex keeps its own full history instead of being handed "
+            "a replayed transcript. 'ephemeral' starts a fresh thread every "
+            "invocation. Only the direct transport resumes; the shim is always "
+            "ephemeral, because the tools it runs never reach Codex's history."
+        ),
+    )
 
     @field_validator("workspace_root")
     @classmethod
@@ -161,6 +202,10 @@ class CodexRuntimeConfig(BaseModel):
             updates["approval_mode"] = value
         if value := os.getenv("VEADK_CODEX_WORKSPACE_ROOT"):
             updates["workspace_root"] = value
+        if value := os.getenv("VEADK_CODEX_MODEL_TRANSPORT"):
+            updates["model_transport"] = value.strip().lower()
+        if value := os.getenv("VEADK_CODEX_THREAD_MODE"):
+            updates["thread_mode"] = value.strip().lower()
         if value := os.getenv("VEADK_CODEX_NETWORK_ACCESS"):
             updates["network_access"] = value.strip().lower() in {
                 "1",
