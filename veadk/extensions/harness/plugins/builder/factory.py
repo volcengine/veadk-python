@@ -17,9 +17,11 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from typing import Literal
 
 from google.adk.plugins import BasePlugin
 
+from veadk.extensions.decisions import DEFAULT_JUDGEMENT_THRESHOLD
 from veadk.extensions.harness.modules.final_response_verifier import (
     FinalResponseVerifier,
     FinalResponseVerifierConfig,
@@ -28,9 +30,15 @@ from veadk.extensions.harness.modules.invocation_context import (
     HarnessInvocationContextBuilder,
     HarnessInvocationContextConfig,
 )
+from veadk.extensions.harness.modules.skill_prefilter import (
+    HarnessSkillPrefilterConfig,
+)
 from veadk.extensions.harness.modules.tool_result_compactor import (
     ToolResultCompactor,
     ToolResultCompactorConfig,
+)
+from veadk.extensions.harness.plugins.agent_routing import (
+    HarnessAgentRoutingPlugin,
 )
 from veadk.extensions.harness.plugins.compactor import HarnessCompressPlugin
 from veadk.extensions.harness.plugins.invocation_context import (
@@ -41,6 +49,9 @@ from veadk.extensions.harness.plugins.long_run_control import (
 )
 from veadk.extensions.harness.plugins.response_verification import (
     HarnessResponseVerificationPlugin,
+)
+from veadk.extensions.harness.plugins.skill_prefilter import (
+    HarnessSkillPrefilterPlugin,
 )
 from veadk.extensions.harness.stores import HarnessStoreProtocol, InMemoryHarnessStore
 
@@ -56,6 +67,12 @@ def build_harness_plugins(
     compaction_config: ToolResultCompactorConfig | None = None,
     compression_config: ToolResultCompactorConfig | None = None,
     verifier_config: FinalResponseVerifierConfig | None = None,
+    long_run_strategy: str = "counter",
+    long_run_ready_threshold: float = DEFAULT_JUDGEMENT_THRESHOLD,
+    long_run_min_confidence: float = 0.0,
+    skill_prefilter_config: HarnessSkillPrefilterConfig | None = None,
+    routing_strategy: str = "model",
+    routing_confidence_threshold: float = DEFAULT_JUDGEMENT_THRESHOLD,
 ) -> list[BasePlugin]:
     """Build a shared-store Harness plugin bundle."""
 
@@ -92,9 +109,39 @@ def build_harness_plugins(
             HarnessLongRunControlPlugin(
                 store=shared_store,
                 profile=profile,
+                strategy=_long_run_strategy(long_run_strategy),
+                ready_threshold=long_run_ready_threshold,
+                min_confidence=long_run_min_confidence,
+            )
+        )
+    if "skill_prefilter" in selected:
+        plugins.append(
+            HarnessSkillPrefilterPlugin(
+                config=skill_prefilter_config,
+                store=shared_store,
+                profile=profile,
+            )
+        )
+    if "agent_routing" in selected:
+        plugins.append(
+            HarnessAgentRoutingPlugin(
+                store=shared_store,
+                profile=profile,
+                strategy=_routing_strategy(routing_strategy),
+                confidence_threshold=routing_confidence_threshold,
             )
         )
     return plugins
+
+
+def _long_run_strategy(value: str | None) -> Literal["counter", "decision"]:
+    """Normalize the long-run control strategy name."""
+    return "decision" if (value or "").strip().lower() == "decision" else "counter"
+
+
+def _routing_strategy(value: str | None) -> Literal["model", "decision"]:
+    """Normalize the agent-routing strategy name."""
+    return "decision" if (value or "").strip().lower() == "decision" else "model"
 
 
 def _normalize_components(components: Iterable[ComponentName] | str | None) -> set[str]:
@@ -126,6 +173,14 @@ def _normalize_components(components: Iterable[ComponentName] | str | None) -> s
         "final_response_verifier": "hallucination",
         "harness_hallucination_plugin": "hallucination",
         "harness_response_verification_plugin": "hallucination",
+        "agent_routing": "agent_routing",
+        "agent_router": "agent_routing",
+        "harness_agent_routing_plugin": "agent_routing",
+        "routing": "agent_routing",
+        "router": "agent_routing",
+        "harness_skill_prefilter_plugin": "skill_prefilter",
+        "skill_prefilter": "skill_prefilter",
+        "skills": "skill_prefilter",
         "long_run": "long_run_control",
         "long_run_control": "long_run_control",
         "long_running": "long_run_control",

@@ -16,8 +16,18 @@
 
 from __future__ import annotations
 
+from collections import OrderedDict
+from typing import Literal
+
 from pydantic import Field
 
+from veadk.extensions.decisions import DecisionModelError
+from veadk.extensions.harness.modules.invocation_context.mode_judge import (
+    ARTIFACT_MODE,
+    PRECISION_MODE,
+    ModeJudge,
+    build_mode_judge,
+)
 from veadk.extensions.harness.schemas import (
     ToolReceipt,
     InvocationContextBlock,
@@ -26,6 +36,12 @@ from veadk.extensions.harness.schemas import (
     HarnessInvocationRef,
 )
 from veadk.extensions.harness.utils import summarize_text
+from veadk.utils.logger import get_logger
+
+logger = get_logger(__name__)
+
+#: 判定结果按 invocation 缓存，避免同一次运行里每次模型调用都问一遍。
+_MAX_CACHED_MODES = 64
 
 
 class HarnessInvocationContextConfig(HarnessBaseModel):
@@ -33,6 +49,11 @@ class HarnessInvocationContextConfig(HarnessBaseModel):
 
     max_history_messages: int = 12
     max_context_chars: int = 24000
+    # ``decision`` replaces the keyword markers of the precision and artifact
+    # blocks with a judgement from the configured decision model; ``keywords``
+    # keeps the marker lists below.
+    mode_strategy: Literal["keywords", "decision"] = "keywords"
+    mode_decision_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
     max_receipts: int = 8
     history_message_chars: int = 500
     receipt_summary_chars: int = 500
@@ -73,8 +94,44 @@ class HarnessInvocationContextConfig(HarnessBaseModel):
 class HarnessInvocationContextBuilder:
     """Build compact invocation context for an Agent turn."""
 
-    def __init__(self, config: HarnessInvocationContextConfig | None = None) -> None:
+    def __init__(
+        self,
+        config: HarnessInvocationContextConfig | None = None,
+        *,
+        mode_judge: ModeJudge | None = None,
+    ) -> None:
         self.config = config or HarnessInvocationContextConfig()
+        self.mode_judge = mode_judge or build_mode_judge(self.config)
+        self._mode_cache: OrderedDict[tuple[str, str], frozenset[str]] = OrderedDict()
+
+    @property
+    def uses_mode_judgement(self) -> bool:
+        """Whether a decision model judges the mode blocks."""
+        return self.mode_judge is not None
+
+    async def aprepare_context(
+        self,
+        context: HarnessInvocationRef,
+        *,
+        user_input: str = "",
+        history: list[ConversationMessage] | None = None,
+        receipts: list[ToolReceipt] | None = None,
+        has_tools: bool = False,
+    ) -> InvocationContextBlock:
+        """Asynchronous counterpart of :meth:`prepare_context`.
+
+        The judgement is made once per invocation and reused by the following
+        model calls of the same run; a failing judgement falls back to the
+        keyword markers.
+        """
+        return self.prepare_context(
+            context,
+            user_input=user_input,
+            history=history,
+            receipts=receipts,
+            has_tools=has_tools,
+            modes=await self._modes(context, user_input),
+        )
 
     def prepare_context(
         self,
@@ -84,8 +141,18 @@ class HarnessInvocationContextBuilder:
         history: list[ConversationMessage] | None = None,
         receipts: list[ToolReceipt] | None = None,
         has_tools: bool = False,
+        modes: frozenset[str] | None = None,
     ) -> InvocationContextBlock:
-        """Create an invocation context block for a model call."""
+        """Create an invocation context block for a model call.
+
+        Args:
+            context: Invocation reference of the current run.
+            user_input: The user's request.
+            history: Conversation messages to summarize into the header.
+            receipts: Capability receipts of the current run.
+            has_tools: Whether the model call exposes tools.
+            modes: Judged mode blocks; ``None`` uses the keyword markers.
+        """
 
         history = history or []
         receipts = receipts or []
@@ -95,6 +162,7 @@ class HarnessInvocationContextBuilder:
             history=history,
             receipts=receipts,
             has_tools=has_tools,
+            modes=modes,
         )
         original_chars = sum(len(message.content) for message in history)
         if len(header) > self.config.max_context_chars:
@@ -115,6 +183,7 @@ class HarnessInvocationContextBuilder:
         history: list[ConversationMessage] | None = None,
         receipts: list[ToolReceipt] | None = None,
         has_tools: bool = False,
+        modes: frozenset[str] | None = None,
     ) -> str:
         """Build the plain-text Harness Context block."""
 
@@ -156,7 +225,7 @@ class HarnessInvocationContextBuilder:
                 lines.append(f"- {receipt.name} [{receipt.status}]: {summary}")
 
         mode_header = self._build_mode_header(
-            user_input=user_input, has_tools=has_tools
+            user_input=user_input, has_tools=has_tools, modes=modes
         )
         if mode_header:
             lines.extend(["", mode_header])
@@ -195,10 +264,52 @@ class HarnessInvocationContextBuilder:
         )
         return messages[:insert_at] + [injected] + messages[insert_at:], bundle
 
-    def _build_mode_header(self, *, user_input: str, has_tools: bool) -> str:
+    async def _modes(
+        self, context: HarnessInvocationRef, user_input: str
+    ) -> frozenset[str]:
+        """Return the mode blocks of one invocation, from the judgement or markers."""
+        if self.mode_judge is None:
+            return self._keyword_modes(user_input)
+        key = (context.session_id, context.invocation_id)
+        cached = self._mode_cache.get(key)
+        if cached is not None:
+            return cached
+        try:
+            probabilities = await self.mode_judge.aprobabilities(user_input=user_input)
+        except DecisionModelError as exc:
+            logger.warning("mode judge unavailable, using the keyword markers: %s", exc)
+            return self._keyword_modes(user_input)
+        modes = frozenset(
+            mode
+            for mode, probability in probabilities.items()
+            if probability >= self.config.mode_decision_threshold
+        )
+        self._mode_cache[key] = modes
+        while len(self._mode_cache) > _MAX_CACHED_MODES:
+            self._mode_cache.popitem(last=False)
+        return modes
+
+    def _keyword_modes(self, user_input: str) -> frozenset[str]:
+        """Return the mode blocks suggested by the keyword markers."""
         lowered = user_input.lower()
-        blocks = []
+        modes = set()
         if any(marker in lowered for marker in self.config.precision_markers):
+            modes.add(PRECISION_MODE)
+        if any(marker in lowered for marker in self.config.artifact_markers):
+            modes.add(ARTIFACT_MODE)
+        return frozenset(modes)
+
+    def _build_mode_header(
+        self,
+        *,
+        user_input: str,
+        has_tools: bool,
+        modes: frozenset[str] | None = None,
+    ) -> str:
+        if modes is None:
+            modes = self._keyword_modes(user_input)
+        blocks = []
+        if PRECISION_MODE in modes:
             blocks.append(
                 "\n".join(
                     [
@@ -209,7 +320,7 @@ class HarnessInvocationContextBuilder:
                     ]
                 )
             )
-        if any(marker in lowered for marker in self.config.artifact_markers):
+        if ARTIFACT_MODE in modes:
             blocks.append(
                 "\n".join(
                     [

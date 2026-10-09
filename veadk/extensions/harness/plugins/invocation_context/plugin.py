@@ -80,13 +80,22 @@ class HarnessInvocationContextPlugin(BasePlugin):
             session_id=run_context.session_id,
             limit=8,
         )
-        bundle = self.context_builder.prepare_context(
-            run_context,
-            user_input=user_text,
-            history=history,
-            receipts=receipts,
-            has_tools=bool(llm_request.tools_dict),
-        )
+        if self.context_builder.uses_mode_judgement:
+            bundle = await self.context_builder.aprepare_context(
+                run_context,
+                user_input=user_text,
+                history=history,
+                receipts=receipts,
+                has_tools=bool(llm_request.tools_dict),
+            )
+        else:
+            bundle = self.context_builder.prepare_context(
+                run_context,
+                user_input=user_text,
+                history=history,
+                receipts=receipts,
+                has_tools=bool(llm_request.tools_dict),
+            )
         if bundle.header:
             append_system_instruction(llm_request, bundle.header)
             self.store.append_event(

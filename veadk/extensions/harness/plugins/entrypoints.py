@@ -14,6 +14,9 @@
 
 """Public Harness plugin entry points."""
 
+from veadk.extensions.harness.plugins.agent_routing import (
+    HarnessAgentRoutingPlugin,
+)
 from veadk.extensions.harness.plugins.builder import build_harness_plugins
 from veadk.extensions.harness.plugins.compactor import HarnessCompressPlugin
 from veadk.extensions.harness.plugins.invocation_context import (
@@ -25,16 +28,21 @@ from veadk.extensions.harness.plugins.long_run_control import (
 from veadk.extensions.harness.plugins.response_verification import (
     HarnessResponseVerificationPlugin,
 )
+from veadk.extensions.harness.plugins.skill_prefilter import (
+    HarnessSkillPrefilterPlugin,
+)
 
 HarnessContextPlugin = HarnessInvocationContextPlugin
 HarnessHallucinationPlugin = HarnessResponseVerificationPlugin
 
 __all__ = [
+    "HarnessAgentRoutingPlugin",
     "HarnessCompressPlugin",
     "HarnessContextPlugin",
     "HarnessHallucinationPlugin",
     "HarnessInvocationContextPlugin",
     "HarnessLongRunControlPlugin",
     "HarnessResponseVerificationPlugin",
+    "HarnessSkillPrefilterPlugin",
     "build_harness_plugins",
 ]
