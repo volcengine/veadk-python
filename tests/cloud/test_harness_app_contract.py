@@ -53,6 +53,7 @@ from veadk.cloud.harness_app.types import (
     HarnessResourceOverride,
     HarnessResponseMetrics,
     HarnessSelectedSkill,
+    HarnessSkillSpacePolicy,
     InvokeHarnessRequest,
     InvokeHarnessResponse,
     LlmUsageMetrics,
@@ -206,6 +207,50 @@ class TestHarnessOverrides:
             skill_id="skill-1",
         )
         assert h.mcp == [HarnessMcpServer(name="db", server_url="http://db.test/mcp")]
+
+    def test_selected_skill_accepts_skill_space_policy(self):
+        h = HarnessOverrides.model_validate(
+            {
+                "selected_skills": [
+                    {
+                        "source": "skillspace",
+                        "skill_space_id": "ss-a",
+                        "skill_space_policy": {
+                            "mode": "deny",
+                            "ids": ["s-blocked"],
+                        },
+                    }
+                ]
+            }
+        )
+
+        assert h.selected_skills == [
+            HarnessSelectedSkill(
+                source="skillspace",
+                skill_space_id="ss-a",
+                skill_space_policy=HarnessSkillSpacePolicy(
+                    mode="deny",
+                    ids=["s-blocked"],
+                ),
+            )
+        ]
+
+    def test_selected_skill_policy_requires_skillspace_source(self):
+        with pytest.raises(ValidationError, match="only supported for skillspace"):
+            HarnessOverrides.model_validate(
+                {
+                    "selected_skills": [
+                        {
+                            "source": "skillhub",
+                            "slug": "team/reporting",
+                            "skill_space_policy": {
+                                "mode": "allow",
+                                "ids": ["s-1"],
+                            },
+                        }
+                    ]
+                }
+            )
 
     def test_structured_registry_is_accepted_and_normalized(self):
         h = HarnessOverrides.model_validate(
@@ -1236,7 +1281,9 @@ class TestHarnessConfig:
         def custom_tool():
             return "custom"
 
-        def fake_build_skill_toolset(skill_ids, download_dir=None):
+        def fake_build_skill_toolset(
+            skill_ids, download_dir=None, skill_space_policy=None
+        ):
             return FakeSkillToolset(skill_ids) if skill_ids else None
 
         custom_tool.__name__ = "custom_tool"
@@ -1259,6 +1306,95 @@ class TestHarnessConfig:
         assert old_skill_toolset not in cloned.tools
         assert len(skill_toolsets) == 1
         assert skill_toolsets[0].names == ["team/new-skill"]
+
+    def test_spawn_passes_selected_skill_space_policy(self, monkeypatch):
+        from veadk.cloud.harness_app import utils
+
+        captured = {}
+
+        class FakeSkillToolset:
+            def __init__(self, names):
+                self.names = names
+
+        def fake_build_skill_toolset(
+            skill_ids, download_dir=None, skill_space_policy=None
+        ):
+            captured["skill_ids"] = list(skill_ids)
+            captured["policy"] = (
+                skill_space_policy.to_json() if skill_space_policy else None
+            )
+            return FakeSkillToolset(skill_ids) if skill_ids else None
+
+        monkeypatch.delenv("SKILL_SPACE_POLICY", raising=False)
+        monkeypatch.setattr(utils, "SkillToolset", FakeSkillToolset)
+        monkeypatch.setattr(utils, "build_skill_toolset", fake_build_skill_toolset)
+        base = Agent(model_name="base-model", model_api_key="test-key")
+
+        spawn_harness_agent(
+            base,
+            HarnessOverrides(
+                selected_skills=[
+                    {
+                        "source": "skillspace",
+                        "skill_space_id": "ss-a",
+                        "skill_space_policy": {
+                            "mode": "allow",
+                            "ids": ["s-a2", "s-a1", "s-a2"],
+                        },
+                    },
+                    {
+                        "source": "skillspace",
+                        "skill_space_id": "ss-b",
+                        "skill_space_policy": {
+                            "mode": "deny",
+                            "ids": ["s-b9"],
+                        },
+                    },
+                ]
+            ),
+        )
+
+        assert captured["skill_ids"] == ["space:ss-a", "space:ss-b"]
+        assert captured["policy"] == (
+            '{"spaces":{"ss-a":{"mode":"allow","ids":["s-a1","s-a2"]},'
+            '"ss-b":{"mode":"deny","ids":["s-b9"]}}}'
+        )
+        assert "SKILL_SPACE_POLICY" not in os.environ
+
+    def test_spawn_rejects_conflicting_selected_skill_space_policy(self, monkeypatch):
+        from veadk.cloud.harness_app import utils
+
+        monkeypatch.setattr(
+            utils, "build_skill_toolset", lambda *_args, **_kwargs: None
+        )
+        base = Agent(model_name="base-model", model_api_key="test-key")
+
+        with pytest.raises(ValueError, match="Conflicting skill_space_policy"):
+            spawn_harness_agent(
+                base,
+                HarnessOverrides(
+                    selected_skills=[
+                        {
+                            "source": "skillspace",
+                            "skill_space_id": "ss-a",
+                            "skill_id": "s-a1",
+                            "skill_space_policy": {
+                                "mode": "allow",
+                                "ids": ["s-a1"],
+                            },
+                        },
+                        {
+                            "source": "skillspace",
+                            "skill_space_id": "ss-a",
+                            "skill_id": "s-a2",
+                            "skill_space_policy": {
+                                "mode": "deny",
+                                "ids": ["s-a9"],
+                            },
+                        },
+                    ]
+                ),
+            )
 
     def test_spawn_clears_builtin_tools_and_skills_with_empty_overrides(
         self, monkeypatch

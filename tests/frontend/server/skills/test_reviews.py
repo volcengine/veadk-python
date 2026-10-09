@@ -42,11 +42,16 @@ from frontend.server.skills.service import SkillService
 def package(name: str, text: str) -> bytes:
     data = io.BytesIO()
     with zipfile.ZipFile(data, "w") as archive:
-        archive.writestr(
-            f"{name}/SKILL.md",
-            f"---\nname: {name}\ndescription: Review test\n---\n{text}",
-        )
-        archive.writestr(f"{name}/references/data.txt", text)
+        for path, content in [
+            (
+                f"{name}/SKILL.md",
+                f"---\nname: {name}\ndescription: Review test\n---\n{text}",
+            ),
+            (f"{name}/references/data.txt", text),
+        ]:
+            info = zipfile.ZipInfo(path)
+            info.date_time = (2025, 1, 1, 0, 0, 0)
+            archive.writestr(info, content)
     return data.getvalue()
 
 

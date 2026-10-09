@@ -25,6 +25,7 @@ from veadk.skills.skill import Skill
 from veadk.skills.policy import (
     SKILL_SPACE_POLICY_ENV,
     SkillSpacePolicyError,
+    SkillSpacePolicySet,
     parse_skill_space_policy,
 )
 from veadk.utils.logger import get_logger
@@ -145,17 +146,11 @@ def load_skills_from_cloud(
     skill_space_ids_list = [x.strip() for x in skill_space_ids.split(",") if x.strip()]
     logger.info(f"Load skills from cloud skill sources: {skill_space_ids_list}")
 
-    raw_policy = os.getenv(SKILL_SPACE_POLICY_ENV)
-    policy = None
-    if raw_policy is not None:
-        try:
-            policy = parse_skill_space_policy(raw_policy)
-        except SkillSpacePolicyError as exc:
-            logger.error(
-                f"Invalid {SKILL_SPACE_POLICY_ENV}; remote Skill Space skills "
-                f"are disabled for this session: {exc}"
-            )
-            return []
+    try:
+        policy = _parse_skill_space_policy_env()
+    except SkillSpacePolicyError as exc:
+        _log_invalid_skill_space_policy(exc)
+        return []
 
     skills = []
 
@@ -177,15 +172,48 @@ def load_skills_from_cloud(
                 )
             )
 
+    return _filter_skills_by_policy(skills, policy)
+
+
+def _filter_skills_by_policy_env(skills: list[Skill]) -> list[Skill]:
+    try:
+        policy = _parse_skill_space_policy_env()
+    except SkillSpacePolicyError as exc:
+        _log_invalid_skill_space_policy(exc)
+        return []
+
+    return _filter_skills_by_policy(skills, policy)
+
+
+def _parse_skill_space_policy_env() -> SkillSpacePolicySet | None:
+    raw_policy = os.getenv(SKILL_SPACE_POLICY_ENV)
+    if raw_policy is None:
+        return None
+    return parse_skill_space_policy(raw_policy)
+
+
+def _filter_skills_by_policy(
+    skills: list[Skill],
+    policy: SkillSpacePolicySet | None,
+) -> list[Skill]:
     if policy is None:
         return skills
 
-    filtered_skills = [skill for skill in skills if policy.allows(skill.id)]
+    filtered_skills = [
+        skill for skill in skills if policy.allows(skill.id, skill.skill_space_id)
+    ]
     logger.info(
-        f"Applied {SKILL_SPACE_POLICY_ENV} mode={policy.mode}: "
+        f"Applied {SKILL_SPACE_POLICY_ENV}: "
         f"kept {len(filtered_skills)} of {len(skills)} remote skills"
     )
     return filtered_skills
+
+
+def _log_invalid_skill_space_policy(exc: SkillSpacePolicyError) -> None:
+    logger.error(
+        f"Invalid {SKILL_SPACE_POLICY_ENV}; remote Skill Space skills "
+        f"are disabled for this session: {exc}"
+    )
 
 
 def _get_cloud_credentials() -> tuple[str, str, str]:

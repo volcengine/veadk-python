@@ -31,6 +31,7 @@ from google.adk.tools import ToolContext
 from google.adk.tools.skill_toolset import SkillToolset
 
 from veadk.cloud.harness_app import utils
+from veadk.skills.policy import parse_skill_space_policy
 from veadk.skills.skill import Skill as VeADKSkill
 
 
@@ -152,6 +153,159 @@ def test_build_skill_toolset_loads_skills_center_space(monkeypatch, tmp_path):
     assert isinstance(toolset._code_executor, UnsafeLocalCodeExecutor)
 
 
+@pytest.mark.parametrize(
+    ("policy", "expected_names"),
+    [
+        ('{"mode":"allow","ids":["s-allow"]}', ["allowed-skill"]),
+        ('{"mode":"deny","ids":["s-deny"]}', ["allowed-skill"]),
+    ],
+)
+def test_build_skill_toolset_applies_skill_space_policy(
+    monkeypatch,
+    tmp_path,
+    policy,
+    expected_names,
+):
+    remote_skills = [
+        VeADKSkill(
+            name="allowed-skill",
+            description="Allowed skill.",
+            path="skills/s-allow/v1/allowed-skill.zip",
+            skill_space_id="ss-test",
+            bucket_name="bucket",
+            id="s-allow",
+        ),
+        VeADKSkill(
+            name="denied-skill",
+            description="Denied skill.",
+            path="skills/s-deny/v1/denied-skill.zip",
+            skill_space_id="ss-test",
+            bucket_name="bucket",
+            id="s-deny",
+        ),
+    ]
+    materialized: list[str] = []
+
+    monkeypatch.setenv("SKILL_SPACE_POLICY", policy)
+    monkeypatch.setattr(
+        utils,
+        "_load_skills_from_space_id",
+        lambda _skill_space_id: remote_skills,
+    )
+
+    def fake_materialize_remote_skill(
+        skill: VeADKSkill,
+        *,
+        cache_dir=None,
+    ):
+        materialized.append(skill.name)
+        skill_dir = tmp_path / skill.name
+        _write_adk_skill(skill_dir, name=skill.name)
+        return skill_dir
+
+    monkeypatch.setattr(
+        utils,
+        "materialize_remote_skill",
+        fake_materialize_remote_skill,
+    )
+
+    toolset = utils.build_skill_toolset(["space:ss-test"], download_dir=tmp_path)
+
+    assert materialized == expected_names
+    assert [skill.name for skill in toolset._list_skills()] == expected_names
+
+
+def test_build_skill_toolset_allows_empty_skill_space_policy(
+    monkeypatch,
+    tmp_path,
+):
+    remote_skills = [
+        VeADKSkill(
+            name="remote-skill",
+            description="Remote skill.",
+            path="skills/s-1/v1/remote-skill.zip",
+            skill_space_id="ss-test",
+            bucket_name="bucket",
+            id="s-1",
+        )
+    ]
+
+    monkeypatch.setenv("SKILL_SPACE_POLICY", '{"mode":"allow","ids":[]}')
+    monkeypatch.setattr(
+        utils,
+        "_load_skills_from_space_id",
+        lambda _skill_space_id: remote_skills,
+    )
+    monkeypatch.setattr(
+        utils,
+        "materialize_remote_skill",
+        lambda *_args, **_kwargs: pytest.fail(
+            "filtered skills must not be materialized"
+        ),
+    )
+
+    assert utils.build_skill_toolset(["space:ss-test"], download_dir=tmp_path) is None
+
+
+def test_build_skill_toolset_prefers_explicit_policy_over_env(
+    monkeypatch,
+    tmp_path,
+):
+    remote_skills = [
+        VeADKSkill(
+            name="explicit-skill",
+            description="Explicit skill.",
+            path="skills/s-explicit/v1/explicit-skill.zip",
+            skill_space_id="ss-test",
+            bucket_name="bucket",
+            id="s-explicit",
+        ),
+        VeADKSkill(
+            name="env-skill",
+            description="Env skill.",
+            path="skills/s-env/v1/env-skill.zip",
+            skill_space_id="ss-test",
+            bucket_name="bucket",
+            id="s-env",
+        ),
+    ]
+    materialized: list[str] = []
+
+    monkeypatch.setenv("SKILL_SPACE_POLICY", '{"mode":"allow","ids":["s-env"]}')
+    monkeypatch.setattr(
+        utils,
+        "_load_skills_from_space_id",
+        lambda _skill_space_id: remote_skills,
+    )
+
+    def fake_materialize_remote_skill(
+        skill: VeADKSkill,
+        *,
+        cache_dir=None,
+    ):
+        materialized.append(skill.name)
+        skill_dir = tmp_path / skill.name
+        _write_adk_skill(skill_dir, name=skill.name)
+        return skill_dir
+
+    monkeypatch.setattr(
+        utils,
+        "materialize_remote_skill",
+        fake_materialize_remote_skill,
+    )
+
+    toolset = utils.build_skill_toolset(
+        ["space:ss-test"],
+        download_dir=tmp_path,
+        skill_space_policy=parse_skill_space_policy(
+            '{"mode":"allow","ids":["s-explicit"]}'
+        ),
+    )
+
+    assert materialized == ["explicit-skill"]
+    assert [skill.name for skill in toolset._list_skills()] == ["explicit-skill"]
+
+
 def test_replace_skills_replaces_existing_skill_toolset(monkeypatch, tmp_path):
     existing_dir = tmp_path / "existing"
     incoming_dir = tmp_path / "incoming"
@@ -170,7 +324,7 @@ def test_replace_skills_replaces_existing_skill_toolset(monkeypatch, tmp_path):
     agent = SimpleNamespace(tools=[marker_tool, existing_toolset])
     calls: list[tuple[list[str], object]] = []
 
-    def fake_build_skill_toolset(skill_ids, download_dir=None):
+    def fake_build_skill_toolset(skill_ids, download_dir=None, skill_space_policy=None):
         calls.append((skill_ids, download_dir))
         return incoming_toolset
 
