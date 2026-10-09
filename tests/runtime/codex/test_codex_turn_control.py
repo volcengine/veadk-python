@@ -797,6 +797,9 @@ async def _real_thread():
             config=CodexConfig(
                 cwd=str(cwd),
                 env={**os.environ, "CODEX_HOME": str(home), "STUB_KEY": "x"},
+                # These tests do not use marketplace plugins. Disable discovery
+                # at startup so background clones cannot race with home cleanup.
+                config_overrides=("features.plugins=false",),
             )
         )
         try:
