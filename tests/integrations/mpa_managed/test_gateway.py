@@ -64,6 +64,9 @@ class Cloud:
     async def account_id(self):
         return self.account
 
+    async def available_zones(self):
+        return [self.region + "-a", self.region + "-c"]
+
     async def find_gateways(self, name):
         return [g for g in self.gateways.values() if g["Name"] == name]
 
@@ -73,7 +76,7 @@ class Cloud:
             self.gateways["gw-1"] = {
                 "Id": "gw-1",
                 "Name": name,
-                "Type": "serverless",
+                "Type": "standard",
                 "Region": self.region,
                 "Status": "Running",
                 "NetworkSpec": {"VpcId": vpc_id},
@@ -158,10 +161,11 @@ def test_unknown_create_outcome_never_issues_a_second_create(commit):
     asyncio.run(scenario())
 
 
-def test_definitive_permission_error_can_retry_after_permissions_fixed():
+@pytest.mark.parametrize("code", ["AccessDenied", "ExceededQuota"])
+def test_definitive_permission_error_can_retry_after_permissions_fixed(code):
     async def scenario():
         registry, cloud = Registry(), Cloud()
-        cloud.create_error = APIGClientError("denied", code="AccessDenied")
+        cloud.create_error = APIGClientError("denied", code=code)
         with pytest.raises(APIGClientError):
             await service(registry, cloud).ensure(
                 vpc_id="vpc-1", subnet_ids=["subnet-1"]
@@ -170,6 +174,33 @@ def test_definitive_permission_error_can_retry_after_permissions_fixed():
         cloud.create_error = None
         await service(registry, cloud).ensure(vpc_id="vpc-1", subnet_ids=["subnet-1"])
         assert cloud.created == 2
+
+    asyncio.run(scenario())
+
+
+def test_im_quota_rejection_can_retry_without_recreating_gateway():
+    async def scenario():
+        registry, cloud = Registry(), Cloud()
+        create = cloud.create_im_gateway_service
+
+        async def rejected(**kwargs):
+            raise APIGClientError("quota", code="ExceededQuota")
+
+        cloud.create_im_gateway_service = rejected
+        with pytest.raises(APIGClientError):
+            await service(registry, cloud).ensure(
+                vpc_id="vpc-1", subnet_ids=["subnet-1", "subnet-2"]
+            )
+        assert (
+            registry.rows[(cloud.account, cloud.region)]["im_create_requested"] is False
+        )
+        cloud.create_im_gateway_service = create
+        assert (
+            await service(registry, cloud).ensure(
+                vpc_id="vpc-1", subnet_ids=["subnet-1", "subnet-2"]
+            )
+        )["state"] == "ready"
+        assert cloud.created == 1
 
     asyncio.run(scenario())
 

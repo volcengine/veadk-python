@@ -111,18 +111,45 @@ class GatewayCloud:
                 return matches
         raise APIGClientError("Gateway pagination exceeded limit")
 
+    async def available_zones(self):
+        result = await self.call("GetGatewayAvailableZones", {})
+        zones = result.get("AvailableZones")
+        if (
+            not isinstance(zones, list)
+            or any(
+                not isinstance(zone, str)
+                or not zone.startswith(self.runtime.region + "-")
+                or not zone[len(self.runtime.region) + 1 :]
+                for zone in zones
+            )
+            or len(set(zones)) != len(zones)
+            or len(zones) < 2
+        ):
+            raise APIGClientError("Invalid APIG available zones")
+        return sorted(zones)
+
     async def create_gateway(self, name, vpc_id, subnet_ids):
+        if (
+            not isinstance(subnet_ids, list)
+            or any(not isinstance(sid, str) or not sid.strip() for sid in subnet_ids)
+            or len(set(subnet_ids)) != len(subnet_ids)
+            or len(subnet_ids) < 2
+        ):
+            raise APIGClientError(
+                "Standard gateway requires at least two distinct subnet IDs",
+                code="InvalidSubnetConfiguration",
+            )
         result = await self.call(
             "CreateGateway",
             {
                 "Name": name,
                 "Region": self.runtime.region,
-                "Type": "serverless",
+                "Type": "standard",
                 "NetworkSpec": {"VpcId": vpc_id, "SubnetIds": subnet_ids},
                 "ResourceSpec": {
                     "Replicas": 2,
                     "InstanceSpecCode": "1c2g",
-                    "ClbSpecCode": "small_1",
+                    "CLBSpecCode": "small_1",
                     "PublicNetworkBillingType": "traffic",
                     "NetworkType": {
                         "EnablePublicNetwork": True,

@@ -2,7 +2,7 @@
 
 - **Component ID：** `mpa-runtime-provisioning`
 - **状态：** 草案；提议变更由关联 PRD 管理
-- **修订日期：** 2026-09-30
+- **修订日期：** 2026-10-09
 - **English version:** [README.md](README.md)
 - **关联 PRD：** [MPA Runtime 集成加固](../../prd-spec/bugfixes/mpa-runtime-integration/2026-09-12-mpa-runtime-integration-hardening.zh.md)
 - **关联 PRD：** [MPA Studio 工作负载身份创建](../../prd-spec/features/mpa-studio-workload-identity/2026-09-20-mpa-studio-workload-identity.zh.md)
@@ -32,7 +32,7 @@
 - `CON-4`：第一阶段在启动前写入占位符；第二阶段只使用非空权威 Runtime 值覆盖。第二阶段部署失败必须报告失败，不得报告部分成功。
 - `CON-5`：调用方显式提供的 `extra_env` 继续保持 last-wins，包括有意覆盖 VeADK 配置默认值。
 - `CON-6`：AgentKit Runtime 创建及收敛更新必须持久化 `veadk:agent-type=mpa`，作为 Studio 稳定分类标签。未打标签 Runtime 在执行显式标签修复前不进入 MPA 筛选。
-- `CON-7`：在其他创建副作用之前，`veadk mpa create` 与 Studio 托管创建都会创建或复用账号和地域范围内的 `agentkit-studio-workload` Pool 与 `{MPA_AGENT_ID}-studio` Identity，然后以 `MPA_WORKLOAD_POOL_NAME` 和 `MPA_WORKLOAD_IDENTITY_NAME` 注入 Runtime。托管参考 Runtime 或模板不得提供其他 Agent 的 Identity；显式空值视为未配置，冲突的非空值在资源修改前失败。
+- `CON-7`：在可选的托管 IAM 准备之后、其他创建副作用之前，`veadk mpa create` 与 Studio 托管创建都会创建或复用账号和地域范围内的 `agentkit-studio-workload` Pool 与 `{MPA_AGENT_ID}-studio` Identity，然后以 `MPA_WORKLOAD_POOL_NAME` 和 `MPA_WORKLOAD_IDENTITY_NAME` 注入 Runtime。托管参考 Runtime 或模板不得提供其他 Agent 的 Identity；显式空值视为未配置，冲突的非空值在资源修改前失败。
 - `CON-8`：`veadk mpa create` 继续自动生成 `mi-[0-9a-z]{12}` ID。显式 ID 接受该格式及 Studio 原有的 `mi-[0-9a-z]{24}` 格式，以兼容托管平铺创建。基础 ID 仍作为 Runtime 和元数据身份，只有 WorkloadIdentity 增加 `-studio` 后缀。
 - `CON-9`：工作负载资源按精确名称幂等 get-or-create。并发创建冲突后重新读取；其他 Identity 错误在 Tool、数据库或 Runtime 修改前失败。已创建的身份资源保留供重试。
 
@@ -110,3 +110,21 @@ stdin 在内存中传递，不得进入 sessionStorage、任务 SQLite 或任务
 ## 固定 MCP 签名密钥
 
 Runtime 创建在 CreateRuntime/UpdateRuntime 前注入 `MCP_TOKEN_SECRET`。显式非空值优先；否则保留目标 Runtime 已有非空值，或生成 32 随机字节并编码为 64 位十六进制字符串。不修改调用方的环境变量字典。地址/API Key 回填沿用同一值。空白值视为未配置。dry-run 输出对显式值脱敏。Runtime 将密钥保存于环境变量配置，创建返回值不暴露密钥。存量部署仅在显式重新部署时变更。参见[密钥创建设计](../../prd-spec/bugfixes/mpa-runtime-mcp-secret/2026-10-07-persistent-mcp-secret.zh.md)及 [Studio 创建](../studio-mpa-creation/README.zh.md)的托管重试边界。
+
+## 自动准备 Runtime IAM 角色
+
+内置 Studio 使用 `managed.iam.mode: auto`，显式配置默认 `existing`。自动准备在 STS 账号核验后、工作负载身份和其他资源变更前执行。仅支持全新来源的默认 `IDRoleForArkClawShareAgent` 配置。IAM 为账号级。查询/创建角色及 `VeADKMPARuntimeAccessV1`，核验账号/名称及无条件信任 `vefaas`、`apig`，补齐已批准的 12 个系统策略和 14 个自定义动作的 Global 绑定，随后回读核验。保留额外绑定，不覆盖信任或已有策略。仅明确不存在错误允许创建，竞态和最终一致性采用最多 120 秒的恢复。取消保留资源。权限/信任/策略/属主/回读失败在 `iam_role` 阶段停止，输出白名单本地化错误，不输出原始云端文本和密钥。Studio 执行凭据须允许 GetRole、CreateRole、GetPolicy、CreatePolicy、ListAttachedRolePolicies、AttachRolePolicy。existing CLI 及通用智能体不受影响。完整权限及验收见[设计](../../prd-spec/features/mpa-runtime-iam/2026-10-09-managed-runtime-role.zh.md)。
+
+## 新建托管账号元数据
+
+新建托管模板根据核验的 STS 身份生成 `CLAW_SPACE_ID`，并由该账号和所选 Runtime 角色生成 `RUNTIME_IAM_ROLE_NAME`/`RUNTIME_IAM_ROLE_TRN`。显式环境变量覆盖保持优先。引用/模板 Runtime 行为不变。内置 Studio 移除旧的固定预期账号；显式 YAML 限制保留。源镜像/参考 Tool 的访问需要单独核验。见 [Studio 账号契约](../studio-mpa-creation/README.zh.md#studio-部署账号)。
+
+托管 VPC/子网描述、旧归属标记兼容及拒绝意图恢复遵守 [Studio 网络契约](../studio-mpa-creation/README.zh.md#网络归属描述与恢复)。名称、账号/地域范围及结果不确定时避免重复创建的规则不变。
+
+托管网络空查询遵循 [Studio 契约](../studio-mpa-creation/README.zh.md#空网络查询)，不改变 Runtime 载荷、账号范围或归属校验。
+
+新共享标准型网关及跨可用区伴随意图遵循 [Studio 网关准备契约](../studio-mpa-creation/README.zh.md#标准型共享网关准备)。已有 Runtime 子网选择不可变，新 Runtime 创建可使用准备好的网关选择。
+
+Worker 环境配置及模板优先级遵循 [Studio 契约](../studio-mpa-creation/README.zh.md#独立-worker-配置)。内置 Studio 不依赖旧账号 Tool。保留显式 CLI 模板/已有 ID；非托管旧创建逻辑不变。
+
+托管 Runtime 的子网等价判断和稳定重试顺序遵循 [Studio 网络恢复契约](../studio-mpa-creation/README.zh.md#runtime-子网顺序与恢复)。

@@ -440,6 +440,94 @@ def test_lost_skill_space_response_recovers_without_duplicate_or_blind_retry():
     asyncio.run(run())
 
 
+@pytest.mark.parametrize("runtime_name", ["", " Support-Agent_01 "])
+def test_skill_space_description_uses_entered_name_and_keeps_internal_bindings(
+    runtime_name,
+):
+    async def run():
+        svc, registry, cloud, _ = deployer()
+        result = await svc.deploy(template(), runtime_name=runtime_name)
+        request = cloud.space_creates[0]
+        assert request["Description"] == "Skills for MPA agent " + (
+            runtime_name.strip() or "agent-one"
+        )
+        suffix = agent_suffix("account", "cn-beijing", "agent-one")
+        assert request["Name"] == "mpa_skills_" + suffix
+        assert {tag["Key"]: tag["Value"] for tag in request["Tags"]} == {
+            "managed_by": "mpa-deployment",
+            "mpa_agent_key": suffix,
+            "display_name": "agent-one 技能空间",
+        }
+        env = env_map(cloud.runtimes[result["runtime_id"]])
+        assert env["MPA_AGENT_ID"] == "agent-one"
+        assert env["SKILL_SPACE_ID"] == result["skill_space_id"]
+        original = copy.deepcopy(cloud.spaces)
+        again = await svc.deploy(template(), runtime_name="different-name")
+        assert again["skill_space_id"] == result["skill_space_id"]
+        assert cloud.spaces == original and len(cloud.space_creates) == 1
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_named_skill_space_lost_response_preserves_full_original_intent(legacy):
+    async def run():
+        svc, registry, cloud, _ = deployer()
+        cloud.lose_space_response = True
+        with pytest.raises(TimeoutError, match="space response lost"):
+            await svc.deploy(
+                template(), runtime_name="" if legacy else "Support-Agent_01"
+            )
+        original = copy.deepcopy(registry.row["skill_space_request"])
+        assert original["Description"] == "Skills for MPA agent " + (
+            "agent-one" if legacy else "Support-Agent_01"
+        )
+        changed = template()
+        changed["ProjectName"] = "another-project"
+        with pytest.raises(DeploymentError, match="different inputs"):
+            await svc.deploy(changed, runtime_name="Support-Agent_01")
+        if not legacy:
+            for name in ["different-name", ""]:
+                with pytest.raises(DeploymentError, match="different inputs"):
+                    await svc.deploy(template(), runtime_name=name)
+        cloud.hide_spaces = True
+        for _ in range(2):
+            with pytest.raises(DeploymentError, match="outcome is unknown"):
+                await svc.deploy(template(), runtime_name="Support-Agent_01")
+            assert registry.row["skill_space_request"] == original
+            assert len(cloud.space_creates) == 1 and not cloud.creates
+        cloud.hide_spaces = False
+        result = await svc.deploy(template(), runtime_name="Support-Agent_01")
+        assert result["skill_space_id"] == "space-1"
+        assert registry.row["skill_space_request"] == original
+        assert cloud.space_creates == [original]
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("runtime_name", ["abc", "a" * 65, "bad/name", "中文名称"])
+def test_invalid_skill_space_runtime_name_fails_before_cloud_calls(runtime_name):
+    from veadk.integrations.mpa.managed.config import ConfigurationError
+    from veadk.integrations.mpa.managed.skills import ensure_skill_space
+
+    async def run():
+        cloud = AsyncMock()
+        with pytest.raises(ConfigurationError):
+            await ensure_skill_space(
+                Registry(),
+                cloud,
+                account="account",
+                region="cn-beijing",
+                agent_id="agent-one",
+                runtime_name=runtime_name,
+            )
+        cloud.find_skill_spaces.assert_not_awaited()
+        cloud.create_skill_space.assert_not_awaited()
+        cloud.get_skill_space.assert_not_awaited()
+
+    asyncio.run(run())
+
+
 def test_missing_registered_skill_space_does_not_create_empty_replacement():
     async def run():
         svc, registry, cloud, _ = deployer()

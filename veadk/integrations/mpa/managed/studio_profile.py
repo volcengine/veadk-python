@@ -19,20 +19,19 @@ from __future__ import annotations
 
 def studio_profile_values() -> dict:
     """Return a fresh Beijing profile; secrets remain server environment values."""
-    account = "2112682748"
     region = "cn-beijing"
     role = "IDRoleForArkClawShareAgent"
     model = "doubao-seed-2-0-pro-260215"
-    registry = f"agentkit-platform-{account}-{region}.cr.volces.com/mpa"
+    registry = "agentkit-platform-2112682748-cn-beijing.cr.volces.com/mpa"
     return {
         "region": region,
-        "account-id": account,
         "model-provider": "openai",
         "model-name": model,
         "model-api-base": "https://ark.cn-beijing.volces.com/api/v3/",
         "model-api-key": "${VEADK_MPA_CONFIG_MODEL_AGENT_API_KEY}",
         "managed": {
             "version": 1,
+            "iam": {"mode": "auto"},
             "postgres": {
                 "mode": "auto",
                 "legacy-urls": "ignore",
@@ -58,7 +57,6 @@ def studio_profile_values() -> dict:
                     "APPCENTER_RESOURCE_DISCOVERY_ENABLED": "false",
                     "CHANNEL_ADMIN_AUTH_MODE": "runtime_key",
                     "CHANNEL_BACKEND": "postgresql",
-                    "CLAW_SPACE_ID": f"csi-{account}",
                     "CLOUD_PROVIDER": "volcengine",
                     "FORCE_APMPLUS_EXPORTER_REGISTRATION": "true",
                     "IDENTITY_REGION": region,
@@ -73,8 +71,6 @@ def studio_profile_values() -> dict:
                     ),
                     "MPA_SESSION_MEMORY_BACKEND": "postgresql",
                     "REGION": region,
-                    "RUNTIME_IAM_ROLE_NAME": role,
-                    "RUNTIME_IAM_ROLE_TRN": f"trn:iam::{account}:role/{role}",
                     "RUNTIME_PROVIDER": "VEFAAS",
                     "SCHEDULED_TASK_BACKEND": "postgresql",
                     "ENABLE_APMPLUS": "true",
@@ -85,7 +81,6 @@ def studio_profile_values() -> dict:
             },
             "worker": {
                 "image": f"{registry}/mpa_codex_worker:latest",
-                "reference-id": "t-yeuujqfldstkidoad4p0",
                 "role-name": role,
             },
             "timeout-seconds": 1800,

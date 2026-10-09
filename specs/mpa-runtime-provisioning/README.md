@@ -2,7 +2,7 @@
 
 - **Component ID:** `mpa-runtime-provisioning`
 - **Status:** Draft; proposed changes are governed by the related PRD
-- **Revision:** 2026-09-30
+- **Revision:** 2026-10-09
 - **Chinese version:** [README.zh.md](README.zh.md)
 - **Related PRD:** [MPA Runtime Integration Hardening](../../prd-spec/bugfixes/mpa-runtime-integration/2026-09-12-mpa-runtime-integration-hardening.md)
 - **Related PRD:** [MPA Studio Workload Identity Provisioning](../../prd-spec/features/mpa-studio-workload-identity/2026-09-20-mpa-studio-workload-identity.md)
@@ -32,7 +32,7 @@ This component converts `veadk mpa create` inputs into one recoverable AgentKit 
 - `CON-4`: Phase one writes placeholders before startup; phase two overwrites them only with non-empty authoritative Runtime values. A phase-two deployment failure is reported as failure, not partial success.
 - `CON-5`: Explicit caller `extra_env` remains last-wins, including an intentional override of VeADK profile defaults.
 - `CON-6`: AgentKit Runtime create and convergent update persist `veadk:agent-type=mpa` as the stable Studio classification tag. Untagged Runtime resources remain outside the MPA filter until an explicit tag repair is performed.
-- `CON-7`: Before other provisioning mutations, both `veadk mpa create` and managed Studio provisioning create or reuse the account-and-region scoped pool `agentkit-studio-workload` and identity `{MPA_AGENT_ID}-studio`, then inject them as `MPA_WORKLOAD_POOL_NAME` and `MPA_WORKLOAD_IDENTITY_NAME`. Managed reference/template values cannot supply another agent's identity; empty explicit values are treated as unspecified and conflicting non-empty values fail before mutation.
+- `CON-7`: After optional managed IAM preparation and before other provisioning mutations, both `veadk mpa create` and managed Studio provisioning create or reuse the account-and-region scoped pool `agentkit-studio-workload` and identity `{MPA_AGENT_ID}-studio`, then inject them as `MPA_WORKLOAD_POOL_NAME` and `MPA_WORKLOAD_IDENTITY_NAME`. Managed reference/template values cannot supply another agent's identity; empty explicit values are treated as unspecified and conflicting non-empty values fail before mutation.
 - `CON-8`: `veadk mpa create` continues to generate `mi-[0-9a-z]{12}` ids. Explicit ids accept that form and the existing Studio `mi-[0-9a-z]{24}` form for flat managed provisioning. The base id remains the Runtime and metadata identity; only the workload identity receives the `-studio` suffix.
 - `CON-9`: Workload get-or-create is exact-name idempotent. Concurrent create conflicts are followed by a read. Other Identity errors fail before Tool, database, or Runtime mutations. Created identity resources are retained for retry.
 
@@ -120,3 +120,21 @@ Sessions and externally supplied Tools are not mutated.
 ## Persistent MCP signing secret
 
 Runtime provisioning injects `MCP_TOKEN_SECRET` before CreateRuntime/UpdateRuntime. A nonblank explicit value wins; otherwise the target Runtime's existing nonblank value is retained, or 32 random bytes are generated as 64 hex characters. Caller-owned environment mappings are unchanged. Endpoint/API Key finalization reuses the same value. Blank values count as missing. Explicit values are masked in dry-run output. The Runtime stores the key in environment configuration, and provisioning results do not expose it. Existing deployments change only on explicit redeployment. See the [secret provisioning design](../../prd-spec/bugfixes/mpa-runtime-mcp-secret/2026-10-07-persistent-mcp-secret.md) and the managed retry boundary in [Studio creation](../studio-mpa-creation/README.md).
+
+## Managed Runtime IAM role
+
+Built-in Studio sets `managed.iam.mode: auto`; explicit profiles default to `existing`. Auto preparation runs after STS account validation and before workload identity or other resource mutations. Only a fresh default `IDRoleForArkClawShareAgent` configuration is supported. IAM is account-scoped. Get/create role and `VeADKMPARuntimeAccessV1`, validate account/name and unconditional trust in `vefaas` and `apig`, add missing Global bindings for the approved 12 system policies and 14 custom actions, then verify readback. Preserve extra bindings; never overwrite trust or an existing policy. Missing-object codes alone allow creation; races and eventual consistency use bounded 120-second recovery. Cancellation retains resources. Permission/trust/policy/ownership/readback failures halt creation at `iam_role` with allowlisted localized errors; raw provider text and secrets are excluded. Studio execution credentials require GetRole, CreateRole, GetPolicy, CreatePolicy, ListAttachedRolePolicies and AttachRolePolicy. Existing-mode CLI and general agents are unaffected. Full permission list and acceptance: [design](../../prd-spec/features/mpa-runtime-iam/2026-10-09-managed-runtime-role.md).
+
+## Fresh managed account metadata
+
+Fresh managed templates generate `CLAW_SPACE_ID` from verified STS identity and `RUNTIME_IAM_ROLE_NAME`/`RUNTIME_IAM_ROLE_TRN` from that account and selected Runtime role. Explicit environment overrides retain precedence. Referenced/template Runtime behavior is unchanged. Built-in Studio removes the old fixed expected account; explicit YAML restrictions remain. Source images/reference Tools require separate access verification. See [Studio account contract](../studio-mpa-creation/README.md#studio-deployment-account).
+
+Managed VPC/subnet descriptions, legacy ownership compatibility and rejected-intent recovery follow the [Studio network contract](../studio-mpa-creation/README.md#network-ownership-descriptions-and-recovery). Names, account/region scope and uncertain-outcome duplicate prevention remain unchanged.
+
+Empty managed network discovery follows the [Studio contract](../studio-mpa-creation/README.md#empty-network-discovery); it does not alter Runtime payloads, account scope or ownership checks.
+
+New shared standard gateways and cross-zone companion intents follow the [Studio gateway preparation contract](../studio-mpa-creation/README.md#standard-shared-gateway-preparation). Existing Runtime subnet selections are immutable; new Runtime creation may use the prepared gateway selection.
+
+Worker environment configuration and reference precedence follow the [Studio contract](../studio-mpa-creation/README.md#independent-worker-configuration). Built-in Studio does not require an old-account Tool. Explicit CLI references/existing IDs remain supported; legacy non-managed creation is unchanged.
+
+Managed Runtime subnet equality and stable retry ordering follow the [Studio network recovery contract](../studio-mpa-creation/README.md#runtime-subnet-ordering-and-recovery).

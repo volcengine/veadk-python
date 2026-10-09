@@ -478,3 +478,37 @@ def test_duplicate_cancel_and_shutdown_do_not_interrupt_reaping(tmp_path):
                 pass
 
     asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    "key,expected",
+    [
+        ("iamPermissionDenied", "iamPermissionDenied"),
+        ("private-provider-text", "creationFailed"),
+    ],
+)
+def test_only_allowlisted_iam_failure_keys_reach_ui(tmp_path, key, expected):
+    import json
+
+    async def run():
+        service = CreationTasks(tmp_path / "tasks.sqlite3")
+        events = [{"stage": "iam_role"}, {"error": key}]
+        code = ";".join(
+            f"print({'MPA_EVENT ' + json.dumps(event)!r})" for event in events
+        )
+        service.command = lambda: [sys.executable, "-c", code + ";raise SystemExit(1)"]
+        payload = {
+            "requestId": "44444444-4444-4444-8444-444444444444",
+            "agentId": "mi-test",
+            "description": "",
+            "region": "cn-beijing",
+        }
+        task = await service.start("owner", payload, config_path="unused", timeout=60)
+        await asyncio.gather(*service.running.values())
+        result = service.get("owner", task["taskId"])
+        assert result["state"] == "failed"
+        assert result["stage"] == "iam_role"
+        assert result["error"] == expected
+        await service.close()
+
+    asyncio.run(run())

@@ -40,6 +40,22 @@ from .studio_profile import studio_profile_values
 
 ADMIN_DATABASE_NAME = "mpa_admin_db"
 ADMIN_WORKSPACE_NAME = "mpa_admin_workspace"
+WORKER_RESERVED_ENV_KEYS = frozenset(
+    {
+        "MPA_AGENT_ID",
+        "AGENTKIT_RUNTIME_ID",
+        "AGENTKIT_TOOL_ID",
+        "AGENTKIT_TOOL_REGION",
+        "SKILL_SPACE_ID",
+        "CODEX_MCP_RUNTIME_API_KEY",
+        "A2A_PUBLIC_URL",
+        "FEISHU_APP_ID",
+        "FEISHU_APP_SECRET",
+        "CHANNEL_STATE_ENCRYPTION_KEY",
+        "DEPLOYMENT_DATABASE_ADMIN_URL",
+        "SHARED_APIG_DATABASE_URL",
+    }
+)
 STUDIO_MPA_IDENTITY_FIELDS = (
     ("VEADK_STUDIO_MPA_USER_POOL_NAME", "user_pool_name", "MPA_USER_POOL_NAME"),
     (
@@ -197,6 +213,7 @@ class Worker(Options):
     image: str = ""
     reference_id: str = ""
     role_name: str = "IDRoleForArkClawShareAgent"
+    env: dict[str, str] = Field(default_factory=dict, repr=False)
     tos_access_key: str = Field(default="", repr=False)
     tos_secret_key: str = Field(default="", repr=False)
     tos_bucket: str = ""
@@ -210,6 +227,17 @@ class Worker(Options):
     def strip_tos_values(cls, value: str) -> str:
         return value.strip()
 
+    @field_validator("env")
+    @classmethod
+    def validate_environment(cls, value: dict[str, str]) -> dict[str, str]:
+        if any(
+            not re.fullmatch(r"[A-Z_][A-Z0-9_]*", key)
+            or key in WORKER_RESERVED_ENV_KEYS
+            for key in value
+        ):
+            raise ValueError("Invalid or provisioner-owned worker environment key")
+        return value
+
     @model_validator(mode="after")
     def validate_source(self):
         if bool(self.existing_id) == bool(self.image):
@@ -219,6 +247,8 @@ class Worker(Options):
             raise ValueError("TOS access key, secret key, and bucket are all required")
         if self.existing_id and all(tos_values):
             raise ValueError("TOS mount settings require a newly created worker")
+        if self.existing_id and self.env:
+            raise ValueError("Environment settings require a newly created worker")
         return self
 
 
@@ -317,11 +347,16 @@ class PostgresWorkspaces(Options):
         return self
 
 
+class Iam(Options):
+    mode: Literal["existing", "auto"] = "existing"
+
+
 class Managed(Options):
     version: Literal[1]
     database_admin_url_env: str = "DEPLOYMENT_DATABASE_ADMIN_URL"
     shared_database_url_env: str = "SHARED_APIG_DATABASE_URL"
     postgres: PostgresWorkspaces | None = None
+    iam: Iam = Field(default_factory=Iam)
     credential_file: str = ""
     from_runtime: str = ""
     template_file: str = ""
@@ -335,6 +370,17 @@ class Managed(Options):
     def validate_source(self):
         if self.from_runtime and self.template_file:
             raise ValueError("Choose one template source")
+        if self.iam.mode == "auto":
+            from .iam import ROLE_NAME
+
+            if (
+                self.from_runtime
+                or self.template_file
+                or self.worker.existing_id
+                or self.worker.role_name != ROLE_NAME
+                or self.runtime.role_name not in (None, ROLE_NAME)
+            ):
+                raise ValueError("Automatic IAM requires fresh default MPA roles")
         return self
 
 
@@ -597,6 +643,8 @@ def load_profile(path: str | Path | None, *, region: str = "") -> Profile:
         worker_values = managed_values.get("worker")
         if isinstance(worker_values, dict):
             worker_values = dict(worker_values)
+            if "env" in worker_values:
+                worker_values["env"] = _resolve(worker_values["env"])
             flat_tos = _resolve(
                 {
                     key: values.get(key, "")

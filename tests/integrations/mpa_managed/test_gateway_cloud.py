@@ -15,8 +15,75 @@
 import asyncio
 import json
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
-from veadk.integrations.mpa.managed.gateway_cloud import GatewayCloud
+import pytest
+
+from veadk.integrations.mpa.managed.gateway_cloud import APIGClientError, GatewayCloud
+
+
+def test_new_gateway_matches_standard_shared_specification():
+    cloud = GatewayCloud(SimpleNamespace(region="cn-beijing"))
+    cloud.call = AsyncMock(return_value={"Id": "gw-new"})
+    assert (
+        asyncio.run(cloud.create_gateway("managed", "vpc", ["subnet-a", "subnet-c"]))
+        == "gw-new"
+    )
+    cloud.call.assert_awaited_once_with(
+        "CreateGateway",
+        {
+            "Name": "managed",
+            "Region": "cn-beijing",
+            "Type": "standard",
+            "NetworkSpec": {"VpcId": "vpc", "SubnetIds": ["subnet-a", "subnet-c"]},
+            "ResourceSpec": {
+                "Replicas": 2,
+                "InstanceSpecCode": "1c2g",
+                "CLBSpecCode": "small_1",
+                "PublicNetworkBillingType": "traffic",
+                "NetworkType": {
+                    "EnablePublicNetwork": True,
+                    "EnablePrivateNetwork": True,
+                },
+            },
+        },
+    )
+
+
+@pytest.mark.parametrize("ids", [[], ["one"], ["one", "one"]])
+def test_standard_gateway_rejects_insufficient_subnets_before_dispatch(ids):
+    cloud = GatewayCloud(SimpleNamespace(region="cn-beijing"))
+    cloud.call = AsyncMock()
+    with pytest.raises(APIGClientError, match="distinct subnet"):
+        asyncio.run(cloud.create_gateway("managed", "vpc", ids))
+    cloud.call.assert_not_awaited()
+
+
+def test_gateway_zones_are_from_apig():
+    cloud = GatewayCloud(SimpleNamespace(region="cn-beijing"))
+    cloud.call = AsyncMock(
+        return_value={"AvailableZones": ["cn-beijing-c", "cn-beijing-a"]}
+    )
+    assert asyncio.run(cloud.available_zones()) == ["cn-beijing-a", "cn-beijing-c"]
+    cloud.call.assert_awaited_once_with("GetGatewayAvailableZones", {})
+
+
+@pytest.mark.parametrize(
+    "zones",
+    [
+        None,
+        [],
+        ["cn-beijing-a"],
+        ["cn-beijing-a", "cn-shanghai-a"],
+        ["cn-beijing-a", "cn-beijing-a"],
+        "bad",
+    ],
+)
+def test_invalid_gateway_zones_fail_closed(zones):
+    cloud = GatewayCloud(SimpleNamespace(region="cn-beijing"))
+    cloud.call = AsyncMock(return_value={"AvailableZones": zones})
+    with pytest.raises(APIGClientError, match="available zones"):
+        asyncio.run(cloud.available_zones())
 
 
 def test_gateway_reads_universal_sdk_raw_response_when_decoded_result_is_empty(

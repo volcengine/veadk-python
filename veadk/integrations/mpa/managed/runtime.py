@@ -30,6 +30,7 @@ from veadk.integrations.mpa.tags import MPA_AGENT_TYPE_TAG, MPA_AGENT_TYPE_VALUE
 from veadk.integrations.mpa.managed.network import (
     AccountNetworkProvisioner,
     NetworkOptions,
+    vpc_configuration_matches,
 )
 from veadk.integrations.mpa.managed.network_cloud import NetworkCloud
 
@@ -293,11 +294,7 @@ def validate_runtime(runtime, *, agent_id, database, template):
             )
         actual = nets["private"].get("VpcConfiguration") or {}
         wanted = template["NetworkConfiguration"]["VpcConfiguration"]
-        if any(
-            actual.get(k) != wanted.get(k)
-            for k in ("VpcId", "SubnetIds", "EnableSharedInternetAccess")
-            if k in wanted
-        ):
+        if not vpc_configuration_matches(actual, wanted):
             raise DeploymentError(
                 "Changing the Runtime VPC configuration requires a separate migration"
             )
@@ -431,6 +428,7 @@ class AgentRuntimeDeployer:
                 region=self.region,
                 agent_id=agent_id,
                 project_name=template.get("ProjectName") or "",
+                runtime_name=runtime_name,
                 configured_id=source_env.get("SKILL_SPACE_ID", "").strip(),
                 current_id=env_map(current).get("SKILL_SPACE_ID", "").strip()
                 if current
