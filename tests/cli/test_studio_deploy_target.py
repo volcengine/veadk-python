@@ -70,7 +70,7 @@ def _stage_test_studio_dependencies(
         "trustedmcp-0.0.5-py3-none-any.whl",
         "volcengine_python_sdk-5.0.36-py2.py3-none-any.whl",
         ("tokenizers-0.22.2-cp39-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"),
-        "openviking_sdk-0.1.4-py3-none-any.whl",
+        "openviking_sdk-0.1.9-py3-none-any.whl",
     ]
     if provider == "byteplus":
         names.append("pydantic-2.12.5-py3-none-any.whl")
