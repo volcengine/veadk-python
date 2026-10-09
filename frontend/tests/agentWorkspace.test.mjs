@@ -334,7 +334,7 @@ test("runtime-backed Agent details load and paginate usage without stale respons
   assert.match(clientSource, /adkT\("client\.checkStudioGateway"\)/);
 
   assert.match(workspaceSource, /if \(item === "usage"\) return canViewUsage && selectedAgent\?\.runtimeId/);
-  assert.match(workspaceSource, /if \(item === "sessionConfig"\) return selectedAgentCategory === "mpa"/);
+  assert.match(workspaceSource, /if \(item === "sessionConfig"\) return false/);
   assert.match(workspaceSource, /canViewUsage\?: boolean/);
   assert.match(workspaceSource, /section === "usage" && !canViewUsage[\s\S]*?setSection\("basic"\)/);
   assert.match(workspaceSource, /section !== "usage" \|\| !runtimeId/);
@@ -402,12 +402,12 @@ test("MPA Agent detail consumes the dedicated MpaAgentView model", () => {
   );
 });
 
-test("MPA Agent details expose Profile configuration as the Studio control entry", () => {
+test("MPA Agent details retain hidden Profile implementation without a navigation entry", () => {
   assert.match(workspaceSource, /mpaProfileFromAgentDraft/);
   assert.match(workspaceSource, /startMpaAgentOperation/);
   assert.match(workspaceSource, /type MpaProfilePayload/);
   assert.match(workspaceSource, /function MpaProfileConfigPanel/);
-  assert.match(workspaceSource, /if \(item === "profileConfig"\) return selectedAgentCategory === "mpa"/);
+  assert.match(workspaceSource, /if \(item === "profileConfig"\) return false/);
   assert.match(workspaceSource, /const shouldLoadUpdateCapability = selectedAgentCategory !== "mpa"/);
   assert.match(
     workspaceSource,
@@ -454,9 +454,6 @@ test("MPA Agent details expose Profile configuration as the Studio control entry
   assert.match(workspaceSource, /setSessionConfigReloadToken\(\(value\) => value \+ 1\)/);
   assert.match(workspaceSource, /section === "profileConfig" && \(/);
   assert.match(workspaceSource, /<MpaProfileConfigPanel[\s\S]*?profile=\{profileDraft\}[\s\S]*?onApply=\{\(\) => void applyMpaProfileFromStudio\(\)\}/);
-  assert.match(workspaceSource, /disabled=\{selectedAgentCategory === "mpa" \? false : Boolean\(updateBlockedReason\)\}/);
-  assert.match(workspaceSource, /if \(selectedAgentCategory === "mpa"\) \{[\s\S]*?setSection\("profileConfig"\)/);
-  assert.match(workspaceSource, /selectedAgentCategory === "mpa" \?\s*\(\s*t\("agentWorkspace\.profileConfig"\)\s*\)/);
   assert.match(workspaceStyles, /\.aw-profile-config \.aw-session-config-card/);
   assert.match(workspaceStyles, /\.aw-profile-config-list/);
   assert.equal(enUiCatalog.agentWorkspace.sections.profileConfig, "Profile configuration");
@@ -485,7 +482,7 @@ test("MPA diagnostics tab uses Runtime Console correlation instead of generic tr
     /\/api\/v1\/runtime-console\/admin\/runs\/\$\{encodeURIComponent\(params\.invocationId\)\}\/trace\?\$\{query\.toString\(\)\}/,
   );
   assert.match(workspaceSource, /type AgentSection = "basic" \| "profileConfig" \| "sessionConfig" \| "usage" \| "diagnostics"/);
-  assert.match(workspaceSource, /if \(item === "diagnostics"\) return selectedAgentCategory === "mpa" && selectedAgent\?\.runtimeId/);
+  assert.match(workspaceSource, /if \(item === "diagnostics"\) return false/);
   assert.match(workspaceSource, /function MpaDiagnosticsPanel/);
   assert.match(workspaceSource, /getMpaRuntimeConsoleRuns\(\{/);
   assert.match(workspaceSource, /getMpaRuntimeConsoleTrace\(\{/);
