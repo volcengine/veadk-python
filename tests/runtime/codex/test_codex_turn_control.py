@@ -785,7 +785,7 @@ def _smoke_gate() -> None:
 async def _real_thread():
     """(stub backend, persistent thread) on a real Codex app-server."""
     _smoke_gate()
-    from openai_codex import AsyncCodex, CodexConfig
+    from openai_codex import ApprovalMode, AsyncCodex, CodexConfig, Sandbox
 
     stub = _StubResponses()
     port = await stub.start()
@@ -804,6 +804,8 @@ async def _real_thread():
                 model="stub-model",
                 model_provider="stub",
                 ephemeral=False,
+                sandbox=Sandbox.read_only,
+                approval_mode=ApprovalMode.deny_all,
                 config={
                     "model_providers": {
                         "stub": {

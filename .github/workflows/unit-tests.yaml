@@ -22,11 +22,15 @@ on:
       - '**.py'
       - 'pyproject.toml'
       - 'requirements*.txt'
+      - 'uv.lock'
+      - '.github/workflows/unit-tests.yaml'
   pull_request:
     paths:
         - '**.py'
         - 'pyproject.toml'
         - 'requirements*.txt'
+        - 'uv.lock'
+        - '.github/workflows/unit-tests.yaml'
 
 jobs:
   test:
@@ -67,27 +71,50 @@ jobs:
   # model backend (no credentials, no network egress). Kept out of the matrix
   # job above because it is serial and process-spawning.
   #
-  # The job tolerates the test FAILING but not the test being ABSENT, and those
-  # are two separate steps below:
-  #
-  #   * `continue-on-error` sits on the pytest step only. Whether the OS sandbox
-  #     (landlock+seccomp on a GitHub runner) establishes at all is precisely the
-  #     unknown this test exists to discover, and the CLI is pinned to an alpha
-  #     (openai-codex-cli-bin==0.137.0a4), so a red assertion is signal to read,
-  #     not a broken build. Drop that flag once the Linux sandbox verdict is in
-  #     and the test has been green for a few runs -- at which point this job
-  #     becomes an ordinary required check.
-  #   * The step after it has NO such flag: a skipped or uncollected smoke test
-  #     means the job proved nothing (lost binary, SDK install failure, platform
-  #     check tripping), and an exit-0 green tick for that would defeat the whole
-  #     point of running it. That must stay a hard failure even before the flag
-  #     above comes off.
+  # Every selected case must run and pass, including database-backed resume.
   codex-smoke:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: veadk_test
+          MYSQL_DATABASE: veadk_test
+          MYSQL_USER: veadk_test
+          MYSQL_PASSWORD: veadk_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 --silent"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: veadk_test
+          POSTGRES_PASSWORD: veadk_test
+          POSTGRES_DB: veadk_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U veadk_test -d veadk_test"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
 
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
+
+    - name: Allow sandbox user namespaces on the runner
+      # Ubuntu's AppArmor restriction removes capabilities inside unprivileged
+      # user namespaces, preventing bubblewrap from configuring its loopback.
+      # Relax that host restriction only on this disposable runner; the tests
+      # still use the real read-only OS sandbox with network access disabled.
+      run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
     - name: Set up Python 3.12
       uses: actions/setup-python@v5
@@ -105,11 +132,10 @@ jobs:
         uv pip install -e .
 
     - name: Run the Codex end-to-end smoke test
-      # Tolerates a failing assertion (the sandbox verdict this job exists to
-      # collect); does NOT tolerate the test not running -- see the next step.
-      continue-on-error: true
       env:
         CODEX_RUN_SMOKE: "1"
+        VEADK_TEST_MYSQL_URL: mysql+aiomysql://veadk_test:veadk_test@127.0.0.1:3306/veadk_test
+        VEADK_TEST_POSTGRES_URL: postgresql+asyncpg://veadk_test:veadk_test@127.0.0.1:5432/veadk_test
       run: |
         source .venv/bin/activate
         # -p no:xdist: this test must not be distributed across workers.
@@ -117,11 +143,11 @@ jobs:
         # SDK, missing binary, unsupported platform) is visible in the log.
         # --junitxml: machine-readable outcome for the assertion step below;
         # pytest's own exit code cannot distinguish "passed" from "skipped".
-        pytest -m codex_smoke -p no:xdist -rs --junitxml=codex-smoke.xml
+        pytest tests/runtime/codex -m codex_smoke -p no:xdist -rs --junitxml=codex-smoke.xml
 
     - name: Assert the smoke test actually ran
-      # No continue-on-error: this is the guard that stops the job going green
-      # while proving nothing.
+      if: ${{ !cancelled() }}
+      # Pytest exits successfully for skipped tests, so check its report too.
       run: |
         python3 - <<'PY'
         import sys
@@ -179,10 +205,7 @@ jobs:
 
         failed = [d for d in (_detail(c, "failure") for c in cases) if d]
         if failed:
-            # Deliberately not fatal: the pytest step above already reported it,
-            # and its `continue-on-error` is what keeps this job advisory while
-            # the Linux sandbox verdict is unknown. Both come off together.
-            print(
+            sys.exit(
                 f"codex smoke: {len(cases)} test(s) ran, {len(failed)} FAILED "
                 "-- this is the signal this job exists to collect; read the "
                 "pytest output above:\n" + "\n".join(failed)
