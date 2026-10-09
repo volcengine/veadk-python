@@ -22,7 +22,6 @@ and a bilingual README (English + 中文).
 | 10 | [Agent routing](./10_agent_routing/) | Complex | A coordinator that delegates to specialists dynamically |
 | 11 | [Tracing](./11_tracing/) | Complex | Observe LLM/tool calls; dump or export spans |
 | 13 | [OpenViking](./13_openviking/) | Complex | Use OpenViking for knowledge retrieval and long-term memory |
-| 18 | [Context compression](./18_context_compression/) | Medium | Default preparation/reranking, long tool results, SQLite source recovery |
 
 There are also frontend-focused demos that run with
 `veadk frontend --agents-dir examples`:

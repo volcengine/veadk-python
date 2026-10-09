@@ -17,6 +17,7 @@
 import copy
 import json
 
+import httpx
 import pytest
 from google.adk.models.lite_llm import LiteLLMClient
 from google.adk.sessions import InMemorySessionService
@@ -25,6 +26,7 @@ from litellm import ModelResponse
 
 from veadk import Agent, Runner
 from veadk.context.tool_results import READ_CONTEXT_TOOL
+from veadk.memory.short_term_memory import ShortTermMemory
 from veadk.models.retrying_lite_llm import RetryingLiteLlm
 
 
@@ -139,3 +141,130 @@ async def test_large_tool_result_is_retrievable_in_the_real_runner_without_reexe
     assert (
         max(len(json.dumps(request["messages"])) for request in client.requests) < 24000
     )
+
+
+@pytest.mark.asyncio
+async def test_sqlite_runner_compresses_tool_input_and_persists_originals(
+    monkeypatch, tmp_path
+):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("MODEL_EMBEDDING_API_KEY", raising=False)
+    wire, runners = [], []
+    original_run = Runner.run
+
+    def get_inventory_report() -> str:
+        """Return the complete synthetic inventory report for all 430 records."""
+        return "".join(
+            f"Record {i}: warehouse {i * 17}, audited balance {i * 23} units.\n"
+            for i in range(430)
+        )
+
+    async def observe_run(self, *args, **kwargs):
+        runners.append(self)
+        return await original_run(self, *args, **kwargs)
+
+    async def send(self, request, **kwargs):
+        assert request.url.host == "ark.cn-beijing.volces.com"
+        body = json.loads(request.content)
+        wire.append(body)
+        message = {"role": "assistant", "content": "Record 113: 2599 units."}
+        finish = "stop"
+        if len(wire) == 1:
+            message = {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "inventory-call",
+                        "type": "function",
+                        "function": {"name": "get_inventory_report", "arguments": "{}"},
+                    }
+                ],
+            }
+            finish = "tool_calls"
+        elif "Record 227" in json.dumps(body["messages"][-1]):
+            message["content"] = "Record 227: 5221 units."
+        return httpx.Response(
+            200,
+            request=request,
+            json={
+                "id": "synthetic",
+                "created": 0,
+                "object": "chat.completion",
+                "model": body["model"],
+                "choices": [
+                    {
+                        "index": 0,
+                        "finish_reason": finish,
+                        "message": message,
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 1,
+                    "completion_tokens": 1,
+                    "total_tokens": 2,
+                },
+            },
+        )
+
+    monkeypatch.setattr(Runner, "run", observe_run)
+    monkeypatch.setattr(httpx.AsyncClient, "send", send)
+    data = tmp_path / ".adk"
+    data.mkdir()
+    memory = ShortTermMemory(
+        backend="sqlite",
+        local_database_path=str(data / "compression-demo.db"),
+    )
+    agent = Agent(
+        name="inventory_assistant",
+        model_name="doubao-seed-2-1-pro-260628",
+        model_api_base="https://ark.cn-beijing.volces.com/api/v3",
+        model_api_key="synthetic-offline",
+        instruction=(
+            "Use get_inventory_report for the first inventory question. "
+            "Answer from the report with record ID, balance and unit. "
+            "For follow-up questions use retained evidence; read the original "
+            "context only if the needed details are missing."
+        ),
+        tools=[get_inventory_report],
+        context_compression={"input_limit": 16000},
+    )
+    runner = Runner(
+        agent=agent,
+        short_term_memory=memory,
+        app_name="compression_demo",
+        user_id="demo_user",
+    )
+    for question in (
+        "Fetch the inventory report. What is the audited balance for Record 113?",
+        "From the same report, what is the audited balance for Record 227?",
+    ):
+        await runner.run(messages=question, session_id="inventory_session")
+    assert len(wire) == 3 and len(runners) == 2
+    original = get_inventory_report()
+    tool_messages = [m for m in wire[1]["messages"] if m["role"] == "tool"]
+    assert len(tool_messages) == 1
+    preview = tool_messages[0]["content"]
+    assert len(preview.encode()) < len(original.encode())
+    assert "ctx_" in preview and "Record 113:" in preview
+    assert "2599 units" in preview
+    assert any(t["function"]["name"] == "veadk_read_context" for t in wire[1]["tools"])
+    service = runners[0].session_service
+    saved = await service.get_session(
+        app_name="compression_demo",
+        user_id="demo_user",
+        session_id="inventory_session",
+    )
+    responses = [
+        p.function_response
+        for e in saved.events
+        if e.content
+        for p in e.content.parts or []
+        if p.function_response
+    ]
+    assert any(
+        r.name == "get_inventory_report" and r.response.get("result") == original
+        for r in responses
+    )
+    assert (tmp_path / ".adk/compression-demo.db").is_file()
+    assert not (tmp_path / ".adk/context-index.sqlite3").exists()

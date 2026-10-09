@@ -21,7 +21,6 @@
 | 10 | [智能体路由](./10_agent_routing/) | 复杂 | 协调者动态委派给专家智能体 |
 | 11 | [链路追踪](./11_tracing/) | 复杂 | 观测大模型/工具调用；导出 span |
 | 13 | [OpenViking](./13_openviking/) | 复杂 | 使用 OpenViking 做知识检索与长期记忆 |
-| 18 | [上下文压缩](./18_context_compression/) | 中等 | 默认索引与重排、长工具结果压缩、SQLite 原文恢复 |
 
 另外还有可通过 `veadk frontend --agents-dir examples` 运行的 frontend 示例：
 
