@@ -196,7 +196,7 @@ test("fails fast with a clear BytePlus Sidecar notice without blocking ordinary 
     customCreateSource,
     /selected && harnessProviderNotice[\s\S]*?setBuildErr\(harnessProviderNotice\)/,
   );
-  assert.match(
+  assert.doesNotMatch(
     customCreateSource,
     /unavailableMessage=\{harnessProviderNotice\}/,
   );

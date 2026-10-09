@@ -640,9 +640,22 @@ def merge_mcp_recoveries(*recoveries: McpRecovery) -> McpRecovery:
     )
 
 
+def _is_registry_a2a_entry(node: Mapping[str, Any]) -> bool:
+    """Registry selectors attach discovery tools to their parent, not an Agent."""
+    registry = node.get("a2aRegistry")
+    return (
+        node.get("agentType") == "a2a"
+        and isinstance(registry, Mapping)
+        and registry.get("enabled") is True
+    )
+
+
 def _draft_nodes(
-    node: Mapping[str, Any], *, depth: int = 0
+    node: Mapping[str, Any], *, depth: int = 0, skip_registry_entries: bool = True
 ) -> Iterable[Mapping[str, Any]]:
+    # Match code generation: registry entries are leaves and cannot own MCPs.
+    if skip_registry_entries and _is_registry_a2a_entry(node):
+        return
     if depth > 16:
         raise LegacyRecoveryError("legacy_overlay_agent_graph_too_deep")
     yield node
@@ -652,7 +665,9 @@ def _draft_nodes(
             raise LegacyRecoveryError("legacy_overlay_agent_graph_too_large")
         for child in children:
             if isinstance(child, Mapping):
-                yield from _draft_nodes(child, depth=depth + 1)
+                yield from _draft_nodes(
+                    child, depth=depth + 1, skip_registry_entries=skip_registry_entries
+                )
     workflow = node.get("workflow")
     workflow_nodes = workflow.get("nodes") if isinstance(workflow, Mapping) else None
     if isinstance(workflow_nodes, list):
@@ -661,11 +676,15 @@ def _draft_nodes(
         for item in workflow_nodes:
             child = item.get("agent") if isinstance(item, Mapping) else None
             if isinstance(child, Mapping):
-                yield from _draft_nodes(child, depth=depth + 1)
+                yield from _draft_nodes(
+                    child, depth=depth + 1, skip_registry_entries=skip_registry_entries
+                )
 
 
 def _draft_node_index(
     draft: Mapping[str, Any],
+    *,
+    skip_registry_entries: bool = False,
 ) -> dict[str, tuple[tuple[str, ...], Mapping[str, Any]]]:
     """Index a draft by stable Agent identity and its parent path."""
 
@@ -674,6 +693,8 @@ def _draft_node_index(
     def visit(
         node: Mapping[str, Any], parent_path: tuple[str, ...], depth: int
     ) -> None:
+        if skip_registry_entries and _is_registry_a2a_entry(node):
+            return
         if depth > 16:
             raise LegacyRecoveryError("legacy_overlay_agent_graph_too_deep")
         name = str(node.get("name") or "").strip()
@@ -823,7 +844,9 @@ def _mcp_reuse_bindings(
         str,
         tuple[tuple[str, str, str], str, tuple[str, ...], int],
     ] = {}
-    for agent_name, (parent_path, node) in _draft_node_index(draft).items():
+    for agent_name, (parent_path, node) in _draft_node_index(
+        draft, skip_registry_entries=True
+    ).items():
         raw_tools = node.get("mcpTools")
         if raw_tools is None:
             continue
@@ -998,7 +1021,9 @@ def canonicalize_source_preserving_mcp_credentials(
     used_supplied: set[tuple[str, str, str]] = set()
     resolved: dict[str, str] = {}
     seen_identities: set[tuple[str, str, str]] = set()
-    for agent_name, (_path, node) in _draft_node_index(canonical).items():
+    for agent_name, (_path, node) in _draft_node_index(
+        canonical, skip_registry_entries=True
+    ).items():
         tools = node.get("mcpTools")
         if tools is None:
             continue
@@ -1120,7 +1145,7 @@ def mcp_editor_draft_without_credentials(
     """Return an editor draft containing references but never secret values."""
 
     sanitized = copy.deepcopy(dict(draft))
-    for node in _draft_nodes(sanitized):
+    for node in _draft_nodes(sanitized, skip_registry_entries=False):
         raw_tools = node.get("mcpTools")
         if not isinstance(raw_tools, list):
             continue
@@ -1145,7 +1170,9 @@ def mcp_editor_credential_values(
 
     credentials: list[dict[str, str]] = []
     seen_references: set[str] = set()
-    for agent_name, (_path, node) in _draft_node_index(draft).items():
+    for agent_name, (_path, node) in _draft_node_index(
+        draft, skip_registry_entries=True
+    ).items():
         raw_tools = node.get("mcpTools")
         if raw_tools is None:
             continue

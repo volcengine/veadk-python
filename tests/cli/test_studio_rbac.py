@@ -114,6 +114,11 @@ def test_runtime_role_lookup_failure_finishes_deployment_and_allows_retry(
         ("legacy_mcp_credential_missing", "缺少可用凭证"),
         ("legacy_mcp_reuse_source_missing", "无法沿用原 MCP 凭证"),
         ("legacy_platform_mcp_read_only", "Skill 或 MCP 配置已变化"),
+        ("legacy_overlay_agent_identity_invalid", "Agent 名称为空或重复"),
+        ("legacy_overlay_agent_graph_changed", "不支持修改子 Agent 或 A2A 结构"),
+        ("legacy_overlay_skill_materialization_invalid", "Skill 文件"),
+        ("legacy_image_registry_unsupported", "源镜像仓库"),
+        ("unknown_validation_error", "智能体部署配置校验失败"),
     ],
 )
 def test_mcp_deployment_error_details_are_actionable(
@@ -708,7 +713,8 @@ def test_managed_sidecar_runtime_envs_reject_invalid_mcp_state(
         {"effectiveComponents": ["mcp_resilience"]},
     )
 
-    assert error == "Harness Sidecar MCP 配置无效，请检查名称、地址与认证后重试。"
+    assert error == "MCP 配置无效，请检查名称、地址与认证后重试。"
+    assert runtime_envs["MCP_SERVERS_JSON"] == raw_mcp
     assert "AGENTKIT_HARNESS_RUNTIME_COMMAND" not in runtime_envs
 
 
