@@ -27,7 +27,7 @@ Skills may be SkillHub names/slugs or skills-center refs prefixed with ``space:`
 
 from typing import Any, Literal
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
 from veadk.consts import DEFAULT_MODEL_AGENT_NAME
 from veadk.prompts.agent_default_prompt import DEFAULT_DESCRIPTION, DEFAULT_INSTRUCTION
@@ -61,6 +61,18 @@ class HarnessMcpServer(BaseModel):
     )
 
 
+class HarnessSkillSpacePolicy(BaseModel):
+    """Session-scoped allow/deny filter for one selected Skill Space."""
+
+    mode: Literal["allow", "deny"] = Field(
+        description="Skill Space filtering mode.",
+    )
+    ids: list[str] = Field(
+        default_factory=list,
+        description="Stable Skill ids selected by the policy.",
+    )
+
+
 class HarnessSelectedSkill(BaseModel):
     """Skill selected by AgentKit runtime config."""
 
@@ -86,6 +98,21 @@ class HarnessSelectedSkill(BaseModel):
     skill_id: str | None = Field(default=None, description="Skill id.")
     version: str | None = Field(default=None, description="Skill version.")
     region: str | None = Field(default=None, description="Skill region.")
+    skill_space_policy: HarnessSkillSpacePolicy | None = Field(
+        default=None,
+        description="Allow/deny filter applied to this skill_space_id.",
+    )
+
+    @model_validator(mode="after")
+    def _validate_skill_space_policy(self) -> "HarnessSelectedSkill":
+        if self.skill_space_policy is not None and self.source != "skillspace":
+            raise ValueError("skill_space_policy is only supported for skillspace")
+        if (
+            self.skill_space_policy is not None
+            and not (self.skill_space_id or "").strip()
+        ):
+            raise ValueError("skill_space_policy requires skill_space_id")
+        return self
 
 
 class HarnessResourceOverride(BaseModel):

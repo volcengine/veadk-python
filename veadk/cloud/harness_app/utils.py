@@ -61,8 +61,17 @@ from veadk.cloud.harness_app.types import (
 from veadk.knowledgebase import KnowledgeBase
 from veadk.memory.long_term_memory import LongTermMemory
 from veadk.memory.short_term_memory import ShortTermMemory
+from veadk.skills.policy import (
+    SKILL_SPACE_POLICY_ENV,
+    SkillSpacePolicySet,
+    parse_skill_space_policy,
+)
 from veadk.skills.materializer import materialize_remote_skill
-from veadk.skills.utils import _load_skills_from_space_id
+from veadk.skills.utils import (
+    _filter_skills_by_policy,
+    _filter_skills_by_policy_env,
+    _load_skills_from_space_id,
+)
 from veadk.tools import get_builtin_tool, list_builtin_tools
 from veadk.tools.builtin_tools.load_knowledgebase import LoadKnowledgebaseTool
 from veadk.utils.logger import get_logger
@@ -336,10 +345,51 @@ def _dedupe_selected_skills(
 ) -> list[HarnessSelectedSkill]:
     ordered: dict[str, HarnessSelectedSkill] = {}
     for entry in entries:
-        ref = _selected_skill_ref(entry)
-        if ref:
-            ordered[ref] = entry
+        key = json.dumps(
+            entry.model_dump(mode="json", exclude_none=True),
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        if key:
+            ordered[key] = entry
     return list(ordered.values())
+
+
+def _selected_skill_space_policy_json(
+    entries: list[HarnessSelectedSkill],
+) -> str | None:
+    spaces: dict[str, dict[str, Any]] = {}
+    for entry in entries:
+        policy = entry.skill_space_policy
+        if policy is None:
+            continue
+        if entry.source != "skillspace":
+            raise ValueError("skill_space_policy is only supported for skillspace")
+        skill_space_id = (entry.skill_space_id or "").strip()
+        if not skill_space_id:
+            raise ValueError("skill_space_policy requires skill_space_id")
+        payload = policy.model_dump(mode="json")
+        existing = spaces.get(skill_space_id)
+        if existing is not None and existing != payload:
+            raise ValueError(
+                f"Conflicting skill_space_policy for skill_space_id={skill_space_id!r}"
+            )
+        spaces[skill_space_id] = payload
+
+    if not spaces:
+        return None
+    return parse_skill_space_policy(json.dumps({"spaces": spaces})).to_json()
+
+
+def _selected_skill_space_policy(
+    entries: list[HarnessSelectedSkill],
+) -> SkillSpacePolicySet | None:
+    if os.getenv(SKILL_SPACE_POLICY_ENV) is not None:
+        return None
+    raw_policy = _selected_skill_space_policy_json(entries)
+    if raw_policy is None:
+        return None
+    return parse_skill_space_policy(raw_policy)
 
 
 def _builtin_tool_entries(
@@ -642,7 +692,9 @@ class SkillLoadError(RuntimeError):
 
 
 def build_skill_toolset(
-    skills: list[str], download_dir: Path | None = None
+    skills: list[str],
+    download_dir: Path | None = None,
+    skill_space_policy: SkillSpacePolicySet | None = None,
 ) -> SkillToolset | None:
     """Download each skill source and load them as a single ADK toolset.
 
@@ -682,6 +734,11 @@ def build_skill_toolset(
                     raise RuntimeError(
                         f"No skills found in skills-center space '{skill_space_id}'"
                     )
+                remote_skills = (
+                    _filter_skills_by_policy(remote_skills, skill_space_policy)
+                    if skill_space_policy is not None
+                    else _filter_skills_by_policy_env(remote_skills)
+                )
 
                 for remote_skill in remote_skills:
                     skill_dir = materialize_remote_skill(
@@ -697,6 +754,8 @@ def build_skill_toolset(
                 )
         except Exception as e:
             raise SkillLoadError(f"Skill '{skill}' failed to load: {e}") from e
+    if not loaded_skills:
+        return None
     return SkillToolset(
         skills=loaded_skills,
         code_executor=UnsafeLocalCodeExecutor(),
@@ -944,8 +1003,12 @@ def _add_mcp_toolsets(agent: Agent, servers: list[HarnessMcpServer]) -> None:
 
 
 def _selected_skill_refs(skills: list[HarnessSelectedSkill]) -> list[str]:
-    refs = [_selected_skill_ref(skill) for skill in skills]
-    return [ref for ref in refs if ref]
+    refs: dict[str, None] = {}
+    for skill in skills:
+        ref = _selected_skill_ref(skill)
+        if ref:
+            refs.setdefault(ref, None)
+    return list(refs)
 
 
 def _assemble_agent(config: HarnessConfig) -> tuple[Agent, ShortTermMemory]:
@@ -958,10 +1021,14 @@ def _assemble_agent(config: HarnessConfig) -> tuple[Agent, ShortTermMemory]:
     """
     tools = _build_builtin_tools(_builtin_tool_entries(config, only_set=False))
 
-    skills = _selected_skill_refs(_selected_skill_entries(config, only_set=False))
+    selected_skills = _selected_skill_entries(config, only_set=False)
+    skills = _selected_skill_refs(selected_skills)
     if skills:
         logger.info(f"Loading skills {skills} for harness.")
-        skill_toolset = build_skill_toolset(skills)
+        skill_toolset = build_skill_toolset(
+            skills,
+            skill_space_policy=_selected_skill_space_policy(selected_skills),
+        )
         if skill_toolset is not None:
             tools.append(skill_toolset)
     tools.extend(_build_mcp_toolsets(config.mcp))
@@ -1095,12 +1162,19 @@ def _is_harness_builtin_tool(tool: Any) -> bool:
 
 
 def _replace_skills(
-    agent: Agent, skill_ids: list[str], download_dir: Path | None = None
+    agent: Agent,
+    skill_ids: list[str],
+    download_dir: Path | None = None,
+    skill_space_policy: SkillSpacePolicySet | None = None,
 ) -> None:
     """Replace the harness-selected skill toolset with ``skill_ids``."""
 
     agent.tools = [tool for tool in agent.tools if not isinstance(tool, SkillToolset)]
-    toolset = build_skill_toolset(skill_ids, download_dir=download_dir)
+    toolset = build_skill_toolset(
+        skill_ids,
+        download_dir=download_dir,
+        skill_space_policy=skill_space_policy,
+    )
     if toolset is not None:
         agent.tools.append(toolset)
 
@@ -1499,10 +1573,12 @@ def spawn_harness_agent(
         )
 
     if "selected_skills" in set_fields:
+        selected_skills = _selected_skill_entries(overrides, only_set=True)
         _replace_skills(
             cloned,
-            _selected_skill_refs(_selected_skill_entries(overrides, only_set=True)),
+            _selected_skill_refs(selected_skills),
             download_dir,
+            skill_space_policy=_selected_skill_space_policy(selected_skills),
         )
 
     if "mcp" in set_fields:

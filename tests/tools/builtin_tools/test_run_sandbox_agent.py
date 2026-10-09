@@ -40,7 +40,9 @@ def _load_run_sandbox_agent_module():
     fake_google_adk_tools.ToolContext = object
 
     fake_veadk = types.ModuleType("veadk")
-    fake_veadk.__path__ = []  # type: ignore[attr-defined]
+    fake_veadk.__path__ = [  # type: ignore[attr-defined]
+        str(Path(__file__).resolve().parents[3] / "veadk")
+    ]
     fake_tools = types.ModuleType("veadk.tools")
     fake_tools.__path__ = []  # type: ignore[attr-defined]
     fake_builtin_tools = types.ModuleType("veadk.tools.builtin_tools")

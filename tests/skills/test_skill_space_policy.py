@@ -68,6 +68,19 @@ def test_policy_json_is_compact_and_deduplicated():
     assert policy.to_json() == '{"mode":"deny","ids":["skill-1","skill-2"]}'
 
 
+def test_space_policy_json_is_compact_and_deduplicated():
+    policy = parse_skill_space_policy(
+        '{"spaces":{"ss-b":{"mode":"deny","ids":["skill-9"]},'
+        '"ss-a":{"mode":"allow","ids":["skill-2","skill-1","skill-2"]}}}'
+    )
+
+    assert (
+        policy.to_json()
+        == '{"spaces":{"ss-a":{"mode":"allow","ids":["skill-1","skill-2"]},'
+        '"ss-b":{"mode":"deny","ids":["skill-9"]}}}'
+    )
+
+
 @pytest.mark.parametrize(
     ("mode", "ids", "expected"),
     [
@@ -99,6 +112,81 @@ def test_load_skills_from_cloud_applies_policy(
     skills = utils.load_skills_from_cloud("ss-test")
 
     assert [skill.id for skill in skills] == expected
+
+
+def test_load_skills_from_cloud_applies_space_policy(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv(
+        "SKILL_SPACE_POLICY",
+        json.dumps(
+            {
+                "spaces": {
+                    "ss-one": {"mode": "allow", "ids": ["skill-1"]},
+                    "ss-two": {"mode": "deny", "ids": ["skill-4"]},
+                }
+            }
+        ),
+    )
+
+    def fake_load(space_id: str, *, raise_on_error=False):
+        return [
+            Skill(
+                id=f"{space_id}-missing",
+                name=f"{space_id}-missing",
+                description="missing",
+                path="unused",
+                skill_space_id=space_id,
+            )
+        ]
+
+    monkeypatch.setattr(
+        utils,
+        "_load_skills_from_space_id",
+        lambda space_id, *, raise_on_error=False: {
+            "ss-one": [
+                Skill(
+                    id="skill-1",
+                    name="one",
+                    description="one",
+                    path="unused",
+                    skill_space_id="ss-one",
+                ),
+                Skill(
+                    id="skill-2",
+                    name="two",
+                    description="two",
+                    path="unused",
+                    skill_space_id="ss-one",
+                ),
+            ],
+            "ss-two": [
+                Skill(
+                    id="skill-3",
+                    name="three",
+                    description="three",
+                    path="unused",
+                    skill_space_id="ss-two",
+                ),
+                Skill(
+                    id="skill-4",
+                    name="four",
+                    description="four",
+                    path="unused",
+                    skill_space_id="ss-two",
+                ),
+            ],
+            "ss-three": fake_load("ss-three"),
+        }[space_id],
+    )
+
+    skills = utils.load_skills_from_cloud("ss-one,ss-two,ss-three")
+
+    assert [skill.id for skill in skills] == [
+        "skill-1",
+        "skill-3",
+        "ss-three-missing",
+    ]
 
 
 def test_missing_policy_keeps_all_remote_skills(monkeypatch: pytest.MonkeyPatch):
