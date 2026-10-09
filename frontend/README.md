@@ -526,7 +526,14 @@ See [deployment and operation](service/studio_release_notifier/README.md).
   `优化` → `调试` → `环境` → `发布`. On the optimization page, `自定义`
   appears first and starts with no components, while `运维场景` applies the
   `ops` component combination. Component checkboxes remain editable and an empty
-  selection keeps Sidecar disabled. The Environment step can optionally add the
+  selection keeps Sidecar disabled. BytePlus does not show a default warning;
+  selecting an unsupported Sidecar option still explains the restriction.
+  A2A center selections configure discovery on their parent Agent and do not
+  require a local Agent name. They can be retained or added during a standard
+  Runtime update without enabling Sidecar or configuring MCP. Source-preserving
+  updates still require the original Agent structure. Deployment validation
+  reports Agent, Skill, MCP, and source-image problems separately.
+  The Environment step can optionally add the
   official Lark CLI, GitHub CLI, and Pandoc to the cloud runtime. Selecting a
   tool generates an inspectable provider-specific Dockerfile with pinned
   releases, amd64/arm64 assets, and SHA-256 verification. Advanced configuration

@@ -136,7 +136,25 @@ _BUILD_ERROR_MARKERS = (
 
 
 def _mcp_deployment_error_detail(code: str) -> str:
-    """Map server-only MCP validation codes to safe, actionable HTTP 409s."""
+    """Map deployment validation codes without exposing configuration values."""
+
+    if code == "legacy_overlay_agent_identity_invalid":
+        return "Agent 名称为空或重复，请为每个本地 Agent 填写唯一名称后重试。"
+    if code == "legacy_overlay_agent_graph_changed":
+        return (
+            "当前 Runtime 使用保留源码更新，不支持修改子 Agent 或 A2A 结构。"
+            "请恢复原结构，或使用完整项目源码重新部署。"
+        )
+    if code.startswith("legacy_overlay_agent_graph_"):
+        return "Agent 结构无效或超出层级、数量限制，请检查子 Agent 配置后重试。"
+    if code.startswith(
+        ("legacy_overlay_skill", "legacy_skill_", "legacy_runtime_skill")
+    ):
+        return "Skill 文件或配置无效，请重新选择包含完整文件的 Skill 后重试。"
+    if code == "legacy_image_registry_unsupported":
+        return "当前源镜像仓库不支持保留源码更新，请使用完整项目源码重新部署。"
+    if code.startswith("legacy_image_"):
+        return "无法确认更新所需的源镜像，请重新打开智能体详情或使用完整项目源码部署。"
 
     if code == "legacy_mcp_name_duplicate":
         return "MCP 名称重复，请为每个 HTTP MCP 服务使用唯一名称。"
@@ -157,7 +175,9 @@ def _mcp_deployment_error_detail(code: str) -> str:
         return "运行版本中的 Skill 或 MCP 配置已变化，请重新打开详情并确认最新配置后再更新。"
     if code == "legacy_overlay_sidecar_intent_changed":
         return "Harness Sidecar 组件选择已变化，请重新打开详情并确认后再更新。"
-    return "Harness Sidecar MCP 配置无效，请检查名称、地址与认证后重试。"
+    if code.startswith(("legacy_mcp_", "legacy_overlay_mcp")):
+        return "MCP 配置无效，请检查名称、地址与认证后重试。"
+    return "智能体部署配置校验失败，请检查配置后重试。"
 
 
 def _capture_process_env(keys: Iterable[str]) -> Callable[[], None]:

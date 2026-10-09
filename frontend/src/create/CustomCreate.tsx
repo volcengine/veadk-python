@@ -3701,13 +3701,11 @@ function DebugComparisonWorkspace({
 function HarnessOptimizationWorkspace({
   profile,
   optimizations,
-  unavailableMessage,
   onProfileChange,
   onOptimizationChange,
 }: {
   profile: HarnessSidecarProfileId;
   optimizations: HarnessSidecarOptionId[];
-  unavailableMessage?: string | null;
   onProfileChange: (profile: HarnessSidecarProfileId) => void;
   onOptimizationChange: (
     optionId: HarnessSidecarOptionId,
@@ -3721,12 +3719,6 @@ function HarnessOptimizationWorkspace({
       aria-label={t("traditional.optimization.ariaLabel")}
     >
       <div className="cw-optimize-panel">
-        {unavailableMessage ? (
-          <div className="cw-banner" role="alert">
-            <Info className="cw-i" />
-            <span>{unavailableMessage}</span>
-          </div>
-        ) : null}
         <fieldset className="cw-optimize-section">
           <legend>{t("traditional.optimization.scenario")}</legend>
           <RadioGroup<HarnessSidecarProfileId>
@@ -6604,7 +6596,6 @@ export function CustomCreate({
           <HarnessOptimizationWorkspace
             profile={harnessOptimizationProfile}
             optimizations={harnessOptimizations}
-            unavailableMessage={harnessProviderNotice}
             onProfileChange={updateHarnessOptimizationProfile}
             onOptimizationChange={updateHarnessOptimization}
           />
