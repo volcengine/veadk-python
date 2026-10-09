@@ -834,6 +834,19 @@ test("opens skill and video dropdowns on deliberate mouse hover", () => {
     workspaceStylesSource,
     /\.new-chat-compact-select__menu\s*\{[^}]*left:\s*0;/,
   );
+  assert.match(compactSelectSource, /updateMenuPlacement/);
+  assert.match(compactSelectSource, /data-side=\{menuSide\}/);
+  assert.match(compactSelectSource, /new-chat-compact-select-list-max-height/);
+  assert.match(
+    workspaceStylesSource,
+    /\.new-chat-compact-select__menu\[data-side="top"\]\s*\{[^}]*bottom:\s*calc\(100% \+ 7px\);/,
+    "a list without room below opens upwards",
+  );
+  assert.match(
+    workspaceStylesSource,
+    /\.new-chat-compact-select__list\s*\{[\s\S]*?max-height:\s*min\([\s\S]*?var\(--new-chat-compact-select-list-max-height/,
+    "the list shrinks to the room the trigger has",
+  );
   assert.doesNotMatch(
     workspaceStylesSource,
     /^\.new-chat-compact-select__menu\s*\{[^}]*right:\s*0;/m,

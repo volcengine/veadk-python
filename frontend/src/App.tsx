@@ -8455,8 +8455,7 @@ export default function App() {
                         blocks={turn.blocks}
                         groupProcess={Boolean(sandboxSession?.intelligentDevelopment)}
                         liveStatus={sandboxSession?.intelligentDevelopment && isLast
-                          ? (development.connection || (development.run?.phase !== "coding" || development.run?.state !== "running" ? developmentRunStatus(development.run) : ""))
-                          : undefined}
+                          ? (development.connection || (development.run?.phase !== "coding" || development.run?.state !== "running" ? developmentRunStatus(development.run) : "")) : undefined}
                         streaming={turnIsStreaming}
                         onStreamFrame={turnIsStreaming ? followConversationStreamFrame : undefined}
                         onStreamComplete={
