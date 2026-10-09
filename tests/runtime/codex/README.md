@@ -33,6 +33,29 @@ Confirm they are not skipping:
 .venv/bin/python -m pytest tests/runtime/codex -q -rs   # -rs lists skip reasons
 ```
 
+## Connect to local test databases with Colima
+
+On macOS, Docker commands can fail with `Cannot connect to the Docker daemon`
+at `unix:///var/run/docker.sock` even when Colima is running. If you use Colima
+to host the MySQL and PostgreSQL test databases, check its status and select
+its Docker context explicitly from any directory:
+
+```bash
+colima list
+docker context ls
+docker --context colima info --format '{{.OSType}}'
+```
+
+For Colima's default profile, expect `Running` in `colima list`, a `colima`
+context in `docker context ls`, and `linux` from the final command. Use
+`docker --context colima` for subsequent container commands so they reach the
+same daemon without changing the default context for other projects. For a
+named Colima profile, use its context name from `docker context ls` instead
+
+Set `VEADK_TEST_MYSQL_URL` and `VEADK_TEST_POSTGRES_URL` to the databases'
+published host ports before running the tests. Selecting a Docker context
+does not set these URLs; without them, the corresponding database cases skip
+
 ## Why the differential suite still runs without the SDK
 
 `veadk/runtime/codex/runtime.py` imports `openai_codex` at module scope, so
