@@ -71,12 +71,13 @@ You can refer to the [config instructions](https://volcengine.github.io/veadk-py
 Enjoy a minimal agent from VeADK:
 
 ```python
-from veadk import Agent
+from veadk import Agent, Runner
 import asyncio
 
 agent = Agent()
+runner = Runner(agent=agent)
 
-res = asyncio.run(agent.run("hello!"))
+res = asyncio.run(runner.run("hello!"))
 print(res)
 ```
 
