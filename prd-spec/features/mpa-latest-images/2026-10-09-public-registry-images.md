@@ -56,3 +56,21 @@ Discovery adds latency and depends on public repository availability. Build time
 Config GET accepts optional UUID `requestId`; an owner-scoped existing snapshot bypasses discovery even when reopening a failed task. The existing UI passes its request identity; this is API wiring, without a visual/interaction redesign. Direct review confirms this completes FR-3 rather than expanding scope.
 
 Client config/task requests allow 75 seconds so the 60-second resolver can return a clear error. Build timestamps preserve nanosecond order (RFC3339, at most 9 fractional digits).
+
+## Main integration amendment (2026-10-09)
+
+Merged `origin/main` named creation and MPA basic-details changes into the approved public-image feature. Required Runtime names and server-derived agent IDs remain; manual image inputs and the requested public repositories remain authoritative for image selection. The named-creation design’s removal of image fields and `/mpa/*:latest` defaults are superseded only in this respect. STS account selection, automatic IAM and reference-free Worker creation remain intact. Direct merge review preserves owner/request image snapshots, named retry payloads and both feature test sets. User authorized merging main; no push is authorized.
+
+### Merge verification (2026-10-09)
+
+Tested the resolved merge of local `3f134207` and `origin/main` `f6ed8ffa` on `feat/test-main`, before the merge commit. Review confirmed named creation/server IDs, public image discovery/manual overrides, immutable retry snapshots, STS/IAM/Worker preparation and the main basic-details change coexist. Both current component-contract translations were reconciled. A pre-existing optional mock-call type warning was resolved with an explicit assertion in the affected service test.
+
+- `pass`: `uv run --extra dev pytest tests/integrations/mpa_managed tests/cli/test_cli_mpa.py -n 2 -q` — 635 passed, 10 dependency warnings. Two workers selected for bounded local resources.
+- `pass`: `npm --prefix frontend test` — 1,377 Node tests and 69 Vitest tests; no skips.
+- `pass`: `npm --prefix frontend run build`, `npm --prefix frontend run test:webui-assets` (113 files, 350 internal references), and `npm --prefix frontend run check:i18n` (2 locales, 21 namespaces).
+- `pass`: Ruff on `frontend/server/mpa_creation.py`, `tests/integrations/mpa_managed` and `veadk/integrations/mpa/managed`; Pyright on changed Python files, zero errors/warnings.
+- `pass`: `uv run --extra dev pre-commit run --all-files` — Ruff check/format and both secret scanners.
+- `pass`: isolated real browser check of merged three-step form, required empty-name state, valid name, manual MPA image, blank Worker default and 800×700 viewport. Config responses were simulated; no cloud resources were created. Existing automated tests cover lost responses, cancellation, retry, loading/errors and legacy drafts.
+- `not_run`: live cloud creation, IME composition and full repository Python regression. This merge preserves the approved behavior; affected creation/CLI suites ran instead, and live cloud creation is outside this merge request. Harness/sidecar smoke is `not_applicable`: no such contract changed.
+
+Generated WebUI files were rebuilt from the merged source; neither parent's obsolete bundles were retained. The pre-merge backup branch is `backup/test-main-before-main-20261009-2110`. Push is not part of this request.

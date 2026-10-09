@@ -109,6 +109,13 @@
   outline: 2px solid var(--studio-text-primary);
   outline-offset: 2px;
 }
+.mpa-create-body input[aria-invalid="true"] {
+  border-color: var(--studio-danger);
+  outline-color: var(--studio-danger);
+}
+.mpa-create-body label p[role="alert"] {
+  color: var(--studio-danger);
+}
 .mpa-create-body input[readonly] {
   background: var(--studio-bg-subtle, var(--studio-bg-panel));
   color: var(--studio-text-secondary);

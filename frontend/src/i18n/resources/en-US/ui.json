@@ -1594,6 +1594,9 @@
     },
     "wakingHint": "Waking the agent. This may take some time.",
     "mpaCreate": {
+      "name": "Name",
+      "namePlaceholder": "e.g. test-agent",
+      "nameHelp": "Used as the Runtime name. Use 4–64 letters, numbers, underscores or hyphens.",
       "stepsLabel": "Creation steps",
       "steps": {
         "basics": "Basics",
@@ -1618,7 +1621,7 @@
       "openvikingInvalid": "Enter a valid HTTPS service URL, resource ID and API Key together, or leave all blank.",
       "openvikingCredentials": "The API Key is used only for this creation and is not saved in browser drafts; re-enter it after a refresh.",
       "tosTitle": "Session output storage",
-      "tosDescription": "Optional. Enter complete TOS credentials and a bucket to mount an isolated output directory for every Session. Leave all three blank to keep the server configuration.",
+      "tosDescription": "Optional. Enter complete TOS credentials and a bucket to mount an isolated output directory for every Session. Leave all three blank to use the server defaults; TOS mounting is disabled if no defaults are configured.",
       "tosAccessKey": "TOS Access Key",
       "tosSecretKey": "TOS Secret Key",
       "tosBucket": "TOS bucket",

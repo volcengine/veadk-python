@@ -345,10 +345,15 @@ class AgentRuntimeDeployer:
         template: dict,
         *,
         runtime_id: str = "",
+        runtime_name: str = "",
         legacy_tag_items: list[dict] | None = None,
     ) -> dict:
         from agentkit.sdk.runtime.types import CreateRuntimeRequest
         from veadk.integrations.mpa.managed.skills import ensure_skill_space
+        from veadk.integrations.mpa.managed.config import validate_runtime_name
+
+        if runtime_name:
+            runtime_name = validate_runtime_name(runtime_name)
 
         account = await self.cloud.account_id()
         source_env = env_map(template)
@@ -357,7 +362,9 @@ class AgentRuntimeDeployer:
         template = copy.deepcopy(template)
         # Validate supplied fields, including partial network settings, before
         # provisioning anything. Missing network fields are filled below.
-        CreateRuntimeRequest.model_validate({**template, "Name": agent_id})
+        CreateRuntimeRequest.model_validate(
+            {**template, "Name": runtime_name or agent_id}
+        )
         network = template.get("NetworkConfiguration") or {}
         self.network_options.validate()
         if network.get("EnablePublicNetwork") is False or (
@@ -404,7 +411,9 @@ class AgentRuntimeDeployer:
                 project_name=template.get("ProjectName") or "default",
             )
             self.progress("Account VPC and subnet configuration ready")
-            CreateRuntimeRequest.model_validate({**template, "Name": agent_id})
+            CreateRuntimeRequest.model_validate(
+                {**template, "Name": runtime_name or agent_id}
+            )
             if current:
                 validate_runtime(
                     current, agent_id=agent_id, database=name, template=template
@@ -472,7 +481,7 @@ class AgentRuntimeDeployer:
             )
             desired = {
                 **template,
-                "Name": current["Name"] if current else agent_id,
+                "Name": current["Name"] if current else runtime_name or agent_id,
                 "Envs": [{"Key": k, "Value": v} for k, v in sorted(env.items())],
             }
             desired.pop("ClientToken", None)

@@ -1621,7 +1621,7 @@ The production entry loads both component token stylesheets before rendering. Wh
 
 生产入口在渲染前加载两份组件主题样式。宿主未在 `<html>` 上设置 `data-theme` 时沿用浅色页面；显式浅色或深色设置保持不变，确保弹窗、文字、输入框和按钮配色一致。组件预览的默认主题不变。
 
-### MPA creation image inputs / MPA 创建镜像输入
+### Named MPA creation / MPA 名称创建
 
 Studio resolves shared VPC/subnet and APIG/IM Gateway from the account/region
 records in `mpa_admin_workspace/mpa_admin_db`. It creates and persists missing
@@ -1637,17 +1637,17 @@ With `managed.postgres` configured, the PG step uses a shared business Workspace
 
 配置 `managed.postgres` 后，PG 步骤使用共享业务 Workspace，每个 MPA 保留独立业务库。账号/地域共享资源记录存入 `mpa_admin_workspace/mpa_admin_db`。设置 `managed.postgres.mode: auto` 后，由部署 STS 创建/复用两个 Workspace，PG 步骤无需填写连接信息；仍兼容手动配置。参见[配置和注册库迁移说明](../veadk/integrations/mpa/managed/README.zh.md)。
 
-The MPA creation dialog pre-fills MPA and Worker image inputs from the server profile. Users with agent-management permission can edit either reference or leave it blank to use the configured default. Inputs lock on submission; retry and browser-session recovery preserve the original request and effective-image snapshot. URLs and credentials are rejected. These values affect only the requested creation, not the built-in server profile or existing agents. See [managed creation](../veadk/integrations/mpa/managed/README.md).
+The MPA creation dialog asks for a Runtime name (4–64 ASCII letters, digits, underscores or hyphens) and description. The server generates the stable Agent ID; the ID is not shown as an input. Fresh requests resolve the newest public MPA/Worker images; editable image inputs allow manual overrides. Submitted legacy drafts retain their original request and images for retry. Existing Runtimes are unchanged. See [managed creation](../veadk/integrations/mpa/managed/README.md).
 
-The dialog now uses three steps: basics (generated read-only ID, description and images), automatic PostgreSQL preparation, and optional OpenViking HTTPS URL/resource ID/API Key. It links to the relevant Volcengine console pages. The server obtains PostgreSQL Workspace connections through deployment credentials. OpenViking is enabled only when the HTTPS URL, resource ID and masked API Key are all entered; leaving all three blank omits its four Runtime variables, including any values inherited from a template or reference Runtime. The key is never saved in browser drafts or task SQLite. Only the final step submits; nonsecret draft choices and request identity survive reopening in the same browser session. See the [creation contract](../specs/studio-mpa-creation/README.md).
+The dialog now uses three steps: basics (required Runtime name and description), automatic PostgreSQL preparation, and optional OpenViking HTTPS URL/resource ID/API Key. It links to the relevant Volcengine console pages. The server obtains PostgreSQL Workspace connections through deployment credentials. OpenViking is enabled only when the HTTPS URL, resource ID and masked API Key are all entered; leaving all three blank omits its four Runtime variables, including any values inherited from a template or reference Runtime. The key is never saved in browser drafts or task SQLite. Only the final step submits; nonsecret draft choices and request identity survive reopening in the same browser session. See the [creation contract](../specs/studio-mpa-creation/README.md).
 
-创建弹窗现分为基础信息（生成的只读 ID、描述和镜像）、PostgreSQL 自动准备、可选 OpenViking HTTPS 地址/资源 ID/API Key 三步，并提供对应的火山引擎控制台入口。服务端通过部署凭据获取 PostgreSQL Workspace 连接。仅在 HTTPS 地址、资源 ID 和遮罩的 API Key 三项均填写时启用 OpenViking；三项全空时，新 Runtime 不注入其四个变量，也不继承模板或参考 Runtime 中的旧值。密钥不保存到浏览器草稿或任务 SQLite。仅最后一步提交，非密钥草稿与请求身份在同一浏览器会话中可恢复。参见[创建契约](../specs/studio-mpa-creation/README.zh.md)。
+创建弹窗现分为基础信息（必填 Runtime 名称和描述）、PostgreSQL 自动准备、可选 OpenViking HTTPS 地址/资源 ID/API Key 三步，并提供对应的火山引擎控制台入口。服务端通过部署凭据获取 PostgreSQL Workspace 连接。仅在 HTTPS 地址、资源 ID 和遮罩的 API Key 三项均填写时启用 OpenViking；三项全空时，新 Runtime 不注入其四个变量，也不继承模板或参考 Runtime 中的旧值。密钥不保存到浏览器草稿或任务 SQLite。仅最后一步提交，非密钥草稿与请求身份在同一浏览器会话中可恢复。参见[创建契约](../specs/studio-mpa-creation/README.zh.md)。
 
-After a confirmed failure or cancellation, the dialog retains the old task for same-ID retry. “Create another agent” generates new request and agent IDs and returns to the first step. It replaces only the browser draft, not any cloud resources from the previous attempt. Running or uncertain submissions cannot switch identities.
+After a confirmed failure or cancellation, the dialog retains the old task for same-ID retry. “Create another agent” generates a new request UUID and blank name; the server derives the new agent ID on submission and returns to the first step. It replaces only the browser draft, not any cloud resources from the previous attempt. Running or uncertain submissions cannot switch identities.
 
-失败或取消后，创建弹窗保留原任务供同 ID 重试；点击“新建另一个智能体”会生成新的请求及智能体 ID 并返回第一步。该操作只替换浏览器草稿，不会删除上次创建的云资源。运行中或提交结果不明时不能切换到新身份。
+失败或取消后，创建弹窗保留原任务供同 ID 重试；点击“新建另一个智能体”会生成新的请求 UUID 和空白名称并返回第一步，服务端在提交时派生新智能体 ID。该操作只替换浏览器草稿，不会删除上次创建的云资源。运行中或提交结果不明时不能切换到新身份。
 
-MPA 创建弹窗默认填入服务端配置中的 MPA 和 Worker 镜像。有智能体管理权限的用户可以修改或留空使用默认值。提交后锁定输入，重试和浏览器会话恢复保留原请求及实际镜像快照。不接受网址或凭据。这些输入只影响本次创建，不修改服务端内置配置或已有智能体。参见[托管创建说明](../veadk/integrations/mpa/managed/README.zh.md)。
+MPA 创建弹窗填写 Runtime 名称（4–64 个 ASCII 字母、数字、下划线或连字符）和描述。服务端生成稳定的智能体 ID，不再显示 ID 输入框。新请求解析公开仓库最新的 MPA/Worker 镜像，保留镜像输入框供手动覆盖。已提交旧草稿保留原请求和镜像用于重试。现有 Runtime 不变。参见[托管创建说明](../veadk/integrations/mpa/managed/README.zh.md)。
 
 MPA A2A responses now group adjacent assistant fragments into one reply with a single action row. Copy/share include the grouped response; feedback remains attached to the final answer event, and the trace entry retains the session timeline through the latest fragment. Reported request tokens are deduplicated by usage source/event, including trailing usage updates. General-agent rendering is unchanged.
 
@@ -1788,23 +1788,23 @@ The production entry loads both component token stylesheets before rendering. Wh
 
 生产入口在渲染前加载两份组件主题样式。宿主未在 `<html>` 上设置 `data-theme` 时沿用浅色页面；显式浅色或深色设置保持不变，确保弹窗、文字、输入框和按钮配色一致。组件预览的默认主题不变。
 
-### MPA creation image inputs / MPA 创建镜像输入
+### Named MPA creation / MPA 名称创建
 
 With `managed.postgres` configured, the PG step uses a shared business Workspace with a separate database per MPA. Shared account/region resource records live in `mpa_admin_workspace/mpa_admin_db`. With `managed.postgres.mode: auto`, deployment STS creates/reuses both Workspaces and the PG step needs no connection input. Manual profiles remain supported. See the [setup and registry migration instructions](../veadk/integrations/mpa/managed/README.md).
 
 配置 `managed.postgres` 后，PG 步骤使用共享业务 Workspace，每个 MPA 保留独立业务库。账号/地域共享资源记录存入 `mpa_admin_workspace/mpa_admin_db`。设置 `managed.postgres.mode: auto` 后，由部署 STS 创建/复用两个 Workspace，PG 步骤无需填写连接信息；仍兼容手动配置。参见[配置和注册库迁移说明](../veadk/integrations/mpa/managed/README.zh.md)。
 
-The MPA creation dialog pre-fills MPA and Worker image inputs from the server profile. Users with agent-management permission can edit either reference or leave it blank to use the configured default. Inputs lock on submission; retry and browser-session recovery preserve the original request and effective-image snapshot. URLs and credentials are rejected. These values affect only the requested creation, not the built-in server profile or existing agents. See [managed creation](../veadk/integrations/mpa/managed/README.md).
+The MPA creation dialog asks for a Runtime name (4–64 ASCII letters, digits, underscores or hyphens) and description. The server generates the stable Agent ID; the ID is not shown as an input. Fresh requests resolve the newest public MPA/Worker images; editable image inputs allow manual overrides. Submitted legacy drafts retain their original request and images for retry. Existing Runtimes are unchanged. See [managed creation](../veadk/integrations/mpa/managed/README.md).
 
-The dialog now uses three steps: basics (generated read-only ID, description and images), automatic PostgreSQL preparation, and optional OpenViking HTTPS URL/resource ID/API Key. It links to the relevant Volcengine console pages. The server obtains PostgreSQL Workspace connections through deployment credentials. OpenViking is enabled only when the HTTPS URL, resource ID and masked API Key are all entered; leaving all three blank omits its four Runtime variables, including any values inherited from a template or reference Runtime. The key is never saved in browser drafts or task SQLite. Only the final step submits; nonsecret draft choices and request identity survive reopening in the same browser session. See the [creation contract](../specs/studio-mpa-creation/README.md).
+The dialog now uses three steps: basics (required Runtime name and description), automatic PostgreSQL preparation, and optional OpenViking HTTPS URL/resource ID/API Key. It links to the relevant Volcengine console pages. The server obtains PostgreSQL Workspace connections through deployment credentials. OpenViking is enabled only when the HTTPS URL, resource ID and masked API Key are all entered; leaving all three blank omits its four Runtime variables, including any values inherited from a template or reference Runtime. The key is never saved in browser drafts or task SQLite. Only the final step submits; nonsecret draft choices and request identity survive reopening in the same browser session. See the [creation contract](../specs/studio-mpa-creation/README.md).
 
-创建弹窗现分为基础信息（生成的只读 ID、描述和镜像）、PostgreSQL 自动准备、可选 OpenViking HTTPS 地址/资源 ID/API Key 三步，并提供对应的火山引擎控制台入口。服务端通过部署凭据获取 PostgreSQL Workspace 连接。仅在 HTTPS 地址、资源 ID 和遮罩的 API Key 三项均填写时启用 OpenViking；三项全空时，新 Runtime 不注入其四个变量，也不继承模板或参考 Runtime 中的旧值。密钥不保存到浏览器草稿或任务 SQLite。仅最后一步提交，非密钥草稿与请求身份在同一浏览器会话中可恢复。参见[创建契约](../specs/studio-mpa-creation/README.zh.md)。
+创建弹窗现分为基础信息（必填 Runtime 名称和描述）、PostgreSQL 自动准备、可选 OpenViking HTTPS 地址/资源 ID/API Key 三步，并提供对应的火山引擎控制台入口。服务端通过部署凭据获取 PostgreSQL Workspace 连接。仅在 HTTPS 地址、资源 ID 和遮罩的 API Key 三项均填写时启用 OpenViking；三项全空时，新 Runtime 不注入其四个变量，也不继承模板或参考 Runtime 中的旧值。密钥不保存到浏览器草稿或任务 SQLite。仅最后一步提交，非密钥草稿与请求身份在同一浏览器会话中可恢复。参见[创建契约](../specs/studio-mpa-creation/README.zh.md)。
 
-After a confirmed failure or cancellation, the dialog retains the old task for same-ID retry. “Create another agent” generates new request and agent IDs and returns to the first step. It replaces only the browser draft, not any cloud resources from the previous attempt. Running or uncertain submissions cannot switch identities.
+After a confirmed failure or cancellation, the dialog retains the old task for same-ID retry. “Create another agent” generates a new request UUID and blank name; the server derives the new agent ID on submission and returns to the first step. It replaces only the browser draft, not any cloud resources from the previous attempt. Running or uncertain submissions cannot switch identities.
 
-失败或取消后，创建弹窗保留原任务供同 ID 重试；点击“新建另一个智能体”会生成新的请求及智能体 ID 并返回第一步。该操作只替换浏览器草稿，不会删除上次创建的云资源。运行中或提交结果不明时不能切换到新身份。
+失败或取消后，创建弹窗保留原任务供同 ID 重试；点击“新建另一个智能体”会生成新的请求 UUID 和空白名称并返回第一步，服务端在提交时派生新智能体 ID。该操作只替换浏览器草稿，不会删除上次创建的云资源。运行中或提交结果不明时不能切换到新身份。
 
-MPA 创建弹窗默认填入服务端配置中的 MPA 和 Worker 镜像。有智能体管理权限的用户可以修改或留空使用默认值。提交后锁定输入，重试和浏览器会话恢复保留原请求及实际镜像快照。不接受网址或凭据。这些输入只影响本次创建，不修改服务端内置配置或已有智能体。参见[托管创建说明](../veadk/integrations/mpa/managed/README.zh.md)。
+MPA 创建弹窗填写 Runtime 名称（4–64 个 ASCII 字母、数字、下划线或连字符）和描述。服务端生成稳定的智能体 ID，不再显示 ID 输入框。新请求解析公开仓库最新的 MPA/Worker 镜像，保留镜像输入框供手动覆盖。已提交旧草稿保留原请求和镜像用于重试。现有 Runtime 不变。参见[托管创建说明](../veadk/integrations/mpa/managed/README.zh.md)。
 
 MPA A2A responses now group adjacent assistant fragments into one reply with a single action row. Copy/share include the grouped response; feedback remains attached to the final answer event, and the trace entry retains the session timeline through the latest fragment. Reported request tokens are deduplicated by usage source/event, including trailing usage updates. General-agent rendering is unchanged.
 
@@ -1813,3 +1813,9 @@ MPA grouped replies hide exact answer mirrors only in their derived view: an ext
 ### MPA A2A shared gateway compatibility
 
 MPA creation defaults to A2A discovery (`ENABLE_A2A=true`, `DISABLE_JWT_AUTH=false`). When a tagged MPA Runtime's agent card omits the shared gateway `/runtime/<ID>` prefix from its same-origin `/a2a/jsonrpc` URL, the Studio backend restores the prefix from the control-plane endpoint for chat and history requests. General-agent URLs are unchanged. Existing Runtimes need an explicit configuration release; reconnect to refresh discovery. Restart Studio after this backend update; no frontend rebuild is required.
+
+MPA name validation highlights invalid input and its message in the theme danger color, offers a valid-name placeholder, and visibly disables Next until corrected. Shared Button disabled states are dimmed consistently; loading retains its own appearance.
+
+MPA 名称校验使用主题错误色显示非法输入及错误提示，并提供合法名称示例；名称修正前“下一步”明显置灰。共享 Button 的禁用态统一降低透明度，加载态保留原有外观。
+
+MPA Agent details currently expose only Basic information. Other tabs and the Profile configuration action are hidden; this page does not query Profile status or submit Profile operations. General Agent pages and chat session protocols are unchanged.

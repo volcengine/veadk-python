@@ -268,7 +268,9 @@ def test_network_gateway_worker_precede_runtime(
             agent_id="mi-123456789abc",
             owner="owner-hash-a",
             studio_runtime_owner=studio_runtime_owner,
+            runtime_name="support-agent",
         )
+        assert cloud.creates[0]["Name"] == "support-agent"
         assert result["runtime_id"] == "r-agent"
         assert result["gateway_id"] == "gw-one"
         assert cloud.runtimes[result["runtime_id"]]["ToolId"] == "t-one"
@@ -741,6 +743,7 @@ async def test_existing_runtime_keeps_network_when_new_standard_gateway_needs_co
         service, "AgentRuntimeDeployer", lambda **kw: SimpleNamespace(deploy=deploy)
     )
     await service.provision(profile, agent_id="mi-existing", owner="owner")
+    assert deploy.await_args is not None
     assert (
         deploy.await_args.args[0]["NetworkConfiguration"]["VpcConfiguration"]
         == original["VpcConfiguration"]

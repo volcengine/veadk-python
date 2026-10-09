@@ -56,3 +56,21 @@ Studio 当前从 `studio_profile.py` 预填固定历史标签。用户指定的�
 配置 GET 接受可选 UUID `requestId`；owner 范围已有快照在重开失败任务时也跳过发现。原 UI 传递请求身份，仅接通 API，不重新设计视觉/交互。直接评审确认这是补齐 FR-3，没有扩大范围。
 
 客户端配置/创建请求允许 75 秒，使 60 秒解析器有时间返回明确错误。构建时间保留纳秒顺序（RFC3339，最多 9 位小数）。
+
+## Main 集成修订（2026-10-09）
+
+将 `origin/main` 的按名称创建及 MPA 基础详情修改合入已批准的公开镜像功能。保留必填 Runtime 名称和服务端派生智能体 ID；镜像选择继续以手动输入及用户指定的公开仓库为准。按名称创建设计中移除镜像字段和 `/mpa/*:latest` 默认值仅在这两点被替代。保留 STS 账号选择、自动 IAM 和无参考模板 Worker 创建。直接合并评审保留 owner/request 镜像快照、名称重试载荷及两套功能测试。用户授权合并 main，未授权推送。
+
+### 合并验证（2026-10-09）
+
+验证范围是 `feat/test-main` 上本地 `3f134207` 与 `origin/main` `f6ed8ffa` 的冲突解决结果，验证发生在合并提交前。审查确认名称创建/服务端 ID、公开镜像发现/手动覆盖、不可变重试快照、STS/IAM/Worker 准备以及 main 的基本详情改动同时保留。当前组件契约的两种语言已对齐。受影响的 service 测试增加显式断言，解决已有 mock 调用可能为空的类型警告。
+
+- `pass`：`uv run --extra dev pytest tests/integrations/mpa_managed tests/cli/test_cli_mpa.py -n 2 -q` — 635 项通过，10 条依赖警告。使用两个 worker 控制本地资源占用。
+- `pass`：`npm --prefix frontend test` — 1,377 项 Node 测试和 69 项 Vitest 测试，无跳过。
+- `pass`：`npm --prefix frontend run build`、`npm --prefix frontend run test:webui-assets`（113 个文件、350 个内部引用）和 `npm --prefix frontend run check:i18n`（2 种语言、21 个命名空间）。
+- `pass`：Ruff 检查 `frontend/server/mpa_creation.py`、`tests/integrations/mpa_managed` 和 `veadk/integrations/mpa/managed`；Pyright 检查改动的 Python 文件，无错误或警告。
+- `pass`：`uv run --extra dev pre-commit run --all-files` — Ruff 检查/格式化及两项密钥扫描通过。
+- `pass`：隔离真实浏览器验证合并后的三步表单、必填空名称状态、合法名称、手动 MPA 镜像、留空 Worker 默认值和 800×700 窗口。配置响应为模拟值，未创建云资源。已有自动化测试覆盖响应丢失、取消、重试、加载/错误和旧草稿。
+- `not_run`：真实云端创建、输入法组合输入和全仓库 Python 回归。本次合并保留已批准行为，改为运行受影响创建/CLI 测试；真实云端创建不在本次合并请求范围内。Harness/sidecar smoke 为 `not_applicable`：未改变其契约。
+
+WebUI 产物由合并后的源码重新构建，不保留任一父提交的过期 bundle。合并前备份分支为 `backup/test-main-before-main-20261009-2110`。本次请求不包含推送。

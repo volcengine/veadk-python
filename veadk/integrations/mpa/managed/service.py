@@ -207,10 +207,15 @@ async def provision(
     owner: str,
     studio_runtime_owner: str | None = None,
     description: str = "",
+    runtime_name: str = "",
     progress=lambda stage: None,
 ):
     if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", agent_id) or not owner:
         raise DeploymentError("Invalid agent identity or owner")
+    if runtime_name:
+        from .config import validate_runtime_name
+
+        runtime_name = validate_runtime_name(runtime_name)
     studio_runtime_tags = (
         studio_mpa_runtime_tags(
             owner=studio_runtime_owner,
@@ -403,6 +408,7 @@ async def provision(
             ),
         ).deploy(
             template,
+            runtime_name=runtime_name,
             legacy_tag_items=legacy_tag_items
             if studio_runtime_tags is not None
             else None,

@@ -611,7 +611,7 @@ test("Runtime update entry passes only cloud capability to the update handler", 
   assert.ok(clickStart >= 0 && clickEnd > clickStart);
   const clickHandler = workspaceSource.slice(clickStart, clickEnd);
 
-  assert.match(clickHandler, /selectedAgentCategory === "mpa"[\s\S]*?setSection\("profileConfig"\)/);
+  assert.doesNotMatch(clickHandler, /setSection\("profileConfig"\)/);
   assert.match(clickHandler, /onUpdateAgent\(selectedUpdateCapability\)/);
   assert.doesNotMatch(clickHandler, /onUpdateAgent\(draft,/);
   assert.doesNotMatch(clickHandler, /selectedAgentUpdateDraft[\s\S]*?onEditDraft/);
