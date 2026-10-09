@@ -49,11 +49,22 @@ Gateway resources are created and saved before Runtime deployment. Later agents
 reuse the same records. Account locks and saved creation intents protect
 concurrent requests and retries from duplicate creation.
 
+New gateways use the standard type with two 1c2g nodes, small_1 CLB, public/private
+access and traffic billing. Deployment credentials need `apig:GetGatewayAvailableZones`.
+The service queries APIG-supported zones and reuses or creates two same-VPC subnets
+in different supported zones; missing companions have independently persisted
+requests/tokens. Existing registered/adopted gateways and Runtime network selections
+are preserved. New Runtimes use the prepared selection. `ExceededQuota` is a definite
+rejection and permits retry after correction; unknown outcomes still require
+discovery. Historical unknown flags require an audited, scoped repair.
+
 Existing records are retained, including previously adopted resources. This
 change does not move existing agents or replace an exhausted VPC. A quota or
 permission error remains a failure; increasing quota or migrating the shared
 network is a separate operation. Restart local Studio (or redeploy cloud Studio)
 to load the updated defaults. Explicit CLI network/APIG adoption remains supported.
+
+Runtime subnet IDs may be returned in a different order by AgentKit. An identical unique selection is accepted during creation and retry; real membership/VPC/shared-egress changes remain migration errors. Retry preserves the original requested or matching registered order, including existing pending request hashes. After updating VeADK, use the same agent ID and original inputs to resume a task stopped by this ordering mismatch; do not delete records or recreate resources.
 
 ## CLI YAML and manual / legacy server setup
 
@@ -203,7 +214,7 @@ Retain region, shared/admin database secret references and any worker-specific s
 
 ### Choosing images when creating in Studio
 
-The creation dialog contains **MPA image** and **Worker image** text inputs, initially filled from the current server configuration. Edit either image for this creation, or clear it to use the configured default. These fields accept container references such as `registry.example/mpa:v2` or `registry.example/worker@sha256:<64 hex digits>`, not download URLs or registry login credentials. They do not edit the Studio built-in profile or redeploy existing agents. Submitting locks both inputs; failure, cancellation, closing and reopening retain the original request and known effective images for safe retry. A configuration based only on a reference Runtime/existing worker may have no locally available image default to display; leaving it blank retains that source. Administrators remain responsible for image access and compatibility. Explicit Worker image input provisions a dedicated worker, even when the profile otherwise selects an existing worker.
+The dialog prefills **MPA image** and **Worker image** using the newest Linux/amd64 build from the public repositories `agentkit-platform-2112682748-cn-beijing.cr.volces.com/agentkit/agentkit_mpa_agent_studio` and `agentkit-platform-2112682748-cn-beijing.cr.volces.com/agentkit/agentkit_mpa_codex_worker_studio`. Newest means image-config build time, not tag name or push time. Automatically selected defaults appear as immutable `@sha256:` references. You can replace either input manually; clearing it resolves the latest default at first submission. Public discovery does not require deployment-account registry permissions, and failures are shown without fallback. The first effective images remain fixed on retries/reopening even if newer images are published or the registry becomes unavailable. Inputs lock after submission; an existing request cannot change its images. Explicit CLI YAML image settings remain separate and do not perform discovery. Image pull access and application compatibility remain the administrator's responsibility.
 
 ### Worker retries and failure diagnostics
 
@@ -230,3 +241,31 @@ Flat creation defaults to `ENABLE_A2A=true` and `DISABLE_JWT_AUTH=true`. The inn
 ### Managed sandbox template naming
 
 New managed sandbox templates use the trimmed agent ID with every `-` replaced by `_` (for example, `mi-example` → `mi_example`). Existing worker IDs remain authoritative and are never renamed. A pre-change unfinished creation intent retains its hashed name only when the complete legacy request matches the persisted worker_hash; its ClientToken is preserved. Other payload changes and unrelated same-name resources remain errors. Scoped ownership tags and Runtime ToolId bindings are unchanged.
+
+### Automatic MPA runtime role
+
+Built-in Studio prepares `IDRoleForArkClawShareAgent` in the verified deployment account before preparing resources. It reuses a compatible role and adds missing approved policy bindings; it never replaces trust or policy contents. Explicit CLI profiles default to `managed.iam.mode: existing`; `auto` opts in for fresh default-role configurations only. See the [permission baseline and recovery rules](../../../../prd-spec/features/mpa-runtime-iam/2026-10-09-managed-runtime-role.md). The Studio execution role needs `iam:CreatePolicy` in addition to GetRole/CreateRole/GetPolicy/ListAttachedRolePolicies/AttachRolePolicy. Redeploy or update an existing Studio execution policy before using this capability. Retry the same agent ID after administrator repair; cancellation retains shared IAM resources.
+
+### Deployment account in Studio
+
+Studio uses the account returned by deployment-credential STS verification; it no longer requires the original image-registry account. Role TRN and compatibility Space ID for a fresh Runtime use the verified account. Explicit YAML `account-id` still restricts CLI deployments. Default image URLs and Worker reference IDs are unchanged; ensure the deployment account can access them or supply accessible resources. Existing Runtimes are not automatically migrated.
+
+Managed network descriptions use the provider-compatible `mpa-account-network-v1-<scope hash>`. Retry automatically corrects a legacy description-only intent after a definite rejection when no resource exists; changed payloads receive a new token. Existing scoped resources are retained. Uncertain outcomes require discovery and never trigger a duplicate create.
+
+### Worker without a reference template
+
+Built-in Studio uses startup settings supplied by the configured Worker image, without duplicate port/mode/directory environment entries; it no longer reads a Tool from the previous account. The image must still be accessible to the deployment account. Restart Studio to load changed defaults, then retry an agent that failed before Worker creation. Already dispatched requests retain their original payload/token; do not reset their registry intent.
+
+For a private CLI profile, configure startup values directly:
+
+```yaml
+managed:
+  worker:
+    image: registry.example/agentkit/mpa_codex_worker:release-tag
+    env:
+      MPA_RUNTIME_PROFILE: codex-headless
+      MPA_AIO_ENTRYPOINT_MODE: minimal
+      CUSTOM_SETTING: ${WORKER_CUSTOM_SETTING}
+```
+
+`managed.worker.env` accepts uppercase string keys and whole server environment references. It overrides filtered environment values from an optional accessible `reference-id`. Agent/Runtime/Tool/Skill Space bindings, inherited channel/Runtime credentials and control database URLs are reserved. A missing explicit reference remains an error. Environment settings with `existing-id` are rejected because existing Tools are not updated. Secrets do not enter config summaries/repr or deployment records; use server references rather than committing values. Model credentials are delivered per session by Runtime, not copied from the old Tool.

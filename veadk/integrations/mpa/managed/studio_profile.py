@@ -17,22 +17,26 @@
 from __future__ import annotations
 
 
+STUDIO_IMAGE_REPOSITORIES = {
+    "runtimeImage": "agentkit-platform-2112682748-cn-beijing.cr.volces.com/agentkit/agentkit_mpa_agent_studio",
+    "workerImage": "agentkit-platform-2112682748-cn-beijing.cr.volces.com/agentkit/agentkit_mpa_codex_worker_studio",
+}
+
+
 def studio_profile_values() -> dict:
     """Return a fresh Beijing profile; secrets remain server environment values."""
-    account = "2112682748"
     region = "cn-beijing"
     role = "IDRoleForArkClawShareAgent"
     model = "doubao-seed-2-0-pro-260215"
-    registry = f"agentkit-platform-{account}-{region}.cr.volces.com/agentkit"
     return {
         "region": region,
-        "account-id": account,
         "model-provider": "openai",
         "model-name": model,
         "model-api-base": "https://ark.cn-beijing.volces.com/api/v3/",
         "model-api-key": "${VEADK_MPA_CONFIG_MODEL_AGENT_API_KEY}",
         "managed": {
             "version": 1,
+            "iam": {"mode": "auto"},
             "postgres": {
                 "mode": "auto",
                 "legacy-urls": "ignore",
@@ -43,7 +47,7 @@ def studio_profile_values() -> dict:
             "database-admin-url-env": "DEPLOYMENT_DATABASE_ADMIN_URL",
             "shared-database-url-env": "SHARED_APIG_DATABASE_URL",
             "runtime": {
-                "image": f"{registry}/mpa_agent_studio:studio-a1f9627-20260923-172555",
+                "image": f"{STUDIO_IMAGE_REPOSITORIES['runtimeImage']}:studio-a1f9627-20260923-172555",
                 "role-name": role,
                 "cpu-milli": 2000,
                 "memory-mb": 4096,
@@ -58,7 +62,6 @@ def studio_profile_values() -> dict:
                     "APPCENTER_RESOURCE_DISCOVERY_ENABLED": "false",
                     "CHANNEL_ADMIN_AUTH_MODE": "runtime_key",
                     "CHANNEL_BACKEND": "postgresql",
-                    "CLAW_SPACE_ID": f"csi-{account}",
                     "CLOUD_PROVIDER": "volcengine",
                     "FORCE_APMPLUS_EXPORTER_REGISTRATION": "true",
                     "IDENTITY_REGION": region,
@@ -73,8 +76,6 @@ def studio_profile_values() -> dict:
                     ),
                     "MPA_SESSION_MEMORY_BACKEND": "postgresql",
                     "REGION": region,
-                    "RUNTIME_IAM_ROLE_NAME": role,
-                    "RUNTIME_IAM_ROLE_TRN": f"trn:iam::{account}:role/{role}",
                     "RUNTIME_PROVIDER": "VEFAAS",
                     "SCHEDULED_TASK_BACKEND": "postgresql",
                     "ENABLE_APMPLUS": "true",
@@ -85,10 +86,9 @@ def studio_profile_values() -> dict:
             },
             "worker": {
                 "image": (
-                    f"{registry}/agentkit_mpa_codex_worker:"
+                    f"{STUDIO_IMAGE_REPOSITORIES['workerImage']}:"
                     "20260921-master-81f3496-160404"
                 ),
-                "reference-id": "t-yeuujqfldstkidoad4p0",
                 "role-name": role,
             },
             "timeout-seconds": 1800,

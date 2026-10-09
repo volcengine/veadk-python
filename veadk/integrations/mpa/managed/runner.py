@@ -25,6 +25,7 @@ from .config import (
     with_creation_tos,
 )
 from .diagnostics import classify_error, diagnostic_scope, report
+from .iam import IamError
 from .service import provision
 
 
@@ -74,7 +75,7 @@ def run():
     except Exception as error:
         report("provision", classify_error(error))
         # Error text can contain SDK request payloads, URLs and credentials.
-        emit(error="creationFailed")
+        emit(error=error.key if isinstance(error, IamError) else "creationFailed")
         return 1
 
 

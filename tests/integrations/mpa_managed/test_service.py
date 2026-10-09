@@ -75,6 +75,7 @@ def test_network_gateway_worker_precede_runtime(
             OPENVIKING_USER="old-user",
             OPENVIKING_EXTRA="old-extra",
         )
+        assert profile.template is not None
         profile.template["Envs"].extend(
             [
                 {
@@ -134,8 +135,13 @@ def test_network_gateway_worker_precede_runtime(
         monkeypatch.setattr(service, "AgentDeploymentRegistry", lambda url: entry)
         databases = Databases()
         monkeypatch.setattr(service, "AgentDatabaseProvisioner", lambda **kw: databases)
-        cloud._credentials = lambda: SimpleNamespace(
-            access_key_id="ak", secret_access_key="sk", session_token="token"
+        monkeypatch.setattr(
+            cloud,
+            "_credentials",
+            lambda: SimpleNamespace(
+                access_key_id="ak", secret_access_key="sk", session_token="token"
+            ),
+            raising=False,
         )
         monkeypatch.setattr(
             service, "IdentityClient", lambda **kw: SimpleNamespace(), raising=False
@@ -173,6 +179,13 @@ def test_network_gateway_worker_precede_runtime(
             events.append("worker")
             return "t-one"
 
+        monkeypatch.setattr(
+            service,
+            "GatewayCloud",
+            lambda _: SimpleNamespace(
+                available_zones=AsyncMock(return_value=["cn-beijing-a", "cn-beijing-c"])
+            ),
+        )
         monkeypatch.setattr(service, "SharedAPIGService", Gateway)
         monkeypatch.setattr(service, "ensure_worker", worker)
         cloud_create = cloud.create
@@ -358,6 +371,15 @@ def test_two_agents_use_one_business_workspace_and_one_management_registry(
             monkeypatch.setattr(service, "AgentDatabaseProvisioner", databases_factory)
             gateway = AsyncMock()
             gateway.ensure.return_value = {"gateway_id": "gw-shared"}
+            monkeypatch.setattr(
+                service,
+                "GatewayCloud",
+                lambda _: SimpleNamespace(
+                    available_zones=AsyncMock(
+                        return_value=["cn-beijing-a", "cn-beijing-c"]
+                    )
+                ),
+            )
             monkeypatch.setattr(service, "SharedAPIGService", lambda **kw: gateway)
             monkeypatch.setattr(
                 service, "ensure_worker", AsyncMock(return_value="t-one")
@@ -605,3 +627,130 @@ def test_effective_scaling_conflict_fails_before_provisioning(settings, source_v
 
     with pytest.raises(ConfigurationError, match="instance"):
         service.apply_runtime_settings(source_values, Runtime.model_validate(settings))
+
+
+@pytest.mark.asyncio
+async def test_explicit_profile_account_mismatch_stops_before_role(monkeypatch):
+    from veadk.integrations.mpa.managed.config import load_studio_profile
+
+    monkeypatch.setenv("VEADK_MPA_CONFIG_MODEL_AGENT_API_KEY", "test-model-key")
+    profile = load_studio_profile()
+    profile.values["account_id"] = "expected-account"
+    cloud = AsyncMock()
+    cloud.account_id.return_value = "different-account"
+    monkeypatch.setattr(service, "RuntimeCloud", lambda **kw: cloud)
+    role = AsyncMock()
+    identity = AsyncMock()
+    monkeypatch.setattr(service, "ensure_runtime_role", role)
+    monkeypatch.setattr(service, "ensure_workload_identity", identity)
+    stages = []
+    with pytest.raises(DeploymentError, match="expected account"):
+        await service.provision(
+            profile, agent_id="mi-test", owner="user", progress=stages.append
+        )
+    assert stages == ["checking"]
+    role.assert_not_awaited()
+    identity.assert_not_awaited()
+
+
+@pytest.mark.parametrize("role", [None, "custom-role"])
+def test_fresh_template_role_trn_uses_verified_account_and_selected_role(
+    monkeypatch, role
+):
+    from veadk.integrations.mpa.managed.config import load_studio_profile
+
+    monkeypatch.setenv("VEADK_MPA_CONFIG_MODEL_AGENT_API_KEY", "test-model-key")
+    profile = load_studio_profile()
+    profile.values.update(pg_host="db.example", pg_user="test", pg_password="test")
+    profile.managed.runtime.role_name = role
+    selected_role = role or "IDRoleForArkClawShareAgent"
+    request = service.fresh_template(profile, "mi-123456789abc", "verified-account")
+    service.apply_runtime_settings(request, profile.managed.runtime)
+    env = service.env_map(request)
+    assert request["RoleName"] == selected_role
+    assert env["CLAW_SPACE_ID"] == "csi-verified-account"
+    assert env["RUNTIME_IAM_ROLE_NAME"] == selected_role
+    assert (
+        env["RUNTIME_IAM_ROLE_TRN"] == f"trn:iam::verified-account:role/{selected_role}"
+    )
+    profile.managed.runtime.env["RUNTIME_IAM_ROLE_TRN"] = "explicit-trn"
+    service.apply_runtime_settings(request, profile.managed.runtime)
+    assert service.env_map(request)["RUNTIME_IAM_ROLE_TRN"] == "explicit-trn"
+
+
+@pytest.mark.asyncio
+async def test_existing_runtime_keeps_network_when_new_standard_gateway_needs_companion(
+    monkeypatch,
+):
+    import copy
+
+    entry = Registry()
+    entry.row = {"runtime_id": "r-existing", "studio_owner": "owner"}
+    entry.network.row = {"vpc_id": "vpc-one", "subnet_ids": ["subnet-one"]}
+    cloud = Cloud(entry)
+    original = template()["NetworkConfiguration"]
+    original["VpcConfiguration"]["EnableSharedInternetAccess"] = True
+    cloud.runtimes["r-existing"] = {
+        "RuntimeId": "r-existing",
+        "NetworkConfigurations": [
+            {"NetworkType": "public"},
+            {
+                "NetworkType": "private",
+                "VpcConfiguration": copy.deepcopy(original["VpcConfiguration"]),
+            },
+        ],
+    }
+    profile = Profile(
+        region="cn-beijing",
+        values={},
+        template=template(),
+        admin_url="fake",
+        shared_url="postgresql://registry.example/shared",
+        managed=Managed(
+            version=1,
+            runtime=Runtime(),
+            worker=Worker(existing_id="t-one"),
+            timeout_seconds=60,
+        ),
+    )
+    gateway = AsyncMock()
+    gateway.ensure.return_value = {"gateway_id": "gw-one"}
+    deploy = AsyncMock(return_value={"runtime_id": "r-existing"})
+    monkeypatch.setattr(service, "RuntimeCloud", lambda **kw: cloud)
+    monkeypatch.setattr(service, "AgentDeploymentRegistry", lambda _: entry)
+    monkeypatch.setattr(service, "AgentDatabaseProvisioner", lambda **kw: Databases())
+    monkeypatch.setattr(
+        service,
+        "ensure_workload_identity",
+        AsyncMock(
+            return_value=SimpleNamespace(
+                workload_pool_name="pool", workload_identity_name="identity"
+            )
+        ),
+    )
+    monkeypatch.setattr(service, "ensure_worker", AsyncMock(return_value="t-one"))
+    monkeypatch.setattr(
+        service,
+        "GatewayCloud",
+        lambda _: SimpleNamespace(
+            available_zones=AsyncMock(return_value=["cn-beijing-a", "cn-beijing-c"])
+        ),
+    )
+    monkeypatch.setattr(service, "SharedAPIGService", lambda **kw: gateway)
+    monkeypatch.setattr(
+        service, "AgentRuntimeDeployer", lambda **kw: SimpleNamespace(deploy=deploy)
+    )
+    await service.provision(profile, agent_id="mi-existing", owner="owner")
+    assert (
+        deploy.await_args.args[0]["NetworkConfiguration"]["VpcConfiguration"]
+        == original["VpcConfiguration"]
+    )
+    assert gateway.ensure.await_args.kwargs["subnet_ids"] == [
+        "subnet-one",
+        "subnet-auto",
+    ]
+    assert entry.network.row["subnet_ids"] == ["subnet-one", "subnet-auto"]
+    assert (
+        cloud.runtimes["r-existing"]["NetworkConfigurations"][1]["VpcConfiguration"]
+        == original["VpcConfiguration"]
+    )

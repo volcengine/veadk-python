@@ -104,6 +104,14 @@ class NetworkCloud:
                 method, request_type, page_number=page, page_size=100, **params
             )
             items = result.get(collection)
+            total_count = result.get("total_count")
+            if (
+                items is None
+                and page == 1
+                and type(total_count) is int
+                and total_count == 0
+            ):
+                return []
             if not isinstance(items, list):
                 raise DeploymentError("Network discovery returned invalid results")
             rows.extend(items)

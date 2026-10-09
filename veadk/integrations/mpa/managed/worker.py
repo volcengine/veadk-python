@@ -21,6 +21,7 @@ import hashlib
 import json
 import uuid
 
+from .config import WORKER_RESERVED_ENV_KEYS
 from .database import DeploymentError, agent_suffix
 from .diagnostics import report, retry_worker
 from ..mpa_tool import build_tos_mount_config
@@ -141,21 +142,12 @@ async def _ensure_worker(entry, cloud, options, *, account, region, agent_id, pr
             source = await retry_worker(
                 "get_reference_worker", lambda: cloud.get(options.reference_id)
             )
-            excluded = {
-                "MPA_AGENT_ID",
-                "AGENTKIT_RUNTIME_ID",
-                "SKILL_SPACE_ID",
-                "CODEX_MCP_RUNTIME_API_KEY",
-                "A2A_PUBLIC_URL",
-                "FEISHU_APP_ID",
-                "FEISHU_APP_SECRET",
-                "CHANNEL_STATE_ENCRYPTION_KEY",
-            }
             env = {
                 item["Key"]: item.get("Value", "")
                 for item in source.get("Envs", [])
-                if item["Key"] not in excluded
+                if item["Key"] not in WORKER_RESERVED_ENV_KEYS
             }
+        env.update(options.env)
         env["MPA_AGENT_ID"] = agent_id
         request = {
             "Name": agent_id.strip().replace("-", "_"),

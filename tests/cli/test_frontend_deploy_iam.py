@@ -284,7 +284,8 @@ def test_frontend_policy_allows_release_download() -> None:
     assert "vefaas:GetCodeUploadAddress" in actions
     assert "vefaas:GetApplication" in actions
     assert "vefaas:GetApplicationRevisionLog" in actions
-    assert "iam:CreatePolicy" not in actions
+    # Studio now prepares a versioned custom MPA runtime policy.
+    assert "iam:CreatePolicy" in actions
     assert "iam:UpdatePolicy" not in actions
     assert "vefaas:CodeUploadCallback" in actions
     assert "vefaas:UpdateFunction" in actions
@@ -296,6 +297,7 @@ def test_frontend_policy_allows_release_download() -> None:
         "apig:ListGateways",
         "apig:CreateGateway",
         "apig:GetGateway",
+        "apig:GetGatewayAvailableZones",
         "apig:CreateIMChannelGateway",
         "apig:GetIMChannelGatewayStatus",
     }.issubset(actions)
@@ -355,6 +357,7 @@ def test_frontend_policy_allows_complete_managed_mpa_cloud_workflow() -> None:
         "apig:ListGateways",
         "apig:CreateGateway",
         "apig:GetGateway",
+        "apig:GetGatewayAvailableZones",
         "apig:CreateIMChannelGateway",
         "apig:GetIMChannelGatewayStatus",
         "iam:PassRole",
@@ -394,14 +397,16 @@ def test_default_frontend_role_policy_is_refreshed_for_future_updates(
     calls: list[dict[str, str]] = []
     monkeypatch.setattr(
         "veadk.cli.frontend_deploy_iam.ensure_frontend_role",
-        lambda access_key, secret_key, **kwargs: calls.append(
-            {
-                "access_key": access_key,
-                "secret_key": secret_key,
-                **kwargs,
-            }
-        )
-        or role,
+        lambda access_key, secret_key, **kwargs: (
+            calls.append(
+                {
+                    "access_key": access_key,
+                    "secret_key": secret_key,
+                    **kwargs,
+                }
+            )
+            or role
+        ),
     )
 
     refreshed = ensure_default_frontend_role_policy(

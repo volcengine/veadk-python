@@ -124,6 +124,21 @@ def test_authorized_config_returns_defaults_and_task_freezes_them(
     monkeypatch.setattr(
         mpa_creation, "load_volcengine_credentials", lambda *args: object()
     )
+    from unittest.mock import AsyncMock
+
+    defaults = {
+        "runtimeImage": "registry.example/mpa@sha256:" + "a" * 64,
+        "workerImage": "registry.example/worker@sha256:" + "b" * 64,
+    }
+    monkeypatch.setattr(
+        mpa_creation,
+        "resolve_studio_images",
+        AsyncMock(
+            side_effect=lambda fields=("runtimeImage", "workerImage"): {
+                k: defaults[k] for k in fields
+            }
+        ),
+    )
     service = CreationTasks(tmp_path / "tasks.db")
     service.command = lambda: [sys.executable, "-c", "import time; time.sleep(30)"]
     app = FastAPI()
@@ -142,9 +157,7 @@ def test_authorized_config_returns_defaults_and_task_freezes_them(
     }
     with TestClient(app) as client:
         config = client.get("/web/mpa-creation/config?region=cn-beijing").json()
-        assert config["runtimeImage"].endswith(
-            "/mpa_agent_studio:studio-a1f9627-20260923-172555"
-        )
+        assert config["runtimeImage"] == defaults["runtimeImage"]
         response = client.post("/web/mpa-creation/tasks", json=payload)
         assert response.status_code == 202
         assert response.json()["images"] == {

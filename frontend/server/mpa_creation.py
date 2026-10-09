@@ -43,6 +43,7 @@ from veadk.integrations.mpa.managed.config import (
     with_creation_resources,
     with_creation_tos,
 )
+from frontend.server.mpa_creation_images import resolve_studio_images
 from veadk.integrations.mpa.managed.credentials import load_volcengine_credentials
 from veadk.integrations.mpa.managed.tasks import CreationTasks, TaskError, owner_key
 
@@ -110,11 +111,20 @@ def mount_mpa_creation_routes(
         return None, result
 
     @app.get("/web/mpa-creation/config")
-    async def inspect(request: Request, region: str):
-        owner(request)
+    async def inspect(request: Request, region: str, requestId: UUID | None = None):
+        identity = owner_key(owner(request))
         try:
             _, result = profile(region)
-            return result.summary()
+            summary = result.summary()
+            snapshot = (
+                get_tasks().request_images(identity, str(requestId))
+                if requestId is not None
+                else None
+            )
+            summary.update(
+                snapshot if snapshot is not None else await resolve_studio_images()
+            )
+            return summary
         except ConfigurationError as exc:
             return {"configured": False, "region": region, "error": str(exc)}
 
@@ -143,7 +153,14 @@ def mount_mpa_creation_routes(
             resources = validate_creation_resources(
                 {**payload, "openvikingApiKey": openviking_api_key}
             )
-            images = config.image_defaults()
+            images = get_tasks().request_images(identity, str(body.requestId))
+            if images is None:
+                missing = tuple(
+                    field
+                    for field in ("runtimeImage", "workerImage")
+                    if not payload[field]
+                )
+                images = await resolve_studio_images(missing) if missing else {}
             for field in ("runtimeImage", "workerImage"):
                 if payload[field]:
                     images[field] = payload[field]

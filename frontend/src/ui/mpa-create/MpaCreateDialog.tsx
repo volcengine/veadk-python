@@ -170,7 +170,7 @@ export function MpaCreateDialog({
   useEffect(() => {
     const controller = new AbortController();
     setLoading(true);
-    void getMpaCreationConfig(region, controller.signal)
+    void getMpaCreationConfig(region, controller.signal, input.requestId)
       .then((value) => {
         if (!controller.signal.aborted) {
           setConfig(value);
@@ -203,7 +203,7 @@ export function MpaCreateDialog({
         if (!controller.signal.aborted) setLoading(false);
       });
     return () => controller.abort();
-  }, [region, revision, t]);
+  }, [region, revision, t, input.requestId]);
   useEffect(() => {
     if (!taskId) return;
     const controller = new AbortController();

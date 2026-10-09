@@ -17,25 +17,27 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import contextmanager
 import hashlib
 import json
 import logging
 import os
-from pathlib import Path
 import re
 import sqlite3
 import sys
 import time
 import uuid
+from contextlib import contextmanager
+from pathlib import Path
 
 from .diagnostics import classify_error, validate_diagnostic
+from .iam import ERROR_KEYS
 
 logger = logging.getLogger(__name__)
 
 STAGES = {
     "queued",
     "checking",
+    "iam_role",
     "admin_workspace",
     "business_workspace",
     "admin_database",
@@ -166,6 +168,15 @@ class CreationTasks:
             "images": json.loads(row["images"]),
             **json.loads(row["payload"]),
         }
+
+    def request_images(self, owner: str, request_id: str) -> dict | None:
+        """Read a prior request snapshot without resolving new registry defaults."""
+        with self.db() as db:
+            row = db.execute(
+                "SELECT images FROM tasks WHERE owner=? AND request=?",
+                (owner, request_id),
+            ).fetchone()
+        return json.loads(row["images"]) if row is not None else None
 
     async def start(
         self,
@@ -329,6 +340,8 @@ class CreationTasks:
                     )
                 if isinstance(event.get("stage"), str) and event["stage"] in STAGES:
                     self._update(task_id, stage=event["stage"])
+                if isinstance(event.get("error"), str) and event["error"] in ERROR_KEYS:
+                    terminal["error"] = event["error"]
                 if event.get("result"):
                     result = event["result"]
                     keys = {

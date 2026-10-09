@@ -780,3 +780,46 @@ it("shows the registry migration prerequisite without asking for PG inputs", asy
   await act(async () => button("next").click());
   expect(button("submit").disabled).toBe(true);
 });
+
+it("preserves the runtime role stage and actionable IAM error for retry", async () => {
+  const input = {
+    region: "cn-beijing",
+    requestId: "12345678-90ab-4cde-8f01-23456789abcd",
+    agentId: "mi-1234567890ab4cde8f012345",
+    description: "",
+  };
+  sessionStorage.setItem(
+    "mpa-create:cn-beijing",
+    JSON.stringify({ input, submitted: true, step: 2, taskId: "iam-task" }),
+  );
+  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
+    configured: true,
+    region: "cn-beijing",
+  });
+  vi.mocked(api.getMpaCreation).mockResolvedValue({
+    ...input,
+    taskId: "iam-task",
+    state: "failed",
+    stage: "iam_role",
+    error: "iamPermissionDenied",
+  });
+  await mount();
+  expect(document.body.textContent).toContain("myAgents.mpaCreate.stages.iam_role");
+  expect(document.body.textContent).toContain("myAgents.mpaCreate.iamPermissionDenied");
+  expect(button("retry").disabled).toBe(false);
+  expect(
+    JSON.parse(sessionStorage.getItem("mpa-create:cn-beijing")!).input.agentId,
+  ).toBe(input.agentId);
+});
+
+it("passes the recovering request identity to config inspection", async () => {
+  const requestId = "11111111-1111-4111-8111-111111111111";
+  sessionStorage.setItem("mpa-create:cn-beijing", JSON.stringify({
+    input: { requestId, agentId: "mi-test", region: "cn-beijing", description: "" },
+    submitted: true,
+    step: 2,
+  }));
+  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({ configured: true, region: "cn-beijing" });
+  await mount();
+  expect(api.getMpaCreationConfig).toHaveBeenCalledWith("cn-beijing", expect.any(AbortSignal), requestId);
+});

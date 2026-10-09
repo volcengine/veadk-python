@@ -4,7 +4,7 @@
 
 - 组件 ID：`studio-mpa-creation`
 - 状态：active
-- 修订日期：2026-09-30
+- 修订日期： 2026-10-09
 - 设计及证据：[Studio MPA 创建](../../prd-spec/features/mpa-agent-oneclick-provision/2026-09-20-studio-mpa-creation.zh.md)
 - 所属代码：`veadk/integrations/mpa/managed/`、`frontend/server/mpa_creation.py`、`frontend/src/adk/mpaCreation.ts`、`frontend/src/ui/mpa-create/`；CLI 和目录接入。
 - 测试：`tests/integrations/mpa_managed/`、`frontend/tests/mpaCreation.test.tsx`。
@@ -13,7 +13,7 @@
 
 ## 职责与边界
 
-VeADK 负责托管 YAML 解析、云服务/数据库编排、有权限约束的持久创建任务和 MPA 目录窗口。无需外部源码仓库。共享注册/初始化协议与 MPA 镜像互通。旧 `veadk mpa create` 独立保留且行为不变。不增加模型执行、渠道路由、PostgreSQL 实例创建或 IAM 策略管理。
+VeADK 负责托管 YAML 解析、云服务/数据库编排、有权限约束的持久创建任务和 MPA 目录窗口。无需外部源码仓库。共享注册/初始化协议与 MPA 镜像互通。旧 `veadk mpa create` 独立保留且行为不变。模型执行与渠道路由仍由 Runtime 负责。托管运行角色 IAM 准备遵循下文契约。
 
 ## 契约
 
@@ -21,8 +21,8 @@ VeADK 负责托管 YAML 解析、云服务/数据库编排、有权限约束的�
 
 - **CON-16 — Studio MPA 来源标签：**通用 Studio MPA 部署和托管式一键创建都写入 `veadk:agent-type=mpa`、`veadk:managed=true`、`veadk:provisioner=studio-mpa`、可信 `veadk:owner` 和其持有的 `veadk:mpa-instance-id`；可信 owner 缺失时必须在云变更前失败，且启动子进程前必须验证原始 owner 的哈希与任务 owner 一致。一键创建路由把 owner 哈希后用于本地任务和原生注册表归属，同时仅通过固定子进程把原始可信 owner 临时传递给 Runtime 标签，不把它持久化到任务状态。只有该路由显式提供可信 Runtime owner 时，共享 provisioning 服务才写入 Studio 来源，因此 `veadk mpa create` 不进入 Studio 发现范围。标签对账替换这些受管键、保留无关非系统标签，并且不重放 `sys:*` 标签。对于持久化了旧版无来源标签 request hash 的 pending create，先使用原始 create payload 与 client token 精确重放，再通过正常 Runtime update 写入当前来源标签后完成。共享常量位于内部 MPA 标签模块，不新增公共 Python API。标签是发现 metadata，不是授权凭据。缺少 `veadk:managed=true` 的历史托管式一键 Runtime 必须经过显式受支持的更新/重试或未来回填后，Studio 才会列出。已由 [Studio 创建的 MPA Runtime 过滤](../../prd-spec/features/studio-mpa-source-filter/2026-09-28-studio-mpa-source-filter.zh.md) 于 2026-09-29 实现并完成本地验证；真实浏览器发现仍是独立的本机验收步骤。
 
-- **CON-1 — 配置：** Studio 使用代码内置的北京地域配置并忽略 `VEADK_MPA_CREATE_CONFIG`；账号、镜像及 Runtime 默认值与原私有文件一致；不固定 VPC/子网/APIG ID。自动准备 PG 后，Studio 按核验后的账号和地域读取 `mpa_admin_workspace/mpa_admin_db` 中的共享资源：校验并复用已登记资源，或通过现有带锁 provisioner 创建并保存缺失的 VPC/子网及 APIG/IM Gateway。不重置已有记录来绕过配额。CLI 显式接管仍受支持。参见[注册库驱动网络修复](../../prd-spec/bugfixes/mpa-shared-network-bootstrap/2026-09-28-registry-owned-network.zh.md)。`VEADK_MPA_CONFIG_MODEL_AGENT_API_KEY` 和部署凭据仍须由服务端提供，不写入源码。子进程收到内置配置标记并校验相同配置。CLI `--config` 继续接受私有 YAML；`managed.version: 1` 支持短横线/下划线别名并拒绝未知字段。CLI 的 `from-runtime` 与 `template-file` 互斥，否则通过平铺镜像/模型/PG 字段构建模板。CLI 的 `database-admin-url-env` 与 `shared-database-url-env` 在服务端解析 PostgreSQL URL；配置/模板文件最多 256 KiB。HTTP 客户端不能选择路径、命令、账号或部署/PG 凭据；CON-11 允许本次创建提供 OpenViking API Key。配置检查仅限本地，不证明真实访问权限。参见[内置配置设计](../../prd-spec/features/mpa-agent-oneclick-provision/2026-09-23-studio-builtin-mpa-profile.zh.md)。
-- **CON-2 — 准备：** 运维提供 PostgreSQL 实例/注册库/登录用户/属主、IAM 角色、镜像、模型权限和网络连通性。先核验云账号及数据库权限，再准备账号 VPC/子网、APIG/IM Gateway、worker、独立业务库、Skill Space 和 Runtime。显式接管 APIG 要求配置匹配 VPC。不得假设新 VPC 可访问私网 PostgreSQL。等待应用就绪前释放账号锁。
+- **CON-1 — 配置：** Studio 使用代码内置的北京地域配置并忽略 `VEADK_MPA_CREATE_CONFIG`；镜像及不含账号的 Runtime 默认值与原私有文件一致；部署账号来自核验的 STS 身份；不固定 VPC/子网/APIG ID。自动准备 PG 后，Studio 按核验后的账号和地域读取 `mpa_admin_workspace/mpa_admin_db` 中的共享资源：校验并复用已登记资源，或通过现有带锁 provisioner 创建并保存缺失的 VPC/子网及 APIG/IM Gateway。不重置已有记录来绕过配额。CLI 显式接管仍受支持。参见[注册库驱动网络修复](../../prd-spec/bugfixes/mpa-shared-network-bootstrap/2026-09-28-registry-owned-network.zh.md)。`VEADK_MPA_CONFIG_MODEL_AGENT_API_KEY` 和部署凭据仍须由服务端提供，不写入源码。子进程收到内置配置标记并校验相同配置。CLI `--config` 继续接受私有 YAML；`managed.version: 1` 支持短横线/下划线别名并拒绝未知字段。CLI 的 `from-runtime` 与 `template-file` 互斥，否则通过平铺镜像/模型/PG 字段构建模板。CLI 的 `database-admin-url-env` 与 `shared-database-url-env` 在服务端解析 PostgreSQL URL；配置/模板文件最多 256 KiB。HTTP 客户端不能选择路径、命令、账号或部署/PG 凭据；CON-11 允许本次创建提供 OpenViking API Key。配置检查仅限本地，不证明真实访问权限。参见[内置配置设计](../../prd-spec/features/mpa-agent-oneclick-provision/2026-09-23-studio-builtin-mpa-profile.zh.md)。
+- **CON-2 — 准备：** 运维提供 PostgreSQL 实例/注册库/登录用户/属主、IAM 角色（内置配置自动准备）、镜像、模型权限和网络连通性。先核验云账号及数据库权限，再准备账号 VPC/子网、APIG/IM Gateway、worker、独立业务库、Skill Space 和 Runtime。显式接管 APIG 要求配置匹配 VPC。不得假设新 VPC 可访问私网 PostgreSQL。等待应用就绪前释放账号锁。
 - **CON-3 — 身份：** 持久身份为已核验账号 + 地域 + 稳定智能体 ID。原生归属标记、哈希、client token 和会话 advisory lock 决定复用。拒绝无关同名资源及未完成配置冲突。在原生部署记录保存 `studio_owner`；其他所属用户或无该所属身份的已有记录不能被隐式接管。CLI 使用 `cli`，Studio 使用授权主体的哈希。
 - **CON-4 — 初始化：** 使用真实 Runtime 元数据及共享 APIG 初始化，不进行旧占位 endpoint 回填。要求公私网、KeyAuth、MPA 标签、绑定 worker/Skill Space 及元数据/IM 启动初始化。参考 Runtime 模板移除来源身份、渠道凭据、Skill Space 和 worker 身份。成功要求平台 Ready 及应用 `/readiness`。
 - **CON-5 — 鉴权：** 四个接口在读取配置/状态前均调用 Studio 智能体管理鉴权。认证普通用户不能创建；本地开发沿用现有 `local` 主体语义。查询/取消按所属用户隔离。同一用户/request ID 复用任务；修改输入返回 409。全局最多四个活动任务，每用户一个。
@@ -75,7 +75,7 @@ CON-1 镜像优先级：可选 `managed.runtime.image` 显式指定 MPA 自定�
 
 CON-1 显式基础设施：`managed.runtime` 可选字段包括 `role-name`、正数 `cpu-milli`/`memory-mb`/`max-concurrency`、非负 `min-instance`、正数 `max-instance`、`apmplus-enable`、`project-name` 和 `env`（字符串环境值，完整 `${ENV_NAME}` 引用由服务端解析）。显式值覆盖参考 Runtime/模板/平铺设置，省略字段保留默认值。合并来源后验证 min<=max。平铺 `model-*`、`pg-*` 与 `managed.network.vpc-id/subnet-ids` 支持不依赖参考 Runtime 的配置。Runtime env 键须为大写环境变量标识；禁止设置创建流程拥有的智能体/Runtime/工具/技能 ID、派生数据库名、Runtime 端点/鉴权/加密、数据库管理员/共享注册库 URL、请求/遥测标识。CON-3/CON-8 的生成、秘密脱敏和未完成请求一致性仍为准。Worker 参考配置独立于 MPA Runtime 来源。
 
-CON-9 创建镜像：弹窗包含可编辑的 MPA/Worker 镜像输入框，使用鉴权配置返回的 `runtimeImage`/`workerImage` 初始化。留空沿用服务端来源，显式镜像仅作用于本次创建。提交后锁定输入，并保留原请求值以支持重试/恢复。POST 接受可选镜像引用（去除首尾空白，最多 1024 字符），拒绝 URL/凭据/查询片段/非法 SHA256 digest，绝不作为 shell 命令执行。配置接口仅返回本地可确定的默认镜像，纯参考配置可为空。CON-6/CON-8 任务存储新增 `images` JSON 列，旧记录为 `{}`。首次提交保存本地可确定的实际镜像，重试沿用该列并拒绝修改显式输入。任务响应包含该非秘密快照，固定 runner 将其应用于配置副本。显式 worker 镜像会在本次新任务中取消配置的已有 worker 选择。权限和其他资源设置仍由服务端管理。
+CON-9 创建镜像：弹窗包含可编辑的 MPA/Worker 镜像输入框，使用鉴权配置返回的 `runtimeImage`/`workerImage` 初始化。留空沿用服务端来源，显式镜像仅作用于本次创建。提交后锁定输入，并保留原请求值以支持重试/恢复。POST 接受可选镜像引用（去除首尾空白，最多 1024 字符），拒绝 URL/凭据/查询片段/非法 SHA256 digest，绝不作为 shell 命令执行。配置接口按下文解析公开默认镜像；显式 CLI 参考配置保持独立。CON-6/CON-8 任务存储新增 `images` JSON 列，旧记录为 `{}`。首次提交保存已解析的实际镜像，重试沿用该列并拒绝修改显式输入。任务响应包含该非秘密快照，固定 runner 将其应用于配置副本。显式 worker 镜像会在本次新任务中取消配置的已有 worker 选择。权限和其他资源设置仍由服务端管理。
 
 
 CON-10 — Worker 恢复/诊断：暂时性 Worker 操作最多尝试 4 次，间隔 1/2/4 秒，受默认 600 秒阶段预算和总任务期限限制。创建重试保持同一载荷/ClientToken；仅已登记的托管 Worker 可恢复已识别的不存在错误。永久/未知错误和归属冲突立即失败。只含安全枚举的诊断记录到日志和 `task_diagnostics`（每任务最新 100 条，跨重试保留），绝不持久化原始异常数据。任务 HTTP 字段和错误码不变。见[已批准设计](../../prd-spec/bugfixes/mpa-worker-retry/2026-09-20-worker-retry.zh.md)。
@@ -121,3 +121,34 @@ CON-10 元数据可见性：区分初始化元数据缺失和显式冲突。具�
 ## 托管 MCP 签名密钥
 
 每个托管 MPA Runtime 均配置 `MCP_TOKEN_SECRET`。显式模板环境变量非空值优先于目标 Runtime 值，后者优先于 Agent 专属 PostgreSQL `mpa_deployment_settings` 表中的 `mcp_token_secret`。全部缺失时生成 32 随机字节、编码为 64 位十六进制字符串，并在云创建前持久化。原子插入或保留已有值确保不确定创建结果的重试稳定。仅在校验未完成请求摘要后同步显式值/当前值，避免被拒绝的变更重试破坏原请求。数据库失败终止创建并释放连接。参考 Runtime 模板排除源 Agent 密钥；显式 JSON 模板可配置密钥。回填沿用密钥，正常返回值及共享非敏感部署登记记录不包含密钥。不新增前端字段或自动迁移存量部署。参见[双语设计](../../prd-spec/bugfixes/mpa-runtime-mcp-secret/2026-10-07-persistent-mcp-secret.zh.md)。
+
+## 自动准备 Runtime IAM 角色
+
+内置 Studio 使用 `managed.iam.mode: auto`，显式配置默认 `existing`。自动准备在 STS 账号核验后、工作负载身份和其他资源变更前执行。仅支持全新来源的默认 `IDRoleForArkClawShareAgent` 配置。IAM 为账号级。查询/创建角色及 `VeADKMPARuntimeAccessV1`，核验账号/名称及无条件信任 `vefaas`、`apig`，补齐已批准的 12 个系统策略和 14 个自定义动作的 Global 绑定，随后回读核验。保留额外绑定，不覆盖信任或已有策略。仅明确不存在错误允许创建，竞态和最终一致性采用最多 120 秒的恢复。取消保留资源。权限/信任/策略/属主/回读失败在 `iam_role` 阶段停止，输出白名单本地化错误，不输出原始云端文本和密钥。Studio 执行凭据须允许 GetRole、CreateRole、GetPolicy、CreatePolicy、ListAttachedRolePolicies、AttachRolePolicy。existing CLI 及通用智能体不受影响。完整权限及验收见[设计](../../prd-spec/features/mpa-runtime-iam/2026-10-09-managed-runtime-role.zh.md)。
+
+## Studio 部署账号
+
+内置配置不再固定预期账号。使用非空部署 STS 身份确定账号级 IAM、PG、VPC、APIG 和 Runtime 归属。新建 Runtime 的 `CLAW_SPACE_ID` 和 `RUNTIME_IAM_ROLE_TRN` 由该账号和所选角色派生；显式调用方环境变量覆盖保持优先。显式 YAML 预期账号检查和凭据账号变化检查继续生效。镜像仓库地址及 Worker 参考 ID 仍是源资源，具有独立访问要求。见[设计](../../prd-spec/bugfixes/mpa-studio-account/2026-10-09-sts-account.zh.md)。
+
+## 网络归属描述与恢复
+
+新 VPC/子网描述使用 `mpa-account-network-v1-<scope hash>`。恢复/校验托管资源仅接受当前范围精确的旧 `mpa-account-network:v1:<scope hash>` 或新标记，不改写已有资源。旧意图仅描述不同，派发标记明确为 false、无资源 ID、按名称查询无资源时，才修正描述并生成新 ClientToken；其他字段必须完全一致。结果不确定时，没有成功查询到资源就不得再次 Create。继续遵守现有锁及先保存后派发规则。见[设计](../../prd-spec/bugfixes/mpa-network-description/2026-10-09-valid-network-marker.zh.md)。
+
+## 空网络查询
+
+[已批准修复](../../prd-spec/bugfixes/mpa-network-discovery/2026-10-09-empty-network-results.zh.md)明确：DescribeVpcs/DescribeSubnets 第一页集合为 null/缺失且整数 `total_count=0` 时为空结果。其他非列表集合、null 集合且数量缺失/非整数/非零，以及后续页面的 null 集合仍为无效响应。SDK/提供方错误不得成为空查询。已记录的托管 VPC 可继续准备第一个子网，无需替换 VPC。分页、归属、持久化意图及未知结果防重复保护不变。
+
+## 标准型共享网关准备
+
+[已实施标准型网关修复](../../prd-spec/bugfixes/mpa-standard-gateway/2026-10-09-standard-shared-gateway.zh.md)规定：新托管 APIG 使用 standard、两个 1c2g 节点、small_1 CLB、公私网和 traffic 计费。新网关创建前，在共享锁内准备同 VPC、不同 APIG 支持可用区的两个子网。可选 gateway_subnet_intents 持久化每个伴随请求/token/发送状态，未知创建必须查询恢复。保留已有网关接管/复用和已有 Runtime 网络载荷。ExceededQuota 明确允许修正后重新发送；旧未知标记仍需审计恢复。部署凭据额外需要 apig:GetGatewayAvailableZones。不新增前端字段，不修改 Runtime 角色。
+
+## 独立 Worker 配置
+
+内置 Studio 使用镜像默认值创建 Worker，不引用 Tool，也不重复注入启动环境。CreateTool.Port 仍为 8000，默认 Envs 仅包含生成的 MPA_AGENT_ID。见[镜像默认值修订](../../prd-spec/bugfixes/mpa-worker-template/2026-10-09-worker-image-defaults.zh.md)。可选 `managed.worker.env` 是字符串映射；完整 `${ENV_NAME}` 在服务端解析。键必须使用大写。智能体/Runtime/Tool/技能空间绑定、继承的渠道/Runtime 密钥和控制库地址为保留字段。existing-id 不允许非空 env。显式 env 覆盖已过滤的可选模板环境，最后编排器生成 MPA_AGENT_ID。显式模板不存在仍报错。环境值不进入配置摘要/repr 或部署记录。已有归属、时限、取消及请求哈希/ClientToken 保护不变；修改未完成请求参数仍冲突。见[已批准设计与验证](../../prd-spec/bugfixes/mpa-worker-template/2026-10-09-independent-worker.zh.md)。
+
+## Runtime 子网顺序与恢复
+
+SubnetIds 按非空、唯一成员判断相同，不受平台返回顺序影响。VpcId、EnableSharedInternetAccess 仍不可变且精确比较。成员变化、重复及格式错误列表仍校验失败。恢复保留请求顺序，或在注册记录与当前 Runtime 成员相同时保留注册顺序，使已有请求哈希及 ClientToken 继续可用。成员不同的共享默认值不得替换当前智能体选择。无需结构或哈希格式迁移。设计与验证：[子网顺序修复](../../prd-spec/bugfixes/mpa-subnet-order/2026-10-09-subnet-order.zh.md)。
+
+
+CON-9 公开默认镜像：Studio 从两个固定公开 Studio 仓库按 config `created` 选择最新 Linux/amd64 构建，返回经核验的 digest 引用。配置 GET 接受可选 UUID `requestId`，用于复用 owner 范围已存快照；客户端为 60 秒发现期限预留 75 秒请求时间。显式输入跳过查询，首次留空提交解析默认值。已有 owner/request 任务快照无需访问仓库即可复用，含旧快照。匿名 OCI 读取有界、可取消，错误安全且不回退。源仓库归属不限制部署账号。见[公开镜像设计](../../prd-spec/features/mpa-latest-images/2026-10-09-public-registry-images.zh.md)。
