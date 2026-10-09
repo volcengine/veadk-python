@@ -49,6 +49,7 @@ def run():
                 provision(
                     profile,
                     agent_id=data["agentId"],
+                    runtime_name=data.get("name", ""),
                     owner=data["owner"],
                     studio_runtime_owner=data.get("studioRuntimeOwner"),
                     description=data["description"],

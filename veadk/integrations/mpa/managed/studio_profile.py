@@ -23,7 +23,7 @@ def studio_profile_values() -> dict:
     region = "cn-beijing"
     role = "IDRoleForArkClawShareAgent"
     model = "doubao-seed-2-0-pro-260215"
-    registry = f"agentkit-platform-{account}-{region}.cr.volces.com/agentkit"
+    registry = f"agentkit-platform-{account}-{region}.cr.volces.com/mpa"
     return {
         "region": region,
         "account-id": account,
@@ -43,7 +43,7 @@ def studio_profile_values() -> dict:
             "database-admin-url-env": "DEPLOYMENT_DATABASE_ADMIN_URL",
             "shared-database-url-env": "SHARED_APIG_DATABASE_URL",
             "runtime": {
-                "image": f"{registry}/mpa_agent_studio:studio-a1f9627-20260923-172555",
+                "image": f"{registry}/mpa_agent:latest",
                 "role-name": role,
                 "cpu-milli": 2000,
                 "memory-mb": 4096,
@@ -84,10 +84,7 @@ def studio_profile_values() -> dict:
                 },
             },
             "worker": {
-                "image": (
-                    f"{registry}/agentkit_mpa_codex_worker:"
-                    "20260921-master-81f3496-160404"
-                ),
+                "image": f"{registry}/mpa_codex_worker:latest",
                 "reference-id": "t-yeuujqfldstkidoad4p0",
                 "role-name": role,
             },

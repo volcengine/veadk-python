@@ -19,9 +19,10 @@ vi.mock("../src/adk/mpaCreation", () => ({
   getMpaCreation: vi.fn(),
   cancelMpaCreation: vi.fn(),
 }));
-vi.mock("react-i18next", () => {
+vi.mock("react-i18next", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("react-i18next")>();
   const t = (key: string) => key;
-  return { useTranslation: () => ({ t }) };
+  return { ...actual, useTranslation: () => ({ t }) };
 });
 let host: HTMLDivElement;
 let root: ReturnType<typeof createRoot>;
@@ -39,7 +40,7 @@ afterEach(async () => {
   await act(async () => root.unmount());
   host.remove();
 });
-async function mount() {
+async function mount(fillName = true) {
   await act(async () =>
     root.render(
       <MpaCreateDialog
@@ -49,6 +50,14 @@ async function mount() {
       />,
     ),
   );
+  if (
+    fillName &&
+    field("name") &&
+    !field("name").disabled &&
+    !field("name").value
+  ) {
+    await edit("name", "test-agent");
+  }
 }
 it("explains the separate management workspace only for configured split layouts", async () => {
   vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
@@ -139,7 +148,7 @@ it("unlocks the form after a definite validation rejection", async () => {
     new api.MpaCreationRequestError(400, "PG target does not match"),
   );
   await mount();
-  const originalId = field("agentId").value;
+  const originalId = field("name").value;
   await goToFinal();
   await act(async () => submitButton().click());
   expect(button("previousStep")).toBeDefined();
@@ -147,7 +156,7 @@ it("unlocks the form after a definite validation rejection", async () => {
   expect(field("pgHost").disabled).toBe(false);
   expect(field("pgHost").value).toBe("db.example");
   await act(async () => button("previousStep").click());
-  expect(field("agentId").value).toBe(originalId);
+  expect(field("name").value).toBe(originalId);
 });
 
 it("can omit the shared modal footer without overriding component styles", async () => {
@@ -183,18 +192,16 @@ function button(label: string) {
     (candidate) => candidate.textContent === `myAgents.mpaCreate.${label}`,
   )!;
 }
-it("keeps the generated ID read only and navigates the three creation steps", async () => {
+it("edits the Runtime name and navigates the three creation steps", async () => {
   vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
     configured: true,
     region: "cn-beijing",
   });
   await mount();
-  const id = document.querySelector<HTMLInputElement>('input[name="agentId"]')!;
-  expect(id.value).toMatch(/^mi-[0-9a-f]{24}$/);
-  expect(id.readOnly).toBe(true);
-  expect(document.body.textContent).toContain(
-    "myAgents.mpaCreate.runtimeImage",
-  );
+  expect(field("name").value).toBe("test-agent");
+  expect(field("name").disabled).toBe(false);
+  expect(document.querySelector('input[name="agentId"]')).toBeNull();
+  expect(document.querySelector('input[name="runtimeImage"]')).toBeNull();
   await act(async () => button("next").click());
   expect(document.body.textContent).toContain("myAgents.mpaCreate.pgHost");
   expect(
@@ -216,7 +223,7 @@ it("keeps the generated ID read only and navigates the three creation steps", as
   expect(document.body.textContent).toContain("myAgents.mpaCreate.pgHost");
   expect(api.startMpaCreation).not.toHaveBeenCalled();
 });
-it("restores an unsubmitted draft and its generated ID after reopening", async () => {
+it("restores an unsubmitted name and request after reopening", async () => {
   vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
     configured: true,
     region: "cn-beijing",
@@ -224,17 +231,23 @@ it("restores an unsubmitted draft and its generated ID after reopening", async (
     pgPort: "5432",
   });
   await mount();
-  const generatedId = field("agentId").value;
+  await edit("name", "draft-agent");
+  const requestId = JSON.parse(sessionStorage.getItem("mpa-create:cn-beijing")!)
+    .input.requestId;
   await act(async () => button("next").click());
   await edit("pgHost", "db.changed.example");
   await act(async () => root.render(null));
   await mount();
   expect(field("pgHost").value).toBe("db.changed.example");
   await act(async () => button("previousStep").click());
-  expect(field("agentId").value).toBe(generatedId);
-  expect(field("agentId").readOnly).toBe(true);
+  expect(field("name").value).toBe("draft-agent");
+  expect(field("name").disabled).toBe(false);
+  expect(
+    JSON.parse(sessionStorage.getItem("mpa-create:cn-beijing")!).input
+      .requestId,
+  ).toBe(requestId);
 });
-it("restores the original ID length in unsubmitted short-ID drafts", async () => {
+it("removes hidden IDs and image overrides from unsubmitted legacy drafts", async () => {
   const requestId = "12345678-90ab-4cde-8f01-23456789abcd";
   sessionStorage.setItem(
     "mpa-create:cn-beijing",
@@ -243,6 +256,8 @@ it("restores the original ID length in unsubmitted short-ID drafts", async () =>
         region: "cn-beijing",
         requestId,
         agentId: "mi-1234567890ab",
+        runtimeImage: "registry.example/old:v1",
+        workerImage: "registry.example/old-worker:v1",
         description: "Draft",
       },
       step: 1,
@@ -254,7 +269,14 @@ it("restores the original ID length in unsubmitted short-ID drafts", async () =>
   });
   await mount();
   await act(async () => button("previousStep").click());
-  expect(field("agentId").value).toBe("mi-1234567890ab4cde8f012345");
+  expect(field("name").value).toBe("");
+  const draft = JSON.parse(
+    sessionStorage.getItem("mpa-create:cn-beijing")!,
+  ).input;
+  expect(draft.agentId).toBeUndefined();
+  expect(draft.runtimeImage).toBeUndefined();
+  expect(draft.workerImage).toBeUndefined();
+  expect(draft.requestId).toBe(requestId);
 });
 it("keeps a submitted short ID unchanged for task retry", async () => {
   sessionStorage.setItem(
@@ -318,11 +340,8 @@ it.each(["failed", "cancelled"] as const)(
     await edit("openvikingApiKey", "private-test-key");
     expect(button("retry")).toBeDefined();
     await act(async () => button("newAgent").click());
-    const freshId = field("agentId").value;
-    expect(freshId).toMatch(/^mi-[0-9a-f]{24}$/);
-    expect(freshId).not.toBe(oldInput.agentId);
-    expect(field("runtimeImage").value).toBe("registry.example/mpa:v1");
-    expect(field("workerImage").value).toBe("registry.example/worker:v1");
+    expect(field("name").value).toBe("");
+    expect(document.querySelector('input[name="agentId"]')).toBeNull();
     await goToFinal();
     expect(field("openvikingApiKey").value).toBe("");
     expect(field("openvikingUrl").value).toBe("");
@@ -336,7 +355,8 @@ it.each(["failed", "cancelled"] as const)(
     expect(api.startMpaCreation).not.toHaveBeenCalled();
     expect(api.cancelMpaCreation).not.toHaveBeenCalled();
     const stored = JSON.parse(sessionStorage.getItem("mpa-create:cn-beijing")!);
-    expect(stored.input.agentId).toBe(freshId);
+    expect(stored.input.agentId).toBeUndefined();
+    expect(stored.input.name).toBe("test-agent");
     expect(stored.input.requestId).not.toBe(oldInput.requestId);
     expect(stored.taskId).toBeUndefined();
     expect(JSON.stringify(stored)).not.toContain("private-test-key");
@@ -344,7 +364,7 @@ it.each(["failed", "cancelled"] as const)(
     await mount();
     await act(async () => button("previousStep").click());
     await act(async () => button("previousStep").click());
-    expect(field("agentId").value).toBe(freshId);
+    expect(field("name").value).toBe("test-agent");
     expect(api.getMpaCreation).toHaveBeenCalledTimes(1);
     vi.mocked(api.startMpaCreation).mockImplementation(async (request) => ({
       ...request,
@@ -355,7 +375,7 @@ it.each(["failed", "cancelled"] as const)(
     await goToFinal();
     await act(async () => submitButton().click());
     expect(vi.mocked(api.startMpaCreation).mock.calls[0][0]).toMatchObject({
-      agentId: freshId,
+      name: "test-agent",
       requestId: stored.input.requestId,
     });
   },
@@ -407,14 +427,13 @@ it.each(["uncertain", "running", "cancelling", "unavailable"] as const)(
       JSON.parse(sessionStorage.getItem("mpa-create:cn-beijing")!).input,
     ).toEqual(input);
     await act(async () => button("newAgent").click());
-    expect(field("agentId").value).not.toBe(input.agentId);
-    expect(field("runtimeImage").disabled).toBe(false);
-    expect(field("runtimeImage").value).toBe("registry.example/runtime:v2");
+    expect(field("name").value).toBe("");
+    expect(field("name").disabled).toBe(false);
     const stored = JSON.parse(sessionStorage.getItem("mpa-create:cn-beijing")!);
     expect(stored.input.requestId).not.toBe(input.requestId);
     expect(stored.submitted).toBeUndefined();
     expect(stored.taskId).toBeUndefined();
-    await edit("runtimeImage", "registry.example/edited:v3");
+    await edit("name", "new-agent");
     await goToFinal();
     expect(field("openvikingUrl").disabled).toBe(false);
     expect(field("tosAccessKey").disabled).toBe(false);
@@ -450,7 +469,8 @@ it("ignores late old-task results after starting a new request", async () => {
   );
   await mount();
   await act(async () => button("newAgent").click());
-  const freshId = field("agentId").value;
+  const freshId = JSON.parse(sessionStorage.getItem("mpa-create:cn-beijing")!)
+    .input.requestId;
   await act(async () =>
     resolve({
       ...input,
@@ -459,8 +479,8 @@ it("ignores late old-task results after starting a new request", async () => {
       stage: "verifying",
     }),
   );
-  expect(field("agentId").value).toBe(freshId);
-  expect(field("runtimeImage").disabled).toBe(false);
+  expect(field("name").value).toBe("");
+  expect(field("name").disabled).toBe(false);
   expect(sessionStorage.getItem("mpa-create:cn-beijing")).toContain(freshId);
 });
 
@@ -514,8 +534,9 @@ it("navigates restored submitted settings without unlocking or changing identity
   ];
   expect(steps()).toHaveLength(3);
   await act(async () => steps()[0].click());
-  expect(field("agentId").value).toBe("mi-saved");
-  expect(field("runtimeImage").disabled).toBe(true);
+  expect(field("name").value).toBe("mi-saved");
+  expect(field("name").disabled).toBe(true);
+  expect(document.querySelector('input[name="runtimeImage"]')).toBeNull();
   await act(async () => steps()[1].click());
   expect(field("pgHost").disabled).toBe(true);
   await act(async () => steps()[2].click());
@@ -539,10 +560,10 @@ it("validates forward step clicks and disables navigation during submission", as
   const steps = () => [
     ...document.querySelectorAll<HTMLButtonElement>(".mpa-create-steps button"),
   ];
-  await edit("runtimeImage", "invalid image");
+  await edit("name", "invalid name");
   expect(steps()[1].disabled).toBe(true);
   expect(steps()[2].disabled).toBe(true);
-  await edit("runtimeImage", "registry.example/runtime:v1");
+  await edit("name", "valid-name");
   await act(async () => steps()[1].click());
   await edit("pgPort", "invalid");
   expect(steps()[0].disabled).toBe(false);
@@ -634,69 +655,56 @@ function submitButton() {
   return button("submit");
 }
 async function goToFinal() {
+  if (field("name") && !field("name").value) await edit("name", "test-agent");
   await act(async () => button("next").click());
   await act(async () => button("next").click());
 }
-it("prefills both images and submits edits or an intentionally cleared default", async () => {
+it.each(["abc", "a".repeat(65), "bad name", "中文名称", ""])(
+  "blocks invalid Runtime name %s before forward navigation",
+  async (name) => {
+    vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
+      configured: true,
+      region: "cn-beijing",
+    });
+    await mount();
+    await edit("name", name);
+    expect(button("next").disabled).toBe(true);
+    expect(field("name").getAttribute("aria-invalid")).toBe("true");
+    expect(api.startMpaCreation).not.toHaveBeenCalled();
+  },
+);
+it("retains submitted legacy image selections on lost-response retry", async () => {
+  const input = {
+    requestId: "old-request",
+    agentId: "mi-existing",
+    region: "cn-beijing",
+    description: "",
+    runtimeImage: "",
+    workerImage: "registry.example/worker:custom",
+  };
+  sessionStorage.setItem(
+    "mpa-create:cn-beijing",
+    JSON.stringify({ input, submitted: true }),
+  );
   vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
     configured: true,
     region: "cn-beijing",
-    runtimeImage: "registry.example/mpa:v1",
-    workerImage: "registry.example/worker:v1",
-  });
-  vi.mocked(api.startMpaCreation).mockReturnValue(new Promise(() => {}));
-  await mount();
-  expect(field("runtimeImage").value).toBe("registry.example/mpa:v1");
-  expect(field("workerImage").value).toBe("registry.example/worker:v1");
-  await edit("runtimeImage", "registry.example/mpa:custom");
-  await edit("workerImage", "");
-  await goToFinal();
-  await act(async () => submitButton().click());
-  expect(vi.mocked(api.startMpaCreation).mock.calls[0][0]).toMatchObject({
-    runtimeImage: "registry.example/mpa:custom",
-    workerImage: "",
-  });
-  expect(button("previousStep")).toBeDefined();
-});
-it("blocks malformed image references but allows empty values", async () => {
-  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
-    configured: true,
-    region: "cn-beijing",
-  });
-  await mount();
-  await edit("runtimeImage", "https://repo?token=private");
-  expect(button("next").disabled).toBe(true);
-  expect(field("runtimeImage").getAttribute("aria-invalid")).toBe("true");
-  await edit("runtimeImage", "");
-  await goToFinal();
-  expect(submitButton().disabled).toBe(false);
-});
-it("does not replace saved or cleared image choices when config reloads after a lost response", async () => {
-  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
-    configured: true,
-    region: "cn-beijing",
-    runtimeImage: "registry.example/mpa:v1",
-    workerImage: "registry.example/worker:v1",
+    runtimeImage: "registry.example/new:latest",
   });
   vi.mocked(api.startMpaCreation).mockRejectedValue(new Error("Response lost"));
   await mount();
-  await edit("runtimeImage", "");
-  await edit("workerImage", "registry.example/worker:custom");
-  await goToFinal();
   await act(async () => submitButton().click());
-  const original = vi.mocked(api.startMpaCreation).mock.calls[0][0];
-  await act(async () => root.render(null));
-  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
-    configured: true,
-    region: "cn-beijing",
-    runtimeImage: "registry.example/mpa:v2",
+  expect(vi.mocked(api.startMpaCreation).mock.calls[0][0]).toEqual({
+    ...input,
+    openvikingApiKey: "",
   });
+  await act(async () => root.render(null));
   await mount();
-  const saved = JSON.parse(sessionStorage.getItem("mpa-create:cn-beijing")!);
-  expect(saved.input.runtimeImage).toBe("");
-  expect(saved.input.workerImage).toBe("registry.example/worker:custom");
   await act(async () => submitButton().click());
-  expect(vi.mocked(api.startMpaCreation).mock.calls[1][0]).toEqual(original);
+  expect(vi.mocked(api.startMpaCreation).mock.calls[1][0]).toEqual({
+    ...input,
+    openvikingApiKey: "",
+  });
 });
 
 it("automatically prepares PG without reusing an unsubmitted PG draft", async () => {
@@ -779,4 +787,138 @@ it("shows the registry migration prerequisite without asking for PG inputs", asy
   );
   await act(async () => button("next").click());
   expect(button("submit").disabled).toBe(true);
+});
+
+it("requires a Runtime name and omits browser-owned IDs and images", async () => {
+  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
+    configured: true,
+    region: "cn-beijing",
+    runtimeImage: "registry.example/old:v1",
+  });
+  vi.mocked(api.startMpaCreation).mockReturnValue(new Promise(() => {}));
+  await mount(false);
+  expect(field("name").value).toBe("");
+  expect(button("next").disabled).toBe(true);
+  for (const removed of ["agentId", "runtimeImage", "workerImage"]) {
+    expect(document.querySelector(`input[name="${removed}"]`)).toBeNull();
+  }
+  await edit("name", "  support-agent  ");
+  await goToFinal();
+  await act(async () => submitButton().click());
+  const request = vi.mocked(api.startMpaCreation).mock.calls[0][0];
+  expect(request.name).toBe("support-agent");
+  expect(request.agentId).toBeUndefined();
+  expect(request.runtimeImage).toBeUndefined();
+  expect(request.workerImage).toBeUndefined();
+});
+
+it("keeps composition and multiline description input from submitting the wizard", async () => {
+  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
+    configured: true,
+    region: "cn-beijing",
+  });
+  await mount();
+  const description = document.querySelector("textarea")!;
+  await act(async () => {
+    description.dispatchEvent(
+      new CompositionEvent("compositionstart", { bubbles: true }),
+    );
+    Object.getOwnPropertyDescriptor(
+      HTMLTextAreaElement.prototype,
+      "value",
+    )!.set!.call(description, "中文说明\n第二行");
+    description.dispatchEvent(new Event("input", { bubbles: true }));
+    description.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Enter",
+        isComposing: true,
+        bubbles: true,
+      }),
+    );
+    description.dispatchEvent(
+      new CompositionEvent("compositionend", {
+        bubbles: true,
+        data: "中文说明",
+      }),
+    );
+  });
+  expect(description.value).toBe("中文说明\n第二行");
+  expect(api.startMpaCreation).not.toHaveBeenCalled();
+  expect(field("name")).not.toBeNull();
+});
+
+it("visibly disables Next for a Chinese name and restores it after correction", async () => {
+  const { readFileSync } = await import("node:fs");
+  const css = document.createElement("style");
+  css.textContent = readFileSync(
+    "src/components/primitives/Button/Button.css",
+    "utf8",
+  );
+  document.head.append(css);
+  try {
+    vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
+      configured: true,
+      region: "cn-beijing",
+    });
+    await mount();
+    await edit("name", "czh的测试agent");
+    expect(button("next").disabled).toBe(true);
+    expect(getComputedStyle(button("next")).opacity).toBe("0.45");
+    expect(getComputedStyle(button("next")).cursor).toBe("not-allowed");
+    expect(document.getElementById("mpa-name-help")?.getAttribute("role")).toBe(
+      "alert",
+    );
+    await edit("name", "czh-test-agent");
+    expect(button("next").disabled).toBe(false);
+    expect(Number(getComputedStyle(button("next")).opacity || 1)).toBe(1);
+    expect(
+      document.getElementById("mpa-name-help")?.getAttribute("role"),
+    ).toBeNull();
+    await act(async () => button("next").click());
+    expect(field("name")).toBeNull();
+  } finally {
+    css.remove();
+  }
+});
+
+it("keeps disabled and loading appearance consistent across shared Button variants", async () => {
+  const { readFileSync } = await import("node:fs");
+  const { Button } = await import("../src/components/primitives/Button");
+  const css = document.createElement("style");
+  css.textContent = readFileSync(
+    "src/components/primitives/Button/Button.css",
+    "utf8",
+  );
+  document.head.append(css);
+  try {
+    const variants = [
+      "primary",
+      "secondary",
+      "outline",
+      "ghost",
+      "link",
+      "pill",
+    ] as const;
+    await act(async () =>
+      root.render(
+        <>
+          {variants.map((variant) => (
+            <Button key={variant} variant={variant} disabled>
+              {variant}
+            </Button>
+          ))}
+          <Button loading>Loading</Button>
+        </>,
+      ),
+    );
+    const buttons = [...host.querySelectorAll("button")];
+    for (const control of buttons.slice(0, variants.length)) {
+      expect(control.disabled).toBe(true);
+      expect(getComputedStyle(control).opacity).toBe("0.45");
+      expect(getComputedStyle(control).cursor).toBe("not-allowed");
+    }
+    expect(getComputedStyle(buttons.at(-1)!).opacity).toBe("0.65");
+  } finally {
+    css.remove();
+  }
 });

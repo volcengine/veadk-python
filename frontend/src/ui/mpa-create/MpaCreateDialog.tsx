@@ -16,7 +16,7 @@ import {
 } from "../../adk/mpaCreation";
 import "../../components/composites/ModalButton/ModalButton.css";
 import "./MpaCreateDialog.css";
-import { validCreationImage } from "../../adk/mpaCreationImages";
+import { runtimeNameProblem } from "../../create/runtimeName";
 import { validOpenViking, validPgTarget } from "../../adk/mpaCreationResources";
 
 const PG_CONSOLE_URL =
@@ -25,11 +25,10 @@ const OPENVIKING_CONSOLE_URL =
   "https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing/ov-6689fabdf032294/context-management?accountId=default&userId=default&projectName=default";
 
 function freshInput(region: string): MpaCreationInput {
-  const id = crypto.randomUUID();
   return {
     region,
-    requestId: id,
-    agentId: `mi-${id.replace(/-/g, "").slice(0, 24)}`,
+    requestId: crypto.randomUUID(),
+    name: "",
     description: "",
   };
 }
@@ -50,25 +49,19 @@ function initial(region: string): {
     );
     if (
       saved?.input?.region === region &&
-      typeof saved.input.requestId === "string" &&
-      typeof saved.input.agentId === "string"
+      typeof saved.input.requestId === "string"
     ) {
-      const suffix = saved.input.requestId.replace(/-/g, "");
-      if (
-        !saved.submitted &&
-        !saved.taskId &&
-        /^[0-9a-f]{32}$/.test(suffix) &&
-        saved.input.agentId === `mi-${suffix.slice(0, 12)}`
-      ) {
-        return {
-          ...saved,
-          input: withoutTosCredentials({
-            ...saved.input,
-            agentId: `mi-${suffix.slice(0, 24)}`,
-          }),
-        };
+      if (saved.submitted || saved.taskId) {
+        return { ...saved, input: withoutTosCredentials(saved.input) };
       }
-      return { ...saved, input: withoutTosCredentials(saved.input) };
+      const draft: MpaCreationInput = {
+        ...saved.input,
+        name: typeof saved.input.name === "string" ? saved.input.name : "",
+      };
+      delete draft.agentId;
+      delete draft.runtimeImage;
+      delete draft.workerImage;
+      return { ...saved, input: withoutTosCredentials(draft) };
     }
   } catch {
     /* A fresh form is safe when browser storage is unavailable. */
@@ -113,9 +106,14 @@ export function MpaCreateDialog({
   const created = useRef(onCreated);
   created.current = onCreated;
   const running = task?.state === "running" || task?.state === "cancelling";
-  const imagesValid =
-    validCreationImage(input.runtimeImage) &&
-    validCreationImage(input.workerImage);
+  const legacyRequest =
+    submitted && input.name === undefined && Boolean(input.agentId);
+  const nameError = legacyRequest
+    ? null
+    : runtimeNameProblem((input.name ?? "").trim(), (problem) =>
+        t(`validation.runtimeName.${problem}`, { ns: "create" }),
+      );
+  const nameValid = !nameError;
   const autoPg = config?.postgresMode === "auto";
   const pgValid = autoPg
     ? !input.pgHost && !input.pgPort
@@ -182,8 +180,6 @@ export function MpaCreateDialog({
           ) {
             setInput((previous) => ({
               ...previous,
-              runtimeImage: previous.runtimeImage ?? value.runtimeImage ?? "",
-              workerImage: previous.workerImage ?? value.workerImage ?? "",
               pgHost:
                 value.postgresMode === "auto"
                   ? ""
@@ -240,7 +236,7 @@ export function MpaCreateDialog({
     if (
       lock.current ||
       !config?.configured ||
-      !imagesValid ||
+      !nameValid ||
       !pgValid ||
       !openvikingValid ||
       !tosValid ||
@@ -258,7 +254,11 @@ export function MpaCreateDialog({
     action.current = controller;
     try {
       const value = await startMpaCreation(
-        { ...input, openvikingApiKey },
+        {
+          ...input,
+          ...(input.name === undefined ? {} : { name: input.name.trim() }),
+          openvikingApiKey,
+        },
         controller.signal,
       );
       if (!alive.current || controller.signal.aborted) return;
@@ -304,8 +304,6 @@ export function MpaCreateDialog({
   function startAnotherAgent() {
     const nextInput: MpaCreationInput = {
       ...freshInput(region),
-      runtimeImage: config?.runtimeImage ?? "",
-      workerImage: config?.workerImage ?? "",
       pgHost: autoPg ? "" : (config?.pgHost ?? ""),
       pgPort: autoPg ? "" : (config?.pgPort ?? ""),
     };
@@ -371,7 +369,7 @@ export function MpaCreateDialog({
                             busy ||
                             (index > step &&
                               !submitted &&
-                              (!imagesValid || (index === 2 && !pgValid)))
+                              (!nameValid || (index === 2 && !pgValid)))
                           }
                           onClick={() => setStep(index)}
                         >
@@ -392,15 +390,27 @@ export function MpaCreateDialog({
                       {t(key("region"))}：{region}
                     </p>
                     <label>
-                      {t(key("agentId"))}
+                      {t(key("name"))}
                       <input
-                        name="agentId"
-                        value={input.agentId}
-                        pattern="[a-z0-9][a-z0-9_-]{0,63}"
+                        name="name"
+                        placeholder={t(key("namePlaceholder"))}
+                        value={input.name ?? input.agentId ?? ""}
                         maxLength={64}
-                        readOnly
-                        aria-readonly="true"
+                        disabled={busy || submitted}
+                        required
+                        autoComplete="off"
+                        aria-invalid={Boolean(nameError)}
+                        aria-describedby="mpa-name-help"
+                        onChange={(event) =>
+                          setInput({ ...input, name: event.target.value })
+                        }
                       />
+                      <p
+                        id="mpa-name-help"
+                        role={nameError ? "alert" : undefined}
+                      >
+                        {nameError || t(key("nameHelp"))}
+                      </p>
                     </label>
                     <label>
                       {t(key("description"))}
@@ -417,50 +427,7 @@ export function MpaCreateDialog({
                         }
                       />
                     </label>
-                    {(["runtimeImage", "workerImage"] as const).map((field) => (
-                      <label key={field}>
-                        {t(key(field))}
-                        <input
-                          name={field}
-                          value={
-                            submitted
-                              ? (task?.images?.[field] ?? input[field] ?? "")
-                              : (input[field] ?? "")
-                          }
-                          maxLength={1024}
-                          placeholder={t(key("imageDefault"))}
-                          disabled={
-                            loading || busy || submitted || !config?.configured
-                          }
-                          autoComplete="off"
-                          spellCheck={false}
-                          aria-invalid={!validCreationImage(input[field])}
-                          aria-describedby={`mpa-${field}-help`}
-                          onChange={(event) =>
-                            setInput((previous) => ({
-                              ...previous,
-                              [field]: event.target.value,
-                            }))
-                          }
-                        />
-                        <p
-                          id={`mpa-${field}-help`}
-                          role={
-                            !validCreationImage(input[field])
-                              ? "alert"
-                              : undefined
-                          }
-                        >
-                          {t(
-                            key(
-                              validCreationImage(input[field])
-                                ? "imageDefault"
-                                : "imageInvalid",
-                            ),
-                          )}
-                        </p>
-                      </label>
-                    ))}
+
                     <section
                       className="mpa-create-plan"
                       aria-label={t(key("plan"))}
@@ -739,7 +706,7 @@ export function MpaCreateDialog({
                       <Button
                         disabled={
                           busy ||
-                          (step === 0 && !imagesValid) ||
+                          (step === 0 && !nameValid) ||
                           (step === 1 && !pgValid)
                         }
                         onClick={() => setStep((previous) => previous + 1)}
@@ -752,11 +719,10 @@ export function MpaCreateDialog({
                         disabled={
                           loading ||
                           !config?.configured ||
-                          !imagesValid ||
+                          !nameValid ||
                           !pgValid ||
                           !openvikingValid ||
-                          !tosValid ||
-                          !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(input.agentId)
+                          !tosValid
                         }
                         onClick={() => void submit()}
                       >

@@ -255,7 +255,9 @@ def test_network_gateway_worker_precede_runtime(
             agent_id="mi-123456789abc",
             owner="owner-hash-a",
             studio_runtime_owner=studio_runtime_owner,
+            runtime_name="support-agent",
         )
+        assert cloud.creates[0]["Name"] == "support-agent"
         assert result["runtime_id"] == "r-agent"
         assert result["gateway_id"] == "gw-one"
         assert cloud.runtimes[result["runtime_id"]]["ToolId"] == "t-one"

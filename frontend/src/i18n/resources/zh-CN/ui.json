@@ -1594,6 +1594,9 @@
     },
     "wakingHint": "正在唤醒智能体，可能需要一些时间。",
     "mpaCreate": {
+      "name": "名称",
+      "namePlaceholder": "例如 test-agent",
+      "nameHelp": "作为 Runtime 名称，支持 4–64 位字母、数字、下划线或连字符。",
       "stepsLabel": "创建步骤",
       "steps": {
         "basics": "基本信息",
@@ -1618,7 +1621,7 @@
       "openvikingInvalid": "请同时填写有效的 HTTPS 服务地址、资源 ID 和 API Key，或全部留空。",
       "openvikingCredentials": "API Key 仅用于本次创建，不保存到浏览器草稿；刷新页面后需重新填写。",
       "tosTitle": "会话输出存储",
-      "tosDescription": "可选。填写完整的 TOS 凭证和存储桶，为新智能体的每个会话挂载独立输出目录。三项均留空时沿用服务端配置。",
+      "tosDescription": "可选。填写完整的 TOS 凭证和存储桶，为新智能体的每个会话挂载独立输出目录。三项均留空时使用服务端预设；服务端未配置时，不启用 TOS 挂载。",
       "tosAccessKey": "TOS Access Key",
       "tosSecretKey": "TOS Secret Key",
       "tosBucket": "TOS 存储桶",

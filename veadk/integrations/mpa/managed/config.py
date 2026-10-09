@@ -153,6 +153,15 @@ def validate_creation_tos(values: dict[str, str]) -> dict[str, str]:
     return selected
 
 
+def validate_runtime_name(value: str) -> str:
+    name = value.strip()
+    if not re.fullmatch(r"[A-Za-z0-9_-]{4,64}", name):
+        raise ConfigurationError(
+            "Runtime name must be 4–64 letters, numbers, underscores or hyphens"
+        )
+    return name
+
+
 def validate_image_reference(value: str) -> str:
     value = value.strip()
     if not value:

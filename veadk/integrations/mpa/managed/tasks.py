@@ -280,6 +280,7 @@ class CreationTasks:
             data = {
                 "config": None if config_path is None else str(config_path),
                 "agentId": payload["agentId"],
+                "name": payload.get("name", ""),
                 "description": payload["description"],
                 "owner": owner,
                 "region": payload["region"],

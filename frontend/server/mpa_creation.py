@@ -21,7 +21,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
-from uuid import UUID
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import (
@@ -38,6 +38,7 @@ from veadk.integrations.mpa.managed.config import (
     load_studio_profile,
     validate_creation_resources,
     validate_image_reference,
+    validate_runtime_name,
     validate_creation_tos,
     with_creation_images,
     with_creation_resources,
@@ -59,7 +60,8 @@ def _studio_task_path() -> Path:
 class CreationRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     requestId: UUID
-    agentId: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]{0,63}$")
+    agentId: str = Field(default="", pattern=r"^[a-z0-9][a-z0-9_-]{0,63}$")
+    name: str = ""
     description: str = Field(default="", max_length=512)
     region: str = Field(pattern=r"^cn-[a-z]+$", max_length=32)
     runtimeImage: str = Field(default="", max_length=1024)
@@ -78,8 +80,15 @@ class CreationRequest(BaseModel):
     def validate_image(cls, value):
         return validate_image_reference(value)
 
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        return validate_runtime_name(value)
+
     @model_validator(mode="after")
     def validate_resources(self):
+        if not self.name and not self.agentId:
+            raise ValueError("Runtime name is required")
         validate_creation_resources(self.model_dump())
         validate_creation_tos(self.model_dump())
         return self
@@ -134,6 +143,16 @@ def mount_mpa_creation_routes(
         try:
             path, config = profile(body.region)
             payload = body.model_dump(mode="json")
+            if not payload["agentId"]:
+                payload["agentId"] = (
+                    "mi-"
+                    + uuid5(
+                        NAMESPACE_URL, f"veadk:mpa:{identity}:{body.requestId}"
+                    ).hex[:24]
+                )
+            if not payload["name"]:
+                # Keep the exact input shape of already-submitted legacy tasks.
+                payload.pop("name")
             tos = {
                 field: payload.pop(field)
                 for field in ("tosAccessKey", "tosSecretKey", "tosBucket")
