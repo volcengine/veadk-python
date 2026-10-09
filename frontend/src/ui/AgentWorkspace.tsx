@@ -1899,7 +1899,7 @@ export function AgentWorkspace({
 }: AgentWorkspaceProps) {
   const { t, i18n } = useTranslation("ui");
   const [view, setView] = useState<WorkspaceView>("library");
-  const [section, setSection] = useState<AgentSection>("basic");
+  const [requestedSection, setSection] = useState<AgentSection>("basic");
   const [activeAgentId, setActiveAgentId] = useState("");
   const [activeDraftId, setActiveDraftId] = useState("");
   const [runtimeDetail, setRuntimeDetail] = useState<RuntimeDetail | null>(null);
@@ -2107,6 +2107,8 @@ export function AgentWorkspace({
     selectedAgentInfo?.appName || selectedAgent?.runtimeApp || selectedAgent?.app || "";
   const selectedAgentCategory: AgentCategory =
     selectedAgent?.agentCategory ?? "general";
+  // MPA details expose only Basic, including restored/external focus.
+  const section = selectedAgentCategory === "mpa" ? "basic" : requestedSection;
   const runtimeDetailForSelectedAgent = runtimeDetail?.runtimeId === selectedAgent?.runtimeId
     ? runtimeDetail
     : null;
@@ -2118,10 +2120,11 @@ export function AgentWorkspace({
     selectedAgent?.runtimeId ??
     "";
   const visibleAgentSectionIds = AGENT_SECTIONS.filter((item) => {
-    if (item === "profileConfig") return selectedAgentCategory === "mpa";
+    if (selectedAgentCategory === "mpa") return item === "basic";
+    if (item === "profileConfig") return false;
     if (item === "usage") return canViewUsage && selectedAgent?.runtimeId;
-    if (item === "sessionConfig") return selectedAgentCategory === "mpa";
-    if (item === "diagnostics") return selectedAgentCategory === "mpa" && selectedAgent?.runtimeId;
+    if (item === "sessionConfig") return false;
+    if (item === "diagnostics") return false;
     return true;
   });
   const visibleAgentSections = visibleAgentSectionIds.map((id) => ({
@@ -2599,7 +2602,10 @@ export function AgentWorkspace({
     const region = selectedAgent?.region ?? "cn-beijing";
     const requestKey = mpaAgentViewRequestKey;
     setMpaAgentViewError("");
-    if (selectedAgentCategory !== "mpa" || !runtimeId) {
+    if (
+      selectedAgentCategory !== "mpa" || !runtimeId ||
+      (section !== "profileConfig" && section !== "sessionConfig")
+    ) {
       setMpaAgentView(null);
       setMpaAgentViewLoading(false);
       return;
@@ -2638,6 +2644,7 @@ export function AgentWorkspace({
   }, [
     detailReloadToken,
     mpaAgentViewRequestKey,
+    section,
     selectedMpaInstanceId,
     selectedAgent?.region,
     selectedAgent?.runtimeId,
@@ -5258,7 +5265,7 @@ export function AgentWorkspace({
                     <span>{t("agentWorkspace.chat")}</span>
                   </button>
                 )}
-                <span
+                {selectedAgentCategory !== "mpa" && <span
                   className={`aw-update-wrap${updateBlockedReason ? " is-disabled" : ""}`}
                   tabIndex={updateBlockedReason ? 0 : undefined}
                   aria-describedby={updateBlockedReason ? updateReasonId : undefined}
@@ -5266,14 +5273,10 @@ export function AgentWorkspace({
                   <button
                     type="button"
                     className="aw-update studio-update-action"
-                    disabled={selectedAgentCategory === "mpa" ? false : Boolean(updateBlockedReason)}
+                    disabled={Boolean(updateBlockedReason)}
                     aria-busy={updateCapabilityLoading || undefined}
                     aria-describedby={updateBlockedReason ? updateReasonId : undefined}
                     onClick={() => {
-                      if (selectedAgentCategory === "mpa") {
-                        setSection("profileConfig");
-                        return;
-                      }
                       if (selectedDraft) {
                         onEditDraft?.(selectedDraft);
                         return;
@@ -5291,8 +5294,6 @@ export function AgentWorkspace({
                         />
                         <span>{t("agentWorkspace.preparing")}</span>
                       </>
-                    ) : selectedAgentCategory === "mpa" ? (
-                      t("agentWorkspace.profileConfig")
                     ) : selectedDraft || selectedAgentUpdateDraft ? (
                       t("agentWorkspace.continueEditing")
                     ) : (
@@ -5308,7 +5309,7 @@ export function AgentWorkspace({
                       {updateBlockedReason}
                     </span>
                   )}
-                </span>
+                </span>}
               </div>
             )}
                   </>
