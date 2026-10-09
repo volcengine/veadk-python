@@ -1,5 +1,9 @@
 # Studio MPA 控制面
 
+## MPA 详情开放范围（2026-10-09）
+
+MPA 智能体详情目前只开放基本信息。其他详情 Tab 及底部 Profile 入口隐藏；恢复或外部焦点在页面副作用执行前解析为基本信息。此页面不读取 Agent View、Profile 状态，也不能提交 Profile 操作。保留 Runtime 信息、执行流程、聊天/删除及其授权。普通 Agent 导航、后端控制面 API 和原生聊天会话的 Profile 处理维持原契约。
+
 - Component ID：`studio-mpa-control-plane`
 - 状态：剩余 P0 修订为 `draft`；基线第一期、第二期部分能力以及 P0 Studio 切片至 S5-12 浏览器验证已实现
 - 修订日期：2026-09-20

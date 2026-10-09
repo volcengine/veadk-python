@@ -1824,3 +1824,7 @@ MPA creation defaults to A2A discovery (`ENABLE_A2A=true`, `DISABLE_JWT_AUTH=fal
 MPA name validation highlights invalid input and its message in the theme danger color, offers a valid-name placeholder, and visibly disables Next until corrected. Shared Button disabled states are dimmed consistently; loading retains its own appearance.
 
 MPA 名称校验使用主题错误色显示非法输入及错误提示，并提供合法名称示例；名称修正前“下一步”明显置灰。共享 Button 的禁用态统一降低透明度，加载态保留原有外观。
+
+MPA Agent details currently expose only Basic information. Other tabs and the Profile configuration action are hidden; this page does not query Profile status or submit Profile operations. General Agent pages and chat session protocols are unchanged.
+
+MPA 智能体详情当前仅显示基本信息。其他页面及 Profile 配置操作隐藏；本页不查询 Profile 状态或提交 Profile 操作。普通智能体页面与聊天会话协议保持不变。
