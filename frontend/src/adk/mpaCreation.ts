@@ -5,7 +5,8 @@ import { requestSignal, DEFAULT_REQUEST_TIMEOUT_MS } from "./timeout";
 
 export interface MpaCreationInput {
   requestId: string;
-  agentId: string;
+  name?: string;
+  agentId?: string;
   description: string;
   region: string;
   runtimeImage?: string;

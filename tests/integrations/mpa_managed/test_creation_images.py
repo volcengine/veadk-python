@@ -142,9 +142,7 @@ def test_authorized_config_returns_defaults_and_task_freezes_them(
     }
     with TestClient(app) as client:
         config = client.get("/web/mpa-creation/config?region=cn-beijing").json()
-        assert config["runtimeImage"].endswith(
-            "/mpa_agent_studio:studio-a1f9627-20260923-172555"
-        )
+        assert config["runtimeImage"].endswith("/mpa/mpa_agent:latest")
         response = client.post("/web/mpa-creation/tasks", json=payload)
         assert response.status_code == 202
         assert response.json()["images"] == {

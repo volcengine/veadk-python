@@ -1594,6 +1594,8 @@
     },
     "wakingHint": "正在唤醒智能体，可能需要一些时间。",
     "mpaCreate": {
+      "name": "名称",
+      "nameHelp": "作为 Runtime 名称，支持 4–64 位字母、数字、下划线或连字符。",
       "stepsLabel": "创建步骤",
       "steps": {
         "basics": "基本信息",

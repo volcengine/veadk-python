@@ -1594,6 +1594,8 @@
     },
     "wakingHint": "Waking the agent. This may take some time.",
     "mpaCreate": {
+      "name": "Name",
+      "nameHelp": "Used as the Runtime name. Use 4–64 letters, numbers, underscores or hyphens.",
       "stepsLabel": "Creation steps",
       "steps": {
         "basics": "Basics",
