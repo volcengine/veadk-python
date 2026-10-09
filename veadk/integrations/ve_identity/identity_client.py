@@ -471,14 +471,48 @@ class IdentityClient:
         return convert_response(resp)
 
     @refresh_credentials
+    def get_workload_pool(
+        self, *, workload_pool_name: str
+    ) -> volcenginesdkid.GetWorkloadPoolResponse:
+        """Get a workload pool by its exact name."""
+        return self._api_client.get_workload_pool(
+            volcenginesdkid.GetWorkloadPoolRequest(
+                workload_pool_name=workload_pool_name
+            )
+        )
+
+    @refresh_credentials
+    def create_workload_pool(
+        self, *, workload_pool_name: str
+    ) -> volcenginesdkid.CreateWorkloadPoolResponse:
+        """Create a workload pool with the supplied name."""
+        return self._api_client.create_workload_pool(
+            volcenginesdkid.CreateWorkloadPoolRequest(
+                workload_pool_name=workload_pool_name
+            )
+        )
+
+    @refresh_credentials
+    def get_workload_identity(
+        self, *, workload_pool_name: str, name: str
+    ) -> volcenginesdkid.GetWorkloadIdentityResponse:
+        """Get a workload identity by pool and exact name."""
+        return self._api_client.get_workload_identity(
+            volcenginesdkid.GetWorkloadIdentityRequest(
+                workload_pool_name=workload_pool_name, name=name
+            )
+        )
+
+    @refresh_credentials
     def create_workload_identity(
-        self, name: Optional[str] = None
+        self, name: Optional[str] = None, *, workload_pool_name: str | None = None
     ) -> volcenginesdkid.CreateWorkloadIdentityResponse:
         """Create a new workload identity.
 
         Args:
             name: Optional name for the workload identity. If not provided,
                   a random name will be generated.
+            workload_pool_name: Optional workload pool containing the identity.
 
         Returns:
             Dictionary containing the created workload identity information.
@@ -488,7 +522,9 @@ class IdentityClient:
             name = f"workload-{uuid.uuid4().hex[:8]}"
 
         return self._api_client.create_workload_identity(
-            volcenginesdkid.CreateWorkloadIdentityRequest(name=name),
+            volcenginesdkid.CreateWorkloadIdentityRequest(
+                name=name, workload_pool_name=workload_pool_name
+            ),
         )
 
     @refresh_credentials
@@ -950,6 +986,71 @@ class IdentityClient:
         return response.uid, response.client_secret
 
     @refresh_credentials
+    def list_identity_providers(self, user_pool_uid: str) -> list[dict[str, Any]]:
+        """List normalized identity-provider metadata for one user pool."""
+        from typing import cast
+
+        from volcenginesdkid import (
+            ListIdentityProvidersRequest,
+            ListIdentityProvidersResponse,
+        )
+
+        providers: list[dict[str, Any]] = []
+        page_number = 1
+        while True:
+            response = cast(
+                ListIdentityProvidersResponse,
+                self._api_client.list_identity_providers(
+                    ListIdentityProvidersRequest(
+                        user_pool_uid=user_pool_uid,
+                        page_number=page_number,
+                        page_size=100,
+                    )
+                ),
+            )
+            page = response.data or []
+            for item in page:
+                providers.append(
+                    {
+                        "uid": str(item.uid or ""),
+                        "connection_type": str(item.connection_type or ""),
+                        "enabled": bool(item.enabled),
+                    }
+                )
+            if not page or len(providers) >= int(response.total_count or 0):
+                return providers
+            page_number += 1
+
+    @refresh_credentials
+    def get_user_pool_resource_names(
+        self,
+        user_pool_uid: str,
+        client_uid: str,
+    ) -> tuple[str, str]:
+        """Resolve the names that mpa-agent expects from configured UIDs."""
+        from volcenginesdkid import (
+            GetUserPoolClientRequest,
+            GetUserPoolClientResponse,
+            GetUserPoolRequest,
+            GetUserPoolResponse,
+        )
+
+        pool: GetUserPoolResponse = self._api_client.get_user_pool(
+            GetUserPoolRequest(user_pool_uid=user_pool_uid)
+        )
+        client: GetUserPoolClientResponse = self._api_client.get_user_pool_client(
+            GetUserPoolClientRequest(
+                user_pool_uid=user_pool_uid,
+                client_uid=client_uid,
+            )
+        )
+        pool_name = str(pool.name or "").strip()
+        client_name = str(client.name or "").strip()
+        if not pool_name or not client_name:
+            raise ValueError("UserPool or client name is unavailable")
+        return pool_name, client_name
+
+    @refresh_credentials
     def register_callback_for_user_pool_client(
         self,
         user_pool_uid: str,
@@ -974,14 +1075,12 @@ class IdentityClient:
             request
         )
 
-        allowed_callback_urls = response.allowed_callback_urls
-        if not allowed_callback_urls:
-            allowed_callback_urls = []
-        allowed_callback_urls.append(callback_url)
-        allowed_web_origins = response.allowed_web_origins
-        if not allowed_web_origins:
-            allowed_web_origins = []
-        allowed_web_origins.append(web_origin)
+        allowed_callback_urls = list(response.allowed_callback_urls or [])
+        if callback_url not in allowed_callback_urls:
+            allowed_callback_urls.append(callback_url)
+        allowed_web_origins = list(response.allowed_web_origins or [])
+        if web_origin not in allowed_web_origins:
+            allowed_web_origins.append(web_origin)
 
         request2 = UpdateUserPoolClientRequest(
             user_pool_uid=user_pool_uid,

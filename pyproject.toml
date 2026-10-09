@@ -53,7 +53,7 @@ dependencies = [
     "pillow>=10.0.0", # Encode rendered PDF pages as PNG
     "qrcode>=8,<9", # Render Feishu app-registration links for Studio setup
     "vikingdb-python-sdk>=0.1.32", # For Viking DB
-    "agentkit-sdk-python>=0.8.0",
+    "agentkit-sdk-python>=0.8.5",
     "websockets>=15,<16", # Stream temporary AgentKit Sandbox conversations
     "openviking-sdk>=0.1.9",
     "python-frontmatter==1.1.0",

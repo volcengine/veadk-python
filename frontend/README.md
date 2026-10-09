@@ -5,12 +5,38 @@ server that `veadk frontend` launches — no separate backend.
 
 ## Release notifications
 
+The MPA creation wizard supports clicking step headings and returning to earlier
+settings after restoring a submitted draft. Submitted settings remain read-only;
+retry retains the original identity. Any submitted draft offers New Agent to
+open a fresh, editable request. It replaces the browser recovery draft without
+cancelling the old task; active-task admission limits still apply on submission.
+
+恢复已提交草稿时配置保持只读，重试沿用原身份。“新建另一个智能体”会生成新请求，
+开放编辑并替换浏览器恢复草稿，不取消旧任务；提交仍受服务端活动任务限制。
+
 The release workflow sends one Feishu card after both cloud providers finish
 publishing. A separate VeFaaS Webhook discovers the app bot’s group memberships
 and persists delivery results to avoid duplicate notifications on retries.
 See [deployment and operation](service/studio_release_notifier/README.md).
 
 ## Features
+
+Runtime connections discovered as `a2a-default` keep the A2A session protocol,
+including when the agent is categorized as MPA. Session creation, history and
+chat use the same bridge and do not query native MPA execution configuration.
+Native MPA apps continue to use their Profile and session APIs; authentication
+errors never cause an automatic protocol switch.
+
+For MPA agents connected through A2A, Studio uses the sandbox's completed answer
+once and omits only exact complete outer-model answer copies for the same task.
+Distinct supplementary text, reasoning, and partial output remain available. Sandbox tool activity
+and token usage remain available. This normalization runs in the Studio backend;
+restart the local Studio process after updating it. Ordinary ADK chat is unaffected.
+
+MPA A2A transcripts also reconcile repeated consolidated outer reasoning
+snapshots. Empty-response notices are evaluated across the whole user request,
+so an intermediate reasoning fragment does not report an empty reply when tools
+or an answer follow. General agents retain their existing per-turn behavior.
 
 - **Ark API Keys**: Each page load reads the current API Key list directly from
   the cloud provider. Enabled, disabled, all-permission and custom-permission
@@ -26,7 +52,6 @@ See [deployment and operation](service/studio_release_notifier/README.md).
   Overlapping identical requests share one in-flight cloud query, including
   failures; later API Key list reads still fetch the latest cloud data.
   This behavior applies to both Volcengine and BytePlus
-
 - **Agent publication review**: Developers deploy privately and apply from an
   Agent card. The review center's Agent tab lets administrators inspect the
   submitted Runtime metadata, approve with an optional comment, or return with
@@ -1093,6 +1118,25 @@ When `--user-pool-id` and `--allowed-client-id` are omitted, deployment creates
 or reuses them in the selected `--region` and prints the resolved IDs. Pass both
 options to keep using existing Identity resources.
 
+The cloud deploy and update commands register both `/oauth2/callback` for Studio
+SSO and `/oauth/callback` for MPA user authorization on that same client. An MPA
+Runtime can therefore reuse the deployed Studio user pool and client and set its
+identity callback URL to `https://<studio-domain>/oauth/callback`. The callback
+validates the MPA relay state without requiring a Studio browser session,
+redirects the browser through the configured UserPool, then locates exactly one
+key-auth Runtime by `MPA_AGENT_ID` and calls its `/identity/oauth/callback`
+endpoint from the server. The browser never receives the Runtime endpoint or
+API key.
+
+For Studio web chat with an MPA Runtime, the Studio server refreshes the signed-in
+user's UserPool session before each run and prewarms the Runtime's
+`/identity/sessions/put` using the server-held Runtime key. The ID token stays
+server-side and out of the browser session cookie. This requires Studio and MPA
+to use the same UserPool client, a refresh-backed Studio login, and an MPA
+Runtime that recognizes Studio's `x-user-id` as the user identity. If the
+handoff fails, chat continues and MPA can ask the user to log in normally.
+Feishu chat keeps its separate manual login flow.
+
 After automatic provisioning, the success summary lists every Sandbox type and
 Tool ID, the private Studio TOS address, and the resolved Identity user pool and
 client IDs. It also links to the matching Volcengine or BytePlus Identity
@@ -1537,6 +1581,92 @@ DatePicker 在基础组件中展示日期与日期时间选择；IndexLayout 在
 `npm run dev:components` 启动独立组件库，在布局分组打开 App layout 可查看完整侧栏
 支持 240px / 56px 展开折叠、会话菜单、账号区域与默认深色的主题切换
 全屏入口为 `/components-preview/?fullscreen=app-layout#app-layout`，详见 [组件预览说明](src/components-preview/README.md)
+### MPA 消息渠道
+
+在“自动化 → 消息渠道”打开“MPA智能体消息渠道”，与飞书机器人创建、网站集成并列。选择已有 MPA 智能体后配置飞书、企业微信、钉钉；原智能体详情不再显示消息渠道栏目。列表按当前账号授权范围加载，选项展示名称、描述、“创建者 | 相对创建时间”，以及地域和 Runtime ID，支持按名称、Runtime ID、地域搜索已加载结果，并可加载更多；切换智能体会清理临时二维码和凭据，已有绑定继续保留。三个渠道均提供“极速配置”和“手动配置”，默认极速配置，切换方式后仅显示对应内容。极速配置沿用飞书、钉钉扫码绑定和企业微信官方 SDK 弹窗授权；手动配置分别填写飞书 App ID / App Secret、钉钉 Client ID / Client Secret、企业微信 Bot ID / Secret；仅飞书提供允许群列表，并独立展示消息网关、入站路由和回复投递状态。钉钉与企业微信无需配置本地群白名单。所有渠道均可解绑，旧 Runtime 必须升级后才能使用新增绑定接口。需要 Studio 管理员身份、Runtime 的 `CHANNEL_ADMIN_AUTH_MODE=runtime_key`，以及通过部署配置注入并在更新时保留的 `CHANNEL_STATE_ENCRYPTION_KEY`（Fernet key）。渠道数据库必须独立于其他 MPA 实例。飞书和钉钉的扫码凭据由服务端获取；企微 SDK 授权结果仅在浏览器内存中短暂存在，立即提交 Runtime 保存并完成注册，取消、切页和五分钟超时会清理弹窗。配置完成不等于收发验证通过；部署后请单独验收私聊和授权群 @ 对话。详见 [接口契约](../specs/mpa-channels/README.zh.md)。
+
+已绑定飞书、钉钉或企业微信时，可点击“重新生成二维码”展开“消息渠道扫码配对”。生成二维码不会先解绑当前机器人；飞书扫码并绑定成功后替换原机器人，可在授权流程选择绑定存量机器人或新建机器人。
+
+企业微信的“重新生成二维码”会重新打开企微扫码授权窗口，成功绑定后更新连接，取消授权或失败保留原机器人。
+
+配对二维码仅在当前渠道面板临时展示，不显示“等待扫码”或“打开授权页面”。切换渠道、离开页面、浏览器刷新或面板刷新后不恢复旧二维码，需要重新点击生成；已绑定机器人配置保留。
+
+三个渠道的解除连接操作统一为“解除绑定”；已绑定企业微信的“重新生成二维码”与“解除绑定”横向排列，与飞书和钉钉一致。
+
+飞书群聊权限列表不再提供“编辑”；每行右侧的 × 按钮用于移除该群权限。
+
+配置方式不跨页面或 Runtime 保存。切换方式会清空未提交凭据、隐藏二维码并停止前端轮询或企微授权等待；注册提交进行中禁止切换。已绑定机器人也可以通过手动配置替换，失败保留现有绑定。飞书与钉钉手动配置须由 Runtime 的 `credentialBindingChannels` 声明支持；旧镜像显示升级提示。
+
+### MPA Runtime scheduled tasks
+
+Select a connected cloud Runtime and open the Runtime scheduled tasks tab. The list/calendar supports search, status filtering, pagination, creation, editing, copying, deletion, enable/disable, manual execution, and execution history. Studio retains gateway authentication and Runtime authorization, forwards the authenticated Studio user as `x-user-id`, and does not require JWT input or TOP credential exchange. With MPA JWT disabled, task ownership remains scoped to that user. The Runtime resolves the default executing Agent; no Agent ID input is required. Errors are not rendered as empty results. Complex Cron expressions show the server's next execution in the calendar.
+
+Run `npm run test:mpa-cron-coverage` and `python -m pytest tests/frontend/server/test_mpa_cron.py` for focused regression checks.
+
+### A2A 长耗时请求
+
+连接 A2A Runtime 后，对话会显示等待响应、排队或执行中的状态。收到有效状态后会继续等待最终回复，不因任务耗时超过 30 秒而自动中断。等待响应不代表 Runtime 已接受任务；错误或连接中断也不代表后台任务已取消，请先确认任务状态再重试创建等操作。
+
+### Sandbox file downloads
+
+Assistant Markdown links under `/data/output/` or `/data/workspace/` appear as download buttons in conversation history and streaming messages. Studio uses the current Runtime and session through its authenticated proxy; files remain available only while that Sandbox and file exist. Legacy `<file-card>` and `<personal-drive-enable-card>` payloads are hidden in conversation rendering. A failed download can be retried by clicking the button again. Run `npm run test:sandbox-download-coverage` for the focused regression suite.
+
+
+### MPA conversation information rail / MPA 会话信息侧栏
+
+Only MPA Runtimes show the right conversation rail. AGENTS.md displays the actual Runtime document through the authenticated Studio metadata endpoint. Upgrade the MPA Runtime image to expose `/api/v1/studio/agent-info`; Studio alone cannot add the endpoint to deployed agents. Runtime credentials stay server-side.
+
+Skills show only the bound Skill Spaces, with pagination. Temporary mounting has been removed, and old temporary selections are excluded from MPA messages. Click a skill name to view its latest SKILL.md. Authorized owners/admins can save a new version to that space; shared/review spaces remain read-only. Saving preserves other files, rejects stale versions and changes to the frontmatter name, and can affect other agents bound to the same space. Running sessions may need a cache refresh or a new session. Use **Refresh information** to reload the rail; environment controls remain available.
+
+右侧会话信息栏仅对 MPA Runtime 展示。AGENTS.md 通过受认证的 Studio 元信息接口显示真实正文。需要更新 MPA Runtime 镜像以提供 `/api/v1/studio/agent-info`；单独更新 Studio 无法给已部署智能体增加此接口。Runtime 凭据仅保留在服务端。
+
+技能仅展示绑定空间的内容并支持分页。已取消临时挂载，旧的临时技能选择不会再发送给 MPA。点击技能名称查看最新 SKILL.md；有权限的所有者/管理员可保存新版本到该空间，共享/审核空间保持只读。保存保留其他文件，拒绝过期版本及 frontmatter 名称变化，可能影响绑定同一空间的其他智能体。运行中的会话可能需要等待缓存刷新或新建会话后生效。点击“刷新信息”重新加载侧栏；环境操作保持可用。
+
+### Production component themes
+
+The production entry loads both component token stylesheets before rendering. When the host does not set `data-theme` on `<html>`, Studio uses `light` to match its existing page; an explicit `light` or `dark` value is preserved. This keeps portalled dialogs, their text, inputs and buttons on the same palette. Component-preview defaults are unchanged.
+
+生产入口在渲染前加载两份组件主题样式。宿主未在 `<html>` 上设置 `data-theme` 时沿用浅色页面；显式浅色或深色设置保持不变，确保弹窗、文字、输入框和按钮配色一致。组件预览的默认主题不变。
+
+### Named MPA creation / MPA 名称创建
+
+Studio resolves shared VPC/subnet and APIG/IM Gateway from the account/region
+records in `mpa_admin_workspace/mpa_admin_db`. It creates and persists missing
+resources, then reuses them for later agents. The built-in profile does not pin
+existing resource IDs. Existing records are preserved; this does not migrate
+agents or bypass resource quotas.
+
+Studio 从 `mpa_admin_workspace/mpa_admin_db` 的账号/地域记录解析共享 VPC/子网及
+APIG/IM Gateway；缺失时创建并保存，后续智能体复用。内置配置不固定已有资源 ID。
+已有记录保持不变；本次不迁移智能体或绕过资源配额。
+
+With `managed.postgres` configured, the PG step uses a shared business Workspace with a separate database per MPA. Shared account/region resource records live in `mpa_admin_workspace/mpa_admin_db`. With `managed.postgres.mode: auto`, deployment STS creates/reuses both Workspaces and the PG step needs no connection input. Manual profiles remain supported. See the [setup and registry migration instructions](../veadk/integrations/mpa/managed/README.md).
+
+配置 `managed.postgres` 后，PG 步骤使用共享业务 Workspace，每个 MPA 保留独立业务库。账号/地域共享资源记录存入 `mpa_admin_workspace/mpa_admin_db`。设置 `managed.postgres.mode: auto` 后，由部署 STS 创建/复用两个 Workspace，PG 步骤无需填写连接信息；仍兼容手动配置。参见[配置和注册库迁移说明](../veadk/integrations/mpa/managed/README.zh.md)。
+
+The MPA creation dialog asks for a Runtime name (4–64 ASCII letters, digits, underscores or hyphens) and description. The server generates the stable Agent ID; neither ID nor image inputs are shown. Fresh requests use the built-in `mpa/mpa_agent:latest` and `mpa/mpa_codex_worker:latest` images. Submitted legacy drafts retain their original request and images for retry. Existing Runtimes are unchanged. See [managed creation](../veadk/integrations/mpa/managed/README.md).
+
+The dialog now uses three steps: basics (required Runtime name and description), automatic PostgreSQL preparation, and optional OpenViking HTTPS URL/resource ID/API Key. It links to the relevant Volcengine console pages. The server obtains PostgreSQL Workspace connections through deployment credentials. OpenViking is enabled only when the HTTPS URL, resource ID and masked API Key are all entered; leaving all three blank omits its four Runtime variables, including any values inherited from a template or reference Runtime. The key is never saved in browser drafts or task SQLite. Only the final step submits; nonsecret draft choices and request identity survive reopening in the same browser session. See the [creation contract](../specs/studio-mpa-creation/README.md).
+
+创建弹窗现分为基础信息（必填 Runtime 名称和描述）、PostgreSQL 自动准备、可选 OpenViking HTTPS 地址/资源 ID/API Key 三步，并提供对应的火山引擎控制台入口。服务端通过部署凭据获取 PostgreSQL Workspace 连接。仅在 HTTPS 地址、资源 ID 和遮罩的 API Key 三项均填写时启用 OpenViking；三项全空时，新 Runtime 不注入其四个变量，也不继承模板或参考 Runtime 中的旧值。密钥不保存到浏览器草稿或任务 SQLite。仅最后一步提交，非密钥草稿与请求身份在同一浏览器会话中可恢复。参见[创建契约](../specs/studio-mpa-creation/README.zh.md)。
+
+After a confirmed failure or cancellation, the dialog retains the old task for same-ID retry. “Create another agent” generates a new request UUID and blank name; the server derives the new agent ID on submission and returns to the first step. It replaces only the browser draft, not any cloud resources from the previous attempt. Running or uncertain submissions cannot switch identities.
+
+失败或取消后，创建弹窗保留原任务供同 ID 重试；点击“新建另一个智能体”会生成新的请求 UUID 和空白名称并返回第一步，服务端在提交时派生新智能体 ID。该操作只替换浏览器草稿，不会删除上次创建的云资源。运行中或提交结果不明时不能切换到新身份。
+
+MPA 创建弹窗填写 Runtime 名称（4–64 个 ASCII 字母、数字、下划线或连字符）和描述。服务端生成稳定的智能体 ID，不再显示 ID 和镜像输入框。新请求使用内置 `mpa/mpa_agent:latest` 和 `mpa/mpa_codex_worker:latest` 镜像。已提交旧草稿保留原请求和镜像用于重试。现有 Runtime 不变。参见[托管创建说明](../veadk/integrations/mpa/managed/README.zh.md)。
+
+MPA A2A responses now group adjacent assistant fragments into one reply with a single action row. Copy/share include the grouped response; feedback remains attached to the final answer event, and the trace entry retains the session timeline through the latest fragment. Reported request tokens are deduplicated by usage source/event, including trailing usage updates. General-agent rendering is unchanged.
+
+MPA grouped replies hide exact answer mirrors only in their derived view: an extended fragment reappears intact, including its original prefix. General Codex tool activity preserves commentary and subsequent model text under its original behavior.
+
+### MPA A2A shared gateway compatibility
+
+MPA conversations (native or A2A) hide the separate “会话产物” entry because it does not read the Worker `/data/output` mount. General Runtime sessions retain the entry. Existing MPA Markdown file-download links are unchanged.
+
+Fresh flat MPA creation defaults to `ENABLE_A2A=true` and `DISABLE_JWT_AUTH=true`; explicit `false` overrides and referenced Runtime/template environments are preserved. The inner legacy REST JWT gate is bypassed, including its admin checks and header-based identity paths; trusted callers must control identity headers. Outer gateway key-auth is unchanged. Studio now prefers a valid Agent Card for tagged MPA Runtimes, selecting `a2a-default` even when the Runtime also advertises ADK. General Runtimes and MPA without a usable card keep existing discovery behavior. This avoids native Profile/session preflight on the A2A path; it does not enable `MPA_AGENTKIT_MODE`, change independent management-endpoint authentication or migrate old sessions. If a tagged MPA Runtime's agent card omits the shared gateway `/runtime/<ID>` prefix from its same-origin `/a2a/jsonrpc` URL, the Studio backend still restores the prefix from the control-plane endpoint for chat and history requests. General-agent URLs are unchanged. Existing Runtimes need an explicit configuration release for environment changes; reconnect to refresh discovery. Restart Studio after this backend update; no frontend rebuild is required.
+
+新建 MPA 沙箱模板按智能体 ID 命名，并将 `-` 替换为 `_`（例如 `mi-example` → `mi_example`）；已有模板保持原绑定，未完成的旧创建任务继续按原名称重试。
 
 ### 智能构建首页与任务找回
 
@@ -1618,3 +1748,79 @@ it. Deleting a default set stops feedback writes to that set and prevents backgr
 List filtering and counts currently scan only the selected Runtime's objects,
 with bounded parallel reads. This is intended for the initial dataset sizes;
 large collections will need a separate rebuildable query index.
+### MPA 消息渠道
+
+在“自动化 → 消息渠道”打开“MPA智能体消息渠道”，与飞书机器人创建、网站集成并列。选择已有 MPA 智能体后配置飞书、企业微信、钉钉；原智能体详情不再显示消息渠道栏目。列表按当前账号授权范围加载，选项展示名称、描述、“创建者 | 相对创建时间”，以及地域和 Runtime ID，支持按名称、Runtime ID、地域搜索已加载结果，并可加载更多；切换智能体会清理临时二维码和凭据，已有绑定继续保留。三个渠道均提供“极速配置”和“手动配置”，默认极速配置，切换方式后仅显示对应内容。极速配置沿用飞书、钉钉扫码绑定和企业微信官方 SDK 弹窗授权；手动配置分别填写飞书 App ID / App Secret、钉钉 Client ID / Client Secret、企业微信 Bot ID / Secret；仅飞书提供允许群列表，并独立展示消息网关、入站路由和回复投递状态。钉钉与企业微信无需配置本地群白名单。所有渠道均可解绑，旧 Runtime 必须升级后才能使用新增绑定接口。需要 Studio 管理员身份、Runtime 的 `CHANNEL_ADMIN_AUTH_MODE=runtime_key`，以及通过部署配置注入并在更新时保留的 `CHANNEL_STATE_ENCRYPTION_KEY`（Fernet key）。渠道数据库必须独立于其他 MPA 实例。飞书和钉钉的扫码凭据由服务端获取；企微 SDK 授权结果仅在浏览器内存中短暂存在，立即提交 Runtime 保存并完成注册，取消、切页和五分钟超时会清理弹窗。配置完成不等于收发验证通过；部署后请单独验收私聊和授权群 @ 对话。详见 [接口契约](../specs/mpa-channels/README.zh.md)。
+
+已绑定飞书、钉钉或企业微信时，可点击“重新生成二维码”展开“消息渠道扫码配对”。生成二维码不会先解绑当前机器人；飞书扫码并绑定成功后替换原机器人，可在授权流程选择绑定存量机器人或新建机器人。
+
+企业微信的“重新生成二维码”会重新打开企微扫码授权窗口，成功绑定后更新连接，取消授权或失败保留原机器人。
+
+配对二维码仅在当前渠道面板临时展示，不显示“等待扫码”或“打开授权页面”。切换渠道、离开页面、浏览器刷新或面板刷新后不恢复旧二维码，需要重新点击生成；已绑定机器人配置保留。
+
+三个渠道的解除连接操作统一为“解除绑定”；已绑定企业微信的“重新生成二维码”与“解除绑定”横向排列，与飞书和钉钉一致。
+
+飞书群聊权限列表不再提供“编辑”；每行右侧的 × 按钮用于移除该群权限。
+
+配置方式不跨页面或 Runtime 保存。切换方式会清空未提交凭据、隐藏二维码并停止前端轮询或企微授权等待；注册提交进行中禁止切换。已绑定机器人也可以通过手动配置替换，失败保留现有绑定。飞书与钉钉手动配置须由 Runtime 的 `credentialBindingChannels` 声明支持；旧镜像显示升级提示。
+
+### MPA Runtime scheduled tasks
+
+Select a connected cloud Runtime and open the Runtime scheduled tasks tab. The list/calendar supports search, status filtering, pagination, creation, editing, copying, deletion, enable/disable, manual execution, and execution history. Studio retains gateway authentication and Runtime authorization, forwards the authenticated Studio user as `x-user-id`, and does not require JWT input or TOP credential exchange. With MPA JWT disabled, task ownership remains scoped to that user. The Runtime resolves the default executing Agent; no Agent ID input is required. Errors are not rendered as empty results. Complex Cron expressions show the server's next execution in the calendar.
+
+Run `npm run test:mpa-cron-coverage` and `python -m pytest tests/frontend/server/test_mpa_cron.py` for focused regression checks.
+
+### A2A 长耗时请求
+
+连接 A2A Runtime 后，对话会显示等待响应、排队或执行中的状态。收到有效状态后会继续等待最终回复，不因任务耗时超过 30 秒而自动中断。等待响应不代表 Runtime 已接受任务；错误或连接中断也不代表后台任务已取消，请先确认任务状态再重试创建等操作。
+
+### Sandbox file downloads
+
+Assistant Markdown links under `/data/output/` or `/data/workspace/` appear as download buttons in conversation history and streaming messages. Studio uses the current Runtime and session through its authenticated proxy; files remain available only while that Sandbox and file exist. Legacy `<file-card>` and `<personal-drive-enable-card>` payloads are hidden in conversation rendering. A failed download can be retried by clicking the button again. Run `npm run test:sandbox-download-coverage` for the focused regression suite.
+
+
+### MPA conversation information rail / MPA 会话信息侧栏
+
+Only MPA Runtimes show the right conversation rail. AGENTS.md displays the actual Runtime document through the authenticated Studio metadata endpoint. Upgrade the MPA Runtime image to expose `/api/v1/studio/agent-info`; Studio alone cannot add the endpoint to deployed agents. Runtime credentials stay server-side.
+
+Skills show only the bound Skill Spaces, with pagination. Temporary mounting has been removed, and old temporary selections are excluded from MPA messages. Click a skill name to view its latest SKILL.md. Authorized owners/admins can save a new version to that space; shared/review spaces remain read-only. Saving preserves other files, rejects stale versions and changes to the frontmatter name, and can affect other agents bound to the same space. Running sessions may need a cache refresh or a new session. Use **Refresh information** to reload the rail; environment controls remain available.
+
+右侧会话信息栏仅对 MPA Runtime 展示。AGENTS.md 通过受认证的 Studio 元信息接口显示真实正文。需要更新 MPA Runtime 镜像以提供 `/api/v1/studio/agent-info`；单独更新 Studio 无法给已部署智能体增加此接口。Runtime 凭据仅保留在服务端。
+
+技能仅展示绑定空间的内容并支持分页。已取消临时挂载，旧的临时技能选择不会再发送给 MPA。点击技能名称查看最新 SKILL.md；有权限的所有者/管理员可保存新版本到该空间，共享/审核空间保持只读。保存保留其他文件，拒绝过期版本及 frontmatter 名称变化，可能影响绑定同一空间的其他智能体。运行中的会话可能需要等待缓存刷新或新建会话后生效。点击“刷新信息”重新加载侧栏；环境操作保持可用。
+
+### Production component themes
+
+The production entry loads both component token stylesheets before rendering. When the host does not set `data-theme` on `<html>`, Studio uses `light` to match its existing page; an explicit `light` or `dark` value is preserved. This keeps portalled dialogs, their text, inputs and buttons on the same palette. Component-preview defaults are unchanged.
+
+生产入口在渲染前加载两份组件主题样式。宿主未在 `<html>` 上设置 `data-theme` 时沿用浅色页面；显式浅色或深色设置保持不变，确保弹窗、文字、输入框和按钮配色一致。组件预览的默认主题不变。
+
+### Named MPA creation / MPA 名称创建
+
+With `managed.postgres` configured, the PG step uses a shared business Workspace with a separate database per MPA. Shared account/region resource records live in `mpa_admin_workspace/mpa_admin_db`. With `managed.postgres.mode: auto`, deployment STS creates/reuses both Workspaces and the PG step needs no connection input. Manual profiles remain supported. See the [setup and registry migration instructions](../veadk/integrations/mpa/managed/README.md).
+
+配置 `managed.postgres` 后，PG 步骤使用共享业务 Workspace，每个 MPA 保留独立业务库。账号/地域共享资源记录存入 `mpa_admin_workspace/mpa_admin_db`。设置 `managed.postgres.mode: auto` 后，由部署 STS 创建/复用两个 Workspace，PG 步骤无需填写连接信息；仍兼容手动配置。参见[配置和注册库迁移说明](../veadk/integrations/mpa/managed/README.zh.md)。
+
+The MPA creation dialog asks for a Runtime name (4–64 ASCII letters, digits, underscores or hyphens) and description. The server generates the stable Agent ID; neither ID nor image inputs are shown. Fresh requests use the built-in `mpa/mpa_agent:latest` and `mpa/mpa_codex_worker:latest` images. Submitted legacy drafts retain their original request and images for retry. Existing Runtimes are unchanged. See [managed creation](../veadk/integrations/mpa/managed/README.md).
+
+The dialog now uses three steps: basics (required Runtime name and description), automatic PostgreSQL preparation, and optional OpenViking HTTPS URL/resource ID/API Key. It links to the relevant Volcengine console pages. The server obtains PostgreSQL Workspace connections through deployment credentials. OpenViking is enabled only when the HTTPS URL, resource ID and masked API Key are all entered; leaving all three blank omits its four Runtime variables, including any values inherited from a template or reference Runtime. The key is never saved in browser drafts or task SQLite. Only the final step submits; nonsecret draft choices and request identity survive reopening in the same browser session. See the [creation contract](../specs/studio-mpa-creation/README.md).
+
+创建弹窗现分为基础信息（必填 Runtime 名称和描述）、PostgreSQL 自动准备、可选 OpenViking HTTPS 地址/资源 ID/API Key 三步，并提供对应的火山引擎控制台入口。服务端通过部署凭据获取 PostgreSQL Workspace 连接。仅在 HTTPS 地址、资源 ID 和遮罩的 API Key 三项均填写时启用 OpenViking；三项全空时，新 Runtime 不注入其四个变量，也不继承模板或参考 Runtime 中的旧值。密钥不保存到浏览器草稿或任务 SQLite。仅最后一步提交，非密钥草稿与请求身份在同一浏览器会话中可恢复。参见[创建契约](../specs/studio-mpa-creation/README.zh.md)。
+
+After a confirmed failure or cancellation, the dialog retains the old task for same-ID retry. “Create another agent” generates a new request UUID and blank name; the server derives the new agent ID on submission and returns to the first step. It replaces only the browser draft, not any cloud resources from the previous attempt. Running or uncertain submissions cannot switch identities.
+
+失败或取消后，创建弹窗保留原任务供同 ID 重试；点击“新建另一个智能体”会生成新的请求 UUID 和空白名称并返回第一步，服务端在提交时派生新智能体 ID。该操作只替换浏览器草稿，不会删除上次创建的云资源。运行中或提交结果不明时不能切换到新身份。
+
+MPA 创建弹窗填写 Runtime 名称（4–64 个 ASCII 字母、数字、下划线或连字符）和描述。服务端生成稳定的智能体 ID，不再显示 ID 和镜像输入框。新请求使用内置 `mpa/mpa_agent:latest` 和 `mpa/mpa_codex_worker:latest` 镜像。已提交旧草稿保留原请求和镜像用于重试。现有 Runtime 不变。参见[托管创建说明](../veadk/integrations/mpa/managed/README.zh.md)。
+
+MPA A2A responses now group adjacent assistant fragments into one reply with a single action row. Copy/share include the grouped response; feedback remains attached to the final answer event, and the trace entry retains the session timeline through the latest fragment. Reported request tokens are deduplicated by usage source/event, including trailing usage updates. General-agent rendering is unchanged.
+
+MPA grouped replies hide exact answer mirrors only in their derived view: an extended fragment reappears intact, including its original prefix. General Codex tool activity preserves commentary and subsequent model text under its original behavior.
+
+### MPA A2A shared gateway compatibility
+
+MPA creation defaults to A2A discovery (`ENABLE_A2A=true`, `DISABLE_JWT_AUTH=false`). When a tagged MPA Runtime's agent card omits the shared gateway `/runtime/<ID>` prefix from its same-origin `/a2a/jsonrpc` URL, the Studio backend restores the prefix from the control-plane endpoint for chat and history requests. General-agent URLs are unchanged. Existing Runtimes need an explicit configuration release; reconnect to refresh discovery. Restart Studio after this backend update; no frontend rebuild is required.
+
+MPA name validation highlights invalid input and its message in the theme danger color, offers a valid-name placeholder, and visibly disables Next until corrected. Shared Button disabled states are dimmed consistently; loading retains its own appearance.
+
+MPA 名称校验使用主题错误色显示非法输入及错误提示，并提供合法名称示例；名称修正前“下一步”明显置灰。共享 Button 的禁用态统一降低透明度，加载态保留原有外观。

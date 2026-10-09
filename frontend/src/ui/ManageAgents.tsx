@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import {
   deleteRuntime,
+  copyRuntimeEnvironmentSecret,
   getMyRuntimes,
   getRuntimeDetail,
   type AgentNode,
@@ -337,10 +338,12 @@ export function ManageAgentsView({
 /** Env keys whose values are commonly credentials. */
 const SENSITIVE_ENV_RE = /KEY|SECRET|TOKEN|PASSWORD|CREDENTIAL/i;
 
-function EnvValue({ envKey, value }: { envKey: string; value: string }) {
+function EnvValue({ runtimeId, region, envKey, value, sensitive, configured }: { runtimeId: string; region: string; envKey: string; value: string; sensitive?: boolean; configured?: boolean }) {
   const { t } = useTranslation("workspaceTools");
-  const [revealed, setRevealed] = useState(false);
-  if (!SENSITIVE_ENV_RE.test(envKey) || revealed) {
+  const [copied, setCopied] = useState(false);
+  const [copyFailed, setCopyFailed] = useState(false);
+  const isSensitive = sensitive ?? SENSITIVE_ENV_RE.test(envKey);
+  if (!isSensitive) {
     return <code className="manage-env-v">{value}</code>;
   }
   return (
@@ -348,10 +351,11 @@ function EnvValue({ envKey, value }: { envKey: string; value: string }) {
       type="button"
       className="manage-env-v manage-env-masked"
       title={t("manageAgents.secretHidden")}
-      aria-label={t("manageAgents.revealSecret", { key: envKey })}
-      onClick={() => setRevealed(true)}
+      aria-label={t("manageAgents.copySecret", { key: envKey })}
+      disabled={!configured}
+      onClick={() => void copyRuntimeEnvironmentSecret(runtimeId, region, envKey).then(() => { setCopyFailed(false); setCopied(true); window.setTimeout(() => setCopied(false), 1500); }).catch(() => setCopyFailed(true))}
     >
-      ••••••••
+      {copyFailed ? t("manageAgents.copyFailed") : copied ? t("manageAgents.copied") : configured ? t("manageAgents.copy") : t("manageAgents.notConfigured")}
     </button>
   );
 }
@@ -411,7 +415,7 @@ function RuntimeDetailCard({ detail }: { detail: RuntimeDetail }) {
           {detail.envs.map((e) => (
             <div key={e.key} className="manage-env">
               <code className="manage-env-k">{e.key}</code>
-              <EnvValue envKey={e.key} value={e.value} />
+              <EnvValue runtimeId={detail.runtimeId} region={detail.region} envKey={e.key} value={e.value} sensitive={e.sensitive} configured={e.configured} />
             </div>
           ))}
         </div>

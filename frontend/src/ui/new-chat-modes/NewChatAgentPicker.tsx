@@ -21,6 +21,7 @@ import "./new-chat-agent-picker.css";
 
 type AgentType =
   | "general"
+  | "mpa"
   | "codex"
   | "deepseek-harness"
   | "openclaw"
@@ -33,6 +34,7 @@ interface AgentTypeOption {
 
 const AGENT_TYPES: AgentTypeOption[] = [
   { id: "general", labelKey: "agentPicker.types.general" },
+  { id: "mpa", labelKey: "agentPicker.types.mpa" },
   { id: "codex", labelKey: "agentPicker.types.codex" },
   { id: "deepseek-harness", labelKey: "agentPicker.types.deepseekHarness" },
   { id: "openclaw", labelKey: "agentPicker.types.openclaw" },
@@ -91,7 +93,7 @@ function AgentTypeIcon({
   type: AgentType;
   className?: string;
 }) {
-  if (type === "general") {
+  if (type === "general" || type === "mpa") {
     return <AgentFaceIcon className={className} />;
   }
   return <SandboxAgentIcon kind={type} className={className} />;
@@ -116,8 +118,9 @@ export function NewChatAgentPicker({
   const [keyboardPanel, setKeyboardPanel] = useState<"types" | "runtimes">("types");
   const [keyboardNavigating, setKeyboardNavigating] = useState(false);
   const [runtimes, setRuntimes] = useState<CloudRuntime[]>([]);
+  const [loadedRuntimeType, setLoadedRuntimeType] = useState<"general" | "mpa" | null>(null);
   const [sandboxSessions, setSandboxSessions] = useState<SandboxAgentResource[]>([]);
-  const [loadedSandboxType, setLoadedSandboxType] = useState<Exclude<AgentType, "general"> | null>(null);
+  const [loadedSandboxType, setLoadedSandboxType] = useState<Exclude<AgentType, "general" | "mpa"> | null>(null);
   const [nextToken, setNextToken] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -133,6 +136,7 @@ export function NewChatAgentPicker({
   const activeTypeLabel = activeTypeKey
     ? t(activeTypeKey)
     : t("agentPicker.types.agent");
+  const visibleRuntimes = runtimes;
 
   const close = useCallback((returnFocus = false) => {
     if (hoverOpenTimerRef.current !== null) {
@@ -158,6 +162,7 @@ export function NewChatAgentPicker({
     try {
       const page = await Promise.race([
         getRuntimes({
+          agentCategory: activeType === "mpa" ? "mpa" : "general",
           scope: runtimeScope,
           region: "all",
           pageSize: PAGE_SIZE,
@@ -177,6 +182,7 @@ export function NewChatAgentPicker({
             combined.findIndex((item) => item.runtimeId === runtime.runtimeId) === index,
         );
       });
+      setLoadedRuntimeType(activeType === "mpa" ? "mpa" : "general");
       setNextToken(page.nextToken);
       setActiveRuntimeIndex(0);
     } catch (cause) {
@@ -186,10 +192,10 @@ export function NewChatAgentPicker({
       window.clearTimeout(timeoutId);
       if (requestIdRef.current === requestId) setLoading(false);
     }
-  }, [runtimeScope, t]);
+  }, [activeType, runtimeScope, t]);
 
   const loadSandboxSessions = useCallback(async (
-    type: Exclude<AgentType, "general">,
+    type: Exclude<AgentType, "general" | "mpa">,
   ) => {
     sandboxAbortRef.current?.abort();
     const controller = new AbortController();
@@ -229,12 +235,25 @@ export function NewChatAgentPicker({
   }, [t]);
 
   useEffect(() => {
-    if (agentsSource === "local" || !open || activeType !== "general" || runtimes.length > 0 || loading || error) return;
+    if (
+      !open ||
+      !["general", "mpa"].includes(activeType ?? "") ||
+      (agentsSource === "local" && activeType === "general") ||
+      loadedRuntimeType === activeType ||
+      loading ||
+      error
+    ) return;
     void loadRuntimes("", true);
-  }, [activeType, agentsSource, error, loadRuntimes, loading, open, runtimes.length]);
+  }, [activeType, agentsSource, error, loadRuntimes, loadedRuntimeType, loading, open]);
 
   useEffect(() => {
-    if (!open || activeType === null || activeType === "general" || loadedSandboxType === activeType) return;
+    if (
+      !open ||
+      activeType === null ||
+      activeType === "general" ||
+      activeType === "mpa" ||
+      loadedSandboxType === activeType
+    ) return;
     void loadSandboxSessions(activeType);
   }, [activeType, loadSandboxSessions, loadedSandboxType, open]);
 
@@ -308,6 +327,9 @@ export function NewChatAgentPicker({
       requestIdRef.current += 1;
       sandboxAbortRef.current?.abort();
       sandboxAbortRef.current = null;
+      setRuntimes([]);
+      setLoadedRuntimeType(null);
+      setNextToken("");
       setLoading(false);
       setError("");
     }
@@ -359,7 +381,8 @@ export function NewChatAgentPicker({
   }
 
   function onMenuKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
-    const generalOptionCount = agentsSource === "local" ? localApps.length : runtimes.length;
+    const showingLocalApps = activeType === "general" && agentsSource === "local";
+    const runtimeOptionCount = showingLocalApps ? localApps.length : visibleRuntimes.length;
     if (event.key === "Escape") {
       event.preventDefault();
       close(true);
@@ -382,19 +405,19 @@ export function NewChatAgentPicker({
     if (event.key === "ArrowLeft") {
       event.preventDefault();
       setKeyboardPanel("types");
-    } else if ((activeType === "general" ? generalOptionCount : sandboxSessions.length) > 0 &&
+    } else if ((activeType === "general" || activeType === "mpa" ? runtimeOptionCount : sandboxSessions.length) > 0 &&
       (event.key === "ArrowDown" || event.key === "ArrowUp")) {
       event.preventDefault();
       const delta = event.key === "ArrowDown" ? 1 : -1;
-      const optionCount = activeType === "general" ? generalOptionCount : sandboxSessions.length;
+      const optionCount = activeType === "general" || activeType === "mpa" ? runtimeOptionCount : sandboxSessions.length;
       setActiveRuntimeIndex((index) => (index + delta + optionCount) % optionCount);
-    } else if (event.key === "Enter" && activeType === "general" && agentsSource === "local" && localApps[activeRuntimeIndex]) {
+    } else if (event.key === "Enter" && showingLocalApps && localApps[activeRuntimeIndex]) {
       event.preventDefault();
       void chooseLocalApp(localApps[activeRuntimeIndex]);
-    } else if (event.key === "Enter" && activeType === "general" && runtimes[activeRuntimeIndex]) {
+    } else if (event.key === "Enter" && ["general", "mpa"].includes(activeType ?? "") && visibleRuntimes[activeRuntimeIndex]) {
       event.preventDefault();
-      void chooseRuntime(runtimes[activeRuntimeIndex]);
-    } else if (event.key === "Enter" && activeType !== "general" && sandboxSessions[activeRuntimeIndex]) {
+      void chooseRuntime(visibleRuntimes[activeRuntimeIndex]);
+    } else if (event.key === "Enter" && activeType !== "general" && activeType !== "mpa" && sandboxSessions[activeRuntimeIndex]) {
       event.preventDefault();
       void chooseSandboxSession(sandboxSessions[activeRuntimeIndex]);
     }
@@ -477,19 +500,19 @@ export function NewChatAgentPicker({
               role="listbox"
               aria-label={t("agentPicker.listLabel", { type: activeTypeLabel })}
             >
-            {activeType !== "general" && loading && sandboxSessions.length === 0 ? (
+            {activeType !== "general" && activeType !== "mpa" && loading && sandboxSessions.length === 0 ? (
               <div className="new-chat-agent-picker__status" role="status" aria-live="polite">
                 <span className="new-chat-agent-picker__spinner" aria-hidden="true" />
                 {t("agentPicker.loading")}
               </div>
-            ) : activeType !== "general" && error && sandboxSessions.length === 0 ? (
+            ) : activeType !== "general" && activeType !== "mpa" && error && sandboxSessions.length === 0 ? (
               <div className="new-chat-agent-picker__error" role="alert">
                 <span>{error}</span>
                 <button type="button" onClick={() => void loadSandboxSessions(activeType)}>
                   {t("agentPicker.reload")}
                 </button>
               </div>
-            ) : activeType !== "general" && sandboxSessions.length === 0 ? (
+            ) : activeType !== "general" && activeType !== "mpa" && sandboxSessions.length === 0 ? (
               <EmptyMessage className="new-chat-agent-picker__empty" fill="none">
                 <EmptyMessage.Icon size="sm">
                   <AgentTypeIcon
@@ -506,7 +529,7 @@ export function NewChatAgentPicker({
                   {t("agentPicker.createHint")}
                 </EmptyMessage.Description>
               </EmptyMessage>
-            ) : activeType !== "general" ? (
+            ) : activeType !== "general" && activeType !== "mpa" ? (
               <div className="new-chat-agent-picker__runtime-list">
                 {sandboxSessions.some((session) => session.resourceType === "snapshot" && session.id === connectingRuntimeId)
                   ? <p className="new-chat-agent-picker__wake-note" role="status"><TextShimmer>{t("agentPicker.wakingHint")}</TextShimmer></p> : null}
@@ -540,7 +563,7 @@ export function NewChatAgentPicker({
                   );
                 })}
               </div>
-            ) : agentsSource === "local" && localApps.length === 0 ? (
+            ) : activeType === "general" && agentsSource === "local" && localApps.length === 0 ? (
               <EmptyMessage className="new-chat-agent-picker__empty" fill="none">
                 <EmptyMessage.Icon size="sm">
                   <AgentFaceIcon />
@@ -554,7 +577,7 @@ export function NewChatAgentPicker({
                   {t("agentPicker.localHint")}
                 </EmptyMessage.Description>
               </EmptyMessage>
-            ) : agentsSource === "local" ? (
+            ) : activeType === "general" && agentsSource === "local" ? (
               <div className="new-chat-agent-picker__runtime-list">
                 {localApps.map((app, index) => {
                   const connecting = connectingRuntimeId === app;
@@ -584,26 +607,28 @@ export function NewChatAgentPicker({
                 })}
                 {error ? <div className="new-chat-agent-picker__inline-error" role="alert">{error}</div> : null}
               </div>
-            ) : loading && runtimes.length === 0 ? (
+            ) : loading && visibleRuntimes.length === 0 ? (
               <div className="new-chat-agent-picker__status" role="status" aria-live="polite">
                 <span className="new-chat-agent-picker__spinner" aria-hidden="true" />
                 {t("agentPicker.loading")}
               </div>
-            ) : error && runtimes.length === 0 ? (
+            ) : error && visibleRuntimes.length === 0 ? (
               <div className="new-chat-agent-picker__error" role="alert">
                 <span>{error}</span>
                 <button type="button" onClick={() => void loadRuntimes("", true)}>
                   {t("agentPicker.reload")}
                 </button>
               </div>
-            ) : runtimes.length === 0 ? (
+            ) : visibleRuntimes.length === 0 ? (
               <EmptyMessage className="new-chat-agent-picker__empty" fill="none">
                 <EmptyMessage.Icon size="sm">
                   <AgentFaceIcon />
                 </EmptyMessage.Icon>
                 <EmptyMessage.Title>
                   <span className="new-chat-agent-picker__empty-title">
-                    {t("agentPicker.emptyGeneral")}
+                    {activeType === "mpa"
+                      ? t("agentPicker.empty", { type: activeTypeLabel })
+                      : t("agentPicker.emptyGeneral")}
                   </span>
                 </EmptyMessage.Title>
                 <EmptyMessage.Description>
@@ -613,7 +638,7 @@ export function NewChatAgentPicker({
             ) : (
               <>
                 <div className="new-chat-agent-picker__runtime-list">
-                  {runtimes.map((runtime, index) => {
+                  {visibleRuntimes.map((runtime, index) => {
                     const connecting = connectingRuntimeId === runtime.runtimeId;
                     const selected = runtime.runtimeId === selectedRuntimeId;
                     return (

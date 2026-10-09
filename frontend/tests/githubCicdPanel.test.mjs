@@ -33,6 +33,8 @@ test("exposes a GitHub CICD pipeline client without persisting tokens", () => {
   assert.match(clientSource, /bindGithubCicdRuntime/);
   assert.match(clientSource, /syncGithubCicdRuntime/);
   assert.match(clientSource, /\/web\/github-cicd\/runtime-sync/);
+  assert.match(clientSource, /agentCategory\?: "general" \| "mpa"/);
+  assert.match(clientSource, /mpaCompatibilityManifest\?: Record<string, unknown>/);
   assert.match(clientSource, /github\?:/);
   assert.match(clientSource, /githubToken/);
   assert.match(clientSource, /cloudProvider: params\.cloudProvider/);
@@ -47,6 +49,10 @@ test("renders the GitHub CICD panel from the project deployment sidebar", () => 
   assert.match(panelSource, /githubCicd\.mountDelivery/);
   assert.doesNotMatch(panelSource, /disabled\s+title="下一阶段接入 GitHub Actions 持续交付"/);
   assert.match(panelSource, /createGithubDeliveryCicdPipeline/);
+  assert.match(
+    panelSource,
+    /createGithubDeliveryCicdPipeline\(\{[\s\S]*?agentCategory,/,
+  );
   assert.match(panelSource, /workflowPath/);
   assert.match(panelSource, /githubUrl/);
   assert.match(panelSource, /githubToken/);
@@ -65,6 +71,13 @@ test("renders the GitHub CICD panel from the project deployment sidebar", () => 
   assert.match(projectPreviewSource, /pendingGithubCicd\.volcengineAccessKey/);
   assert.match(projectPreviewSource, /pendingGithubCicd\.volcengineSecretKey/);
   assert.match(projectPreviewSource, /pendingGithubCicd\.cloudProvider/);
+  assert.match(projectPreviewSource, /agentCategory=\{isMpaDeployment \? "mpa" : "general"\}/);
+  assert.match(
+    projectPreviewSource,
+    /initializeGithubDeliveryMain\(\{[\s\S]*?agentCategory: isMpaDeployment \? "mpa" : "general"/,
+  );
+  assert.match(panelSource, /agentCategory = "general"/);
+  assert.match(panelSource, /agentCategory,/);
   assert.match(clientSource, /volcengineAccessKey/);
   assert.match(clientSource, /volcengineSecretKey/);
   assert.doesNotMatch(clientSource, /localStorage[\s\S]{0,160}volcengineAccessKey/);

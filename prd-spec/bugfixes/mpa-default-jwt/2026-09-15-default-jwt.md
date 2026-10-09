@@ -1,0 +1,9 @@
+# Default JWT setting for VeADK MPA provisioning
+
+The user approved adding this deployment default on 2026-09-15. MPA deployments have no ArkClaw identity pools, but REST endpoints currently require JWT unless explicitly configured. Add DISABLE_JWT_AUTH=true to build_runtime_env defaults. Existing extra_env processing remains last so explicit false wins. Ordinary Agent deployments, MPA backend defaults, gateway authentication, and existing TIP defaults are outside scope.
+
+Change only the provisioning helper, focused tests, and this bilingual specification update. Acceptance: omitted value becomes true; explicit false remains false; input overrides are not mutated. Test the helper and CLI callers, measure changed-line coverage above 95%, and run Ruff, Pyright and pre-commit. No cloud mutation is required.
+
+Design review: existing override precedence provides the required behavior without new configuration or branches. No unresolved design issues. User approval is the explicit request to implement on a new branch.
+
+Verification (2026-09-15): regression failed with missing DISABLE_JWT_AUTH before implementation; helper and CLI tests pass (26). pytest-cov reports 98.65% statement coverage for the provisioning module. The added constant dictionary entry has no independent executable line; its containing dictionary construction is covered, and default/explicit-false behavior is asserted. Changed behavior coverage is complete; a separate added executable production-line percentage is not applicable. Ruff, formatting, secret scanning and diff whitespace pass. Production-file Pyright passes; test-file Pyright reports two unchanged diagnostics at line 47, reproduced from HEAD. Remote provisioning base was fetched and rebased before final checks (already current). No cloud deployment or live Runtime mutation was performed. Review found no new correctness or contract issues.

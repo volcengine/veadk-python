@@ -546,6 +546,7 @@ class OAuth2Session(BaseModel):
     """OAuth2 session data stored in cookies."""
 
     access_token: str
+    id_token: Optional[str] = None
     token_type: str = "Bearer"
     expires_at: float
     refresh_token: Optional[str] = None
@@ -854,6 +855,7 @@ class OAuth2Handler:
 
             session = OAuth2Session(
                 access_token=token_response["access_token"],
+                id_token=token_response.get("id_token"),
                 token_type=token_response.get("token_type", "Bearer"),
                 expires_at=expires_at,
                 refresh_token=token_response.get("refresh_token"),
@@ -977,6 +979,7 @@ class OAuth2Handler:
             # Create new session with refreshed tokens, preserving user_info.
             new_session = OAuth2Session(
                 access_token=token_response["access_token"],
+                id_token=token_response.get("id_token"),
                 token_type=token_response.get("token_type", "Bearer"),
                 expires_at=expires_at,
                 # Use new refresh_token if provided, otherwise keep the old one.
@@ -1320,12 +1323,23 @@ class OAuth2Handler:
             return await self._validate_with_introspection(token)
         return await self._validate_with_jwks(token)
 
+    async def validate_id_token(self, token: str) -> dict[str, Any]:
+        """Validate a UserPool ID token against the configured OIDC client."""
+        claims = await self._validate_with_jwks(token)
+        audience = claims.get("aud")
+        audiences = audience if isinstance(audience, list) else [audience]
+        if self.config.client_id not in audiences:
+            raise HTTPException(status_code=403, detail="ID token client mismatch")
+        return claims
+
     def encode_session(self, session: OAuth2Session) -> str:
         """Encode OAuth2 session data for cookie storage.
 
         Warns if the encoded session exceeds the recommended cookie size limit.
         """
-        session_json = session.model_dump_json()
+        # ID tokens are request-local. Persisting another JWT can push an
+        # otherwise valid browser session beyond the 4 KB cookie limit.
+        session_json = session.model_dump_json(exclude={"id_token"})
         payload = self._base64url_encode(session_json.encode("utf-8"))
         signing_key = self._get_cookie_signing_key()
 
@@ -2025,6 +2039,7 @@ def create_oauth2_middleware(
                     )
                 session = None
             else:
+                request.state.oauth2_session = session
                 auth_header_value = session.to_authorization_header().encode()
 
                 # Update the scope headers so downstream dependencies can read it.
@@ -2047,6 +2062,13 @@ def create_oauth2_middleware(
                 )
 
                 response = await call_next(request)
+
+                # A downstream identity handoff may rotate the refresh token
+                # again. Its newest session must win over this middleware's
+                # earlier refresh, including when the handoff returns an error.
+                override = getattr(request.state, "oauth2_session_override", None)
+                if override is not None:
+                    response_cookies = [oauth2_handler.create_session_cookie(override)]
 
                 # Set any refreshed session cookies on the response.
                 for cookie_params in response_cookies:

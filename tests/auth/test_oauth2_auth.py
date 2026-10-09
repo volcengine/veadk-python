@@ -272,6 +272,28 @@ def test_expired_access_token_remains_available_for_refresh() -> None:
 
     assert restored is not None
     assert restored.refresh_token == "refresh-token"
+    assert restored.id_token is None
+
+
+@pytest.mark.asyncio
+async def test_code_exchange_keeps_id_token_out_of_session_cookie() -> None:
+    handler = OAuth2Handler(oauth2_config())
+    response = Mock()
+    response.raise_for_status.return_value = None
+    response.json.return_value = {
+        "access_token": "access-token",
+        "refresh_token": "refresh-token",
+        "id_token": "id-token",
+        "expires_in": 3600,
+    }
+    handler._http_client.post = AsyncMock(return_value=response)
+
+    session = await handler.exchange_code_for_token("code")
+    restored = handler.decode_session(handler.encode_session(session))
+
+    assert session.id_token == "id-token"
+    assert restored is not None
+    assert restored.id_token is None
 
 
 def test_expired_browser_session_is_not_available_for_refresh() -> None:
@@ -450,6 +472,38 @@ async def test_refresh_access_token_preserves_absolute_session_expiry() -> None:
     handler._http_client.post.assert_awaited_once()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("response_id_token", "expected_id_token"),
+    [("new-id-token", "new-id-token"), (None, None)],
+)
+async def test_refresh_retains_or_replaces_id_token(
+    response_id_token: str | None, expected_id_token: str | None
+) -> None:
+    handler = OAuth2Handler(oauth2_config())
+    session = OAuth2Session(
+        access_token="old-access-token",
+        expires_at=time.time() - 1,
+        refresh_token="old-refresh-token",
+        id_token="old-id-token",
+    )
+    response = Mock()
+    response.raise_for_status.return_value = None
+    response.json.return_value = {
+        "access_token": "new-access-token",
+        "refresh_token": "new-refresh-token",
+        "expires_in": 3600,
+        **({"id_token": response_id_token} if response_id_token else {}),
+    }
+    handler._http_client.post = AsyncMock(return_value=response)
+
+    refreshed = await handler.refresh_access_token(session)
+
+    assert refreshed is not None
+    assert refreshed.id_token == expected_id_token
+    assert refreshed.refresh_token == "new-refresh-token"
+
+
 def test_userinfo_refreshes_expired_access_token_and_rotates_cookie() -> None:
     handler = OAuth2Handler(oauth2_config())
     absolute_expiry = time.time() + 3600
@@ -548,6 +602,57 @@ def test_protected_request_refreshes_expired_access_token() -> None:
     assert response.status_code == 200
     assert response.json() == {"ok": True}
     assert "veadk_session=" in response.headers["set-cookie"]
+
+
+def test_downstream_refresh_override_wins_and_stays_cookie_safe() -> None:
+    async def protected(request: Request) -> JSONResponse:
+        current = request.state.oauth2_session
+        request.state.oauth2_session_override = current.model_copy(
+            update={"refresh_token": "rotated-token", "id_token": "x" * 2000}
+        )
+        return JSONResponse({"ok": True})
+
+    app = Starlette(routes=[Route("/api/test", protected)])
+    handler = setup_oauth2(app, oauth2_config())
+    handler.validate_access_token = AsyncMock(return_value={"sub": "user-1"})
+    session = OAuth2Session(
+        access_token="access-token",
+        expires_at=time.time() + 3600,
+        refresh_token="first-token",
+        user_info={"sub": "user-1"},
+    )
+
+    with TestClient(app, base_url="https://studio.example.com") as client:
+        client.cookies.set("veadk_session", handler.encode_session(session))
+        response = client.get("/api/test", headers={"Accept": "application/json"})
+        persisted = handler.decode_session(response.cookies["veadk_session"])
+
+    assert response.status_code == 200
+    assert persisted is not None
+    assert persisted.refresh_token == "rotated-token"
+    assert persisted.id_token is None
+    assert len(response.cookies["veadk_session"]) < 4096
+
+
+@pytest.mark.asyncio
+async def test_id_token_validation_requires_studio_client_audience() -> None:
+    handler = OAuth2Handler(oauth2_config())
+    handler._validate_with_jwks = AsyncMock(
+        return_value={
+            "sub": "user-1",
+            "aud": ["studio-client"],
+        }
+    )
+
+    assert (await handler.validate_id_token("signed-token"))["sub"] == "user-1"
+    handler._validate_with_jwks = AsyncMock(
+        return_value={
+            "sub": "user-1",
+            "aud": "other-client",
+        }
+    )
+    with pytest.raises(Exception, match="ID token client mismatch"):
+        await handler.validate_id_token("signed-token")
 
 
 def test_from_veidentity_uses_refresh_token_absolute_lifetime(

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
@@ -41,6 +42,17 @@ const {
   runtimeLogLevel,
   streamRuntimeLogs,
 } = await import(moduleUrl);
+const dialogSource = readFileSync(
+  new URL("../src/ui/RuntimeLogsDialog.tsx", import.meta.url),
+  "utf8",
+);
+
+test("downloads the current sanitized bounded snapshot", () => {
+  assert.match(dialogSource, /lines\.map\(\(line\) => line\.text\)\.join\("\\n"\)/);
+  assert.match(dialogSource, /new Blob\(\[snapshot\]/);
+  assert.match(dialogSource, /URL\.revokeObjectURL\(blobUrl\)/);
+  assert.match(dialogSource, /disabled=\{!logs\}/);
+});
 
 test("reads only the BFF-safe runtime context headers", () => {
   const response = new Response(null, {

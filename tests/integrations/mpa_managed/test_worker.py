@@ -1,0 +1,340 @@
+# Copyright (c) 2025 Beijing Volcano Engine Technology Co., Ltd. and/or its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+import asyncio
+import hashlib
+import json
+from unittest.mock import AsyncMock
+
+import pytest
+
+from tests.integrations.mpa_managed.test_agent_deployment import Registry
+from veadk.integrations.mpa.managed.config import Worker
+from veadk.integrations.mpa.managed.database import DeploymentError, agent_suffix
+from veadk.integrations.mpa.managed.worker import (
+    WorkerCloud,
+    _missing_worker_metadata,
+    ensure_worker,
+)
+
+
+@pytest.mark.parametrize("agent_id", ["mi-example-id", " mi-example-id "])
+def test_new_worker_uses_agent_derived_name(agent_id):
+    async def run():
+        cloud = AsyncMock()
+        cloud.find.return_value = []
+        cloud.create.side_effect = DeploymentError("stop after request capture")
+        with pytest.raises(DeploymentError, match="request capture"):
+            await ensure_worker(
+                Registry(),
+                cloud,
+                Worker(image="worker:v1"),
+                account="a",
+                region="r",
+                agent_id=agent_id,
+            )
+        request = cloud.create.call_args.args[0]
+        assert request["Name"] == "mi_example_id"
+        cloud.find.assert_awaited_once_with("mi_example_id")
+        assert {item["Key"]: item["Value"] for item in request["Tags"]}[
+            "mpa_agent_key"
+        ] == agent_suffix("a", "r", agent_id)
+        assert {item["Key"]: item["Value"] for item in request["Envs"]}[
+            "MPA_AGENT_ID"
+        ] == agent_id
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("discovered", [False, True])
+@pytest.mark.parametrize("changed_image", [False, True])
+def test_unfinished_legacy_worker_retains_request_and_token(discovered, changed_image):
+    async def run():
+        from tests.integrations.mpa_managed.test_worker_recovery import ready
+
+        registry = Registry()
+        cloud = AsyncMock()
+        cloud.find.return_value = []
+        cloud.create.side_effect = DeploymentError("response lost")
+        options = Worker(image="worker:v1")
+        with pytest.raises(DeploymentError, match="response lost"):
+            await ensure_worker(
+                registry, cloud, options, account="a", region="r", agent_id="agent"
+            )
+        # Model a durable pre-upgrade intent whose provider response was lost.
+        previous_request = dict(cloud.create.call_args.args[0])
+        token = previous_request.pop("ClientToken")
+        previous_request["Name"] = "mpa_worker_" + agent_suffix("a", "r", "agent")
+        registry.row["worker_hash"] = hashlib.sha256(
+            json.dumps(previous_request, sort_keys=True).encode()
+        ).hexdigest()
+        previous_hash = registry.row["worker_hash"]
+        cloud.reset_mock()
+        cloud.find.return_value = [ready()] if discovered else []
+        cloud.create.side_effect = None
+        cloud.create.return_value = "t-test"
+        cloud.get.return_value = ready()
+        if changed_image:
+            options = Worker(image="worker:v2")
+            with pytest.raises(DeploymentError, match="configuration changed"):
+                await ensure_worker(
+                    registry, cloud, options, account="a", region="r", agent_id="agent"
+                )
+            cloud.find.assert_not_awaited()
+            cloud.create.assert_not_awaited()
+        else:
+            assert (
+                await ensure_worker(
+                    registry, cloud, options, account="a", region="r", agent_id="agent"
+                )
+                == "t-test"
+            )
+            cloud.find.assert_awaited_once_with(previous_request["Name"])
+            if discovered:
+                cloud.create.assert_not_awaited()
+            else:
+                cloud.create.assert_awaited_once_with(
+                    {**previous_request, "ClientToken": token}
+                )
+        assert registry.row["worker_token"] == token
+        assert registry.row["worker_hash"] == previous_hash
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("registered", [False, True])
+def test_existing_worker_id_is_reused_without_name_discovery(registered):
+    async def run():
+        from tests.integrations.mpa_managed.test_worker_recovery import ready
+
+        registry = Registry()
+        if registered:
+            registry.row.update(worker_id="t-test", worker_managed=True)
+        cloud = AsyncMock()
+        cloud.get.return_value = {**ready(), "Name": "mpa_worker_previous"}
+        options = (
+            Worker(image="worker:v1") if registered else Worker(existing_id="t-test")
+        )
+        assert (
+            await ensure_worker(
+                registry, cloud, options, account="a", region="r", agent_id="agent"
+            )
+            == "t-test"
+        )
+        cloud.find.assert_not_awaited()
+        cloud.create.assert_not_awaited()
+
+    asyncio.run(run())
+
+
+def test_lost_worker_response_reuses_token_and_scoped_identity(monkeypatch):
+    from veadk.integrations.mpa.managed import diagnostics
+
+    monkeypatch.setattr(diagnostics.asyncio, "sleep", AsyncMock())
+
+    async def run():
+        registry = Registry()
+        cloud = AsyncMock()
+        cloud.find.return_value = []
+        cloud.create.side_effect = TimeoutError()
+        options = Worker(image="registry.example/worker:v1")
+        with pytest.raises(TimeoutError):
+            await ensure_worker(
+                registry, cloud, options, account="a", region="r", agent_id="agent"
+            )
+        token = registry.row["worker_token"]
+        with pytest.raises(TimeoutError):
+            await ensure_worker(
+                registry, cloud, options, account="a", region="r", agent_id="agent"
+            )
+        assert [c.args[0]["ClientToken"] for c in cloud.create.call_args_list] == [
+            token
+        ] * 8
+        assert "Envs" not in str(registry.row)
+
+    asyncio.run(run())
+
+
+def test_worker_ownership_collision_stops_before_creation():
+    async def run():
+        cloud = AsyncMock()
+        cloud.find.return_value = [{"ToolId": "t-other", "Tags": []}]
+        with pytest.raises(DeploymentError):
+            await ensure_worker(
+                Registry(),
+                cloud,
+                Worker(image="worker:v1"),
+                account="a",
+                region="r",
+                agent_id="agent",
+            )
+        cloud.create.assert_not_called()
+
+    asyncio.run(run())
+
+
+def test_managed_worker_create_includes_tos_output_mount():
+    async def run():
+        registry = Registry()
+        cloud = AsyncMock()
+        cloud.find.return_value = []
+        cloud.create.return_value = "t-created"
+        cloud.get.return_value = {
+            "ToolId": "t-created",
+            "ProjectName": "default",
+            "Status": "Ready",
+            "Tags": [
+                {"Key": "managed_by", "Value": "mpa-deployment"},
+                {
+                    "Key": "mpa_agent_key",
+                    "Value": agent_suffix("a", "r", "agent"),
+                },
+            ],
+            "Envs": [{"Key": "MPA_AGENT_ID", "Value": "agent"}],
+            "TosMountConfig": {
+                "EnableTos": True,
+                "MountPoints": [
+                    {
+                        "BucketName": "mpa-output",
+                        "BucketPath": "/",
+                        "Endpoint": "http://tos-r.ivolces.com",
+                        "LocalMountPath": "/data/output",
+                        "ReadOnly": False,
+                    }
+                ],
+            },
+        }
+        options = Worker(
+            image="worker:v1",
+            tos_access_key="tos-ak",
+            tos_secret_key="tos-sk",
+            tos_bucket="mpa-output",
+        )
+
+        assert (
+            await ensure_worker(
+                registry,
+                cloud,
+                options,
+                account="a",
+                region="r",
+                agent_id="agent",
+            )
+            == "t-created"
+        )
+        request = cloud.create.await_args.args[0]
+        config = request["TosMountConfig"]
+        assert config["Credentials"] == {
+            "AccessKeyId": "tos-ak",
+            "SecretAccessKey": "tos-sk",
+        }
+        assert config["MountPoints"][0]["LocalMountPath"] == "/data/output"
+        assert "tos-ak" not in str(registry.row)
+        assert "tos-sk" not in str(registry.row)
+
+    asyncio.run(run())
+
+
+def test_worker_tos_metadata_mismatch_fails_closed():
+    expected = {
+        "EnableTos": True,
+        "MountPoints": [
+            {
+                "BucketName": "mpa-output",
+                "BucketPath": "/",
+                "Endpoint": "http://tos-r.ivolces.com",
+                "LocalMountPath": "/data/output",
+                "ReadOnly": False,
+            }
+        ],
+    }
+
+    with pytest.raises(DeploymentError, match="TOS output mount"):
+        _missing_worker_metadata(
+            {"TosMountConfig": {"EnableTos": True, "MountPoints": []}},
+            tool_id="t-one",
+            project="default",
+            owned={"managed_by": "mpa-deployment", "mpa_agent_key": "key"},
+            agent_id="agent",
+            managed=True,
+            expected_tos=expected,
+        )
+
+
+def test_worker_discovery_follows_cursor_even_after_short_page():
+    cloud = WorkerCloud(None)
+    target = {"Name": "target", "ToolId": "target-id"}
+    cloud.call = AsyncMock(
+        side_effect=[
+            {"Tools": [{"Name": "other", "ToolId": "other-id"}], "NextToken": "next"},
+            {"Tools": [target]},
+        ]
+    )
+    assert asyncio.run(cloud.find("target")) == [target]
+    assert [call.kwargs for call in cloud.call.call_args_list] == [
+        {"MaxResults": 100},
+        {"MaxResults": 100, "NextToken": "next"},
+    ]
+
+
+def test_worker_discovery_stops_on_full_final_page():
+    cloud = WorkerCloud(None)
+    cloud.call = AsyncMock(return_value={"Tools": [{"Name": "other"}] * 100})
+    assert asyncio.run(cloud.find("target")) == []
+    cloud.call.assert_awaited_once()
+
+
+def test_worker_discovery_deduplicates_ids_but_retains_distinct_name_collisions():
+    cloud = WorkerCloud(None)
+    first = {"Name": "target", "ToolId": "one"}
+    second = {"Name": "target", "ToolId": "two"}
+    cloud.call = AsyncMock(
+        side_effect=[
+            {"Tools": [first], "NextToken": "next"},
+            {"Tools": [first, second]},
+        ]
+    )
+    assert asyncio.run(cloud.find("target")) == [first, second]
+
+
+def test_worker_discovery_rejects_repeated_cursor_without_partial_matches():
+    cloud = WorkerCloud(None)
+    cloud.call = AsyncMock(
+        side_effect=[
+            {"Tools": [{"Name": "target", "ToolId": "one"}], "NextToken": "same"},
+            {"Tools": [], "NextToken": "same"},
+        ]
+    )
+    with pytest.raises(DeploymentError, match="repeated pagination token"):
+        asyncio.run(cloud.find("target"))
+    assert cloud.call.await_count == 2
+
+
+def test_worker_discovery_rejects_page_limit_without_partial_matches():
+    cloud = WorkerCloud(None)
+    cloud.call = AsyncMock(
+        side_effect=[{"Tools": [], "NextToken": str(i)} for i in range(1000)]
+    )
+    with pytest.raises(DeploymentError, match="pagination limit"):
+        asyncio.run(cloud.find("target"))
+    assert cloud.call.await_count == 1000
+
+
+def test_worker_discovery_propagates_provider_failure():
+    cloud = WorkerCloud(None)
+    cloud.call = AsyncMock(
+        side_effect=[{"Tools": [], "NextToken": "next"}, TimeoutError()]
+    )
+    with pytest.raises(TimeoutError):
+        asyncio.run(cloud.find("target"))

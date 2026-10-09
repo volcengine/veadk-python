@@ -45,6 +45,7 @@ export interface DeploymentSelectOption {
   value: string;
   label: string;
   description?: string;
+  metadata?: string;
   badge?: string;
 }
 
@@ -277,7 +278,7 @@ export function DeploymentSelect({
                   aria-selected={selected}
                   tabIndex={index === activeIndex ? 0 : -1}
                   className={`pp-deployment-select-option${selected ? " is-selected" : ""}`}
-                  title={option.description}
+                  title={option.metadata ? [option.label, option.description, option.metadata].filter(Boolean).join("\n") : option.description}
                   onFocus={() => setActiveIndex(index)}
                   onClick={() => selectOption(option)}
                 >
@@ -290,7 +291,8 @@ export function DeploymentSelect({
                         </span>
                       )}
                     </span>
-                    {option.description && <small>{option.description}</small>}
+                    {option.description && <small className={option.metadata ? "pp-deployment-select-description" : undefined}>{option.description}</small>}
+                    {option.metadata && <small className="pp-deployment-select-metadata">{option.metadata}</small>}
                   </span>
                   {selected && <SelectCheckIcon />}
                 </button>

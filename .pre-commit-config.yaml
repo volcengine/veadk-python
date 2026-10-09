@@ -14,3 +14,10 @@ repos:
   rev: v8.24.2
   hooks:
     - id: gitleaks
+- repo: local
+  hooks:
+    - id: yaml-secret-scan
+      name: Detect concrete secrets in YAML
+      entry: scripts/scan_yaml_secrets.py
+      language: python
+      types_or: [yaml]

@@ -1,0 +1,1 @@
+^tests/integrations/mpa_managed/test_(admin_database|auto_pg|config|deployment_database_unit|registry_url|service)\.py$

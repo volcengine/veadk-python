@@ -35,7 +35,7 @@ test("assistant action row opens issue feedback for the selected turn", () => {
   assert.match(appSource, /aria-label=\{t\("feedback\.reportIssue"\)\}/);
   assert.match(appSource, /<IssueFeedbackIcon/);
   assert.match(appSource, /setIssueFeedbackTarget\(\{/);
-  assert.match(appSource, /input: previousUserTurnText\(turns, i\)/);
+  assert.match(appSource, /input: previousUserTurnText\(transcriptTurns, i\)/);
   assert.match(appSource, /<IssueFeedbackDialog/);
   assert.match(iconSource, /export function IssueFeedbackIcon/);
   assert.doesNotMatch(iconSource, /lucide-react/);

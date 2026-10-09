@@ -43,7 +43,7 @@ test("loads built-in Sandbox, Skill, and Studio BFF capabilities independently",
   );
   assert.match(
     appSource,
-    /const refreshCurrentAgentAndStartNewChat[\s\S]*?probeNewChatCapabilities\(id\)[\s\S]*?loadHydratedSessions\(id, userId\)[\s\S]*?setNewChatCapabilities\(capabilities\)[\s\S]*?setAppName\(id\)[\s\S]*?startNewChat\(\)/,
+    /const refreshCurrentAgentAndStartNewChat[\s\S]*?probeNewChatCapabilities\(id\)[\s\S]*?loadHydratedSessions\(id, userId\)[\s\S]*?setNewChatCapabilities\(capabilities\)[\s\S]*?startNewChat\(\)[\s\S]*?setAppName\(id\)/,
   );
   assert.match(appSource, /newChatCapabilitiesCacheRef/);
 });

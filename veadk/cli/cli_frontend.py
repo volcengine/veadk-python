@@ -37,7 +37,8 @@ import tempfile
 import threading
 import unicodedata
 import zipfile
-from collections.abc import Callable, Iterable, Mapping
+from collections import OrderedDict
+from collections.abc import AsyncIterator, Callable, Iterable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
@@ -60,6 +61,16 @@ from veadk.cli.managed_sidecar_source import (
     ManagedSidecarSourceError,
     stage_managed_sidecar_veadk_source,
 )
+from veadk.cli.mpa_p0_contract import (
+    default_mpa_p0_manifest,
+    evaluate_mpa_p0_compatibility,
+    load_default_matrix,
+)
+from veadk.cli.runtime_a2a_stream import (
+    A2AStreamDecoder,
+    a2a_error_message,
+    is_method_not_supported,
+)
 from veadk.cli.studio_model_catalog import (
     is_byteplus_model,
     is_provider_modelark_base_url,
@@ -78,6 +89,15 @@ from veadk.cli.studio_vpc_network import (
     discover_studio_vpc_networks,
     is_vefaas_runtime,
     studio_function_id,
+)
+from veadk.integrations.mpa.mpa_provision import generate_mpa_agent_id
+from veadk.integrations.mpa.tags import (
+    MPA_AGENT_TYPE_TAG,
+    MPA_AGENT_TYPE_VALUE,
+    MPA_INSTANCE_ID_TAG,
+    MPA_MANAGED_TAG,
+    MPA_MANAGED_VALUE,
+    studio_mpa_runtime_tags,
 )
 from veadk.utils.cloud_provider import (
     DEFAULT_BYTEPLUS_REGION,
@@ -235,6 +255,11 @@ _CP_BUILD_LOG_FINAL_ERROR_RETRIES = 5
 _CP_BUILD_LOG_FINAL_ERROR_RETRY_INTERVAL_SECONDS = 2.0
 _LOCAL_ADK_SESSION_PATH_RE = re.compile(r"^/apps/[^/]+/users/([^/]+)/sessions(?:/|$)")
 _LOCAL_ADK_RUN_PATHS = frozenset({"/run", "/run_sse"})
+_RUNTIME_A2A_VIRTUAL_APP = "a2a-default"
+_RUNTIME_A2A_AGENT_CARD_PATH = "/.well-known/agent-card.json"
+_RUNTIME_A2A_SESSION_PATH_RE = re.compile(
+    r"^apps/(?P<app>[^/]+)/users/(?P<user>[^/]+)/sessions(?:/(?P<session>[^/]+))?$"
+)
 _CP_BUILD_LOG_ERROR_TAIL_CHECK_CHARS = 1024
 _DEPLOY_STREAM_HEARTBEAT_SECONDS = 15.0
 _DEPLOY_STREAM_POLL_SECONDS = 0.1
@@ -284,9 +309,36 @@ _RUNTIME_NAME_MIN_LENGTH = 4
 _RUNTIME_NAME_MAX_LENGTH = 64
 _RUNTIME_ENVIRONMENT_ID_TAG = "veadk:environment-id"
 _RUNTIME_ENVIRONMENT_VERSION_TAG = "veadk:environment-version"
+_MPA_INSTANCE_ID_TAG = MPA_INSTANCE_ID_TAG
 _RUNTIME_ENVIRONMENT_ID_ENV = "VEADK_STUDIO_ENVIRONMENT_ID"
 _RUNTIME_ENVIRONMENT_VERSION_ENV = "VEADK_STUDIO_ENVIRONMENT_VERSION_ID"
 _DEFAULT_RUNTIME_ENVIRONMENT = "default"
+
+
+def _build_mpa_identity_runtime_env(
+    *,
+    user_pool_name: str,
+    user_pool_client_name: str,
+    oauth2_redirect_uri: str,
+) -> dict[str, str]:
+    """Build the explicit mpa-agent identity environment from Studio SSO."""
+    from urllib.parse import urlsplit, urlunsplit
+
+    pool_name = user_pool_name.strip()
+    client_name = user_pool_client_name.strip()
+    parsed = urlsplit(oauth2_redirect_uri.strip())
+    if not pool_name or not client_name or not parsed.scheme or not parsed.netloc:
+        raise ValueError("Studio MPA identity configuration is incomplete")
+    return {
+        "IDENTITY_STARTUP_ENABLED": "true",
+        "MPA_USER_POOL_NAME": pool_name,
+        "MPA_USER_POOL_CLIENT_NAME": client_name,
+        "IDENTITY_CALLBACK_URL": urlunsplit(
+            (parsed.scheme, parsed.netloc, "/oauth/callback", "", "")
+        ),
+    }
+
+
 _STUDIO_STORAGE_ENV_KEYS = (
     "VEADK_STUDIO_TOS_BUCKET",
     "VEADK_STUDIO_TOS_REGION",
@@ -1523,6 +1575,8 @@ def _build_agentkit_proxy_headers(
         "content-length",
         "x-agentkit-base",
         "x-agentkit-key",
+        "x-mpa-channel-key",
+        "x-mpa-studio-key",
         # Local VeADK/SSO credentials must not leak to the remote runtime.
         "authorization",
         "cookie",
@@ -2051,6 +2105,18 @@ def _run_frontend_server(
         ],
         web=False,  # we serve our own UI, not the bundled ADK dev UI
     )
+    scenario_token_file = os.environ.get("VEADK_MPA_SCENARIO_TOKEN_FILE", "")
+    if (
+        os.environ.get("APP_ENV") == "test"
+        and os.environ.get("VEADK_MPA_TEST_SCENARIOS") == "1"
+    ):
+        if not scenario_token_file:
+            raise RuntimeError(
+                "VEADK_MPA_SCENARIO_TOKEN_FILE is required for MPA test scenarios"
+            )
+        from frontend.server.mpa.test_scenarios import mount_test_scenario_routes
+
+        mount_test_scenario_routes(app, token_file=Path(scenario_token_file))
 
     from contextlib import asynccontextmanager
 
@@ -2690,6 +2756,114 @@ def _run_frontend_server(
             return _default_cloud_region()
         return candidate or _default_cloud_region()
 
+    def _current_git_revision() -> str:
+        try:
+            import subprocess
+
+            completed = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=Path(__file__).resolve().parents[2],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=2,
+            )
+        except Exception:
+            return "0" * 40
+        revision = completed.stdout.strip().lower()
+        if completed.returncode == 0 and re.fullmatch(r"[0-9a-f]{40}", revision):
+            return revision
+        return "0" * 40
+
+    def _mpa_compatibility_failure_detail(
+        report: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        status = str(report.get("status") or "incompatible")
+        error_code = str(report.get("errorCode") or "worker_protocol_incompatible")
+        message = (
+            "MPA Runtime compatibility preflight failed before making changes: "
+            f"{error_code}"
+        )
+        return {
+            "code": "mpa_compatibility_preflight_failed",
+            "status": status,
+            "errorCode": error_code,
+            "message": message,
+            **(
+                {"matrixRule": str(report["matrixRule"])}
+                if report.get("matrixRule")
+                else {}
+            ),
+        }
+
+    def _mpa_compatibility_manifest_from_request(
+        data: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        has_manifest = (
+            "mpaCompatibilityManifest" in data or "compatibilityManifest" in data
+        )
+        raw = data.get("mpaCompatibilityManifest")
+        if raw is None and "compatibilityManifest" in data:
+            raw = data.get("compatibilityManifest")
+        if has_manifest:
+            if not isinstance(raw, Mapping):
+                raise HTTPException(
+                    status_code=409,
+                    detail=_mpa_compatibility_failure_detail(
+                        {
+                            "status": "invalid_manifest",
+                            "errorCode": "manifest_not_object",
+                        }
+                    ),
+                )
+            return dict(raw)
+        runtime_revision = (
+            str(
+                data.get("runtimeRevision")
+                or data.get("runtimeGitRevision")
+                or os.getenv("VEADK_MPA_RUNTIME_REVISION", "")
+            )
+            .strip()
+            .lower()
+        )
+        runtime_image_digest = (
+            str(
+                data.get("runtimeImageDigest")
+                or os.getenv("VEADK_MPA_RUNTIME_IMAGE_DIGEST", "")
+            )
+            .strip()
+            .lower()
+        )
+        return default_mpa_p0_manifest(
+            veadk_revision=_current_git_revision(),
+            runtime_revision=runtime_revision
+            if re.fullmatch(r"[0-9a-f]{40}", runtime_revision)
+            else "0" * 40,
+            runtime_image_digest=runtime_image_digest
+            if re.fullmatch(r"sha256:[0-9a-f]{64}", runtime_image_digest)
+            else "sha256:" + "0" * 64,
+        )
+
+    def _mpa_compatibility_requested(data: Mapping[str, Any]) -> bool:
+        return (
+            str(data.get("agentCategory") or "").strip().lower() == "mpa"
+            or "mpaCompatibilityManifest" in data
+            or "compatibilityManifest" in data
+        )
+
+    def _require_mpa_compatibility_preflight(
+        data: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        manifest = _mpa_compatibility_manifest_from_request(data)
+        matrix = load_default_matrix()
+        report = evaluate_mpa_p0_compatibility(manifest, matrix)
+        if report.get("status") != "compatible":
+            raise HTTPException(
+                status_code=409,
+                detail=_mpa_compatibility_failure_detail(report),
+            )
+        return report
+
     def _coerce_studio_resource_region(region: str | None) -> str:
         candidate = (region or "").strip()
         fallback = _studio_resource_region(provider)
@@ -2858,12 +3032,14 @@ def _run_frontend_server(
         mount_model_catalog_routes,
     )
 
+    studio_model_catalog_service = build_model_catalog_service(
+        provider=provider,
+        resolve_credentials=_resolve_ve_credentials,
+    )
+    app.state.studio_model_catalog_service = studio_model_catalog_service
     mount_model_catalog_routes(
         app,
-        service=build_model_catalog_service(
-            provider=provider,
-            resolve_credentials=_resolve_ve_credentials,
-        ),
+        service=studio_model_catalog_service,
         authorize=_require_agent_management,
     )
 
@@ -2886,6 +3062,21 @@ def _run_frontend_server(
     def _feishu_setup_owner(request: Request) -> str:
         principal = _require_agent_management(request)
         return principal.owner_id if principal is not None else "local"
+
+    from frontend.server.mpa_creation import mount_mpa_creation_routes
+
+    def _mpa_creation_owner(request: Request) -> str:
+        principal = _require_agent_management(request)
+        if principal is None:
+            raise HTTPException(
+                status_code=401,
+                detail="Studio identity is required for MPA creation",
+            )
+        return principal.owner_id
+
+    mount_mpa_creation_routes(
+        app, owner=_mpa_creation_owner, supported=provider == "volcengine"
+    )
 
     mount_feishu_bot_setup_routes(
         app,
@@ -3908,6 +4099,61 @@ def _run_frontend_server(
             out["DATABASE_VIKING_REGION"] = DEFAULT_BYTEPLUS_VIKING_MEMORY_REGION
         return out
 
+    def _runtime_env_value(runtime: Any | None, key: str) -> str:
+        if runtime is None:
+            return ""
+        for item in getattr(runtime, "envs", None) or []:
+            if str(getattr(item, "key", "") or "").strip() == key:
+                return str(getattr(item, "value", "") or "")
+        return ""
+
+    def _runtime_env_map(runtime: Any | None) -> dict[str, str]:
+        if runtime is None:
+            return {}
+        result: dict[str, str] = {}
+        for item in getattr(runtime, "envs", None) or []:
+            key = str(getattr(item, "key", "") or "").strip()
+            if key:
+                result[key] = str(getattr(item, "value", "") or "")
+        return result
+
+    def _resolve_mpa_instance_id(
+        *,
+        existing_runtime: Any | None,
+        runtime_id: str = "",
+        runtime_name: str = "",
+        agent_name: str = "",
+        tags: Mapping[str, str] | None = None,
+    ) -> str:
+        for candidate in (
+            _runtime_env_value(existing_runtime, "MPA_AGENT_ID"),
+            (tags or {}).get(_MPA_INSTANCE_ID_TAG, ""),
+            runtime_name,
+            getattr(existing_runtime, "name", "")
+            if existing_runtime is not None
+            else "",
+            runtime_id,
+        ):
+            value = str(candidate or "").strip()
+            if value.startswith("mi-"):
+                return value
+        if existing_runtime is not None:
+            runtime_value = str(
+                getattr(existing_runtime, "runtime_id", "") or ""
+            ).strip()
+            if runtime_value:
+                return runtime_value
+        generated = generate_mpa_agent_id()
+        logger.info(
+            "generated Studio MPA instance id runtime_id=%s runtime_name=%s "
+            "agent_name=%s mpa_instance_id=%s",
+            runtime_id,
+            runtime_name,
+            agent_name,
+            generated,
+        )
+        return generated
+
     def _resolve_ark_model_api_key(
         *,
         api_key_id: str = "",
@@ -4550,6 +4796,70 @@ def _run_frontend_server(
         ]
         return {"mounted": True, "results": results}
 
+    @app.post("/web/mpa/identity-prewarm/{runtime_id}")
+    async def _mpa_identity_prewarm(runtime_id: str, request: Request):
+        """Hand the logged-in Studio user's fresh OIDC tokens to one MPA Runtime."""
+        if request.headers.get("x-requested-with", "").lower() != "xmlhttprequest":
+            raise HTTPException(status_code=403, detail="studio_request_required")
+        oauth2_handler = getattr(app.state, "oauth2_handler", None)
+        session = getattr(request.state, "oauth2_session", None)
+        if oauth2_handler is None or session is None or not session.can_refresh():
+            raise HTTPException(status_code=409, detail="studio_oauth_session_required")
+        principal = _current_principal(request)
+        if principal is None or not principal.owner_id:
+            raise HTTPException(status_code=401, detail="studio_identity_required")
+
+        region = _coerce_cloud_region(request.query_params.get("region"))
+        runtime = await asyncio.to_thread(
+            _authorized_runtime_for_connection, request, runtime_id, region
+        )
+        if _runtime_agent_category(runtime, _runtime_tags(runtime)) != "mpa":
+            raise HTTPException(status_code=400, detail="mpa_runtime_required")
+        endpoint, apikey, auth_type, network_type = _resolve_runtime_conn(
+            runtime_id, region, runtime
+        )
+        if auth_type != "key_auth" or not apikey or network_type != "public":
+            raise HTTPException(status_code=409, detail="mpa_key_auth_required")
+
+        refreshed = await oauth2_handler.refresh_access_token(session)
+        if refreshed is None:
+            raise HTTPException(status_code=401, detail="studio_session_refresh_failed")
+        # The provider may rotate refresh tokens even when its ID-token
+        # response is unusable. Always return the newest browser session.
+        request.state.oauth2_session_override = refreshed
+        if not refreshed.id_token or not refreshed.refresh_token:
+            raise HTTPException(status_code=502, detail="userpool_id_token_missing")
+        claims = await oauth2_handler.validate_id_token(refreshed.id_token)
+        if claims.get("sub") != principal.owner_id:
+            raise HTTPException(status_code=403, detail="studio_user_mismatch")
+
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                response = await client.post(
+                    f"{endpoint.rstrip('/')}/identity/sessions/put",
+                    headers={
+                        "Authorization": _agentkit_authorization_header(apikey),
+                    },
+                    json={
+                        "idToken": refreshed.id_token,
+                        "refreshToken": refreshed.refresh_token,
+                    },
+                )
+            response.raise_for_status()
+        except (httpx.RequestError, httpx.HTTPStatusError) as error:
+            logger.warning(
+                "MPA identity prewarm failed runtime_id=%s region=%s status=%s",
+                runtime_id,
+                region,
+                getattr(
+                    getattr(error, "response", None), "status_code", "network_error"
+                ),
+            )
+            raise HTTPException(
+                status_code=502, detail="mpa_identity_prewarm_failed"
+            ) from error
+        return {"ok": True}
+
     # ---- Skill Hub proxy: proxy /skillhub/* to skills.volces.com ----
     SKILLHUB_TARGET = "https://skills.volces.com"
 
@@ -4647,6 +4957,25 @@ def _run_frontend_server(
         target_url = f"{target_base.rstrip('/')}/{path}"
 
         headers = _build_agentkit_proxy_headers(dict(request.headers), api_key)
+        from veadk.integrations.mpa.channel_proxy import channel_management_headers
+
+        headers.update(
+            channel_management_headers(
+                path, is_admin=_request_role(request).is_admin, api_key=api_key
+            )
+        )
+        if "X-MPA-Channel-Key" in headers:
+            headers = {
+                name: value
+                for name, value in headers.items()
+                if name.lower() != "x-user-id"
+            }
+            channel_principal = _current_principal(request)
+            headers["X-User-Id"] = (
+                channel_principal.owner_id
+                if channel_principal
+                else "studio-local-admin"
+            )
 
         try:
             async with httpx.AsyncClient() as client:
@@ -5665,6 +5994,8 @@ def _run_frontend_server(
         """Create or update the GitHub Actions workflow for Runtime delivery."""
         _require_agent_management(request)
         data = await request.json()
+        if _mpa_compatibility_requested(data):
+            _require_mpa_compatibility_preflight(data)
         try:
             from veadk.cli.github_cicd import (
                 GitHubCicdError,
@@ -5706,6 +6037,8 @@ def _run_frontend_server(
         """Initialize target branch with Agent source and Runtime delivery workflow."""
         _require_agent_management(request)
         data = await request.json()
+        if _mpa_compatibility_requested(data):
+            _require_mpa_compatibility_preflight(data)
         try:
             from veadk.cli.github_cicd import (
                 GitHubCicdError,
@@ -5748,6 +6081,8 @@ def _run_frontend_server(
         """Attach Runtime delivery workflow to an existing source sync branch."""
         _require_agent_management(request)
         data = await request.json()
+        if _mpa_compatibility_requested(data):
+            _require_mpa_compatibility_preflight(data)
         try:
             from veadk.cli.github_cicd import (
                 GitHubCicdError,
@@ -5805,6 +6140,8 @@ def _run_frontend_server(
         """Create a GitHub rollback PR for a Runtime-bound delivery branch."""
         _require_agent_management(request)
         data = await request.json()
+        if _mpa_compatibility_requested(data):
+            _require_mpa_compatibility_preflight(data)
         try:
             from veadk.cli.github_cicd import (
                 GitHubCicdError,
@@ -5870,6 +6207,13 @@ def _run_frontend_server(
         """Sync current AgentProject files to the PR bound to a Runtime."""
         _require_agent_management(request)
         data = await request.json()
+        agent_category = str(data.get("agentCategory") or "").strip().lower()
+        if (
+            agent_category == "mpa"
+            or isinstance(data.get("mpaCompatibilityManifest"), Mapping)
+            or isinstance(data.get("compatibilityManifest"), Mapping)
+        ):
+            _require_mpa_compatibility_preflight(data)
         try:
             from veadk.cli.github_cicd import (
                 GitHubCicdError,
@@ -6538,6 +6882,30 @@ def _run_frontend_server(
                 current_client_uid = str(user_pool_client[0] or "").strip()
         return current_pool_uid, current_client_uid
 
+    def _mpa_runtime_identity_env() -> dict[str, str]:
+        """Resolve the Studio Identity resources into mpa-agent env names."""
+        pool_name = str(oauth2_user_pool or "").strip()
+        client_name = str(oauth2_user_pool_client or "").strip()
+        if not pool_name or not client_name:
+            identity_client = _identity_client()
+            pool_uid, client_uid = _current_studio_identity_ids(identity_client)
+            if not pool_uid or not client_uid:
+                raise RuntimeError("Studio UserPool and client are not configured")
+            resolved_pool_name, resolved_client_name = (
+                identity_client.get_user_pool_resource_names(pool_uid, client_uid)
+            )
+            pool_name = pool_name or resolved_pool_name
+            client_name = client_name or resolved_client_name
+
+        redirect_uri = str(
+            oauth2_redirect_uri or f"http://{host}:{port}/oauth2/callback"
+        ).strip()
+        return _build_mpa_identity_runtime_env(
+            user_pool_name=pool_name,
+            user_pool_client_name=client_name,
+            oauth2_redirect_uri=redirect_uri,
+        )
+
     def _user_pool_runtime_authentication(
         authentication: Any,
     ) -> dict[str, Any]:
@@ -6731,8 +7099,17 @@ def _run_frontend_server(
 
         principal = _require_agent_management(request)
         data = await request.json()
+        agent_category = str(data.get("agentCategory") or "").strip().lower()
+        if agent_category == "mpa" and principal is None:
+            raise HTTPException(
+                status_code=401,
+                detail="Studio identity is required for MPA deployment",
+            )
         agent_name = (data.get("name") or "").strip()
         runtime_id = (data.get("runtimeId") or "").strip()
+        mpa_compatibility_report: dict[str, Any] | None = None
+        if _mpa_compatibility_requested(data):
+            mpa_compatibility_report = _require_mpa_compatibility_preflight(data)
         requested_edit_mode = str(data.get("editMode") or "").strip()
         if requested_edit_mode not in {"", "regenerate", "source-preserving"}:
             raise HTTPException(status_code=400, detail="Invalid Runtime edit mode")
@@ -7185,6 +7562,17 @@ def _run_frontend_server(
                     region=region,
                     app_name=str(data.get("appName") or agent_name).strip(),
                 )
+                if (
+                    mpa_compatibility_report is None
+                    and _runtime_agent_category(
+                        existing_runtime,
+                        _runtime_tags(existing_runtime),
+                    )
+                    == "mpa"
+                ):
+                    mpa_compatibility_report = _require_mpa_compatibility_preflight(
+                        data
+                    )
                 if not update_capability["canUpdate"]:
                     raise HTTPException(
                         status_code=409,
@@ -7582,6 +7970,18 @@ def _run_frontend_server(
                 repository=agent_repository,
             )
 
+        existing_runtime_envs = {
+            str(getattr(item, "key", "") or "").strip(): str(
+                getattr(item, "value", "") or ""
+            )
+            for item in (
+                getattr(existing_runtime, "envs", None) or []
+                if existing_runtime is not None
+                else []
+            )
+            if str(getattr(item, "key", "") or "").strip()
+        }
+
         # Persist the exact environment image selection on the Runtime itself.
         # A missing tag is intentionally interpreted as the AgentKit default so
         # Runtimes created before environment support remain editable.
@@ -7599,6 +7999,21 @@ def _run_frontend_server(
                 **deployment_resource_tag_values,
             }
         )
+        mpa_instance_id_for_deploy = ""
+        if agent_category == "mpa":
+            mpa_instance_id_for_deploy = _resolve_mpa_instance_id(
+                existing_runtime=existing_runtime,
+                runtime_id=runtime_id,
+                runtime_name=requested_runtime_name,
+                agent_name=agent_name,
+                tags=runtime_tag_values,
+            )
+            runtime_tag_values.update(
+                studio_mpa_runtime_tags(
+                    owner=owner_id,
+                    mpa_instance_id=mpa_instance_id_for_deploy,
+                )
+            )
         runtime_tag_values.update(
             _runtime_environment_tags(
                 environment_id,
@@ -7651,17 +8066,6 @@ def _run_frontend_server(
             raw_feishu_config if isinstance(raw_feishu_config, dict) else {}
         )
         feishu_enabled = bool(feishu_config.get("enabled"))
-        existing_runtime_envs = {
-            str(getattr(item, "key", "") or "").strip(): str(
-                getattr(item, "value", "") or ""
-            )
-            for item in (
-                getattr(existing_runtime, "envs", None) or []
-                if existing_runtime is not None
-                else []
-            )
-            if str(getattr(item, "key", "") or "").strip()
-        }
         extra_runtime_envs = {
             key: value
             for key, value in requested_runtime_envs.items()
@@ -7872,6 +8276,10 @@ def _run_frontend_server(
             runtime_envs.pop(key, None)
         for k, v in extra_runtime_envs.items():
             runtime_envs[k] = v
+        if mpa_instance_id_for_deploy:
+            runtime_envs["MPA_AGENT_ID"] = mpa_instance_id_for_deploy
+            if oauth2_user_pool or oauth2_user_pool_uid:
+                runtime_envs.update(_mpa_runtime_identity_env())
         if source_preserving_requested:
             if source_preserving_draft is None:
                 raise HTTPException(
@@ -9496,6 +9904,9 @@ def _run_frontend_server(
                                     "",
                                 ),
                                 "runtimeId": deployed_runtime_id,
+                                "mpaInstanceId": mpa_instance_id_for_deploy
+                                if mpa_instance_id_for_deploy
+                                else None,
                                 "feishuChannel": {
                                     "enabled": True,
                                     "transport": "ws",
@@ -9620,6 +10031,163 @@ def _run_frontend_server(
             for tag in (getattr(runtime, "tags", None) or [])
         }
 
+    def _runtime_account_id(runtime: Any) -> str:
+        configured = os.getenv("VEADK_STUDIO_ACCOUNT_ID", "").strip()
+        if configured:
+            return configured
+        artifact_url = str(getattr(runtime, "artifact_url", "") or "")
+        match = re.search(r"agentkit-platform-([0-9]+)-[^./]+\.cr\.", artifact_url)
+        return match.group(1) if match else ""
+
+    def _runtime_resource_tags(
+        region: str, runtimes: list[Any]
+    ) -> dict[str, dict[str, str]]:
+        requests: dict[str, str] = {}
+        for runtime in runtimes:
+            runtime_id = str(getattr(runtime, "runtime_id", "") or "")
+            account_id = _runtime_account_id(runtime)
+            if runtime_id and account_id:
+                requests[runtime_id] = (
+                    f"trn:agentkit:{region}:{account_id}:runtime/{runtime_id}"
+                )
+        if not requests:
+            return {}
+        try:
+            import volcenginesdkcore
+            import volcenginesdktag
+
+            ak, sk, token = _resolve_ve_credentials()
+            configuration = volcenginesdkcore.Configuration()
+            configuration.ak = ak
+            configuration.sk = sk
+            configuration.session_token = token or ""
+            configuration.region = region
+            configuration.client_side_validation = True
+            client = volcenginesdktag.TAGApi(volcenginesdkcore.ApiClient(configuration))
+            response = client.get_resources(
+                volcenginesdktag.GetResourcesRequest(
+                    resource_trn_list=list(requests.values()),
+                    max_results=len(requests),
+                )
+            )
+        except Exception as error:
+            logger.warning(
+                "runtime tag service lookup failed region=%s error=%s",
+                region,
+                _safe_exception_detail(error, secrets=_resolve_ve_credentials()),
+            )
+            return {}
+
+        result: dict[str, dict[str, str]] = {}
+        for item in getattr(response, "resource_tag_mapping_list", None) or []:
+            runtime_id = str(getattr(item, "resource_id", "") or "")
+            if not runtime_id:
+                continue
+            result[runtime_id] = {
+                str(getattr(tag, "key", "") or ""): str(getattr(tag, "value", "") or "")
+                for tag in (getattr(item, "tags", None) or [])
+                if getattr(tag, "key", None)
+            }
+        return result
+
+    def _runtime_id_from_resource_tag_mapping(item: Any) -> str:
+        runtime_id = str(getattr(item, "resource_id", "") or "")
+        if runtime_id:
+            return runtime_id
+        resource_trn = str(getattr(item, "resource_trn", "") or "")
+        match = re.search(r"/runtime/([^/:]+)$", resource_trn)
+        return match.group(1) if match else ""
+
+    def _runtime_resources_by_tags(
+        region: str,
+        *,
+        tag_filters: Sequence[tuple[str, str]],
+        max_results: int,
+        next_token: str = "",
+    ) -> tuple[dict[str, dict[str, str]], str]:
+        if not tag_filters:
+            return {}, ""
+        try:
+            import volcenginesdkcore
+            import volcenginesdktag
+
+            ak, sk, token = _resolve_ve_credentials()
+            configuration = volcenginesdkcore.Configuration()
+            configuration.ak = ak
+            configuration.sk = sk
+            configuration.session_token = token or ""
+            configuration.region = region
+            configuration.client_side_validation = True
+            client = volcenginesdktag.TAGApi(volcenginesdkcore.ApiClient(configuration))
+            request = volcenginesdktag.GetResourcesRequest(
+                max_results=max(1, min(max_results, 100)),
+                resource_type_filters=["agentkit:runtime"],
+                tag_filters=[
+                    volcenginesdktag.TagFilterForGetResourcesInput(
+                        key=key,
+                        values=[value],
+                    )
+                    for key, value in tag_filters
+                ],
+            )
+            if next_token:
+                request.next_token = next_token
+            response = client.get_resources(request)
+        except Exception as error:
+            logger.warning(
+                "runtime tag service filtered lookup failed region=%s tags=%s error=%s",
+                region,
+                ",".join(key for key, _ in tag_filters),
+                _safe_exception_detail(error, secrets=_resolve_ve_credentials()),
+            )
+            raise RuntimeError("Runtime tag filtered lookup failed") from error
+
+        result: dict[str, dict[str, str]] = {}
+        for item in getattr(response, "resource_tag_mapping_list", None) or []:
+            resource_trn = str(getattr(item, "resource_trn", "") or "")
+            trn_parts = resource_trn.split(":", 4)
+            if (
+                len(trn_parts) >= 3
+                and trn_parts[:2] == ["trn", "agentkit"]
+                and trn_parts[2]
+                and trn_parts[2] != region
+            ):
+                continue
+            runtime_id = _runtime_id_from_resource_tag_mapping(item)
+            if not runtime_id:
+                continue
+            result[runtime_id] = {
+                str(getattr(tag, "key", "") or ""): str(getattr(tag, "value", "") or "")
+                for tag in (getattr(item, "tags", None) or [])
+                if getattr(tag, "key", None)
+            }
+        return result, str(getattr(response, "next_token", "") or "")
+
+    def _runtime_agent_category(runtime: Any, tags: Mapping[str, str]) -> str:
+        """Classify Runtime products from explicit, persisted Runtime tags."""
+        tagged = str(tags.get(MPA_AGENT_TYPE_TAG) or "").strip().lower()
+        if tagged == MPA_AGENT_TYPE_VALUE:
+            return "mpa"
+        return "general"
+
+    def _runtime_mpa_instance_id(runtime: Any, tags: Mapping[str, str]) -> str:
+        """Resolve the MPA Profile identity associated with one Runtime."""
+        for candidate in (
+            _runtime_env_value(runtime, "MPA_AGENT_ID"),
+            tags.get(_MPA_INSTANCE_ID_TAG, ""),
+        ):
+            value = str(candidate or "").strip()
+            if value:
+                return value
+        for candidate in (
+            getattr(runtime, "name", "") or "",
+            getattr(runtime, "runtime_id", "") or "",
+        ):
+            value = str(candidate or "").strip()
+            if value.startswith("mi-"):
+                return value
+        return str(getattr(runtime, "runtime_id", "") or "").strip()
+
     def _get_runtime(runtime_id: str, region: str) -> Any:
         from agentkit.sdk.runtime import types as _rt
         from agentkit.sdk.runtime.client import AgentkitRuntimeClient
@@ -9673,6 +10241,74 @@ def _run_frontend_server(
             if not next_token:
                 break
         return matches[0] if matches else None
+
+    def _resolve_mpa_runtime_credentials(target: Any) -> Any:
+        """Resolve one MPA Runtime from its control-plane environment metadata."""
+        from agentkit.sdk.runtime import types as _rt
+        from agentkit.sdk.runtime.client import AgentkitRuntimeClient
+        from frontend.server.mpa_identity_callback import (
+            MpaRuntimeCredentials,
+            select_mpa_runtime,
+        )
+
+        ak, sk, token = _resolve_ve_credentials()
+        candidate_refs: list[tuple[str, Any, str]] = []
+        for region in _runtime_regions(provider, "all"):
+            client = AgentkitRuntimeClient(
+                access_key=ak,
+                secret_key=sk,
+                session_token=token or "",
+                region=region,
+            )
+            next_token = ""
+            for _ in range(20):
+                kwargs: dict[str, Any] = {"page_size": 100}
+                if next_token:
+                    kwargs["next_token"] = next_token
+                response = client.list_runtimes(_rt.ListRuntimesRequest(**kwargs))
+                runtimes = response.agent_kit_runtimes or []
+                for runtime in runtimes:
+                    runtime_id = str(getattr(runtime, "runtime_id", "") or "").strip()
+                    if (
+                        runtime_id
+                        and _runtime_tags(runtime).get("veadk:agent-type") == "mpa"
+                    ):
+                        candidate_refs.append((region, client, runtime_id))
+                next_token = str(getattr(response, "next_token", "") or "")
+                if not next_token:
+                    break
+
+        def _get_runtime_detail(
+            candidate: tuple[str, Any, str],
+        ) -> tuple[str, Any] | None:
+            candidate_region, client, runtime_id = candidate
+            try:
+                detail = client.get_runtime(_rt.GetRuntimeRequest(RuntimeId=runtime_id))
+            except Exception as detail_error:
+                if is_agentkit_resource_not_found(detail_error):
+                    return None
+                raise
+            return candidate_region, detail
+
+        with ThreadPoolExecutor(
+            max_workers=min(16, max(1, len(candidate_refs)))
+        ) as executor:
+            detailed_candidates = [
+                detail
+                for detail in executor.map(_get_runtime_detail, candidate_refs)
+                if detail is not None
+            ]
+        region, runtime = select_mpa_runtime(detailed_candidates, target)
+        endpoint, api_key, auth_type, network_type = _resolve_runtime_conn(
+            str(getattr(runtime, "runtime_id", "") or ""),
+            region,
+            runtime,
+        )
+        if auth_type != "key_auth" or not api_key:
+            raise RuntimeError("MPA Runtime must use key authentication")
+        if network_type != "public":
+            raise RuntimeError("MPA Runtime must expose a public endpoint")
+        return MpaRuntimeCredentials(endpoint, api_key)
 
     def _authorized_runtime(
         request: Request,
@@ -10125,6 +10761,9 @@ def _run_frontend_server(
                             ),
                             "author": tags.get("veadk:author", ""),
                             "region": reg,
+                            "mpaInstanceId": _runtime_mpa_instance_id(r, tags)
+                            if _runtime_agent_category(r, tags) == "mpa"
+                            else "",
                         }
                     )
                 next_token = getattr(resp, "next_token", None)
@@ -10144,7 +10783,7 @@ def _run_frontend_server(
     @app.post("/web/delete-runtime")
     async def _web_delete_runtime(request: Request):
         """Delete an AgentKit runtime by id (used by the '管理 Agent' view)."""
-        _require_agent_management(request)
+        principal = _require_agent_management(request)
         data = await request.json()
         runtime_id = (data.get("runtimeId") or "").strip()
         region = _coerce_cloud_region(data.get("region"))
@@ -10158,6 +10797,21 @@ def _run_frontend_server(
                 managed_only=True,
             )
             AgentReviewService.require_editable(runtime)
+            runtime_tags = _runtime_tags(runtime)
+            if _runtime_agent_category(runtime, runtime_tags) == "mpa":
+                await _delete_mpa_runtime_with_preview_guard(
+                    request=request,
+                    runtime_id=runtime_id,
+                    region=region,
+                    runtime=runtime,
+                    mpa_instance_id=str(
+                        data.get("mpaInstanceId")
+                        or _runtime_mpa_instance_id(runtime, runtime_tags)
+                        or runtime_id
+                    ),
+                    owner=str(principal.owner_id if principal is not None else "local"),
+                )
+                return {"success": True}
             _delete_agentkit_runtime(runtime_id, region)
             return {"success": True}
         except HTTPException:
@@ -10211,12 +10865,29 @@ def _run_frontend_server(
                 auth_type = "none"
             else:
                 auth_type = "unknown"
-            envs = [
-                {"key": e.key, "value": e.value or ""}
-                for e in (getattr(r, "envs", None) or [])
-            ]
+            envs = []
+            for env in getattr(r, "envs", None) or []:
+                key = str(getattr(env, "key", "") or "")
+                value = str(getattr(env, "value", "") or "")
+                sensitive = bool(
+                    re.search(r"KEY|SECRET|TOKEN|PASSWORD|CREDENTIAL", key, re.I)
+                )
+                envs.append(
+                    {
+                        "key": key,
+                        "value": "" if sensitive else value,
+                        "sensitive": sensitive,
+                        "configured": bool(value),
+                    }
+                )
+            resolved_runtime_id = str(getattr(r, "runtime_id", runtimeId) or runtimeId)
+            runtime_tags = {
+                **_runtime_tags(r),
+                **_runtime_resource_tags(region, [r]).get(resolved_runtime_id, {}),
+            }
+            agent_category = _runtime_agent_category(r, runtime_tags)
             return {
-                "runtimeId": getattr(r, "runtime_id", runtimeId),
+                "runtimeId": resolved_runtime_id,
                 "name": getattr(r, "name", "") or "",
                 "description": getattr(r, "description", "") or "",
                 "status": getattr(r, "status", "") or "",
@@ -10241,6 +10912,10 @@ def _run_frontend_server(
                 "mcpToolsetId": getattr(r, "mcp_toolset_id", "") or "",
                 "artifactUrl": getattr(r, "artifact_url", "") or "",
                 "artifactType": getattr(r, "artifact_type", "") or "",
+                "agentCategory": agent_category,
+                "mpaInstanceId": _runtime_mpa_instance_id(r, runtime_tags)
+                if agent_category == "mpa"
+                else "",
                 "networkTypes": [
                     getattr(item, "network_type", "") or ""
                     for item in network_configurations
@@ -10254,6 +10929,49 @@ def _run_frontend_server(
         except Exception as e:
             logger.error(f"get runtime detail failed: {e}", exc_info=True)
             raise HTTPException(status_code=502, detail=str(e))
+
+    @app.post("/web/runtime-env/copy")
+    async def _web_runtime_env_copy(
+        request: Request,
+        response: Response,
+        runtimeId: str = "",
+        region: str = "cn-beijing",
+        key: str = "",
+    ):
+        """Return one secret only for an explicit authorized copy gesture."""
+        role = _request_role(request)
+        if role not in {StudioRole.ADMIN, StudioRole.DEVELOPER}:
+            raise HTTPException(status_code=403, detail="secret copy is not permitted")
+        if not runtimeId or not key:
+            raise HTTPException(
+                status_code=400, detail="runtimeId and key are required"
+            )
+        runtime = _authorized_runtime(request, runtimeId, _coerce_cloud_region(region))
+        match = next(
+            (env for env in (getattr(runtime, "envs", None) or []) if env.key == key),
+            None,
+        )
+        if match is None or not re.search(
+            r"KEY|SECRET|TOKEN|PASSWORD|CREDENTIAL", key, re.I
+        ):
+            raise HTTPException(
+                status_code=404, detail="secret environment variable not found"
+            )
+        value = str(getattr(match, "value", "") or "")
+        if not value:
+            raise HTTPException(
+                status_code=404, detail="secret environment variable not found"
+            )
+        logger.info(
+            "runtime environment secret copied runtime_id=%s region=%s key=%s role=%s",
+            runtimeId,
+            region,
+            key,
+            role.value,
+        )
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Pragma"] = "no-cache"
+        return {"value": value}
 
     @app.post("/web/runtime-api-key/reveal")
     async def _web_runtime_api_key_reveal(
@@ -10339,6 +11057,7 @@ def _run_frontend_server(
         page_size: int = 30,
         next_token: str = "",
         region: str = "all",
+        agentCategory: str = "",
     ):
         """One page of AgentKit runtimes for the agent selector. Lists ALL
         runtimes (server-side paginated); each item is flagged `isMine` when its
@@ -10350,7 +11069,13 @@ def _run_frontend_server(
         ak, sk, svc_token = _resolve_ve_credentials()
         regions = _runtime_regions(provider, region)
         page_size = max(1, min(page_size, 100))
-        restrict_to_owner = scope == "mine"
+        normalized_agent_category = agentCategory.strip().lower()
+        if normalized_agent_category not in {"", "general", "mpa"}:
+            raise HTTPException(
+                status_code=400,
+                detail="invalid runtime agent category",
+            )
+        restrict_to_owner = scope == "mine" or role != StudioRole.ADMIN
         principal_key = (
             getattr(principal, "owner_id", ""),
             getattr(principal, "display_name", ""),
@@ -10362,6 +11087,7 @@ def _run_frontend_server(
             page_size,
             next_token,
             region,
+            normalized_agent_category,
         )
         cached = _runtime_list_cache.get(cache_key)
         if cached and monotonic() - cached[0] < _runtime_list_cache_ttl_seconds:
@@ -10369,11 +11095,16 @@ def _run_frontend_server(
         list_lock = _runtime_list_locks.setdefault(cache_key, asyncio.Lock())
 
         # next_token format for cross-region mode: "all:<offset>".
+        mpa_tag_filters = (
+            (MPA_AGENT_TYPE_TAG, MPA_AGENT_TYPE_VALUE),
+            (MPA_MANAGED_TAG, MPA_MANAGED_VALUE),
+        )
+
         async def _list_region(
             reg: str,
             tok: str,
             max_results: int = page_size,
-            tag_filter: tuple[str, str] | None = None,
+            tag_filters: Sequence[tuple[str, str]] | None = None,
         ) -> tuple[list[dict], str]:
             from agentkit.sdk.runtime.client import AgentkitRuntimeClient
             from agentkit.sdk.runtime import types as _rt
@@ -10390,11 +11121,12 @@ def _run_frontend_server(
             target_size = max(1, min(max_results, 100))
             for _ in range(20):
                 kw: dict = {"max_results": max(1, target_size - len(out))}
-                if tag_filter is not None:
+                if tag_filters:
                     kw["tag_filters"] = [
                         _rt.TagFiltersItemForListRuntimes.model_validate(
-                            {"Key": tag_filter[0], "Values": [tag_filter[1]]}
+                            {"Key": key, "Values": [value]}
                         )
+                        for key, value in tag_filters
                     ]
                 if current_token:
                     kw["next_token"] = current_token
@@ -10403,8 +11135,18 @@ def _run_frontend_server(
                     client.list_runtimes,
                     request,
                 )
-                for runtime in resp.agent_kit_runtimes or []:
-                    tags = _runtime_tags(runtime)
+                runtime_page = list(resp.agent_kit_runtimes or [])
+                resource_tags = await asyncio.to_thread(
+                    _runtime_resource_tags,
+                    reg,
+                    runtime_page,
+                )
+                for runtime in runtime_page:
+                    runtime_id = str(getattr(runtime, "runtime_id", "") or "")
+                    tags = {
+                        **_runtime_tags(runtime),
+                        **resource_tags.get(runtime_id, {}),
+                    }
                     is_mine = runtime_belongs_to(tags, principal)
                     if scope == "mine" and not is_mine:
                         continue
@@ -10412,6 +11154,12 @@ def _run_frontend_server(
                         not role.is_admin
                         and not is_mine
                         and not (principal is not None and enterprise_visible(tags))
+                    ):
+                        continue
+                    agent_category = _runtime_agent_category(runtime, tags)
+                    if (
+                        normalized_agent_category
+                        and agent_category != normalized_agent_category
                     ):
                         continue
                     can_delete = (
@@ -10431,6 +11179,10 @@ def _run_frontend_server(
                             "currentVersion": getattr(
                                 runtime, "current_version_number", None
                             ),
+                            "agentCategory": agent_category,
+                            "mpaInstanceId": _runtime_mpa_instance_id(runtime, tags)
+                            if agent_category == "mpa"
+                            else "",
                             "region": reg,
                             "author": tags.get("veadk:author", ""),
                             "isMine": is_mine,
@@ -10453,6 +11205,109 @@ def _run_frontend_server(
                     break
                 current_token = next_page_token
             return out[:target_size], next_page_token
+
+        def _runtime_to_visible_item(
+            runtime: Any,
+            tags: Mapping[str, str],
+            reg: str,
+        ) -> dict[str, Any] | None:
+            is_mine = runtime_belongs_to(tags, principal)
+            if scope == "mine" and not is_mine:
+                return None
+            if (
+                not role.is_admin
+                and not is_mine
+                and not (principal is not None and enterprise_visible(tags))
+            ):
+                return None
+            agent_category = _runtime_agent_category(runtime, tags)
+            if (
+                normalized_agent_category
+                and agent_category != normalized_agent_category
+            ):
+                return None
+            can_delete = (
+                role != StudioRole.USER
+                and tags.get("veadk:managed") == "true"
+                and (role.is_admin or is_mine)
+            )
+            return {
+                "name": runtime.name,
+                "runtimeId": runtime.runtime_id,
+                "status": runtime.status,
+                "createdAt": runtime.created_at,
+                "description": getattr(runtime, "description", "") or "",
+                "cpuMilli": getattr(runtime, "cpu_milli", None),
+                "memoryMb": getattr(runtime, "memory_mb", None),
+                "currentVersion": getattr(runtime, "current_version_number", None),
+                "agentCategory": agent_category,
+                "mpaInstanceId": _runtime_mpa_instance_id(runtime, tags)
+                if agent_category == "mpa"
+                else "",
+                "region": reg,
+                "author": tags.get("veadk:author", ""),
+                "isMine": is_mine,
+                "canDelete": can_delete
+                and tags.get(STATUS_TAG) != "pending"
+                and not enterprise_visible(tags),
+                "canManage": role != StudioRole.USER and (role.is_admin or is_mine),
+                "canPublish": role.is_admin,
+                "visibility": "enterprise" if enterprise_visible(tags) else "private",
+                "reviewStatus": tags.get(STATUS_TAG, ""),
+            }
+
+        async def _list_mpa_region(
+            reg: str,
+            tok: str,
+            max_results: int = page_size,
+            extra_tag_filters: Sequence[tuple[str, str]] = (),
+        ) -> tuple[list[dict], str]:
+            tag_filters = [*mpa_tag_filters, *extra_tag_filters]
+
+            async def _tagged_runtime_item(
+                runtime_id: str,
+                tags: Mapping[str, str],
+            ) -> dict[str, Any] | None:
+                try:
+                    runtime = await asyncio.to_thread(_get_runtime, runtime_id, reg)
+                except Exception as error:
+                    if not is_agentkit_resource_not_found(error):
+                        raise
+                    logger.warning(
+                        "stale tagged MPA runtime ignored runtime_id=%s region=%s",
+                        runtime_id,
+                        reg,
+                    )
+                    return None
+                merged_tags = {**_runtime_tags(runtime), **tags}
+                for key, value in mpa_tag_filters:
+                    merged_tags.setdefault(key, value)
+                return _runtime_to_visible_item(runtime, merged_tags, reg)
+
+            out: list[dict] = []
+            current_token = tok
+            following_token = ""
+            target_size = max(1, min(max_results, 100))
+            for _ in range(20):
+                tag_map, following_token = await asyncio.to_thread(
+                    _runtime_resources_by_tags,
+                    reg,
+                    tag_filters=tag_filters,
+                    max_results=max(1, target_size - len(out)),
+                    next_token=current_token,
+                )
+                results = await asyncio.gather(
+                    *(
+                        _tagged_runtime_item(runtime_id, tags)
+                        for runtime_id, tags in tag_map.items()
+                    )
+                )
+                out.extend(item for item in results if item is not None)
+                if len(out) >= target_size or not following_token:
+                    break
+                current_token = following_token
+            out.sort(key=lambda item: item.get("createdAt") or "", reverse=True)
+            return out[:target_size], following_token
 
         await list_lock.acquire()
         cached = _runtime_list_cache.get(cache_key)
@@ -10481,11 +11336,22 @@ def _run_frontend_server(
                 owned_has_more = False
                 owned_results = await asyncio.gather(
                     *(
-                        _list_region(
-                            reg,
-                            "",
-                            window_end,
-                            ("veadk:owner", principal.owner_id),
+                        (
+                            _list_mpa_region(
+                                reg,
+                                "",
+                                window_end,
+                                [("veadk:owner", principal.owner_id)]
+                                if scope == "mine"
+                                else [],
+                            )
+                            if normalized_agent_category == "mpa"
+                            else _list_region(
+                                reg,
+                                "",
+                                window_end,
+                                [("veadk:owner", principal.owner_id)],
+                            )
                         )
                         for reg in regions
                     )
@@ -10506,7 +11372,10 @@ def _run_frontend_server(
                 return _cache_result({"runtimes": page, "nextToken": following_token})
 
             if len(regions) == 1:
-                out, nxt = await _list_region(regions[0], next_token)
+                if normalized_agent_category == "mpa":
+                    out, nxt = await _list_mpa_region(regions[0], next_token)
+                else:
+                    out, nxt = await _list_region(regions[0], next_token)
                 return _cache_result({"runtimes": out, "nextToken": nxt})
 
             if next_token:
@@ -10545,6 +11414,47 @@ def _run_frontend_server(
                     seen_tokens.add(following_token)
                     regional_token = following_token
                 return items, bool(following_token)
+
+            if normalized_agent_category == "mpa":
+                regional_results = await asyncio.gather(
+                    *(_list_mpa_region(reg, "", window_end) for reg in regions),
+                    return_exceptions=True,
+                )
+                regional_errors: list[str] = []
+                tagged_runtimes: list[dict] = []
+                regional_has_more = False
+                for reg, result in zip(regions, regional_results):
+                    if isinstance(result, BaseException):
+                        if isinstance(result, asyncio.CancelledError):
+                            raise result
+                        error_detail = _safe_exception_detail(
+                            result,
+                            secrets=(ak, sk, svc_token),
+                        )
+                        logger.warning(
+                            "list tagged MPA runtimes [%s] failed: %s",
+                            reg,
+                            error_detail,
+                        )
+                        regional_errors.append(f"{reg}: {error_detail}")
+                        continue
+                    items, has_more = result
+                    tagged_runtimes.extend(items)
+                    regional_has_more = regional_has_more or has_more
+                if len(regional_errors) == len(regions):
+                    raise RuntimeError(
+                        "all regional tagged MPA runtime requests failed: "
+                        + "; ".join(regional_errors)
+                    )
+                tagged_runtimes.sort(
+                    key=lambda x: x.get("createdAt") or "",
+                    reverse=True,
+                )
+                page_end = min(offset + page_size, len(tagged_runtimes))
+                page = tagged_runtimes[offset:page_end]
+                has_more = page_end < len(tagged_runtimes) or regional_has_more
+                following_token = f"all:{page_end}" if has_more else ""
+                return _cache_result({"runtimes": page, "nextToken": following_token})
 
             all_runtimes: list[dict] = []
             regional_has_more = False
@@ -10595,6 +11505,29 @@ def _run_frontend_server(
     # Cache resolved (endpoint, apikey, auth type) per runtime so the data-plane
     # proxy does not call GetRuntime on every request. Short TTL; cleared on a 401.
     _rt_conn_cache: dict[tuple[str, str], tuple[str, str, str, str, float]] = {}
+    _a2a_task_by_session: OrderedDict[tuple[str, str, str, str], str] = OrderedDict()
+    _a2a_task_cache_limit = 1_000
+
+    def _remember_a2a_task(
+        *,
+        region: str,
+        runtime_id: str,
+        user_id: str,
+        session_id: str,
+        result: Any,
+    ) -> None:
+        if not session_id or not isinstance(result, Mapping):
+            return
+        task_id = str(result.get("taskId") or "")
+        if not task_id and result.get("kind") == "task":
+            task_id = str(result.get("id") or "")
+        if not task_id:
+            return
+        key = (region, runtime_id, user_id, session_id)
+        _a2a_task_by_session[key] = task_id
+        _a2a_task_by_session.move_to_end(key)
+        while len(_a2a_task_by_session) > _a2a_task_cache_limit:
+            _a2a_task_by_session.popitem(last=False)
 
     def _runtime_endpoint_host(endpoint: str) -> str:
         parsed = urlparse(endpoint or "")
@@ -10641,6 +11574,468 @@ def _run_frontend_server(
                 }
             )
         return items
+
+    async def _runtime_proxy_buffer(upstream: Any) -> bytes:
+        chunks = []
+        async for chunk in upstream.aiter_raw():
+            chunks.append(chunk)
+        return b"".join(chunks)
+
+    async def _runtime_a2a_agent_card(
+        endpoint: str,
+        headers: dict[str, str],
+        *,
+        is_mpa: bool = False,
+    ) -> dict[str, Any] | None:
+        """Return a usable A2A Agent Card for Runtime discovery, else None."""
+
+        client = httpx.AsyncClient(timeout=httpx.Timeout(5.0, connect=4.0))
+        upstream = None
+        try:
+            request = client.build_request(
+                "GET",
+                f"{endpoint.rstrip('/')}{_RUNTIME_A2A_AGENT_CARD_PATH}",
+                params={},
+                headers=headers,
+                content=b"",
+            )
+            upstream = await client.send(request, stream=True)
+            if upstream.status_code != 200:
+                return None
+            body = await _runtime_proxy_buffer(upstream)
+            payload = json.loads(body.decode("utf-8"))
+            if not isinstance(payload, dict):
+                return None
+            card_url = str(payload.get("url") or "").strip()
+            if not card_url:
+                return None
+            if is_mpa:
+                from frontend.server.mpa_a2a import mpa_a2a_rpc_url
+
+                payload["url"] = mpa_a2a_rpc_url(endpoint, card_url)
+            return payload
+        except (httpx.HTTPError, UnicodeDecodeError, json.JSONDecodeError):
+            return None
+        finally:
+            if upstream is not None:
+                await upstream.aclose()
+            await client.aclose()
+
+    def _runtime_a2a_session(
+        session_id: str, user_id: str, *, events: list[dict[str, Any]] | None = None
+    ) -> dict[str, Any]:
+        import time as _time
+
+        return {
+            "id": session_id,
+            "userId": user_id,
+            "lastUpdateTime": _time.time(),
+            "events": events or [],
+            "state": {},
+        }
+
+    async def _runtime_a2a_restored_session(
+        *,
+        runtime_id: str,
+        region: str,
+        session_id: str,
+        user_id: str,
+        endpoint: str,
+        headers: dict[str, str],
+        is_mpa: bool = False,
+    ) -> dict[str, Any]:
+        task_id = _a2a_task_by_session.get((region, runtime_id, user_id, session_id))
+        if not task_id:
+            return _runtime_a2a_session(session_id, user_id)
+        card = await _runtime_a2a_agent_card(endpoint, headers, is_mpa=is_mpa)
+        if card is None:
+            return _runtime_a2a_session(session_id, user_id)
+        rpc_payload = {
+            "jsonrpc": "2.0",
+            "id": str(uuid4()),
+            "method": "tasks/get",
+            "params": {"id": task_id, "historyLength": 20},
+        }
+        client = httpx.AsyncClient(timeout=30.0)
+        response = None
+        try:
+            request = client.build_request(
+                "POST",
+                str(card.get("url") or "").strip(),
+                params={},
+                headers={"Content-Type": "application/json", **headers},
+                content=json.dumps(rpc_payload).encode("utf-8"),
+            )
+            response = await client.send(request, stream=True)
+            if response.status_code >= 400:
+                return _runtime_a2a_session(session_id, user_id)
+            body = await _runtime_proxy_buffer(response)
+            data = json.loads(body.decode("utf-8"))
+        except (httpx.HTTPError, UnicodeDecodeError, json.JSONDecodeError):
+            return _runtime_a2a_session(session_id, user_id)
+        finally:
+            if response is not None:
+                await response.aclose()
+            await client.aclose()
+        result = data.get("result") if isinstance(data, Mapping) else None
+        text = _runtime_a2a_response_text(result)
+        events = (
+            [
+                {
+                    "id": f"{task_id}-restored",
+                    "author": str(card.get("name") or _RUNTIME_A2A_VIRTUAL_APP),
+                    "content": {
+                        "role": "model",
+                        "parts": [{"text": text}],
+                    },
+                    "partial": False,
+                    "turnComplete": True,
+                }
+            ]
+            if text
+            else []
+        )
+        return _runtime_a2a_session(session_id, user_id, events=events)
+
+    def _runtime_a2a_text_parts(parts: Any) -> list[dict[str, str]]:
+        if not isinstance(parts, list):
+            return []
+        text_parts = []
+        for part in parts:
+            if not isinstance(part, Mapping):
+                continue
+            text = str(part.get("text") or "").strip()
+            if text:
+                text_parts.append({"kind": "text", "text": text})
+        return text_parts
+
+    def _runtime_a2a_invocation_metadata(payload: Mapping[str, Any]) -> dict[str, Any]:
+        custom_metadata = payload.get("custom_metadata")
+        if not isinstance(custom_metadata, Mapping):
+            return {}
+        invocation = custom_metadata.get("veadkInvocation")
+        if not isinstance(invocation, Mapping):
+            return {}
+        safe_invocation: dict[str, Any] = {}
+        raw_skills = invocation.get("skills")
+        if isinstance(raw_skills, list):
+            skills = []
+            for item in raw_skills[:20]:
+                if not isinstance(item, Mapping):
+                    continue
+                name = str(item.get("name") or "").strip()
+                if not name:
+                    continue
+                skill = {"name": name}
+                for key in ("skillSpaceId", "skillId", "version"):
+                    value = str(item.get(key) or "").strip()
+                    if value:
+                        skill[key] = value
+                skills.append(skill)
+            if skills:
+                safe_invocation["skills"] = skills
+        return safe_invocation
+
+    def _runtime_a2a_execution_metadata(payload: Mapping[str, Any]) -> dict[str, Any]:
+        custom_metadata = payload.get("custom_metadata")
+        if not isinstance(custom_metadata, Mapping):
+            return {}
+        execution = custom_metadata.get("veadkExecution")
+        if not isinstance(execution, Mapping):
+            return {}
+        safe_execution: dict[str, Any] = {}
+        version = execution.get("executionConfigVersion")
+        if isinstance(version, int) and version > 0:
+            safe_execution["executionConfigVersion"] = version
+        idempotency_key = str(execution.get("idempotencyKey") or "").strip()
+        if idempotency_key:
+            safe_execution["idempotencyKey"] = idempotency_key
+        return safe_execution
+
+    def _runtime_a2a_response_text(result: Any) -> str:
+        def _part_texts(parts: Any) -> list[str]:
+            texts: list[str] = []
+            if not isinstance(parts, list):
+                return texts
+            for part in parts:
+                if not isinstance(part, Mapping):
+                    continue
+                metadata = part.get("metadata")
+                if isinstance(metadata, Mapping) and metadata.get("adk_thought"):
+                    continue
+                text = str(part.get("text") or "").strip()
+                if text:
+                    texts.append(text)
+                    continue
+                data = part.get("data")
+                response = data.get("response") if isinstance(data, Mapping) else None
+                result_text = (
+                    str(response.get("result") or "").strip()
+                    if isinstance(response, Mapping)
+                    else ""
+                )
+                if result_text:
+                    texts.append(result_text)
+            return texts
+
+        if not isinstance(result, Mapping):
+            return ""
+        if result.get("kind") == "message":
+            return "\n".join(_part_texts(result.get("parts")))
+        artifact_texts: list[str] = []
+        for artifact in result.get("artifacts") or []:
+            if isinstance(artifact, Mapping):
+                artifact_texts.extend(_part_texts(artifact.get("parts")))
+        if artifact_texts:
+            return "\n".join(artifact_texts)
+        history_texts: list[str] = []
+        for message in result.get("history") or []:
+            if isinstance(message, Mapping) and message.get("role") == "agent":
+                history_texts.extend(_part_texts(message.get("parts")))
+        return "\n".join(history_texts)
+
+    async def _runtime_a2a_run_sse(
+        *,
+        runtime_id: str,
+        region: str,
+        card: Mapping[str, Any],
+        headers: dict[str, str],
+        payload: Mapping[str, Any],
+        mpa_a2a: bool = False,
+    ) -> AsyncIterator[bytes]:
+        new_message = payload.get("new_message")
+        if not isinstance(new_message, Mapping):
+            yield b'data: {"error":"A2A bridge requires a user message."}\n\n'
+            return
+        text_parts = _runtime_a2a_text_parts(new_message.get("parts"))
+        if not text_parts:
+            yield b'data: {"error":"A2A bridge only supports text messages."}\n\n'
+            return
+        session_id = str(payload.get("session_id") or payload.get("sessionId") or "")
+        message = {
+            "kind": "message",
+            "messageId": str(uuid4()),
+            "role": "user",
+            "parts": text_parts,
+        }
+        if session_id:
+            message["contextId"] = session_id
+        invocation_metadata = _runtime_a2a_invocation_metadata(payload)
+        execution_metadata = _runtime_a2a_execution_metadata(payload)
+        request_metadata = {
+            **(
+                {"modelId": str(payload["model_id"]).strip()}
+                if str(payload.get("model_id") or "").strip()
+                else {}
+            ),
+            **({"veadkInvocation": invocation_metadata} if invocation_metadata else {}),
+            **({"veadkExecution": execution_metadata} if execution_metadata else {}),
+        }
+        rpc_payload = {
+            "jsonrpc": "2.0",
+            "id": str(uuid4()),
+            "method": (
+                "message/stream"
+                if isinstance(card.get("capabilities"), Mapping)
+                and card["capabilities"].get("streaming") is True
+                else "message/send"
+            ),
+            "params": {
+                "message": message,
+                "configuration": {"blocking": True},
+                **({"metadata": request_metadata} if request_metadata else {}),
+            },
+        }
+        # A blocking A2A server may not send headers until the task completes.
+        # Acknowledge the Studio wait without claiming Runtime acceptance.
+        yield (
+            "data: "
+            + json.dumps(
+                {
+                    "id": str(uuid4()),
+                    "author": str(card.get("name") or _RUNTIME_A2A_VIRTUAL_APP),
+                    "partial": True,
+                    "content": {"role": "model", "parts": []},
+                    "customMetadata": {"a2aStatus": "connecting"},
+                }
+            )
+            + "\n\n"
+        ).encode("utf-8")
+        client = httpx.AsyncClient(timeout=None)
+        upstream = None
+        try:
+            request = client.build_request(
+                "POST",
+                str(card.get("url") or "").strip(),
+                params={},
+                headers={"Content-Type": "application/json", **headers},
+                content=json.dumps(rpc_payload).encode("utf-8"),
+            )
+            upstream = await client.send(request, stream=True)
+            if rpc_payload["method"] == "message/stream":
+                if upstream.status_code >= 400:
+                    body = await _runtime_proxy_buffer(upstream)
+                    detail = body.decode("utf-8", errors="replace")[:500]
+                    yield (
+                        "data: "
+                        + json.dumps(
+                            {
+                                "error": f"A2A request failed: {upstream.status_code} {detail}"
+                            },
+                            ensure_ascii=False,
+                        )
+                        + "\n\n"
+                    ).encode("utf-8")
+                    return
+                decoder = A2AStreamDecoder(mpa_a2a=mpa_a2a)
+                received_event = False
+                fallback_to_blocking = False
+                async for chunk in upstream.aiter_raw():
+                    for envelope in decoder.feed(chunk):
+                        if not received_event and is_method_not_supported(envelope):
+                            fallback_to_blocking = True
+                            break
+                        error_message = a2a_error_message(envelope)
+                        if error_message:
+                            yield (
+                                "data: "
+                                + json.dumps(
+                                    {"error": f"A2A JSON-RPC error: {error_message}"},
+                                    ensure_ascii=False,
+                                )
+                                + "\n\n"
+                            ).encode("utf-8")
+                            return
+                        received_event = True
+                        result = envelope.get("result")
+                        _remember_a2a_task(
+                            region=region,
+                            runtime_id=runtime_id,
+                            user_id=str(payload.get("user_id") or "user"),
+                            session_id=session_id,
+                            result=result,
+                        )
+                        for event in decoder.project(
+                            result,
+                            author=str(card.get("name") or _RUNTIME_A2A_VIRTUAL_APP),
+                        ):
+                            yield (
+                                "data: "
+                                + json.dumps(event, ensure_ascii=False)
+                                + "\n\n"
+                            ).encode("utf-8")
+                    if fallback_to_blocking:
+                        break
+                if fallback_to_blocking:
+                    await upstream.aclose()
+                    upstream = None
+                    rpc_payload["method"] = "message/send"
+                    rpc_payload["params"]["configuration"] = {"blocking": True}
+                    request = client.build_request(
+                        "POST",
+                        str(card.get("url") or "").strip(),
+                        params={},
+                        headers={"Content-Type": "application/json", **headers},
+                        content=json.dumps(rpc_payload).encode("utf-8"),
+                    )
+                    upstream = await client.send(request, stream=True)
+                else:
+                    for envelope in decoder.finish():
+                        received_event = True
+                        result = envelope.get("result")
+                        _remember_a2a_task(
+                            region=region,
+                            runtime_id=runtime_id,
+                            user_id=str(payload.get("user_id") or "user"),
+                            session_id=session_id,
+                            result=result,
+                        )
+                        for event in decoder.project(
+                            result,
+                            author=str(card.get("name") or _RUNTIME_A2A_VIRTUAL_APP),
+                        ):
+                            yield (
+                                "data: "
+                                + json.dumps(event, ensure_ascii=False)
+                                + "\n\n"
+                            ).encode("utf-8")
+                    for event in decoder.finalize_projection(
+                        author=str(card.get("name") or _RUNTIME_A2A_VIRTUAL_APP),
+                    ):
+                        yield (
+                            "data: " + json.dumps(event, ensure_ascii=False) + "\n\n"
+                        ).encode("utf-8")
+                    return
+            body = await _runtime_proxy_buffer(upstream)
+            if upstream.status_code >= 400:
+                detail = body.decode("utf-8", errors="replace")[:500]
+                yield (
+                    "data: "
+                    + json.dumps(
+                        {
+                            "error": f"A2A request failed: {upstream.status_code} {detail}"
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n\n"
+                ).encode("utf-8")
+                return
+            data = json.loads(body.decode("utf-8"))
+            if isinstance(data, Mapping) and data.get("error"):
+                error = data.get("error")
+                message_text = (
+                    error.get("message") if isinstance(error, Mapping) else str(error)
+                )
+                yield (
+                    "data: "
+                    + json.dumps(
+                        {"error": f"A2A JSON-RPC error: {message_text}"},
+                        ensure_ascii=False,
+                    )
+                    + "\n\n"
+                ).encode("utf-8")
+                return
+            result = data.get("result") if isinstance(data, Mapping) else None
+            _remember_a2a_task(
+                region=region,
+                runtime_id=runtime_id,
+                user_id=str(payload.get("user_id") or "user"),
+                session_id=session_id,
+                result=result,
+            )
+            text = _runtime_a2a_response_text(result)
+            state = ""
+            if isinstance(result, Mapping):
+                status = result.get("status")
+                if isinstance(status, Mapping):
+                    state = str(status.get("state") or "")
+            if not text:
+                text = (
+                    f"A2A task state: {state or 'unknown'}"
+                    if isinstance(result, Mapping) and result.get("kind") == "task"
+                    else "A2A response contained no text."
+                )
+            event = {
+                "id": str(uuid4()),
+                "author": str(card.get("name") or _RUNTIME_A2A_VIRTUAL_APP),
+                "content": {"role": "model", "parts": [{"text": text}]},
+            }
+            yield ("data: " + json.dumps(event, ensure_ascii=False) + "\n\n").encode(
+                "utf-8"
+            )
+        except (httpx.HTTPError, UnicodeDecodeError, json.JSONDecodeError) as error:
+            yield (
+                "data: "
+                + json.dumps(
+                    {"error": f"A2A bridge failed: {error}"},
+                    ensure_ascii=False,
+                )
+                + "\n\n"
+            ).encode("utf-8")
+        finally:
+            if upstream is not None:
+                await upstream.aclose()
+            await client.aclose()
 
     def _resolve_runtime_conn(
         runtime_id: str,
@@ -10753,6 +12148,287 @@ def _run_frontend_server(
         return _build_agentkit_proxy_headers(
             dict(request.headers), apikey, validated_authorization
         )
+
+    from frontend.server.mpa_cron import mount_routes as mount_mpa_cron_routes
+
+    mount_mpa_cron_routes(
+        app,
+        user_for=_sandbox_owner,
+        authorize=_authorized_runtime_for_connection,
+        connection=_resolve_runtime_conn,
+        region_for=_coerce_cloud_region,
+        authorization=lambda request, apikey, auth_type: _runtime_request_headers(
+            request, apikey=apikey, auth_type=auth_type
+        ).get("Authorization", ""),
+    )
+
+    from frontend.server.mpa import (
+        create_operation_service as create_mpa_operation_service,
+        mount_mpa_profile_routes,
+    )
+    from frontend.server.mpa.runtime_client import MpaRuntimeClient, MpaRuntimeError
+    from frontend.server.mpa.routes import (
+        _ACTIVE_SESSION_STATUSES,
+        _active_operation,
+        _delete_preview_payload,
+        _operation_blocks_delete,
+        _session_payload,
+    )
+
+    async def _resolve_mpa_runtime_bindings(
+        request: Request,
+        mpa_instance_id: str,
+        region: str,
+    ) -> list[dict[str, Any]]:
+        """Return visible MPA Runtime bindings for one MPA instance id."""
+        normalized_id = mpa_instance_id.strip()
+        if not normalized_id:
+            return []
+        regions = _runtime_regions(provider, region)
+
+        async def _runtime_binding_item(
+            runtime_id: str,
+            tags: Mapping[str, str],
+            reg: str,
+        ) -> dict[str, Any] | None:
+            try:
+                runtime = await asyncio.to_thread(_get_runtime, runtime_id, reg)
+            except Exception as error:  # noqa: BLE001 - region probe boundary
+                if is_agentkit_resource_not_found(error):
+                    return None
+                logger.warning(
+                    "MPA Runtime binding lookup failed runtime_id=%s region=%s: %s",
+                    runtime_id,
+                    reg,
+                    _safe_exception_detail(
+                        error,
+                        secrets=_resolve_ve_credentials(),
+                    ),
+                )
+                return None
+            resource_tags = await asyncio.to_thread(
+                _runtime_resource_tags, reg, [runtime]
+            )
+            runtime_id = str(getattr(runtime, "runtime_id", "") or normalized_id)
+            tags = {
+                **_runtime_tags(runtime),
+                **resource_tags.get(runtime_id, {}),
+            }
+            if _runtime_agent_category(runtime, tags) != "mpa":
+                return None
+            return {
+                "runtime": runtime,
+                "runtimeId": runtime_id,
+                "region": reg,
+                "visible": {
+                    "runtimeId": runtime_id,
+                    "region": reg,
+                    "name": str(getattr(runtime, "name", "") or runtime_id),
+                    "status": str(getattr(runtime, "status", "") or ""),
+                    "createdAt": getattr(runtime, "created_at", ""),
+                    "description": getattr(runtime, "description", "") or "",
+                    "currentVersion": getattr(runtime, "current_version_number", None),
+                    "agentCategory": "mpa",
+                    "mpaInstanceId": _runtime_mpa_instance_id(runtime, tags),
+                    "isMine": runtime_belongs_to(tags, _current_principal(request)),
+                    "canManage": _request_role(request) != StudioRole.USER,
+                },
+            }
+
+        async def _runtime_id_candidate(reg: str) -> dict[str, Any] | None:
+            return await _runtime_binding_item(normalized_id, {}, reg)
+
+        async def _tagged_candidates(reg: str) -> list[dict[str, Any]]:
+            try:
+                tag_map, _next_token = await asyncio.to_thread(
+                    _runtime_resources_by_tags,
+                    reg,
+                    tag_filters=[
+                        ("veadk:agent-type", "mpa"),
+                        (_MPA_INSTANCE_ID_TAG, normalized_id),
+                    ],
+                    max_results=100,
+                )
+            except Exception as error:
+                logger.warning(
+                    "MPA Runtime binding tag lookup failed mpa_instance_id=%s "
+                    "region=%s error=%s",
+                    normalized_id,
+                    reg,
+                    _safe_exception_detail(
+                        error,
+                        secrets=_resolve_ve_credentials(),
+                    ),
+                )
+                return []
+            results = await asyncio.gather(
+                *(
+                    _runtime_binding_item(runtime_id, tags, reg)
+                    for runtime_id, tags in tag_map.items()
+                )
+            )
+            return [item for item in results if item is not None]
+
+        tagged_pages = await asyncio.gather(
+            *(_tagged_candidates(reg) for reg in regions)
+        )
+        by_runtime_id: dict[str, dict[str, Any]] = {}
+        for item in (candidate for page in tagged_pages for candidate in page):
+            by_runtime_id[str(item.get("runtimeId") or "")] = item
+        if not by_runtime_id:
+            direct_results = await asyncio.gather(
+                *(_runtime_id_candidate(reg) for reg in regions)
+            )
+            for item in direct_results:
+                if item is not None:
+                    by_runtime_id[str(item.get("runtimeId") or "")] = item
+        return list(by_runtime_id.values())
+
+    def _resolve_mpa_runtime_profile_connection(
+        request: Request,
+        runtime_id: str,
+        region: str,
+        runtime: Any,
+    ) -> tuple[str, str, str, str]:
+        endpoint, apikey, auth_type, network_type = _resolve_runtime_conn(
+            runtime_id,
+            _coerce_cloud_region(region),
+            runtime,
+        )
+        headers = _runtime_request_headers(
+            request,
+            apikey=apikey,
+            auth_type=auth_type,
+        )
+        authorization = headers.get("Authorization", "")
+        return endpoint, authorization, auth_type, network_type
+
+    mpa_runtime_client = MpaRuntimeClient()
+    mpa_operation_service = create_mpa_operation_service(
+        provider=provider,
+        resolve_credentials=_resolve_ve_credentials,
+        runtime_client=mpa_runtime_client,
+        allow_in_memory=dev,
+    )
+
+    async def _delete_mpa_runtime_with_preview_guard(
+        *,
+        request: Request,
+        runtime_id: str,
+        region: str,
+        runtime: Any,
+        mpa_instance_id: str,
+        owner: str,
+    ) -> None:
+        endpoint, bearer_token, _auth_type, _network_type = (
+            _resolve_mpa_runtime_profile_connection(
+                request, runtime_id, region, runtime
+            )
+        )
+        runtime_bearer = (
+            bearer_token[7:].strip()
+            if bearer_token.lower().startswith("bearer ")
+            else bearer_token
+        )
+        active_operation = await _active_operation(
+            mpa_operation_service,
+            owner,
+            mpa_instance_id,
+        )
+        profile: dict[str, Any] | None = None
+        sessions: list[Any] = []
+        blockers: list[str] = []
+        try:
+            profile_result = await mpa_runtime_client.profile_status(
+                endpoint=endpoint,
+                mpa_instance_id=mpa_instance_id,
+                bearer_token=runtime_bearer,
+            )
+            profile = (
+                profile_result.model_dump(mode="json", by_alias=True)
+                if hasattr(profile_result, "model_dump")
+                else dict(profile_result)
+            )
+            sessions = await mpa_runtime_client.list_sessions(
+                endpoint=endpoint,
+                bearer_token=runtime_bearer,
+                include_a2a=True,
+            )
+        except MpaRuntimeError as error:
+            if error.status_code == 404:
+                blockers.append("orphan_runtime")
+            else:
+                raise
+        session_payloads = [_session_payload(session) for session in sessions]
+        active_sessions = [
+            item
+            for item in session_payloads
+            if item["status"].casefold() in _ACTIVE_SESSION_STATUSES
+        ]
+        if _operation_blocks_delete(
+            active_operation,
+            binding_status=(
+                "orphan_runtime" if "orphan_runtime" in blockers else "bound"
+            ),
+            profile=profile,
+        ):
+            blockers.append("active_operation")
+        if active_sessions:
+            blockers.append("active_sessions")
+        if blockers:
+            detail = _delete_preview_payload(
+                mpa_instance_id=mpa_instance_id,
+                binding_status=(
+                    "orphan_runtime" if "orphan_runtime" in blockers else "bound"
+                ),
+                runtime={
+                    "runtimeId": runtime_id,
+                    "region": region,
+                    "name": str(getattr(runtime, "name", "") or runtime_id),
+                    "status": str(getattr(runtime, "status", "") or ""),
+                    "currentVersion": getattr(runtime, "current_version_number", None),
+                    "agentCategory": "mpa",
+                },
+                profile=profile,
+                active_operation=active_operation,
+                bindings=[],
+                blockers=blockers,
+                sessions=sessions,
+            )
+            raise HTTPException(status_code=409, detail=detail)
+        for item in session_payloads:
+            session_id = item["sessionId"].strip()
+            if not session_id:
+                continue
+            try:
+                await mpa_runtime_client.delete_session(
+                    endpoint=endpoint,
+                    session_id=session_id,
+                    bearer_token=runtime_bearer,
+                )
+            except MpaRuntimeError as error:
+                if error.status_code != 404:
+                    raise
+        _delete_agentkit_runtime(runtime_id, region)
+
+    mount_mpa_profile_routes(
+        app,
+        runtime_client=mpa_runtime_client,
+        authorize_runtime=lambda request, runtime_id, region: _authorized_runtime(
+            request,
+            runtime_id,
+            _coerce_cloud_region(region),
+            coded_access_error=True,
+        ),
+        resolve_runtime_connection=_resolve_mpa_runtime_profile_connection,
+        operation_service=mpa_operation_service,
+        owner_resolver=lambda request: (
+            principal.owner_id
+            if (principal := _require_agent_management(request)) is not None
+            else "local"
+        ),
+        resolve_runtime_bindings=_resolve_mpa_runtime_bindings,
+    )
 
     @app.get("/web/runtime-tool-channel/{runtime_id}/capabilities")
     async def _runtime_tool_channel_capabilities(runtime_id: str, request: Request):
@@ -11108,10 +12784,169 @@ def _run_frontend_server(
             apikey=apikey,
             auth_type=auth_type,
         )
+        # Match scheduled-task ownership and never forward browser identity claims.
+        principal = _current_principal(request)
+        if principal is not None:
+            headers["x-user-id"] = principal.owner_id
+        from veadk.integrations.mpa.channel_proxy import channel_management_headers
+
+        headers.update(
+            channel_management_headers(
+                path, is_admin=_request_role(request).is_admin, api_key=apikey
+            )
+        )
+        if "X-MPA-Channel-Key" in headers:
+            headers = {
+                name: value
+                for name, value in headers.items()
+                if name.lower() != "x-user-id"
+            }
+            channel_principal = _current_principal(request)
+            headers["X-User-Id"] = (
+                channel_principal.owner_id
+                if channel_principal
+                else "studio-local-admin"
+            )
         # GET/HEAD probes never need a request body. Avoid reading from an
         # already-disconnected browser request after the control-plane lookup;
         # detail/list navigation deliberately cancels stale probes.
         body = b"" if upstream_method in {"GET", "HEAD"} else await request.body()
+        is_mpa = _runtime_agent_category(runtime, _runtime_tags(runtime)) == "mpa"
+        if is_mpa and upstream_method == "GET" and path == "list-apps":
+            a2a_card = await _runtime_a2a_agent_card(endpoint, headers, is_mpa=True)
+            if a2a_card is not None:
+                return JSONResponse([_RUNTIME_A2A_VIRTUAL_APP])
+        if upstream_method == "GET" and (
+            path == f"web/agent-info/{_RUNTIME_A2A_VIRTUAL_APP}"
+            or (is_mpa and path.startswith("web/agent-info/") and path.count("/") == 2)
+        ):
+            a2a_card = await _runtime_a2a_agent_card(endpoint, headers, is_mpa=is_mpa)
+            if a2a_card is not None or is_mpa:
+                mpa_info = None
+                if is_mpa:
+                    from frontend.server.mpa_agent_info import load_mpa_agent_info
+
+                    mpa_info = await load_mpa_agent_info(
+                        endpoint, headers, a2a_card, region, runtime_api_key=apikey
+                    )
+                a2a_card = a2a_card or {}
+                capabilities = a2a_card.get("capabilities")
+                extensions = (
+                    capabilities.get("extensions")
+                    if isinstance(capabilities, Mapping)
+                    else []
+                )
+                model_config = next(
+                    (
+                        item.get("params")
+                        for item in extensions or []
+                        if isinstance(item, Mapping)
+                        and item.get("uri") == "urn:veadk:mpa:model-selection:v1"
+                    ),
+                    {},
+                )
+                lifecycle_config = next(
+                    (
+                        item.get("params")
+                        for item in extensions or []
+                        if isinstance(item, Mapping)
+                        and item.get("uri") == "urn:veadk:mpa:turn-lifecycle-control:v1"
+                    ),
+                    None,
+                )
+                topology_config = next(
+                    (
+                        item.get("params")
+                        for item in extensions or []
+                        if isinstance(item, Mapping)
+                        and item.get("uri") == "urn:veadk:mpa:resource-topology:v1"
+                    ),
+                    None,
+                )
+                runtime_models = [
+                    str(model).strip()
+                    for model in (model_config or {}).get("models", [])
+                    if str(model).strip()
+                ]
+                selectable_models = runtime_models
+                model_catalog_service = getattr(
+                    app.state, "studio_model_catalog_service", None
+                )
+                if model_catalog_service is not None and runtime_models:
+                    try:
+                        model_options = await model_catalog_service.list_options()
+                        activated_ids = {
+                            model.id
+                            for model in model_options.models
+                            if model.available
+                        }
+                        selectable_models = [
+                            model for model in runtime_models if model in activated_ids
+                        ]
+                    except Exception:  # noqa: BLE001 - Runtime capability remains the fallback
+                        logger.warning(
+                            "failed to intersect Runtime models with the Studio account catalog",
+                            exc_info=True,
+                        )
+                default_model = str(
+                    (model_config or {}).get("defaultModel") or ""
+                ).strip()
+                if default_model and default_model not in selectable_models:
+                    selectable_models.insert(0, default_model)
+                return JSONResponse(
+                    {
+                        "name": (mpa_info or {}).get("name")
+                        or a2a_card.get("name")
+                        or _RUNTIME_A2A_VIRTUAL_APP,
+                        "description": (mpa_info or {}).get("description")
+                        or a2a_card.get("description")
+                        or "",
+                        "agentCategory": "mpa" if is_mpa else "general",
+                        **({"mpa": mpa_info} if mpa_info is not None else {}),
+                        "type": "a2a",
+                        "model": default_model or (mpa_info or {}).get("model", ""),
+                        "selectableModels": selectable_models,
+                        "turnLifecycleControl": lifecycle_config,
+                        "resourceTopology": topology_config,
+                        "tools": [],
+                        "skills": [],
+                        "subAgents": [],
+                    }
+                )
+        session_match = _RUNTIME_A2A_SESSION_PATH_RE.match(path)
+        if session_match and session_match.group("app") == _RUNTIME_A2A_VIRTUAL_APP:
+            user_id = session_match.group("user") or "user"
+            session_id = session_match.group("session") or str(uuid4())
+            if upstream_method == "DELETE":
+                return Response(status_code=200)
+            if upstream_method == "POST" and session_match.group("session") is None:
+                return JSONResponse(_runtime_a2a_session(session_id, user_id))
+            if upstream_method == "GET":
+                if session_match.group("session") is None:
+                    sessions = [
+                        _runtime_a2a_session(stored_session_id, user_id)
+                        for (
+                            stored_region,
+                            stored_runtime_id,
+                            stored_user_id,
+                            stored_session_id,
+                        ) in reversed(_a2a_task_by_session)
+                        if stored_region == region
+                        and stored_runtime_id == runtime_id
+                        and stored_user_id == user_id
+                    ]
+                    return JSONResponse(sessions)
+                return JSONResponse(
+                    await _runtime_a2a_restored_session(
+                        runtime_id=runtime_id,
+                        region=region,
+                        session_id=session_id,
+                        user_id=user_id,
+                        endpoint=endpoint,
+                        headers=headers,
+                        is_mpa=is_mpa,
+                    )
+                )
         run_sse_activity: RunSseActivity | None = None
         run_sse_principal: StudioPrincipal | None = None
         run_sse_payload: dict[str, Any] | None = None
@@ -11463,6 +13298,28 @@ def _run_frontend_server(
             else None
         )
 
+        if (
+            request.method == "POST"
+            and path == "run_sse"
+            and run_sse_payload is not None
+            and str(run_sse_payload.get("app_name") or "") == _RUNTIME_A2A_VIRTUAL_APP
+        ):
+            a2a_card = await _runtime_a2a_agent_card(endpoint, headers, is_mpa=is_mpa)
+            if a2a_card is None:
+                raise HTTPException(status_code=404, detail="runtime_a2a_not_found")
+            return StreamingResponse(
+                _runtime_a2a_run_sse(
+                    runtime_id=runtime_id,
+                    region=region,
+                    card=a2a_card,
+                    headers=headers,
+                    payload=run_sse_payload,
+                    mpa_a2a=is_mpa,
+                ),
+                status_code=200,
+                media_type="text/event-stream",
+            )
+
         def _run_sse_completed(activity: RunSseActivity) -> None:
             if evaluation_automation is not None:
                 evaluation_automation.session_completed(activity)
@@ -11720,10 +13577,19 @@ def _run_frontend_server(
         )
         if upstream.status_code >= 400:
             # Buffer error responses so we can log the body and still forward it.
-            body_chunks = []
-            async for chunk in upstream.aiter_raw():
-                body_chunks.append(chunk)
-            body_bytes = b"".join(body_chunks)
+            body_bytes = await _runtime_proxy_buffer(upstream)
+            if (
+                upstream.status_code == 404
+                and upstream_method == "GET"
+                and path == "list-apps"
+            ):
+                await upstream.aclose()
+                await client.aclose()
+                a2a_card = await _runtime_a2a_agent_card(
+                    endpoint, headers, is_mpa=is_mpa
+                )
+                if a2a_card is not None:
+                    return JSONResponse([_RUNTIME_A2A_VIRTUAL_APP])
             logger.warning(
                 "runtime-proxy %s %s -> %s (%s): %s",
                 upstream_method,
@@ -11994,12 +13860,52 @@ def _run_frontend_server(
                     "/web/sandbox/codex-project-handoff/sessions",
                     "/web/sandbox/codex-project-upload/sessions",
                     "/web/ui-config",
+                    "/oauth/callback",
                 },
                 exempt_prefixes={
                     "/assets",
                     "/skillhub",
                     "/web/sandbox/codex-project-handoff/sessions/",
                 },
+            )
+
+            from frontend.server.mpa_identity_callback import (
+                build_user_pool_hosted_callback_url,
+                mount_mpa_identity_callback,
+            )
+
+            configured_oauth2 = oauth2_config
+
+            async def _resolve_mpa_hosted_callback(provider_id: str) -> str:
+                def _resolve() -> str:
+                    identity_client = _identity_client()
+                    pool_uid, _ = _current_studio_identity_ids(identity_client)
+                    if not pool_uid:
+                        raise RuntimeError("Studio UserPool is not configured")
+                    matches = [
+                        item
+                        for item in identity_client.list_identity_providers(pool_uid)
+                        if item["enabled"] and item["uid"] == provider_id
+                    ]
+                    if len(matches) != 1:
+                        raise RuntimeError("Identity provider is unavailable")
+                    issuer = str(configured_oauth2.issuer or "").strip()
+                    if not issuer:
+                        raise RuntimeError("Studio UserPool issuer is unavailable")
+                    return build_user_pool_hosted_callback_url(
+                        issuer,
+                        matches[0]["connection_type"],
+                    )
+
+                return await asyncio.to_thread(_resolve)
+
+            async def _resolve_mpa_runtime(target: Any) -> Any:
+                return await asyncio.to_thread(_resolve_mpa_runtime_credentials, target)
+
+            mount_mpa_identity_callback(
+                app,
+                hosted_callback_resolver=_resolve_mpa_hosted_callback,
+                runtime_credentials_resolver=_resolve_mpa_runtime,
             )
             logger.info(
                 "OAuth2 SSO enabled "
@@ -12378,7 +14284,7 @@ def _run_frontend_server(
                 _RUNTIME_ENVIRONMENT_VERSION_ENV,
             }
         )
-        return {
+        payload = {
             "runtimeId": str(getattr(runtime, "runtime_id", "") or ""),
             "name": str(getattr(runtime, "name", "") or ""),
             "status": str(getattr(runtime, "status", "") or ""),
@@ -12392,6 +14298,9 @@ def _run_frontend_server(
             "configuredEnvKeys": [],
             "network": _runtime_network_payload(runtime),
         }
+        if _runtime_agent_category(runtime, tags) == "mpa":
+            payload["mpaInstanceId"] = _runtime_mpa_instance_id(runtime, tags)
+        return payload
 
     def _legacy_cr_credential(image: ImageReference) -> RegistryCredential:
         """Issue one short-lived CR credential without logging its value."""
@@ -13427,6 +15336,81 @@ def _run_frontend_server(
     from frontend.server.evaluation.routes import (
         mount_routes as mount_evaluation_routes,
     )
+
+    @app.post("/web/runtime-mcp-credentials")
+    async def _web_runtime_mcp_credentials(
+        credential_request: _RuntimeMcpCredentialsRequest,
+        request: Request,
+    ) -> Response:
+        """Restore MCP values only for one authorized, immutable edit snapshot."""
+
+        _require_agent_management(request)
+        region = _coerce_cloud_region(credential_request.region)
+        try:
+            payload, runtime = await _runtime_update_capability_details(
+                request,
+                runtime_id=credential_request.runtime_id,
+                region=region,
+                app_name=credential_request.app_name,
+            )
+            if (
+                not payload.get("canUpdate")
+                or payload.get("recoveryStatus") not in {"complete", "draft-only"}
+                or payload.get("etag") != credential_request.etag
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Runtime 更新快照已变化，请重新打开智能体详情。",
+                )
+            agent = payload.get("agent")
+            draft = agent.get("draft") if isinstance(agent, Mapping) else None
+            if not isinstance(draft, Mapping):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Runtime 的 MCP 配置无法恢复，请重新打开智能体详情。",
+                )
+
+            references = mcp_auth_environment_keys(draft)
+            environment = _legacy_runtime_environment(runtime)
+            recovered_values = {
+                reference: environment[reference]
+                for reference in references
+                if environment.get(reference)
+            }
+            if set(references).difference(recovered_values):
+                recovery, legacy_values = _legacy_mcp_state(runtime, region)
+                recovered_values.update(
+                    mcp_secret_values_for_draft_references(
+                        draft=draft,
+                        recovery=recovery,
+                        recovered_values=legacy_values,
+                    )
+                )
+            if set(references).difference(recovered_values):
+                raise LegacyRecoveryError("legacy_mcp_credential_missing")
+            credentials = mcp_editor_credential_values(
+                draft=draft,
+                recovered_values=recovered_values,
+            )
+        except HTTPException:
+            raise
+        except LegacyRecoveryError as error:
+            logger.info(
+                "MCP editor credential recovery unavailable runtime_id=%s "
+                "region=%s code=%s",
+                credential_request.runtime_id,
+                region,
+                error.code,
+            )
+            raise HTTPException(
+                status_code=409,
+                detail="Runtime 的 MCP 认证信息无法恢复，请重新配置 Key 后重试。",
+            ) from error
+
+        return JSONResponse(
+            {"credentials": credentials},
+            headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
+        )
 
     mount_evaluation_routes(
         app,
@@ -16047,6 +18031,7 @@ def frontend_deploy(
         )
         url = (app.vefaas_endpoint or "").rstrip("/")
         redirect_uri = f"{url}/oauth2/callback"
+        mpa_callback_uri = f"{url}/oauth/callback"
 
         from veadk.integrations.ve_identity.identity_client import IdentityClient
 
@@ -16065,28 +18050,45 @@ def frontend_deploy(
         #    id:UpdateUserPoolClient, so it can't register the callback itself.
         if url:
             try:
-                identity_client.register_callback_for_user_pool_client(
-                    user_pool_uid=user_pool_id,
-                    client_uid=allowed_client_id,
-                    callback_url=redirect_uri,
-                    web_origin=url,
-                    dismiss_login_page_enabled=False,
-                    skip_consent_enabled=True,
-                )
-                click.echo(f"Registered SSO callback: {redirect_uri}")
+                for callback_url in (redirect_uri, mpa_callback_uri):
+                    identity_client.register_callback_for_user_pool_client(
+                        user_pool_uid=user_pool_id,
+                        client_uid=allowed_client_id,
+                        callback_url=callback_url,
+                        web_origin=url,
+                        dismiss_login_page_enabled=False,
+                        skip_consent_enabled=True,
+                    )
+                    click.echo(f"Registered SSO callback: {callback_url}")
             except Exception as e:
                 click.echo(
-                    f"⚠️  Could not register the SSO callback ({e}). Add "
-                    f"{redirect_uri} to the user-pool client's allowed callback URLs manually."
+                    f"⚠️  Could not register the Studio callbacks ({e}). Add "
+                    f"{redirect_uri} and {mpa_callback_uri} to the user-pool "
+                    "client's allowed callback URLs manually."
                 )
 
         # 5) Two-phase: now that the public URL is known, inject the correct
         #    OAuth redirect and re-release so in-app SSO points at this endpoint.
         function_id = getattr(app, "vefaas_function_id", "")
         if url and function_id:
+            try:
+                mpa_pool_name, mpa_client_name = (
+                    identity_client.get_user_pool_resource_names(
+                        str(user_pool_id), str(allowed_client_id)
+                    )
+                )
+            except Exception:
+                raise click.ClickException(
+                    "Unable to resolve Studio UserPool/client names for MPA creation; "
+                    "check Identity read permissions."
+                ) from None
             click.echo(f"Setting OAUTH2_REDIRECT_URI={redirect_uri} and re-releasing…")
             release_environment = {
                 "OAUTH2_REDIRECT_URI": redirect_uri,
+                "VEADK_STUDIO_MPA_USER_POOL_NAME": mpa_pool_name,
+                "VEADK_STUDIO_MPA_USER_POOL_CLIENT_NAME": mpa_client_name,
+                "VEADK_STUDIO_MPA_IDENTITY_REGION": identity_region,
+                "VEADK_STUDIO_MPA_IDENTITY_CALLBACK_URL": mpa_callback_uri,
                 "VEADK_STUDIO_DEPLOY_ID": studio_deploy_id,
                 "VEADK_STUDIO_CRONJOB_SCHEDULER_BASE": vefaas_app_name,
                 "VEADK_STUDIO_USER_POOL_ID": veadk_environments[
@@ -16593,6 +18595,7 @@ def frontend_update(
         public_url = target.url.rstrip("/")
         if public_url and user_pool_id and user_pool_client_id:
             redirect_uri = f"{public_url}/oauth2/callback"
+            mpa_callback_uri = f"{public_url}/oauth/callback"
             environment_overrides["OAUTH2_REDIRECT_URI"] = redirect_uri
             from veadk.integrations.ve_identity.identity_client import IdentityClient
 
@@ -16604,19 +18607,21 @@ def frontend_update(
                 provider=provider_id,
             )
             try:
-                identity_client.register_callback_for_user_pool_client(
-                    user_pool_uid=user_pool_id,
-                    client_uid=user_pool_client_id,
-                    callback_url=redirect_uri,
-                    web_origin=public_url,
-                    dismiss_login_page_enabled=False,
-                    skip_consent_enabled=True,
-                )
-                click.echo(f"Registered SSO callback: {redirect_uri}")
+                for callback_url in (redirect_uri, mpa_callback_uri):
+                    identity_client.register_callback_for_user_pool_client(
+                        user_pool_uid=user_pool_id,
+                        client_uid=user_pool_client_id,
+                        callback_url=callback_url,
+                        web_origin=public_url,
+                        dismiss_login_page_enabled=False,
+                        skip_consent_enabled=True,
+                    )
+                    click.echo(f"Registered SSO callback: {callback_url}")
             except Exception as error:
                 click.echo(
-                    f"Warning: Could not register the SSO callback ({error}). Add "
-                    f"{redirect_uri} to the user-pool client's allowed callback URLs manually."
+                    f"Warning: Could not register the Studio callbacks ({error}). Add "
+                    f"{redirect_uri} and {mpa_callback_uri} to the user-pool "
+                    "client's allowed callback URLs manually."
                 )
 
         account_resolution = resolve_studio_account_id_metadata(

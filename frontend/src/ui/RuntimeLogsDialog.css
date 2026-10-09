@@ -391,6 +391,40 @@
   font-size: 10.5px;
 }
 
+.runtime-logs-download {
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 7px;
+  background: hsl(var(--panel));
+  color: hsl(var(--foreground));
+  font: inherit;
+  cursor: pointer;
+}
+
+.runtime-logs-download svg {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+
+.runtime-logs-download:hover:not(:disabled) {
+  background: hsl(var(--muted));
+}
+
+.runtime-logs-download:focus-visible {
+  outline: 2px solid hsl(var(--primary));
+  outline-offset: 1px;
+}
+
+.runtime-logs-download:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
 .runtime-logs-inline-error {
   min-width: 0;
   overflow: hidden;

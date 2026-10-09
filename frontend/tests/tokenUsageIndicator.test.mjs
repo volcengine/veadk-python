@@ -388,6 +388,12 @@ test("renders an accessible context meter immediately left of send", () => {
   assert.match(indicatorSource, /token-context-grid/);
   assert.match(indicatorSource, /token-context-breakdown/);
   assert.match(indicatorSource, /token-context-summary/);
+  assert.match(indicatorSource, /token-usage-detail__head/);
+  assert.match(indicatorSource, /usage.current.promptTokenCount/);
+  assert.match(indicatorSource, /usage.current.candidatesTokenCount/);
+  assert.match(indicatorSource, /usage.current.thoughtsTokenCount/);
+  assert.match(indicatorSource, /usage.current.cachedContentTokenCount/);
+  assert.match(indicatorSource, /usage.cumulative.totalTokenCount/);
   assert.match(indicatorSource, /cell\.slices\.map/);
   assert.match(indicatorSource, /tokenUsage\.segments/);
   assert.match(indicatorSource, /tokenUsage\.estimated/);

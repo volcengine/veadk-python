@@ -21,6 +21,7 @@ interface StudioConfirmDialogProps {
   closeLabel?: string;
   variant?: StudioConfirmVariant;
   busy?: boolean;
+  confirmDisabled?: boolean;
   onCancel: () => void;
   onConfirm: () => void;
 }
@@ -34,6 +35,7 @@ export function StudioConfirmDialog({
   closeLabel: closeLabelProp,
   variant = "warning",
   busy = false,
+  confirmDisabled = false,
   onCancel,
   onConfirm,
 }: StudioConfirmDialogProps) {
@@ -112,7 +114,7 @@ export function StudioConfirmDialog({
           </Button>
         </header>
         <div className="studio-confirm-body">
-          <p id={descriptionId}>{description}</p>
+          <div id={descriptionId}>{description}</div>
           {error ? <Alert className="studio-confirm-error" color="danger" variant="soft" description={error} /> : null}
         </div>
         <footer className="studio-confirm-actions">
@@ -136,7 +138,7 @@ export function StudioConfirmDialog({
             pill={false}
             loading={busy}
             onClick={onConfirm}
-            disabled={busy}
+            disabled={busy || confirmDisabled}
           >
             {confirmLabel}
           </Button>

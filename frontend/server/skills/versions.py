@@ -189,6 +189,7 @@ class SkillVersionRepository:
         space_id: str,
         skill_id: str,
         content: bytes,
+        expected_version: str | None = None,
     ) -> dict[str, Any]:
         from agentkit.sdk.skills import types as sdk
         from agentkit.toolkit.cli.cli_skills_workflow import (
@@ -220,6 +221,14 @@ class SkillVersionRepository:
                     status_code=422,
                 )
             previous = {item.version for item in self._versions(client, skill_id)}
+            if expected_version is not None and (
+                not previous or max(previous, key=version_order) != expected_version
+            ):
+                raise SkillRepositoryError(
+                    "SKILL_DOCUMENT_CONFLICT",
+                    "技能已有新版本，请重新打开后编辑。",
+                    status_code=409,
+                )
             config = GlobalConfigManager().load()
             storage = resolve_skill_publish_storage(
                 region=region,
@@ -263,3 +272,66 @@ class SkillVersionRepository:
                 "description": archive.description,
                 "skillSpaceId": space_id,
             }
+
+    def document(
+        self, identity: SkillIdentity, *, region: str, space_id: str, skill_id: str
+    ) -> dict[str, Any]:
+        versions = self.list(
+            identity, region=region, space_id=space_id, skill_id=skill_id
+        )
+        if not versions["items"]:
+            raise SkillRepositoryError(
+                "SKILL_DOCUMENT_NOT_FOUND", "未找到技能版本", status_code=404
+            )
+        version = versions["items"][0]["version"]
+        content, _ = self._repository.skill_archive(
+            region=region,
+            space_id=space_id,
+            skill_id=skill_id,
+            version=version,
+        )
+        return {
+            "content": validate_skill_archive(content).skill_md,
+            "baseVersion": version,
+            "canUpdate": versions["canUpdate"],
+        }
+
+    def save_document(
+        self,
+        identity: SkillIdentity,
+        *,
+        region: str,
+        space_id: str,
+        skill_id: str,
+        base_version: str,
+        document: str,
+    ) -> dict[str, Any]:
+        from .documents import replace_skill_document
+
+        versions = self.list(
+            identity, region=region, space_id=space_id, skill_id=skill_id
+        )
+        if not versions["canUpdate"]:
+            raise SkillRepositoryError(
+                "SKILL_VERSION_UPDATE_FORBIDDEN", "无权修改此技能", status_code=403
+            )
+        if not versions["items"] or versions["items"][0]["version"] != base_version:
+            raise SkillRepositoryError(
+                "SKILL_DOCUMENT_CONFLICT",
+                "技能已有新版本，请重新打开后编辑。",
+                status_code=409,
+            )
+        content, _ = self._repository.skill_archive(
+            region=region,
+            space_id=space_id,
+            skill_id=skill_id,
+            version=base_version,
+        )
+        return self.upload(
+            identity,
+            region=region,
+            space_id=space_id,
+            skill_id=skill_id,
+            content=replace_skill_document(content, document),
+            expected_version=base_version,
+        )

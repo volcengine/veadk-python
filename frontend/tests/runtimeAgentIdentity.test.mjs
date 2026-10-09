@@ -606,11 +606,12 @@ test("Runtime update preserves and hydrates a registry-backed remote child Agent
 });
 
 test("Runtime update entry passes only cloud capability to the update handler", () => {
-  const clickStart = workspaceSource.indexOf("onClick={() =>\n                      selectedDraft");
-  const clickEnd = workspaceSource.indexOf("                    }\n                  >", clickStart);
+  const clickStart = workspaceSource.indexOf('className="aw-update studio-update-action"');
+  const clickEnd = workspaceSource.indexOf("</button>", clickStart);
   assert.ok(clickStart >= 0 && clickEnd > clickStart);
   const clickHandler = workspaceSource.slice(clickStart, clickEnd);
 
+  assert.match(clickHandler, /selectedAgentCategory === "mpa"[\s\S]*?setSection\("profileConfig"\)/);
   assert.match(clickHandler, /onUpdateAgent\(selectedUpdateCapability\)/);
   assert.doesNotMatch(clickHandler, /onUpdateAgent\(draft,/);
   assert.doesNotMatch(clickHandler, /selectedAgentUpdateDraft[\s\S]*?onEditDraft/);

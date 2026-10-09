@@ -50,6 +50,14 @@ type WorkspaceView =
   | { kind: "list" }
   | { kind: "detail"; workspaceId: string | null };
 
+function isStorageUnavailable(cause: unknown): boolean {
+  const message = cause instanceof Error ? cause.message : String(cause ?? "");
+  return message.includes("HTTP 503") && (
+    message.includes("未配置持久化存储") ||
+    message.includes("storage is not configured")
+  );
+}
+
 function AddIcon(props: SVGProps<SVGSVGElement>) {
   return (
     <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true" {...props}>
@@ -253,8 +261,15 @@ function WorkspaceList({ onEnvironment, onProjects }: { onEnvironment: () => voi
       setEnvironments(nextEnvironments);
     }).catch((cause) => {
       if ((cause as Error)?.name !== "AbortError") {
-        console.warn("Unable to load Studio workspaces", cause);
-        setLoadError(t("workspace.loadFailed"));
+        if (isStorageUnavailable(cause)) {
+          setWorkspaces([]);
+          setEnvironments([]);
+          setStatusError(false);
+          setStatusMessage(t("workspace.storageUnavailable"));
+        } else {
+          console.warn("Unable to load Studio workspaces", cause);
+          setLoadError(t("workspace.loadFailed"));
+        }
       }
     }).finally(() => {
       if (!controller.signal.aborted) setLoading(false);
