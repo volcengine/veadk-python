@@ -112,8 +112,10 @@ def _redact_release_text(text: str) -> str:
     text = _redact_release_log(text, ())
     return re.sub(
         r'([{"\']?(key|secret|token|pass|auth|credential|access|api|ak|sk|doubao|volces|coze)[^"\'\s]*["\']?\s*[:=]\s*)(["\']?)([^"\'\s]+)(["\']?)|([A-Za-z0-9+/=]{20,})',
-        lambda m: (
-            f"{m.group(1)}{m.group(3)}******{m.group(5)}" if m.group(1) else "******"
+        lambda match: (
+            f"{match.group(1)}{match.group(3)}******{match.group(5)}"
+            if match.group(1)
+            else "******"
         ),
         text,
         flags=re.IGNORECASE,

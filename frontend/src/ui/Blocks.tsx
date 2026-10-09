@@ -771,9 +771,9 @@ function ToolBlock({
   defaultOpen = false,
   retrying = false,
   codexActivity,
-  source,
   native = false,
   progressText,
+  source,
   onBranchSelect,
   onAction,
 }: {
@@ -1409,33 +1409,12 @@ export function Blocks({
   onDeployDelivery,
   onBranchSelect,
 }: BlocksProps) {
-  if (groupProcess) {
-    return (
-      <DevelopmentProcess
-        blocks={blocks}
-        active={streaming}
-        status={liveStatus}
-        render={(items) => (
-          <Blocks
-            blocks={items}
-            appName={appName}
-            streaming={streaming}
-            onStreamFrame={onStreamFrame}
-            onStreamComplete={onStreamComplete}
-            onAction={onAction}
-            onAuth={onAuth}
-            onArtifactDownload={onArtifactDownload}
-            onArtifactPreview={onArtifactPreview}
-            onResolveDelivery={onResolveDelivery}
-            onResolveDeliveryComparison={onResolveDeliveryComparison}
-            onDownloadDelivery={onDownloadDelivery}
-            onDeployDelivery={onDeployDelivery}
-            onBranchSelect={onBranchSelect}
-          />
-        )}
-      />
-    );
-  }
+  if (groupProcess) return <DevelopmentProcess blocks={blocks} active={streaming} status={liveStatus} render={(items) =>
+    <Blocks blocks={items} appName={appName} streaming={streaming} onStreamFrame={onStreamFrame} onStreamComplete={onStreamComplete}
+      onAction={onAction} onAuth={onAuth} onArtifactDownload={onArtifactDownload} onArtifactPreview={onArtifactPreview}
+      onResolveDelivery={onResolveDelivery} onResolveDeliveryComparison={onResolveDeliveryComparison}
+      onDownloadDelivery={onDownloadDelivery} onDeployDelivery={onDeployDelivery} onBranchSelect={onBranchSelect} />
+  } />;
   const { t } = useTranslation("conversation");
   const displayBlocks = groupDisplayBlocks(
     flattenCodexActivityBlocks(blocks),

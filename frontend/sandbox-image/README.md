@@ -109,7 +109,7 @@ python3 -m unittest discover -s tests -v
 
 Bash 使用上游 ble.sh v0.4.0-devel3 提供输入高亮，采用固定 SHA256 的官方发布包，不切换 Shell
 
-本地 Apple Silicon 在 QEMU 中运行 x64 Codex 0.154.0 时，可能因不支持 TCGETS2 终端接口报 `os error 38`
+本地 Apple Silicon 在 QEMU 中运行 x64 Codex 0.139.0 时，可能因不支持 TCGETS2 终端接口报 `os error 38`
 本地预览容器可通过基础镜像已有的 `CODEX_REAL_BIN` 覆盖为相同版本 Linux ARM64 musl 程序
 此替换仅用于本地兼容，不改变云端 x64 镜像的默认程序，也不放宽权限或沙箱限制
 
