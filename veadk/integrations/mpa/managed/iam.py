@@ -328,5 +328,5 @@ async def ensure_runtime_role(
 
     try:
         await asyncio.wait_for(reconcile(), timeout)
-    except TimeoutError:
+    except asyncio.TimeoutError:
         raise IamError() from None
