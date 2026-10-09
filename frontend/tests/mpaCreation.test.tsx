@@ -846,3 +846,79 @@ it("keeps composition and multiline description input from submitting the wizard
   expect(api.startMpaCreation).not.toHaveBeenCalled();
   expect(field("name")).not.toBeNull();
 });
+
+it("visibly disables Next for a Chinese name and restores it after correction", async () => {
+  const { readFileSync } = await import("node:fs");
+  const css = document.createElement("style");
+  css.textContent = readFileSync(
+    "src/components/primitives/Button/Button.css",
+    "utf8",
+  );
+  document.head.append(css);
+  try {
+    vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
+      configured: true,
+      region: "cn-beijing",
+    });
+    await mount();
+    await edit("name", "czh的测试agent");
+    expect(button("next").disabled).toBe(true);
+    expect(getComputedStyle(button("next")).opacity).toBe("0.45");
+    expect(getComputedStyle(button("next")).cursor).toBe("not-allowed");
+    expect(document.getElementById("mpa-name-help")?.getAttribute("role")).toBe(
+      "alert",
+    );
+    await edit("name", "czh-test-agent");
+    expect(button("next").disabled).toBe(false);
+    expect(Number(getComputedStyle(button("next")).opacity || 1)).toBe(1);
+    expect(
+      document.getElementById("mpa-name-help")?.getAttribute("role"),
+    ).toBeNull();
+    await act(async () => button("next").click());
+    expect(field("name")).toBeNull();
+  } finally {
+    css.remove();
+  }
+});
+
+it("keeps disabled and loading appearance consistent across shared Button variants", async () => {
+  const { readFileSync } = await import("node:fs");
+  const { Button } = await import("../src/components/primitives/Button");
+  const css = document.createElement("style");
+  css.textContent = readFileSync(
+    "src/components/primitives/Button/Button.css",
+    "utf8",
+  );
+  document.head.append(css);
+  try {
+    const variants = [
+      "primary",
+      "secondary",
+      "outline",
+      "ghost",
+      "link",
+      "pill",
+    ] as const;
+    await act(async () =>
+      root.render(
+        <>
+          {variants.map((variant) => (
+            <Button key={variant} variant={variant} disabled>
+              {variant}
+            </Button>
+          ))}
+          <Button loading>Loading</Button>
+        </>,
+      ),
+    );
+    const buttons = [...host.querySelectorAll("button")];
+    for (const control of buttons.slice(0, variants.length)) {
+      expect(control.disabled).toBe(true);
+      expect(getComputedStyle(control).opacity).toBe("0.45");
+      expect(getComputedStyle(control).cursor).toBe("not-allowed");
+    }
+    expect(getComputedStyle(buttons.at(-1)!).opacity).toBe("0.65");
+  } finally {
+    css.remove();
+  }
+});

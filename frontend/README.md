@@ -1813,3 +1813,7 @@ MPA grouped replies hide exact answer mirrors only in their derived view: an ext
 ### MPA A2A shared gateway compatibility
 
 MPA creation defaults to A2A discovery (`ENABLE_A2A=true`, `DISABLE_JWT_AUTH=false`). When a tagged MPA Runtime's agent card omits the shared gateway `/runtime/<ID>` prefix from its same-origin `/a2a/jsonrpc` URL, the Studio backend restores the prefix from the control-plane endpoint for chat and history requests. General-agent URLs are unchanged. Existing Runtimes need an explicit configuration release; reconnect to refresh discovery. Restart Studio after this backend update; no frontend rebuild is required.
+
+MPA name validation highlights invalid input and its message in the theme danger color, offers a valid-name placeholder, and visibly disables Next until corrected. Shared Button disabled states are dimmed consistently; loading retains its own appearance.
+
+MPA 名称校验使用主题错误色显示非法输入及错误提示，并提供合法名称示例；名称修正前“下一步”明显置灰。共享 Button 的禁用态统一降低透明度，加载态保留原有外观。

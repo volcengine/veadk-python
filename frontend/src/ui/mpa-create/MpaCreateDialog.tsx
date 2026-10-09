@@ -393,6 +393,7 @@ export function MpaCreateDialog({
                       {t(key("name"))}
                       <input
                         name="name"
+                        placeholder={t(key("namePlaceholder"))}
                         value={input.name ?? input.agentId ?? ""}
                         maxLength={64}
                         disabled={busy || submitted}

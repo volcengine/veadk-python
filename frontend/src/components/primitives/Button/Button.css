@@ -27,6 +27,11 @@
   transition: background-color var(--studio-motion-duration-fast, 140ms) ease-out, color var(--studio-motion-duration-fast, 140ms) ease-out;
 }
 
+.studio-button:disabled {
+  opacity: .45;
+  cursor: not-allowed;
+}
+
 /* Figma: 632:252803 */
 .studio-button--secondary {
   background: #262626;

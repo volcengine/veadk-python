@@ -72,3 +72,12 @@ Scope: the named-creation changes on `czh/fix-mpa-tos-copy`, based on `origin/ma
 - `not_run`: real cloud MPA provisioning and message delivery. Local tests/build/browser proof do not establish cloud adoption or Agent/Worker execution.
 
 Direct design/implementation review checked bilingual equivalence, owner-scoped deterministic identity, legacy request equality, hidden draft overrides, name propagation and existing-resource preservation. These local checks found no unresolved issue in the changed behavior. `latest` remains mutable; retry snapshots retain tag references, not immutable digests.
+
+
+## Validation feedback follow-up (2026-10-09)
+
+The user reported that Next looked active but did nothing for a Chinese Runtime name, and approved a frontend correction. The existing ASCII name contract remains unchanged. The shared Button primitive lacks a base disabled appearance; add its existing 0.45 opacity/not-allowed cursor treatment to all variants, retaining loading overrides. The MPA form uses the existing danger token for the invalid name border/focus and error text, and adds a localized valid-name placeholder. No API, identity, image or resource behavior changes. Review confirmed component ownership, keyboard/native disabled semantics, theme-token reuse and bilingual equivalence. Verify a failing computed-style regression first, then valid/invalid names, all Button variants/loading, build and browser checks before updating the same Studio and PR.
+
+Follow-up local verification: `pass`. The regression reproduced the enabled-looking disabled Next button and passed after the CSS fix. All 1,377 Node tests and 54 component tests passed, including all six Button variants and loading opacity. The added JSX line is covered (1/1, 100%); CSS is checked through computed styles and browser rendering. Build, i18n, packaged-asset references, pre-commit and whitespace checks passed. Browser checks covered the Chinese-name report, danger border/text, disabled opacity/cursor, correction with Tab/Enter navigation, light/dark themes and 390px width. Backend code is unchanged; prior backend verification and baseline limitations still apply.
+
+Follow-up deployment: `pass` — stable revision 38, homepage HTTP 200, app JS and stylesheet bytes matching the verified build, and all existing environment values unchanged. Wheel SHA256: `0ff26dd247e26fedd96faa21fd62b96f6b86904fd0168f535db39de2047186da`. Temporary deployment credentials were removed after verification. No cloud MPA creation was performed.
