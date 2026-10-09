@@ -47,9 +47,18 @@ Studio 不固定已有 VPC/子网/APIG ID。准备 PostgreSQL 后，按核验后
 在部署 Runtime 前创建并保存，后续智能体复用相同记录。账号锁和持久化创建意图
 保护并发请求及重试，避免重复创建。
 
+新网关采用标准型、两个 1c2g 节点、small_1 CLB、公私网接入和 traffic 计费。
+部署凭据需要 `apig:GetGatewayAvailableZones`。服务查询 APIG 支持的可用区，
+复用或创建同 VPC、不同受支持可用区的两个子网；缺失的伴随子网独立保存请求/token。
+保留已有登记/接管网关和 Runtime 网络选择，新 Runtime 使用准备好的子网。
+`ExceededQuota` 是明确拒绝，修正后可重试；未知结果仍须先查询恢复。
+历史未知标记需经过审计、限定范围后修复。
+
 已有记录（包括此前接管的资源）保持不变。本次不迁移已有智能体，也不替换配额
 耗尽的 VPC。配额或权限错误仍报告失败；提高配额或迁移共享网络属于独立操作。
 重启本地 Studio（云端则重新部署）后加载新默认配置。CLI 显式网络/APIG 接管仍受支持。
+
+AgentKit 返回的 Runtime 子网 ID 顺序可能不同。创建和重试接受成员相同且无重复的选择；实际成员、VPC 或共享公网出口变化仍视为迁移错误。重试保留原请求或成员一致的注册顺序，包括已有待完成请求的哈希。更新 VeADK 后，对因顺序误判停止的任务使用同一智能体 ID 和原始输入重试即可；不要删除记录或重建资源。
 
 ## CLI YAML 与手动 / 旧模式服务端配置
 
@@ -225,4 +234,34 @@ Flat 创建默认设置 `ENABLE_A2A=true` 和 `DISABLE_JWT_AUTH=true`。绕过�
 
 ### 托管沙箱模板命名
 
-新托管沙箱模板使用去掉两端空白、将所有 `-` 替换为 `_` 的智能体 ID（例如 `mi-example` → `mi_example`）。已有 worker ID 仍为权威绑定，不重命名。变更前未完成的创建意图，仅在完整旧请求与已存 worker_hash 匹配时保留哈希名称，并保留 ClientToken。其他请求变更和无关同名资源仍报错。作用域所有权标签及 Runtime ToolId 绑定不变。
+新的 Studio 名称请求直接使用经过校验的手填 Runtime 名称作为沙箱模板 Name（4–64 个 ASCII 字母、数字、连字符或下划线）。未提供名称的旧 CLI 请求仍使用去除首尾空白、将 `-` 替换为 `_` 的智能体 ID。内部智能体 ID、数据库/技能空间/渠道标识、作用域归属标签及 Runtime ToolId 绑定不变。已有 worker ID 为权威绑定，不重命名。新的未完成意图在部署 JSON 中保存 `worker_name`，拒绝后续名称变化。没有该字段的旧意图，仅在完整候选请求与已存 worker_hash 匹配时重放标准化 ID 名称或哈希名称，保留 ClientToken。其他请求变化及无关同名资源仍报错。
+
+### 自动准备 MPA 运行角色
+
+内置 Studio 在准备资源之前，在核验的部署账号下准备 `IDRoleForArkClawShareAgent`。复用兼容角色并补齐已批准策略绑定，不替换信任或策略内容。显式 CLI 配置默认 `managed.iam.mode: existing`；仅全新默认角色配置可通过 `auto` 启用。参见[权限基线与恢复规则](../../../../prd-spec/features/mpa-runtime-iam/2026-10-09-managed-runtime-role.zh.md)。Studio 执行角色除 GetRole/CreateRole/GetPolicy/ListAttachedRolePolicies/AttachRolePolicy 外，还需 `iam:CreatePolicy`。使用此能力前，重新部署或更新已有 Studio 执行策略。管理员修复后以同一智能体 ID 重试；取消保留共享 IAM 资源。
+
+### Studio 部署账号
+
+Studio 使用部署凭据经 STS 核验返回的账号，不再要求原镜像仓库账号。新建 Runtime 的角色 TRN 和兼容 Space ID 使用核验账号。显式 YAML 的 `account-id` 仍限制 CLI 部署。默认镜像 URL 和 Worker 参考 ID 保持不变；请确保部署账号可访问它们，或提供可访问的资源。现有 Runtime 不自动迁移。
+
+托管网络描述使用符合服务商格式的 `mpa-account-network-v1-<scope hash>`。旧意图仅描述不同且明确被拒绝、无资源时，重试自动修正；变化的请求体使用新 token。保留已有范围资源。结果不确定时必须先查询，不触发重复创建。
+
+### 不依赖参考模板的 Worker
+
+内置 Studio 使用已配置 Worker 镜像提供的启动设置，不重复注入端口/模式/目录环境变量，不再读取旧账号的 Tool。部署账号仍须有镜像访问权限。重启 Studio 加载修改后的默认值，再重试尚未开始 Worker 创建就失败的智能体。已发送请求保留原载荷/token；不要重置注册库中的意图。
+
+私有 CLI 配置可以直接指定启动值：
+
+```yaml
+managed:
+  worker:
+    image: registry.example/agentkit/mpa_codex_worker:release-tag
+    env:
+      MPA_RUNTIME_PROFILE: codex-headless
+      MPA_AIO_ENTRYPOINT_MODE: minimal
+      CUSTOM_SETTING: ${WORKER_CUSTOM_SETTING}
+```
+
+`managed.worker.env` 接受大写字符串键及完整服务端环境变量引用，覆盖可选且可访问 `reference-id` 中已过滤的环境设置。智能体/Runtime/Tool/技能空间绑定、继承的渠道/Runtime 凭据及控制库地址为保留字段。显式参考模板缺失仍报错。`existing-id` 不允许环境设置，因为不会更新已有 Tool。密钥不进入配置摘要/repr 或部署记录；使用服务端引用，不提交实际值。模型凭据由 Runtime 按会话下发，不从旧 Tool 复制。
+
+新的名称 MPA 部署使用 `Skills for MPA agent <runtime_name>` 作为技能空间描述，便于在云控制台辨认手填名称。生成的空间 Name、display_name 标签、内部智能体 ID 及绑定保持不变。已有空间保留原描述；升级前待完成请求按原描述准确恢复，其他输入变化仍报错。不提供 Runtime 名称的调用保留内部 ID 描述。

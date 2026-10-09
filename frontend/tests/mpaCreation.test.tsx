@@ -922,3 +922,38 @@ it("keeps disabled and loading appearance consistent across shared Button varian
     css.remove();
   }
 });
+
+it("preserves the runtime role stage and actionable IAM error for retry", async () => {
+  const input = {
+    region: "cn-beijing",
+    requestId: "12345678-90ab-4cde-8f01-23456789abcd",
+    agentId: "mi-1234567890ab4cde8f012345",
+    description: "",
+  };
+  sessionStorage.setItem(
+    "mpa-create:cn-beijing",
+    JSON.stringify({ input, submitted: true, step: 2, taskId: "iam-task" }),
+  );
+  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
+    configured: true,
+    region: "cn-beijing",
+  });
+  vi.mocked(api.getMpaCreation).mockResolvedValue({
+    ...input,
+    taskId: "iam-task",
+    state: "failed",
+    stage: "iam_role",
+    error: "iamPermissionDenied",
+  });
+  await mount();
+  expect(document.body.textContent).toContain(
+    "myAgents.mpaCreate.stages.iam_role",
+  );
+  expect(document.body.textContent).toContain(
+    "myAgents.mpaCreate.iamPermissionDenied",
+  );
+  expect(button("retry").disabled).toBe(false);
+  expect(
+    JSON.parse(sessionStorage.getItem("mpa-create:cn-beijing")!).input.agentId,
+  ).toBe(input.agentId);
+});

@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+from veadk.integrations.mpa.managed.config import validate_runtime_name
 from veadk.integrations.mpa.managed.database import DeploymentError, agent_suffix
 
 
@@ -29,12 +30,15 @@ async def ensure_skill_space(
     project_name="",
     configured_id="",
     current_id="",
+    runtime_name: str = "",
 ):
     """Caller holds the deployment lock. Never replace a missing registered space.
 
     CreateSkillSpace has no ClientToken. Persist the intent first and recover a
     lost response by exact name and ownership tags; never blindly repeat create.
     """
+    if runtime_name:
+        runtime_name = validate_runtime_name(runtime_name)
     record = await entry.read()
     registered_id = record.get("skill_space_id", "")
     ids = {value for value in (registered_id, configured_id, current_id) if value}
@@ -60,7 +64,7 @@ async def ensure_skill_space(
     suffix = agent_suffix(account, region, agent_id)
     request = {
         "Name": "mpa_skills_" + suffix,
-        "Description": "Skills for MPA agent " + agent_id,
+        "Description": "Skills for MPA agent " + (runtime_name or agent_id),
         "Tags": [
             {"Key": "managed_by", "Value": "mpa-deployment"},
             {"Key": "mpa_agent_key", "Value": suffix},
@@ -71,9 +75,15 @@ async def ensure_skill_space(
         request["ProjectName"] = project_name
     previous = record.get("skill_space_request")
     if previous and previous != request:
-        raise DeploymentError(
-            "Unfinished Skill Space creation has different inputs; resume its original configuration"
-        )
+        legacy_request = {
+            **request,
+            "Description": "Skills for MPA agent " + agent_id,
+        }
+        if previous != legacy_request:
+            raise DeploymentError(
+                "Unfinished Skill Space creation has different inputs; resume its original configuration"
+            )
+        request = previous
     spaces = await cloud.find_skill_spaces(request["Name"], project_name)
     if spaces:
         if len(spaces) != 1 or not record.get("skill_space_create_requested"):

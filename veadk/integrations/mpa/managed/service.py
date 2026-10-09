@@ -40,6 +40,7 @@ from .config import ConfigurationError, Profile, Runtime, validate_postgres_layo
 from .database import AgentDatabaseProvisioner, AgentDeploymentRegistry, DeploymentError
 from .gateway import SharedAPIGService
 from .gateway_cloud import GatewayCloud
+from .iam import ROLE_NAME, IamCloud, IamError, ensure_runtime_role
 from .network import AccountNetworkProvisioner, NetworkOptions
 from .runtime import AgentRuntimeDeployer, RuntimeCloud, env_map, template_from_runtime
 from .worker import WorkerCloud, ensure_worker
@@ -98,11 +99,16 @@ def fresh_template(profile, agent_id, account):
     )
     env = build_runtime_env(params, public_endpoint="")
     env.pop("A2A_PUBLIC_URL", None)
+    role = profile.managed.runtime.role_name or values.get(
+        "runtime_role_name", ROLE_NAME
+    )
+    env["RUNTIME_IAM_ROLE_NAME"] = role
+    env["RUNTIME_IAM_ROLE_TRN"] = f"trn:iam::{account}:role/{role}"
     return {
         "ArtifactType": "image",
         "ArtifactUrl": params.image,
         "Command": "bash run.sh",
-        "RoleName": values.get("runtime_role_name", "IDRoleForArkClawShareAgent"),
+        "RoleName": role,
         "ApmplusEnable": True,
         "MinInstance": 1,
         "MaxInstance": 1,
@@ -227,6 +233,14 @@ async def provision(
     expected = str(profile.values.get("account_id", ""))
     if expected and account != expected:
         raise DeploymentError("Deployment credentials differ from the expected account")
+    if profile.managed.iam.mode == "auto":
+        if (
+            profile.managed.runtime.role_name
+            or profile.values.get("runtime_role_name", ROLE_NAME)
+        ) != ROLE_NAME:
+            raise IamError(key="iamConfigurationConflict")
+        progress("iam_role")
+        await ensure_runtime_role(IamCloud(cloud), account)
     identity = await ensure_workload_identity(profile, cloud, agent_id)
     if profile.managed.postgres and profile.managed.postgres.mode == "auto":
         from .pg_bootstrap import prepare_postgres
@@ -311,6 +325,7 @@ async def provision(
     options = NetworkOptions(network.vpc_cidr, network.subnet_prefix, network.zone)
     databases = AgentDatabaseProvisioner(admin_url=profile.admin_url, runtime_env=env)
     registry = AgentDeploymentRegistry(profile.shared_url)
+    gateway_cloud = GatewayCloud(cloud)
     try:
         await databases.check()
         await registry.initialize()
@@ -329,22 +344,37 @@ async def provision(
                 else None
             )
             progress("network")
-            template["NetworkConfiguration"] = await AccountNetworkProvisioner(
+            network_provisioner = AccountNetworkProvisioner(
                 cloud=cloud.network,
                 account=account,
                 region=profile.region,
                 options=options,
-            ).ensure(
-                entry.network_entry(),
+            )
+            network_entry = entry.network_entry()
+            template["NetworkConfiguration"] = await network_provisioner.ensure(
+                network_entry,
                 template.get("NetworkConfiguration"),
                 current=current,
                 project_name=template.get("ProjectName") or "default",
             )
+            gateway_network = template["NetworkConfiguration"]
+            registered_gateway = await network_entry.gateway()
+            if (
+                not registered_gateway.get("gateway_id")
+                and not profile.managed.apig.adopt_id
+            ):
+                gateway_network = await network_provisioner.gateway_network(
+                    network_entry,
+                    gateway_network,
+                    await gateway_cloud.available_zones(),
+                )
+                if current is None:
+                    template["NetworkConfiguration"] = gateway_network
         # APIG takes the same account lock. Do not nest it inside the deployment lock.
         progress("gateway")
-        vpc = template["NetworkConfiguration"]["VpcConfiguration"]
+        vpc = gateway_network["VpcConfiguration"]
         gateway = await SharedAPIGService(
-            registry=registry.shared, cloud=GatewayCloud(cloud), region=profile.region
+            registry=registry.shared, cloud=gateway_cloud, region=profile.region
         ).ensure(
             vpc_id=vpc["VpcId"],
             subnet_ids=vpc["SubnetIds"],
@@ -360,6 +390,7 @@ async def provision(
                 region=profile.region,
                 agent_id=agent_id,
                 project=template.get("ProjectName") or "default",
+                runtime_name=runtime_name,
             )
         env.update(AGENTKIT_TOOL_ID=tool_id, AGENTKIT_TOOL_REGION=profile.region)
         template["ToolId"] = tool_id
@@ -373,9 +404,9 @@ async def provision(
             shared_database_url=profile.shared_url,
             timeout=profile.managed.timeout_seconds,
             network_options=options,
-            progress=lambda message: progress("verifying")
-            if message.startswith("Runtime ")
-            else None,
+            progress=lambda message: (
+                progress("verifying") if message.startswith("Runtime ") else None
+            ),
         ).deploy(
             template,
             runtime_name=runtime_name,
