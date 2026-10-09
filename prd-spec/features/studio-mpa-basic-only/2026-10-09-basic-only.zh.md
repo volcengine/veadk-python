@@ -1,6 +1,6 @@
 # MPA 详情仅保留基本信息
 
-- 日期：2026-10-09；状态：已实现并通过本地验证，未部署。
+- 日期：2026-10-09；状态：已实现、通过本地验证并已部署。
 - 批准依据：用户明确要求隐藏 MPA 详情页其他 Tab，并停止该页面的 Profile 请求。
 - [English](2026-10-09-basic-only.md)；契约：[Studio MPA 控制面](../../../specs/studio-mpa-control-plane/README.zh.md)。
 
@@ -28,6 +28,6 @@
 - **pass**：真实 Chrome 加载临时本地夹具，使用真实组件与模拟 fetch：MPA 仅基本信息、普通 Agent 导航及集成页面交互、普通 Agent 切回 MPA、Profile 零请求、窄窗口布局。提交前移除临时夹具。
 - **pass**：`uv run --extra dev pre-commit run --all-files`；`git diff --check`；已获取最新 `origin/main`，当前分支已包含该基线。
 - **not_applicable**：新增输入/IME、写入取消/重试流程及后端测试；本次未修改这些路径。隐藏页面焦点由组件测试覆盖。
-- **not_run**：云端部署及真实云端 E2E；浏览器夹具与本地检查不代表发布。原生聊天会话创建保留原有 Profile 行为。
+- **pass**：经用户授权，将源码 `4a532405` 更新到云端，稳定版本由 38 升至 39；部署状态 `deploy_success`，既有环境配置哈希不变，首页 HTTP 200 并引用新脚本，线上 JS/CSS/logo 的 SHA256 与本地构建一致。在 Chrome 刷新既有云端 MPA 详情页后，仅显示基本信息，Runtime 信息加载成功，不再显示 JWT/控制面错误。未执行云端写入或聊天 E2E；原生聊天会话创建保留原有 Profile 行为。
 
 最终直接审查：类别限制保留普通 Agent 的导航与更新行为，同步解析页面避免旧焦点启动隐藏页面请求，既有副作用保留清理逻辑。已核对中英文需求与组件文档一致性。

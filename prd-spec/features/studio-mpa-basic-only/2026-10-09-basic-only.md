@@ -1,6 +1,6 @@
 # MPA details: basic information only
 
-- Date: 2026-10-09; status: implemented and locally verified; not deployed.
+- Date: 2026-10-09; status: implemented, locally verified, and deployed.
 - Approval: the user explicitly requested hiding all other tabs and stopping Profile requests on the MPA details page.
 - [Chinese](2026-10-09-basic-only.zh.md); contract: [Studio MPA control plane](../../../specs/studio-mpa-control-plane/README.md).
 
@@ -28,6 +28,6 @@ Verification on the diff against `42b50624` (2026-10-09):
 - **pass**: real Chrome with a temporary loopback fixture using the actual component and mocked fetch: MPA basic-only, General navigation and Integration interaction, General-to-MPA transition, zero Profile requests, narrow viewport layout. Temporary fixture removed before commit.
 - **pass**: `uv run --extra dev pre-commit run --all-files`; `git diff --check`; latest `origin/main` fetched and already included.
 - **not_applicable**: new input/IME, mutation cancellation/retry flows, and backend tests; these paths were not changed. Hidden section focus is covered by component tests.
-- **not_run**: cloud deployment and live cloud E2E; browser fixtures and local checks do not prove publication. Native chat session creation retains its existing Profile behavior.
+- **pass**: user-authorized cloud update of source `4a532405`, stable revision 38 to 39; deployment status `deploy_success`, existing environment hash unchanged, homepage HTTP 200 referencing the new script, and deployed JS/CSS/logo SHA256 values matching the local build. Reloading the existing cloud MPA detail page in Chrome showed only Basic, loaded Runtime information, and no JWT/control-plane error. No cloud mutation or chat E2E was run; native chat session creation retains its existing Profile behavior.
 
 Direct final review: category gating leaves General navigation and update behavior unchanged, synchronous section resolution prevents stale focus from starting hidden-page requests, and existing effects retain cleanup. English/Chinese requirements and component documentation were reconciled.
