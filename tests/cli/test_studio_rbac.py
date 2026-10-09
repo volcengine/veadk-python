@@ -713,7 +713,8 @@ def test_managed_sidecar_runtime_envs_reject_invalid_mcp_state(
         {"effectiveComponents": ["mcp_resilience"]},
     )
 
-    assert error == "Harness Sidecar MCP 配置无效，请检查名称、地址与认证后重试。"
+    assert error == "MCP 配置无效，请检查名称、地址与认证后重试。"
+    assert runtime_envs["MCP_SERVERS_JSON"] == raw_mcp
     assert "AGENTKIT_HARNESS_RUNTIME_COMMAND" not in runtime_envs
 
 

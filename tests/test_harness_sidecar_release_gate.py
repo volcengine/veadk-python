@@ -67,6 +67,11 @@ def test_sidecar_release_gate_runs_backend_and_frontend_in_parallel() -> None:
     assert "tests/frontend/server/test_runtime_iam.py" in backend_run
     assert "tests/cli/test_studio_a2a_deployment.py" in backend_run
     assert "test_mcp_deployment_error_details_are_actionable" in backend_run
+    assert "test_managed_sidecar_runtime_envs_reject_invalid_mcp_state" in backend_run
+    assert (
+        "test_managed_sidecar_runtime_envs_allow_zero_mcp_without_legacy_fallback"
+        in backend_run
+    )
     assert (
         "test_new_deployment_creates_requested_instance_range_without_republishing"
         in backend_run

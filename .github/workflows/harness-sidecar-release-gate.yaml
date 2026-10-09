@@ -138,6 +138,8 @@ jobs:
               tests/cli/test_generated_agent_mcp.py \
               tests/cli/test_studio_a2a_deployment.py \
               tests/cli/test_studio_rbac.py::test_mcp_deployment_error_details_are_actionable \
+              tests/cli/test_studio_rbac.py::test_managed_sidecar_runtime_envs_reject_invalid_mcp_state \
+              tests/cli/test_studio_rbac.py::test_managed_sidecar_runtime_envs_allow_zero_mcp_without_legacy_fallback \
               tests/cli/test_generated_agent_backend_codegen_extended.py::test_generated_debug_applies_published_mcp_credential_contract_before_discovery \
               tests/cli/test_studio_rbac.py::test_deployment_status_recovers_completed_update_from_fresh_instance \
               tests/cli/test_studio_rbac.py::test_new_deployment_creates_requested_instance_range_without_republishing \
