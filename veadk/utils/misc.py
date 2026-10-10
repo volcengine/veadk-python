@@ -206,27 +206,28 @@ async def upload_to_files_api(
     from veadk.config import getenv, settings
     from veadk.consts import DEFAULT_MODEL_AGENT_API_BASE
 
-    client = AsyncArk(
+    async with AsyncArk(
         api_key=getenv("MODEL_AGENT_API_KEY", settings.model.api_key),
         base_url=getenv("DEFAULT_MODEL_AGENT_API_BASE", DEFAULT_MODEL_AGENT_API_BASE),
-    )
-    file = await client.files.create(
-        file=open(local_path, "rb"),
-        purpose="user_data",
-        preprocess_configs={
-            "video": {
-                "fps": fps,
-            }
-        }
-        if fps
-        else None,
-    )
-    await client.files.wait_for_processing(
-        id=file.id,
-        poll_interval=poll_interval,
-        max_wait_seconds=max_wait_seconds,
-    )
-    return file.id
+    ) as client:
+        with open(local_path, "rb") as local_file:
+            file = await client.files.create(
+                file=local_file,
+                purpose="user_data",
+                preprocess_configs={
+                    "video": {
+                        "fps": fps,
+                    }
+                }
+                if fps
+                else None,
+            )
+        await client.files.wait_for_processing(
+            id=file.id,
+            poll_interval=poll_interval,
+            max_wait_seconds=max_wait_seconds,
+        )
+        return file.id
 
 
 def write_string_to_file(file_path: str, content: str):
