@@ -113,6 +113,12 @@ async def test_codex_run_emits_call_llm_span_with_session_id(monkeypatch) -> Non
         assert call_llm_spans, (
             f"no call_llm span: {sorted({s.name for s in exporter._spans})}"
         )
+        # 模型请求来自独立的 Shim 服务任务，必须接回本轮 Agent 的调用链。
+        model_spans = [s for s in exporter._spans if s.name == "codex.model.request"]
+        assert len(model_spans) == 1
+        assert model_spans[0].context.trace_id == call_llm_spans[0].context.trace_id
+        assert model_spans[0].parent is not None
+        assert "backend-key" not in model_spans[0].to_json()
         attributes = dict(call_llm_spans[0].attributes or {})
         assert attributes.get("gen_ai.session.id") == session_id, attributes
         # Operational metadata for dashboards and incident triage: which path
