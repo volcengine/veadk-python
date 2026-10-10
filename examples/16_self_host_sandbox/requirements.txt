@@ -1,4 +1,6 @@
 # Dependencies for Self-Hosted Sandbox Example
-anthropic>=0.40.0
+anthropic>=1.3.0
 python-dotenv>=1.0.0
 httpx[socks]>=0.27.0
+lark-channel-sdk
+lark-oapi

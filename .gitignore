@@ -234,3 +234,8 @@ mpa-create.config*.yaml
 # PiAgent release archives are downloaded and verified during image builds.
 examples/piagent_with_mcp/vendor/pi-*.tar.gz
 .gstack/
+
+# Local Managed Agents verification state; never part of an upstream change.
+examples/16_self_host_sandbox/.local-managed-agents/
+examples/16_self_host_sandbox/deploy_records/
+examples/16_self_host_sandbox/soak_results_*/

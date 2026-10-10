@@ -39,3 +39,70 @@ def test_request_reorganization_preserves_context_management():
     )
 
     assert request["context_management"] == context_management
+
+
+def test_request_reorganization_preserves_tools_with_previous_response_id():
+    tools = [
+        {
+            "type": "function",
+            "name": "bash",
+            "description": "Run a command",
+            "parameters": {"type": "object"},
+        }
+    ]
+
+    request = request_reorganization_by_ark(
+        {
+            "model": "openai/test-model",
+            "input": [{"role": "user", "content": "next"}],
+            "previous_response_id": "response-1",
+            "tools": tools,
+        }
+    )
+
+    assert request["previous_response_id"] == "response-1"
+    assert request["tools"] == tools
+
+
+def test_request_reorganization_does_not_add_tools_when_none_are_authorized():
+    request = request_reorganization_by_ark(
+        {
+            "model": "openai/test-model",
+            "input": [{"role": "user", "content": "next"}],
+            "previous_response_id": "response-1",
+        }
+    )
+
+    assert "tools" not in request
+
+
+def test_disabling_responses_cache_removes_previous_id_but_preserves_tools():
+    tools = [{"type": "function", "name": "bash", "parameters": {}}]
+
+    request = request_reorganization_by_ark(
+        {
+            "model": "openai/test-model",
+            "input": [],
+            "previous_response_id": "response-1",
+            "tools": tools,
+            "store": True,
+        },
+        enable_responses_cache=False,
+    )
+
+    assert "previous_response_id" not in request
+    assert request["tools"] == tools
+
+
+# Regression: cloud conversation storage must not be shortened to one hour.
+def test_response_retention_uses_server_default_or_explicit_value():
+    from veadk.models.ark_llm import request_reorganization_by_ark
+
+    default = request_reorganization_by_ark(
+        {"model": "openai/test", "input": [], "store": True}
+    )
+    assert "expire_at" not in default["extra_body"]
+    explicit = request_reorganization_by_ark(
+        {"model": "openai/test", "input": [], "extra_body": {"expire_at": 123456789}}
+    )
+    assert explicit["extra_body"]["expire_at"] == 123456789

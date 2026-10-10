@@ -1,0 +1,47 @@
+FROM python:3.12-slim-bookworm
+
+# Build-only indexes: never export package credentials into the runtime image.
+ARG PIP_INDEX_URL=https://pypi.org/simple
+ARG UV_DEFAULT_INDEX=https://pypi.org/simple
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    UV_LINK_MODE=copy \
+    MANAGED_AGENT_WORK_CONCURRENCY=500 \
+    MANAGED_AGENT_WORKDIR=/workspace \
+    MANAGED_AGENT_READY_FILE=/tmp/managed-agent-worker-ready \
+    PATH=/app/.venv/bin:$PATH
+
+WORKDIR /app
+COPY --from=ghcr.io/astral-sh/uv:0.11.28 /uv /uvx /bin/
+COPY pyproject.toml uv.lock README.md LICENSE ./
+COPY veadk ./veadk
+COPY docker/managed-agents/verify_anthropic_sdk.py /tmp/verify_anthropic_sdk.py
+
+# Export pinned versions and hashes; an index override changes downloads,
+# never the locked dependency versions. No adjacent SDK wheel is needed.
+RUN --mount=type=cache,id=veadk-managed-agents-uv-python312,target=/root/.cache/uv,sharing=locked \
+    uv export --quiet --frozen --no-dev --extra sandbox \
+      --no-emit-project --output-file /tmp/requirements.txt \
+    && uv venv /app/.venv \
+    && PIP_INDEX_URL="$PIP_INDEX_URL" UV_DEFAULT_INDEX="$UV_DEFAULT_INDEX" \
+       UV_INDEX_URL="$UV_DEFAULT_INDEX" \
+       uv pip install --python /app/.venv/bin/python --no-deps --require-hashes \
+       -r /tmp/requirements.txt \
+    && PIP_INDEX_URL="$PIP_INDEX_URL" UV_DEFAULT_INDEX="$UV_DEFAULT_INDEX" \
+       UV_INDEX_URL="$UV_DEFAULT_INDEX" \
+       uv pip install --python /app/.venv/bin/python --no-deps . \
+    && python /tmp/verify_anthropic_sdk.py \
+    && rm /tmp/requirements.txt /tmp/verify_anthropic_sdk.py \
+    && python -c "from veadk.runtime.managed_agents.dispatcher import EnvironmentWorkDispatcher; from anthropic.lib.tools.agent_toolset import beta_agent_toolset_20260401"
+
+COPY docker/managed-agents/run-runtime.sh /app/run-runtime.sh
+COPY docker/managed-agents/run-claimed.sh /opt/gem/run.sh
+RUN useradd --create-home --uid 10001 veadk \
+    && mkdir -p /workspace \
+    && chmod 0755 /app/run-runtime.sh /opt/gem/run.sh \
+    && chown veadk:veadk /workspace
+
+USER 10001:10001
+EXPOSE 8080
+CMD ["bash", "/app/run-runtime.sh"]

@@ -1,141 +1,93 @@
-# 16. Self-Hosted Sandbox Agent Demo
+# 16. Self-hosted Managed Agents
 
-This example runs the conversation and model loop in `veadk web`. Each new VeADK Web session creates exactly one remote Managed Session. Only VeADK-generated `agent.tool_use` events are sent to the Self-Hosted Runtime dispatcher, which creates a TAE Tool session for the configured Sandbox.
+[中文版](README.zh.md)
 
----
+VeADK runs the model loop; native tool execution may run locally in an isolated
+worker or dispatch through a Managed Agents gateway. The reusable implementation
+ships in `veadk.runtime.managed_agents` and `veadk.integrations.mpa`. This directory
+contains launchers and acceptance scripts, not production library code.
 
-## 🎯 Architecture
-
-```text
-       [ User Prompt ]
-              │
-              ▼
-   ┌───────────────────────┐
-   │      VeADK Web        │
-   │ model + agent loop    │
-   └──────────┬────────────┘
-              │ POST agent.tool_use
-              ▼
-   ┌───────────────────────────┐
-   │ Runtime 7hw8g3yr          │
-   │ dispatcher only           │
-   └──────────┬────────────────┘
-              │ creates one tool session
-              ▼
-   ┌────────────────────────────────────────┐
-   │ TAE Sandbox Tool m3m24zxs              │
-   │ executes the Runtime's tool calls      │
-   └────────────────────────────────────────┘
-```
-
----
-
-## 🚀 Quick Start
-
-### 1. Configure Environment Variables
-
-Copy the example environment configuration file and update it with your credentials:
+## Install and run
 
 ```bash
+uv sync --extra sandbox --extra extensions
 cp examples/16_self_host_sandbox/.env.example examples/16_self_host_sandbox/.env
+# Configure the private .env before starting a worker.
+bash examples/16_self_host_sandbox/run.sh --managed-agent-worker
 ```
 
-Alternatively, export variables directly:
+The launcher loads `.env` as defaults; exported variables take precedence. The
+library never loads example configuration or creates a remote Session at import.
+Run an installed package directly without this example directory:
 
 ```bash
-export ANTHROPIC_BASE_URL="https://<runtime-gateway>"
-export ANTHROPIC_ENVIRONMENT_ID="env_01SLqXHseguCmohifEqeUAYu"
-export ANTHROPIC_ENVIRONMENT_KEY="your-runtime-token"
-export SANDBOX_AGENT_ID="agent_your_managed_agent_id"
-export X_TOP_ACCOUNT_ID="your-account-id"
+python -m veadk.runtime.managed_agents.worker --managed-agent-worker
+python -m veadk.runtime.managed_agents.worker --managed-agent-work-item
 ```
 
-The local VeADK process needs its normal model configuration. Model reasoning happens in VeADK; only tool execution is delegated to the remote Runtime and Sandbox.
+Worker mode continuously polls Work. Claimed mode requires injected Work/Session
+IDs and lease state from the external dispatcher. The Session snapshot owns model,
+permissions, tools, Skills, MCP and Identity bindings. Account scope selects the
+configured execution pool; environment scope additionally needs an Environment ID.
+Local conversation mode creates one Managed Session for each VeADK Session; the
+Runner releases it to idle when overlapping local turns finish.
 
+## Execution and state
 
-### 2. Run the Demo
+Native Anthropic tools run through their tool context, retaining file-edit/read
+semantics. MCP tools keep their actual MCP transport. Tools requiring confirmation
+wait for correlated permission events; custom tools wait for correlated results.
+The gateway event ledger reconciles completed inputs and Ark response IDs across
+worker replacement. The worker always uses process-local ADK bookkeeping and ignores legacy database
+environment variables; durable recovery comes from the event ledger and Ark response IDs.
 
-#### Option A: Web UI Mode (`veadk web`)
+A worker drains on SIGTERM, retains per-Session ordering, and bounds concurrent
+Work using `MANAGED_AGENT_WORK_CONCURRENCY`. File tools confine paths to their
+workspace. Bash requires OS isolation supplied by the worker deployment.
+Cancellation/failure closes runners, MCP/native tool contexts and temporary Skills.
+Runtime and Session credentials remain in process memory.
 
-Run the visual web debugging interface in your browser (defaults to port **8067**, configurable via `PORT` in `.env` or `--port`):
+## Feishu channel
+
+Configure the bot credentials privately and enable the desired optional streaming,
+thinking, tool detail, card and topic settings from `.env.example`, then run:
 
 ```bash
-# Via run.sh helper (automatically switches to agents dir and applies port 8067)
-bash examples/16_self_host_sandbox/run.sh --web
-
-# Or directly in the agents directory
-cd examples/16_self_host_sandbox/agents
-veadk web --port 8067
+bash examples/16_self_host_sandbox/run.sh --feishu
 ```
 
+This starts a long-running channel, reconnects WebSocket transport, and drains
+in-flight replies on shutdown. Channel settings are opt-in outside this demo.
 
-
-
-#### Option B: CLI Mode
+## Tests and acceptance scripts
 
 ```bash
-# Run with run.sh helper
-bash examples/16_self_host_sandbox/run.sh
-
-# Or using uv
-uv run --extra sandbox python examples/16_self_host_sandbox/main.py
-
-# Or select an existing local-to-remote session mapping
-python examples/16_self_host_sandbox/main.py \
-  --session-id "my-local-session" \
-  --prompt "Create a Python script in /workspace and run it with pytest."
+uv run --extra dev --extra sandbox pytest tests/runtime/managed_agents tests/integrations/mpa
+python examples/16_self_host_sandbox/local_agent_loop_test.py
+python examples/16_self_host_sandbox/anthropic_gateway_e2e.py --help
+python examples/16_self_host_sandbox/soak_load_test.py --help
 ```
 
+Unit tests use synthetic services. `anthropic_gateway_e2e.py` offers an official
+SDK conversation check and sandbox lifecycle modes; conversation mode does not
+require an AgentKit inspector. Optional cloud inspection requires explicit
+`AGENTKIT_TOOL_DEPLOY_SCRIPT` and `AGENTKIT_TOOL_ID` inputs. No personal helper path
+or deployment ID is supplied. Soak, fault, distributed-worker and Kubernetes
+scripts are operator-triggered live checks; examine their required configuration
+before running them. Keep local result files and full event logs private.
 
-`ShortTermMemory.after_create_session_callback` creates one remote Managed Session
-for each newly created VeADK session. VeADK handles the user message and model
-loop locally. `DispatchRuntimeProvider` intercepts each model tool call, posts an
-`agent.tool_use`, waits for its matching tool result, and returns that result to
-the local VeADK model loop.
+The distributed helper requires `ANTHROPIC_BASE_URL`, `ANTHROPIC_ENVIRONMENT_ID`,
+`ANTHROPIC_ENVIRONMENT_KEY` and `SANDBOX_AGENT_ID` for existing isolated test
+resources. Its Agent must enable Ark Session credentials and native bash. It
+checks canonical Session history/continuation and archives only its own Session.
+`ark_session_e2e.py` likewise requires explicit gateway and Agent configuration.
 
-## Docker and Kubernetes deployment
+Image build, dependency pitfalls, readiness, writable mounts and the Kubernetes
+worker template are covered in the [build guide](../../docker/managed-agents/README.md).
+Building, local tests, publication, deployment and cloud E2E are separate outcomes.
+The migration deliberately excludes the source's standalone Managed Agents UI.
 
-Use the repository root as the Docker build context:
-
-```bash
-docker build \
-  -f examples/16_self_host_sandbox/Dockerfile \
-  -t <registry>/veadk-self-host-sandbox:<tag> \
-  .
-docker push <registry>/veadk-self-host-sandbox:<tag>
-```
-
-Replace the image and Ingress host in `k8s.yaml` for the target environment. Then
-create an allowlisted Secret from the local `.env` and deploy the workload:
-
-```bash
-set -a
-source examples/16_self_host_sandbox/.env
-set +a
-
-kubectl create secret generic veadk-self-host-sandbox-env \
-  --from-literal=ANTHROPIC_BASE_URL="$ANTHROPIC_BASE_URL" \
-  --from-literal=ANTHROPIC_ENVIRONMENT_ID="$ANTHROPIC_ENVIRONMENT_ID" \
-  --from-literal=ANTHROPIC_ENVIRONMENT_KEY="$ANTHROPIC_ENVIRONMENT_KEY" \
-  --from-literal=SANDBOX_AGENT_ID="$SANDBOX_AGENT_ID" \
-  --from-literal=X_TOP_ACCOUNT_ID="$X_TOP_ACCOUNT_ID" \
-  --dry-run=client -o yaml | kubectl apply -f -
-
-kubectl apply -f examples/16_self_host_sandbox/k8s.yaml
-kubectl rollout status deployment/veadk-self-host-sandbox
-```
-
-Do not create the Secret from the entire `.env`. The Deployment only injects
-the allowlisted Runtime connection values above.
-
-## Development verification
-
-The repository virtual environment may omit test dependencies when it was
-created for runtime use only. Install the development dependency group before
-running the focused dispatch tests:
-
-```bash
-uv sync --group dev --extra sandbox
-uv run pytest -q tests/runtime/test_self_host_sandbox_client.py \
-  tests/runtime/test_self_host_sandbox_agent.py
-```
+Legacy imports `sandbox_client`, `managed_agent_loop`, `runtime_identity`,
+`managed_session_resources` and `event_debug` remain example compatibility adapters.
+Use packaged imports for new code. See the [runtime contract](../../specs/managed-agent-runtime/README.md)
+and [migration design](../../prd-spec/features/managed-agents-upstream/2026-10-10-non-ui-migration.md).
