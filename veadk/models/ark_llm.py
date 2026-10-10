@@ -17,7 +17,9 @@
 import base64
 import copy
 import json
-import time
+import logging
+import os
+import re
 from typing import Any, Dict, Union, AsyncGenerator, Tuple, List, Optional, Literal
 from typing_extensions import override
 
@@ -68,9 +70,106 @@ from veadk.utils.adk_compat import (
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
+_MODEL_TRACE_LOGGER = logging.getLogger("anthropic.managed_agent_model")
+_SAFE_TRACE_VALUE = re.compile(r"^[A-Za-z0-9_.:/-]{1,128}$")
 
 
 _ARK_TEXT_FIELD_TYPES = {"json_object", "json_schema"}
+
+
+def _safe_trace_value(value: Any) -> str:
+    text = str(value or "").strip()
+    return text if _SAFE_TRACE_VALUE.fullmatch(text) else ""
+
+
+def _trace_field(value: Any, name: str) -> Any:
+    if isinstance(value, dict):
+        return value.get(name)
+    return getattr(value, name, None)
+
+
+def _normalized_tool_choice(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return _safe_trace_value(value)
+    result = {}
+    for name in ("type", "name"):
+        safe = _safe_trace_value(_trace_field(value, name))
+        if safe:
+            result[name] = safe
+    function = _trace_field(value, "function")
+    safe_name = _safe_trace_value(_trace_field(function, "name"))
+    if safe_name:
+        result["name"] = safe_name
+    return result
+
+
+def _model_trace(event: str, **fields: Any) -> None:
+    if os.getenv("MANAGED_AGENT_MODEL_TRACE", "").strip().lower() != "true":
+        return
+    payload = {"event": event}
+    payload.update(fields)
+    _MODEL_TRACE_LOGGER.info(json.dumps(payload, sort_keys=True, separators=(",", ":")))
+
+
+def configure_managed_agent_model_trace() -> None:
+    """Configure the isolated, credential-safe model trace channel."""
+    if os.getenv("MANAGED_AGENT_MODEL_TRACE", "").strip().lower() != "true":
+        return
+    logging.getLogger("anthropic._base_client").setLevel(logging.WARNING)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    _MODEL_TRACE_LOGGER.setLevel(logging.INFO)
+    _MODEL_TRACE_LOGGER.propagate = False
+    installed = not any(
+        getattr(existing, "_managed_agent_model_trace", False)
+        for existing in _MODEL_TRACE_LOGGER.handlers
+    )
+    if installed:
+        handler = logging.StreamHandler()
+        handler.setLevel(logging.INFO)
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        setattr(handler, "_managed_agent_model_trace", True)
+        _MODEL_TRACE_LOGGER.addHandler(handler)
+        _model_trace(
+            "model_trace_ready",
+            module=_safe_trace_value(__file__),
+        )
+
+
+def _trace_model_request(responses_args: dict[str, Any]) -> None:
+    tools = []
+    for tool in responses_args.get("tools") or []:
+        name = _safe_trace_value(_trace_field(tool, "name"))
+        tool_type = _safe_trace_value(_trace_field(tool, "type"))
+        if name or tool_type:
+            tools.append({"name": name, "type": tool_type})
+    _model_trace(
+        "model_request",
+        model=_safe_trace_value(responses_args.get("model")),
+        tools=tools,
+        tool_choice=_normalized_tool_choice(responses_args.get("tool_choice")),
+        has_previous_response_id=bool(responses_args.get("previous_response_id")),
+    )
+
+
+def _trace_model_stream_event(event: Any) -> None:
+    event_type = _safe_trace_value(_trace_field(event, "type"))
+    if not event_type:
+        event_type = _safe_trace_value(type(event).__name__)
+    _model_trace("model_response_event", response_event_type=event_type)
+
+
+def _trace_model_response(response: Any) -> None:
+    output_types = []
+    for output in _trace_field(response, "output") or []:
+        output_type = _safe_trace_value(_trace_field(output, "type"))
+        if not output_type:
+            output_type = _safe_trace_value(type(output).__name__)
+        if output_type:
+            output_types.append(output_type)
+    _model_trace("model_response", output_types=output_types)
+
 
 _FINISH_REASON_MAPPING = {
     "incomplete": {
@@ -508,12 +607,11 @@ def request_reorganization_by_ark(
         key: value for key, value in request_data.items() if key in ark_supported_fields
     }
 
-    # expire time 1 hour when send aresponses req
+    # Respect explicit retention, otherwise use Ark's server default.
     extra_body = request_data.get("extra_body")
     if not isinstance(extra_body, dict):
         extra_body = {}
         request_data["extra_body"] = extra_body
-    extra_body["expire_at"] = int(time.time()) + 3600
 
     # [Note: Ark Limitations] caching and text
     # After enabling caching, output_schema(text) cannot be used. Caching must be disabled.
@@ -523,15 +621,8 @@ def request_reorganization_by_ark(
         )
         _remove_caching(request_data)
 
-    # [Note: Ark Limitations] tools and previous_response_id
-    # Remove tools in subsequent rounds (when previous_response_id is present)
-    if (
-        "tools" in request_data
-        and "previous_response_id" in request_data
-        and request_data["previous_response_id"] is not None
-    ):
-        # Remove tools in subsequent rounds regardless of caching status
-        del request_data["tools"]
+    # Tool declarations are request configuration, not conversation history.
+    # Keep them on continuation requests, including after a worker restart.
 
     # [Note: Ark Limitations] caching and store
     # Ensure store field is true or default when caching is enabled
@@ -706,6 +797,7 @@ class ArkLlm(Gemini):
     _additional_args: Dict[str, Any] = None
     use_interactions_api: bool = True
     enable_responses_cache: bool = True
+    retry_expired_response: bool = True
 
     def __init__(self, **kwargs):
         # adk version check
@@ -725,6 +817,7 @@ class ArkLlm(Gemini):
         self._additional_args.pop("stream", None)
         self._additional_args.pop("fallbacks", None)
         self._additional_args.pop("enable_responses_cache", None)
+        self._additional_args.pop("retry_expired_response", None)
         if drop_params is not None:
             self._additional_args["drop_params"] = drop_params
 
@@ -805,6 +898,11 @@ class ArkLlm(Gemini):
 
                 failure = error
                 if self._is_previous_response_not_found(error):
+                    if not self.retry_expired_response:
+                        raise RuntimeError(
+                            "Ark conversation context expired; start a new Session. "
+                            "The previous conversation cannot be silently discarded."
+                        ) from error
                     logger.warning(
                         f"Interaction expired for model `{model}` (PreviousResponseNotFound). Retrying without previous_response_id. Error: {error}"
                     )
@@ -851,13 +949,16 @@ class ArkLlm(Gemini):
     async def generate_content_via_responses(
         self, responses_args: dict, stream: bool = False
     ):
+        configure_managed_agent_model_trace()
         model = responses_args["model"]
         responses_args = request_reorganization_by_ark(
             responses_args, enable_responses_cache=self.enable_responses_cache
         )
+        _trace_model_request(responses_args)
         if stream:
             responses_args["stream"] = True
             async for part in await self.llm_client.aresponses(**responses_args):
+                _trace_model_stream_event(part)
                 llm_response = event_to_generate_content_response(
                     event=part, is_partial=True, model_version=model
                 )
@@ -865,6 +966,7 @@ class ArkLlm(Gemini):
                     yield llm_response
         else:
             raw_response = await self.llm_client.aresponses(**responses_args)
+            _trace_model_response(raw_response)
             llm_response = ark_response_to_generate_content_response(raw_response)
             yield llm_response
 
