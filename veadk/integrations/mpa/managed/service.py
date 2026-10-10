@@ -41,6 +41,7 @@ from .database import AgentDatabaseProvisioner, AgentDeploymentRegistry, Deploym
 from .gateway import SharedAPIGService
 from .gateway_cloud import GatewayCloud
 from .iam import ROLE_NAME, IamCloud, IamError, ensure_runtime_role
+from .model_key import resolve_model_key
 from .network import AccountNetworkProvisioner, NetworkOptions
 from .runtime import AgentRuntimeDeployer, RuntimeCloud, env_map, template_from_runtime
 from .worker import WorkerCloud, ensure_worker
@@ -233,6 +234,7 @@ async def provision(
     expected = str(profile.values.get("account_id", ""))
     if expected and account != expected:
         raise DeploymentError("Deployment credentials differ from the expected account")
+    profile = await resolve_model_key(profile, cloud)
     if profile.managed.iam.mode == "auto":
         if (
             profile.managed.runtime.role_name

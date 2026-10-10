@@ -2021,6 +2021,19 @@
     "feishuAppId": "App ID",
     "feishuAppSecret": "App Secret",
     "manualGuidance": "Enter the credentials of an existing {{name}} bot to connect it to this agent.",
-    "manualReplacement": "Successful binding replaces the current bot. Cancelling or a failed binding does not disconnect the existing bot."
+    "manualReplacement": "Successful binding replaces the current bot. Cancelling or a failed binding does not disconnect the existing bot.",
+    "accountsTitle": "Feishu bots",
+    "account": "Bot",
+    "selectAccount": "Select a bot",
+    "accountEnabled": "Enabled",
+    "accountDisabled": "Disabled",
+    "addAccount": "Add bot",
+    "cancelAddAccount": "Cancel adding",
+    "enableAccount": "Enable bot",
+    "disableAccount": "Disable bot",
+    "noAccounts": "No Feishu bots are bound.",
+    "accountsFailed": "Could not load bots. Try again.",
+    "accountConflict": "The bot account is ambiguous or conflicts with its configuration. Refresh and select a bot.",
+    "multiBotPairingDescription": "Binding a new Feishu app adds a bot. Binding the same App ID updates that bot."
   }
 }

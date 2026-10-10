@@ -6566,7 +6566,7 @@ export async function updateSandboxTool(kind: SandboxToolKind): Promise<{
 
 
 export type ChannelScope = "group" | "group_sender" | "group_topic" | "group_topic_sender";
-export interface ChannelCapabilities { channels?: string[]; credentialBindingChannels?: string[]; serverSideBinding: boolean; bindingReady: boolean; bindingError?: string | null; }
+export interface ChannelCapabilities { channels?: string[]; credentialBindingChannels?: string[]; serverSideBinding: boolean; bindingReady: boolean; bindingError?: string | null; multiBotChannels?: string[]; accountScopedPermissions?: boolean; }
 export interface FeishuBinding {
   id: string;
   status: "PENDING" | "SCANNED" | "AUTHORIZED" | "REGISTERING" | "BOUND" | "FAILED" | "EXPIRED";
@@ -6574,11 +6574,11 @@ export interface FeishuBinding {
   appId?: string | null; lastErrorCode?: string | null; lastErrorMessage?: string | null;
 }
 export interface ChannelDiagnostics {
-  configured: boolean; appId?: string | null; appName?: string | null;
+  configured: boolean; enabled?: boolean; appId?: string | null; appName?: string | null;
   gatewayConfigured: boolean; routeConfigured: boolean; missingConfiguration: string[];
   deliveryHealth: string; lastInboundAt?: number | null; lastDeliveryAt?: number | null;
 }
-export interface ChannelPermission { channel: string; chatId: string; chatName?: string; groupSessionScope?: ChannelScope | null; }
+export interface ChannelPermission { appId?: string; channel: string; chatId: string; chatName?: string; groupSessionScope?: ChannelScope | null; }
 export class ChannelApiError extends Error {
   constructor(public status: number) { super(`Channel request failed (${status})`); }
 }

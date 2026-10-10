@@ -52,6 +52,8 @@ CATEGORIES = {
     "protocol_error",
 }
 OPERATIONS = {
+    "list_model_keys",
+    "get_model_key",
     "get_reference_worker",
     "find_worker",
     "create_worker",

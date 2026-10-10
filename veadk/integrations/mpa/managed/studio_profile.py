@@ -16,9 +16,11 @@
 
 from __future__ import annotations
 
+import os
+
 
 def studio_profile_values() -> dict:
-    """Return a fresh Beijing profile; secrets remain server environment values."""
+    """Return a fresh Beijing profile; model keys resolve with deployment identity."""
     region = "cn-beijing"
     role = "IDRoleForArkClawShareAgent"
     model = "doubao-seed-2-0-pro-260215"
@@ -28,9 +30,13 @@ def studio_profile_values() -> dict:
         "model-provider": "openai",
         "model-name": model,
         "model-api-base": "https://ark.cn-beijing.volces.com/api/v3/",
-        "model-api-key": "${VEADK_MPA_CONFIG_MODEL_AGENT_API_KEY}",
         "managed": {
             "version": 1,
+            "model-key": {
+                "mode": "ark",
+                "api-key-id": os.getenv("VEADK_MPA_ARK_API_KEY_ID", "").strip(),
+                "api-key-name": os.getenv("VEADK_MPA_ARK_API_KEY_NAME", "").strip(),
+            },
             "iam": {"mode": "auto"},
             "postgres": {
                 "mode": "auto",

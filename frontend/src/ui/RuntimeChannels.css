@@ -302,3 +302,23 @@
   width: 16px;
   height: 16px;
 }
+
+.runtime-channels-account-actions {
+  display: flex;
+  align-items: end;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.runtime-channels-account-select {
+  display: flex;
+  flex: 1 1 240px;
+  min-width: 0;
+  flex-direction: column;
+  gap: 8px;
+}
+.runtime-channels-accounts > div > .runtime-channels {
+  margin-top: 16px;
+}
+.runtime-channels-accounts .runtime-channels-diagnostics {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr));
+}

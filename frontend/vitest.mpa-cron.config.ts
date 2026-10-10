@@ -2,7 +2,11 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     environment: "jsdom",
-    include: ["tests/mpaCronTasks.test.tsx", "tests/mpaManagement.test.tsx"],
+    include: [
+      "tests/mpaCronTasks.test.tsx",
+      "tests/mpaManagement.test.tsx",
+      "tests/mpaTaskBots.test.tsx",
+    ],
     coverage: {
       provider: "v8",
       include: [

@@ -36,7 +36,7 @@ from tests.integrations.mpa_managed.test_gateway import (
 from tests.integrations.mpa_managed.test_gateway import (
     Registry as GatewayRegistry,
 )
-from veadk.integrations.mpa.managed import pg_bootstrap, pg_cloud, service
+from veadk.integrations.mpa.managed import model_key, pg_bootstrap, pg_cloud, service
 from veadk.integrations.mpa.managed.config import load_studio_profile
 
 
@@ -47,6 +47,20 @@ async def test_studio_creates_missing_shared_resources_then_reuses_admin_registr
 ):
     monkeypatch.setenv("VEADK_MPA_CONFIG_MODEL_AGENT_API_KEY", "test-model-key")
     profile = load_studio_profile(region="cn-beijing")
+    ark_calls = []
+
+    def ark_request(**kwargs):
+        ark_calls.append(kwargs)
+        if kwargs["query"]["Action"] == "ListApiKeys":
+            return {
+                "Result": {
+                    "Items": [{"Id": 1, "Name": "mpa", "Status": "Active"}],
+                    "TotalCount": 1,
+                }
+            }
+        return {"Result": {"ApiKey": "discovered-test-key"}}
+
+    monkeypatch.setattr(model_key, "volcengine_signed_request", ark_request)
     prepare_role = AsyncMock()
     monkeypatch.setattr(service, "ensure_runtime_role", prepare_role)
     assert profile.managed.postgres is not None
@@ -101,7 +115,16 @@ async def test_studio_creates_missing_shared_resources_then_reuses_admin_registr
         entry.shared = gateways
         cloud = Cloud(entry)
         cloud.network = network
-        monkeypatch.setattr(cloud, "_credentials", lambda: None, raising=False)
+        monkeypatch.setattr(
+            cloud,
+            "_credentials",
+            lambda: SimpleNamespace(
+                access_key_id="test-ak",
+                secret_access_key="test-sk",
+                session_token="test-sts",
+            ),
+            raising=False,
+        )
         monkeypatch.setattr(service, "RuntimeCloud", lambda cloud=cloud, **kw: cloud)
 
         def registry_factory(url, entry=entry):
@@ -116,7 +139,12 @@ async def test_studio_creates_missing_shared_resources_then_reuses_admin_registr
         monkeypatch.setattr(service, "AgentDeploymentRegistry", registry_factory)
         monkeypatch.setattr(service, "AgentDatabaseProvisioner", database_factory)
         result = await service.provision(profile, agent_id=agent_id, owner="user")
-        initialize_identity.assert_awaited_with(profile, cloud, agent_id)
+        assert initialize_identity.await_args is not None
+        resolved_profile, identity_cloud, identity_agent = (
+            initialize_identity.await_args.args
+        )
+        assert resolved_profile.values["model_api_key"] == "discovered-test-key"
+        assert identity_cloud is cloud and identity_agent == agent_id
         assert result["gateway_id"] == gateways.rows[scope]["gateway_id"]
         assert entry.row["admin_workspace_id"] == "ws-1"
         assert entry.row["business_workspace_id"] == "ws-2"
@@ -124,6 +152,7 @@ async def test_studio_creates_missing_shared_resources_then_reuses_admin_registr
         runtime_env = service.env_map(cloud.creates[0])
         assert prepare_role.await_args is not None
         assert prepare_role.await_args.args[1] == "account"
+        assert runtime_env["MODEL_AGENT_API_KEY"] == "discovered-test-key"
         assert runtime_env["CLAW_SPACE_ID"] == "csi-account"
         assert runtime_env["RUNTIME_IAM_ROLE_NAME"] == "IDRoleForArkClawShareAgent"
         assert runtime_env["RUNTIME_IAM_ROLE_TRN"] == (
@@ -137,6 +166,8 @@ async def test_studio_creates_missing_shared_resources_then_reuses_admin_registr
         )
         assert runtime_registry.query == {"ssl": "require"}
 
+    assert len(ark_calls) == 4
+    assert not profile.values.get("model_api_key")
     assert pg.created == 2
     assert initialize_identity.await_count == 2
     assert initialize.await_count == 2

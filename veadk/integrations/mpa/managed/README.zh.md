@@ -68,13 +68,13 @@ AgentKit 返回的 Runtime 子网 ID 顺序可能不同。创建和重试接受�
 4. 使用轮换的 `managed.credential-file`，或 `VOLCENGINE_ACCESS_KEY` / `VOLCENGINE_SECRET_KEY` 与可选 `VOLCENGINE_SESSION_TOKEN` 配置部署凭据。没有显式文件和环境密钥对时，使用挂载的 `/var/run/secrets/iam/credential`。每次云调用刷新凭据；Runtime、VPC、worker、APIG 使用同一经核验账号。
 5. 选择一个模板来源：`managed.from-runtime`、私有 JSON `managed.template-file`，或平铺的镜像/模型/PostgreSQL 字段。参考实例模式会移除智能体专属渠道凭据和 Skill Space 身份。通过 `managed.worker.image` 创建专属 worker（可选 `reference-id` 复用 worker 环境配置），或在核验兼容性后显式使用 `existing-id`。
 6. PostgreSQL 使用私网地址时，设置可访问它的 `managed.network.vpc-id` 和 `subnet-ids`。自动创建网络**不会**配置数据库白名单、对等连接或跨 VPC 路由。显式 `managed.apig.adopt-id` 要求提供该 VPC ID 且网关兼容；否则复用或创建账号登记的网关。
-7. CLI 通过 `--config` 显式传入私有 YAML。Studio 不读取该文件或 `VEADK_MPA_CREATE_CONFIG`；它使用代码内置的北京地域配置，服务端环境仍须提供 `VEADK_MPA_CONFIG_MODEL_AGENT_API_KEY` 与部署 STS 凭据。Studio 选择其他地域时返回配置错误。
+7. CLI 通过 `--config` 显式传入私有 YAML。Studio 不读取该文件或 `VEADK_MPA_CREATE_CONFIG`；它使用代码内置的北京地域配置，服务端环境须提供部署 AK/SK 或 STS 凭据，创建时自动发现该账号的现有方舟模型 Key。Studio 选择其他地域时返回配置错误。
 
 部署身份需要 AgentKit Runtime、Skill Space、Tool、VPC/子网、APIG/IM Gateway 及 `GetCallerIdentity` 操作权限。Runtime/worker 角色还须单独拥有对应镜像所需权限和挂载凭据。IAM 策略、PostgreSQL 云实例、模型服务和网络连通性由运维准备，不会自动创建。
 
 ## 在 Studio 使用
 
-新执行 `veadk studio deploy` 后，托管创建会从服务端 VeFaaS 环境自动复用该 Studio 的 UserPool、客户端、Identity 地域和 `/oauth/callback`。Studio 无需创建 YAML，直接使用代码内置的北京地域账号、Runtime/worker 镜像及模型默认值；模型 API Key 仍从 `VEADK_MPA_CONFIG_MODEL_AGENT_API_KEY` 读取。独立 CLI YAML 若显式填写不同的 `user-pool-name`、`user-pool-client-name`、`identity-callback-url`、`identity-region` 或对应的 `managed.runtime.env` 值，配置检查会在云写入前失败。此前部署的 Studio 须重新部署才能获得这些值。没有 Studio 环境值的独立 `veadk mpa provision` 仍使用显式 YAML。共享 PostgreSQL Workspace 在后续创建 MPA 时才准备，并非部署时的 Identity 存储。
+新执行 `veadk studio deploy` 后，托管创建会从服务端 VeFaaS 环境自动复用该 Studio 的 UserPool、客户端、Identity 地域和 `/oauth/callback`。Studio 无需创建 YAML，直接使用代码内置的北京地域 Runtime/worker 镜像及模型默认值，部署账号来自 STS；模型 API Key 在创建时使用部署凭据读取（见下文方舟 Key 自动发现）。独立 CLI YAML 若显式填写不同的 `user-pool-name`、`user-pool-client-name`、`identity-callback-url`、`identity-region` 或对应的 `managed.runtime.env` 值，配置检查会在云写入前失败。此前部署的 Studio 须重新部署才能获得这些值。没有 Studio 环境值的独立 `veadk mpa provision` 仍使用显式 YAML。共享 PostgreSQL Workspace 在后续创建 MPA 时才准备，并非部署时的 Identity 存储。
 
 选择**智能体 → MPA 智能体 → 创建 MPA 智能体**。三步依次填写基础信息、PostgreSQL 自动准备说明，以及可选的 OpenViking 服务地址/资源 ID/API Key。填写 Runtime 名称（4–64 个 ASCII 字母、数字、下划线或连字符）。服务端生成智能体 ID 并注入 Agent 和 Worker，不再显示 ID 输入框。新创建使用 `agentkit-platform-2112682748-cn-beijing.cr.volces.com/mpa/mpa_agent:latest` 和 `agentkit-platform-2112682748-cn-beijing.cr.volces.com/mpa/mpa_codex_worker:latest`，不再显示镜像输入框。已提交任务重试保留原镜像选择。已有 Runtime 不会被重命名或自动升级。PG 步骤提供[火山引擎 AIDAP 控制台](https://console.volcengine.com/aidap/region:aidap+cn-beijing/)入口；服务端在提交后取得 Workspace 连接。OpenViking 步骤提供[上下文管理控制台](https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing/ov-6689fabdf032294/context-management?accountId=default&userId=default&projectName=default)入口；该页面地址不是要填写的服务地址。PG 凭据仍由服务端配置。同时填写 OpenViking 地址、资源 ID 和遮罩的 API Key 时，注入 `OPENVIKING_URL`、`OPENVIKING_RESOURCE_ID`、`OPENVIKING_API_KEY` 和 `OPENVIKING_USER=default`。三项全空时不注入这些变量，模板或参考 Runtime 中的旧值也不会继承。密钥不保存到浏览器草稿或任务 SQLite，浏览器重启后须重新填写。查看资源计划后在第三步提交。流程依次准备账号网络/APIG/IM Gateway、worker、独立业务库和 Skill Space，然后部署并检查 Runtime 和应用就绪状态。成功后刷新列表。
 
@@ -265,3 +265,21 @@ managed:
 `managed.worker.env` 接受大写字符串键及完整服务端环境变量引用，覆盖可选且可访问 `reference-id` 中已过滤的环境设置。智能体/Runtime/Tool/技能空间绑定、继承的渠道/Runtime 凭据及控制库地址为保留字段。显式参考模板缺失仍报错。`existing-id` 不允许环境设置，因为不会更新已有 Tool。密钥不进入配置摘要/repr 或部署记录；使用服务端引用，不提交实际值。模型凭据由 Runtime 按会话下发，不从旧 Tool 复制。
 
 新的名称 MPA 部署使用 `Skills for MPA agent <runtime_name>` 作为技能空间描述，便于在云控制台辨认手填名称。生成的空间 Name、display_name 标签、内部智能体 ID 及绑定保持不变。已有空间保留原描述；升级前待完成请求按原描述准确恢复，其他输入变化仍报错。不提供 Runtime 名称的调用保留内部 ID 描述。
+
+## 方舟模型 Key 自动发现
+
+内置 Studio 不再读取 `VEADK_MPA_CONFIG_MODEL_AGENT_API_KEY`。部署凭据保留在私有环境或挂载凭据源中，不提交到仓库。当前部署账号需要 `ark:ListApiKeys` 和 `ark:GetRawApiKey` 权限，以及 `default` 项目下现有可用的方舟 Key。模型开通、模型访问权限和 Key IP 限制必须允许 Runtime 推理。不自动创建 Key。
+
+没有选择器时，多个候选 Key 自动按创建时间选最新；只有一个候选时直接使用。服务端只读取选中 Key 的明文，向 Runtime 注入 `MODEL_AGENT_API_KEY`。可选的 `VEADK_MPA_ARK_API_KEY_ID` 或 `VEADK_MPA_ARK_API_KEY_NAME` 优先按精确 ID/名称选择（不是密钥）。有状态时排除非 Active，兼容缺少 Status 的旧响应。最新选择接受 CreateTime（兼容 CreatedAt/CreationTime）、Unix 秒/毫秒或带时区 ISO 8601；同时间选择字符串 ID 字典序最大者。多个候选时间缺失/异常、无匹配、显式名称重名或鉴权/网络失败，在 checking 阶段停止。不使用掩码或任意第一项。重试仍由请求哈希拒绝凭据变化，包括部分部署期间出现更晚创建的 Key。
+
+独立 CLI 配置默认保留显式 `model-api-key`。全新方舟配置可以改为省略该字段，并配置：
+
+```yaml
+managed:
+  model-key:
+    mode: ark
+    project-name: default
+    api-key-id: "<KEY_ID>"  # 可选；省略则选择最新候选 Key。
+```
+
+Ark 模式要求 `model-provider: openai` 和所选地域方舟 `/api/v3/` 地址；拒绝引用 Runtime/模板来源及模型 Key/provider/base 环境覆盖。明文不进入配置/任务响应、本地 bootstrap/任务存储或日志。Runtime 环境配置包含 Key，须保护访问权限。使用内置自动创建时可以移除 `.env` 里旧创建模型 Key 与 `VEADK_MPA_CONFIG_PGPASSWORD` 赋值，保留其他启动配置和部署凭据。其他 CLI 配置仍可使用其显式引用的环境变量。

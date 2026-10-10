@@ -676,7 +676,12 @@ def test_fresh_template_role_trn_uses_verified_account_and_selected_role(
 
     monkeypatch.setenv("VEADK_MPA_CONFIG_MODEL_AGENT_API_KEY", "test-model-key")
     profile = load_studio_profile()
-    profile.values.update(pg_host="db.example", pg_user="test", pg_password="test")
+    profile.values.update(
+        pg_host="db.example",
+        pg_user="test",
+        pg_password="test",
+        model_api_key="resolved-test-key",
+    )
     profile.managed.runtime.role_name = role
     selected_role = role or "IDRoleForArkClawShareAgent"
     request = service.fresh_template(profile, "mi-123456789abc", "verified-account")

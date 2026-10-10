@@ -351,12 +351,28 @@ class Iam(Options):
     mode: Literal["existing", "auto"] = "existing"
 
 
+class ModelKey(Options):
+    mode: Literal["explicit", "ark"] = "explicit"
+    api_key_id: str = Field(default="", max_length=128, pattern=r"^[A-Za-z0-9_-]*$")
+    api_key_name: str = Field(default="", max_length=128)
+    project_name: str = Field(default="default", min_length=1, max_length=128)
+
+    @model_validator(mode="after")
+    def validate_selection(self):
+        if self.api_key_id and self.api_key_name:
+            raise ValueError("Choose an Ark API Key ID or name, not both")
+        if self.mode == "explicit" and (self.api_key_id or self.api_key_name):
+            raise ValueError("Ark API Key selectors require ark mode")
+        return self
+
+
 class Managed(Options):
     version: Literal[1]
     database_admin_url_env: str = "DEPLOYMENT_DATABASE_ADMIN_URL"
     shared_database_url_env: str = "SHARED_APIG_DATABASE_URL"
     postgres: PostgresWorkspaces | None = None
     iam: Iam = Field(default_factory=Iam)
+    model_key: ModelKey = Field(default_factory=ModelKey)
     credential_file: str = ""
     from_runtime: str = ""
     template_file: str = ""
@@ -640,6 +656,10 @@ def load_profile(path: str | Path | None, *, region: str = "") -> Profile:
             isinstance(managed_values.get("postgres"), dict)
             and managed_values["postgres"].get("mode") == "auto"
         )
+        if "model-key" in managed_values:
+            managed_values["model-key"] = _resolve(managed_values["model-key"])
+        elif "model_key" in managed_values:
+            managed_values["model_key"] = _resolve(managed_values["model_key"])
         worker_values = managed_values.get("worker")
         if isinstance(worker_values, dict):
             worker_values = dict(worker_values)
@@ -748,6 +768,26 @@ def load_profile(path: str | Path | None, *, region: str = "") -> Profile:
                 and not (auto and str(k).replace("-", "_").startswith("pg_"))
             }
         )
+        if managed.model_key.mode == "ark":
+            if (
+                template
+                or managed.from_runtime
+                or values.get("model_api_key")
+                or values.get("model_provider") != "openai"
+                or str(values.get("model_api_base", "")).rstrip("/")
+                != f"https://ark.{selected}.volces.com/api/v3"
+                or any(
+                    key in managed.runtime.env
+                    for key in (
+                        "MODEL_AGENT_API_KEY",
+                        "MODEL_AGENT_PROVIDER",
+                        "MODEL_AGENT_API_BASE",
+                    )
+                )
+            ):
+                raise ConfigurationError(
+                    "Ark key discovery requires a fresh Ark model configuration without key overrides"
+                )
         reuse_studio_identity(values, managed.runtime.env)
         if not template and not managed.from_runtime:
             for key in (
@@ -760,6 +800,8 @@ def load_profile(path: str | Path | None, *, region: str = "") -> Profile:
                 "model_api_key",
                 "model_name",
             ):
+                if key == "model_api_key" and managed.model_key.mode == "ark":
+                    continue
                 if auto and key.startswith("pg_"):
                     continue
                 if key == "image" and managed.runtime.image:

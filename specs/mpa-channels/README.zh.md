@@ -39,3 +39,10 @@ CON-14：自动化 MPA 渠道页面仅允许 Studio admin/super_admin 管理；�
 ## 配置方式（2026-09-15）
 
 CON-15：所有渠道提供互斥的“极速配置 / 手动配置”，挂载、切换渠道或 Runtime 时默认极速配置，不持久化选择、不自动发起授权。`credentialBindingChannels` 包含 `feishu` 时，飞书手动方式通过 POST `/api/v1/channels/feishu/bindings/manual` 提交 `{appId, appSecret}`；注册成功仅返回 `{status: "BOUND", appId}`，不含凭据。钉钉和企微的现有路由保持兼容。两种方式均支持替换已配置机器人，不先删除现有绑定。切换方式清空临时配对与凭据，取消前端轮询/SDK 工作并忽略迟到结果；注册写请求期间禁止切换，结果不确定时禁止通过任一方式再次注册。缺少手动能力时提示升级。完整方案和验证映射见[配置方式设计](../../prd-spec/features/channel-configuration-modes/2026-09-15-channel-configuration-modes.zh.md)。
+
+
+## 飞书多机器人账号（2026-10-09）
+
+CON-16：multiBotChannels 包含 feishu 时启用账号管理。根 GET 返回包含 appId 和 enabled 的 channels，允许多个飞书记录。诊断及群权限 CRUD 前先选择账号，始终转发 appId；权限 POST 带 appId，DELETE 保留 chat_id 并附 appId。PATCH /feishu/accounts/{appId} 设置 enabled；根 DELETE 经确认仅删除目标账号。扫码/手动绑定新增不同 appId 并刷新选择，不替换其他账号。缺少能力声明则沿用单账号流程。账号歧义不等于注册不确定。切换目标取消读取/轮询并忽略迟到结果，写入时禁止切换。密钥处理和管理员代理鉴权不变。
+
+见[设计](../../prd-spec/features/mpa-feishu-multi-bot/2026-10-09-studio-multi-bot.zh.md)。

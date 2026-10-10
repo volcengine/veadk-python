@@ -18,10 +18,11 @@ import asyncio
 import copy
 import json
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
-from veadk.integrations.mpa.managed.config import Managed, load_studio_profile
+from veadk.integrations.mpa.managed.config import Managed, Worker, load_studio_profile
 from veadk.integrations.mpa.managed.iam import (
     ACTIONS,
     POLICY_NAME,
@@ -36,15 +37,15 @@ from veadk.integrations.mpa.managed.iam import (
 
 class FakeIAM:
     def __init__(self):
-        self.role = None
-        self.policy = None
+        self.role: dict[str, Any] | None = None
+        self.policy: dict[str, Any] | None = None
         self.bindings = {("unrelated", "Custom")}
         self.calls = []
-        self.fail = None
+        self.fail: str | None = None
         self.hidden = 0
         self.race = False
 
-    async def call(self, method, **params):
+    async def call(self, method, **params) -> dict[str, Any]:
         self.calls.append((method, params))
         if self.fail == method:
             raise IamError("AccessDenied")
@@ -100,6 +101,7 @@ async def test_new_role_and_policy_converge_and_retry_is_additive(race):
     assert cloud.bindings == {("unrelated", "Custom"), (POLICY_NAME, "Custom")} | {
         (name, "System") for name in SYSTEM_POLICIES
     }
+    assert cloud.role is not None
     assert json.loads(cloud.role["TrustPolicyDocument"]) == TRUST_DOCUMENT
     cloud.calls.clear()
     await ensure_runtime_role(cloud, "123", poll_interval=0)
@@ -135,6 +137,7 @@ async def test_partial_failure_preserves_state_and_same_identity_can_resume():
 async def test_conflicting_existing_resources_are_never_overwritten(problem, key):
     cloud = FakeIAM()
     await ensure_runtime_role(cloud, "123", poll_interval=0)
+    assert cloud.role is not None and cloud.policy is not None
     if problem == "account":
         cloud.role["Trn"] = f"trn:iam::456:role/{ROLE_NAME}"
     elif problem == "trust":
@@ -181,7 +184,9 @@ async def test_readback_timeout_and_cancellation_keep_resources():
 def test_default_modes_and_auto_rejects_custom_sources(monkeypatch):
     monkeypatch.setenv("VEADK_MPA_CONFIG_MODEL_AGENT_API_KEY", "test-key")
     assert load_studio_profile(region="cn-beijing").managed.iam.mode == "auto"
-    assert Managed(version=1, worker={"image": "repo/image:tag"}).iam.mode == "existing"
+    assert (
+        Managed(version=1, worker=Worker(image="repo/image:tag")).iam.mode == "existing"
+    )
     for extra in [
         {"from_runtime": "r-reference"},
         {"template_file": "x.json"},
@@ -274,6 +279,7 @@ async def test_role_failure_stops_before_identity_and_pg(monkeypatch):
     profile.values["account_id"] = "123"
     runtime = SimpleNamespace(account_id=AsyncMock(return_value="123"))
     monkeypatch.setattr(service, "RuntimeCloud", lambda **kwargs: runtime)
+    monkeypatch.setattr(service, "resolve_model_key", AsyncMock(return_value=profile))
     prepare = AsyncMock(side_effect=IamError("AccessDenied"))
     identity = AsyncMock()
     monkeypatch.setattr(service, "ensure_runtime_role", prepare)

@@ -2021,6 +2021,19 @@
     "feishuAppId": "App ID",
     "feishuAppSecret": "App Secret",
     "manualGuidance": "填写已有{{name}}机器人的应用凭据，连接到当前智能体。",
-    "manualReplacement": "绑定成功后将替换当前机器人；取消或绑定失败不会解除现有绑定。"
+    "manualReplacement": "绑定成功后将替换当前机器人；取消或绑定失败不会解除现有绑定。",
+    "accountsTitle": "飞书机器人",
+    "account": "机器人",
+    "selectAccount": "请选择机器人",
+    "accountEnabled": "已启用",
+    "accountDisabled": "已停用",
+    "addAccount": "添加机器人",
+    "cancelAddAccount": "取消添加",
+    "enableAccount": "启用机器人",
+    "disableAccount": "停用机器人",
+    "noAccounts": "尚未绑定飞书机器人。",
+    "accountsFailed": "读取机器人列表失败，请重试。",
+    "accountConflict": "机器人账号存在歧义或配置冲突，请刷新并选择机器人。",
+    "multiBotPairingDescription": "绑定新的飞书应用会添加机器人；绑定相同 App ID 会更新对应机器人。"
   }
 }

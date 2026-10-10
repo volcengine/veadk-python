@@ -18,23 +18,30 @@ import {
   WecomAuthorizationError,
 } from "../adk/wecomAuthorization";
 import { SourceCloseIcon } from "./icons/SourceWorkspaceIcons";
+import { FeishuAccounts, type FeishuAccountPanelProps } from "./FeishuAccounts";
 import "./RuntimeChannels.css";
 
 const providers = ["feishu", "wecom", "dingtalk"] as const;
 type Provider = (typeof providers)[number];
 type ConfigurationMethod = "quick" | "manual";
 
-export function RuntimeChannels(props: { runtimeId: string; region: string; showHeader?: boolean }) {
+export function RuntimeChannels(props: {
+  runtimeId: string;
+  region: string;
+  showHeader?: boolean;
+}) {
   const { t } = useTranslation("ui");
   const [provider, setProvider] = useState<Provider>("feishu");
   const id = useId();
   const tabs = useRef<Array<HTMLButtonElement | null>>([]);
   return (
     <div className="message-channels">
-      {props.showHeader !== false && <div className="message-channels-header">
-        <h2>{t("channels.workspaceTitle")}</h2>
-        <p>{t("channels.workspaceDescription")}</p>
-      </div>}
+      {props.showHeader !== false && (
+        <div className="message-channels-header">
+          <h2>{t("channels.workspaceTitle")}</h2>
+          <p>{t("channels.workspaceDescription")}</p>
+        </div>
+      )}
       <div
         className="message-channels-tabs"
         role="tablist"
@@ -136,11 +143,16 @@ function ProviderChannel({
   runtimeId,
   region,
   provider,
+  accountId,
+  accountMode,
+  onBound,
+  onDeleted,
+  onBusyChange,
 }: {
   runtimeId: string;
   region: string;
   provider: Provider;
-}) {
+} & Partial<FeishuAccountPanelProps>) {
   const { t } = useTranslation("ui");
   const ep = useMemo(() => ({ runtimeId, region }), [runtimeId, region]);
   const methodId = useId();
@@ -170,7 +182,14 @@ function ProviderChannel({
   const polling = useRef<AbortController | null>(null);
   const authorizationWaiting = useRef(false);
   const storageKey = `mpa-${provider}-binding:${region}:${runtimeId}`;
-  const fail = (value: unknown) => {
+  const multiBot =
+    provider === "feishu" &&
+    (!!accountMode || !!capability?.multiBotChannels?.includes("feishu"));
+  useEffect(() => {
+    onBusyChange?.(busy);
+    return () => onBusyChange?.(false);
+  }, [busy, onBusyChange]);
+  const fail = (value: unknown, registration = false) => {
     if (!alive.current) return;
     if (value instanceof WecomAuthorizationError) {
       const key =
@@ -186,22 +205,34 @@ function ProviderChannel({
       return;
     }
     const status = value instanceof ChannelApiError ? value.status : 0;
-    if (status === 409) setUncertain(true);
+    if (status === 409 && (registration || !multiBot)) setUncertain(true);
     setError(
       t(
-        `channels.${status === 409 ? "uncertain" : status === 404 ? "unsupported" : status === 401 || status === 403 ? "unauthorized" : status === 503 ? "configurationError" : "requestFailed"}`,
+        `channels.${status === 409 ? (registration || !multiBot ? "uncertain" : "accountConflict") : status === 404 ? "unsupported" : status === 401 || status === 403 ? "unauthorized" : status === 503 ? "configurationError" : "requestFailed"}`,
       ),
     );
   };
   async function refresh(signal: AbortSignal) {
+    if (accountMode === "add") {
+      setDiagnostics(null);
+      setGroups([]);
+      return;
+    }
+    const accountQuery = accountId
+      ? `?appId=${encodeURIComponent(accountId)}`
+      : "";
     const [diag, permissions] = await Promise.all([
-      channelRequest<ChannelDiagnostics>(ep, `/${provider}/diagnostics`, {
-        signal,
-      }),
+      channelRequest<ChannelDiagnostics>(
+        ep,
+        `/${provider}/diagnostics${accountQuery}`,
+        {
+          signal,
+        },
+      ),
       provider === "feishu"
         ? channelRequest<{ permissions: ChannelPermission[] }>(
             ep,
-            "/chat-permissions?channel=feishu",
+            `/chat-permissions?channel=feishu${accountId ? `&appId=${encodeURIComponent(accountId)}` : ""}`,
             { signal },
           )
         : Promise.resolve({ permissions: [] }),
@@ -247,6 +278,12 @@ function ProviderChannel({
         )
           throw new ChannelApiError(404);
         setCapability(caps);
+        if (
+          provider === "feishu" &&
+          caps.multiBotChannels?.includes("feishu") &&
+          !accountMode
+        )
+          return;
         await refresh(controller.signal);
       } catch (value) {
         if (!controller.signal.aborted) fail(value);
@@ -275,7 +312,10 @@ function ProviderChannel({
             setBinding(value);
             if (value.lastErrorCode === "REGISTRATION_UNCERTAIN")
               setUncertain(true);
-            if (value.status === "BOUND") await refresh(controller.signal);
+            if (value.status === "BOUND") {
+              if (accountMode) onBound?.(value.appId || undefined);
+              else await refresh(controller.signal);
+            }
           })
           .catch((value) => {
             if (!controller.signal.aborted) fail(value);
@@ -289,7 +329,10 @@ function ProviderChannel({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [binding, ep, busy, reload, method]);
-  async function perform(action: (signal: AbortSignal) => Promise<void>) {
+  async function perform(
+    action: (signal: AbortSignal) => Promise<void>,
+    registration = false,
+  ) {
     if (operation.current) return;
     const controller = new AbortController();
     operation.current = controller;
@@ -299,7 +342,7 @@ function ProviderChannel({
     try {
       await action(controller.signal);
     } catch (value) {
-      if (!controller.signal.aborted) fail(value);
+      if (!controller.signal.aborted) fail(value, registration);
     } finally {
       if (operation.current === controller) {
         operation.current = null;
@@ -322,9 +365,12 @@ function ProviderChannel({
         setBinding(value);
         if (value.lastErrorCode === "REGISTRATION_UNCERTAIN")
           setUncertain(true);
-        if (value.status === "BOUND") await refresh(signal);
+        if (value.status === "BOUND") {
+          if (accountMode) onBound?.(value.appId || undefined);
+          else await refresh(signal);
+        }
       }
-    });
+    }, true);
   }
   function beginWecom() {
     void perform(async (signal) => {
@@ -391,6 +437,22 @@ function ProviderChannel({
       return undefined;
     }
   };
+  if (multiBot && !accountMode && capability)
+    return (
+      <FeishuAccounts
+        runtimeId={runtimeId}
+        region={region}
+        capability={capability}
+        renderPanel={(props) => (
+          <ProviderChannel
+            runtimeId={runtimeId}
+            region={region}
+            provider="feishu"
+            {...props}
+          />
+        )}
+      />
+    );
   const wecomAuthorizationActions = provider === "wecom" && capability && (
     <>
       <Button
@@ -525,190 +587,197 @@ function ProviderChannel({
               })}
             </p>
           )}
-          <fieldset className="runtime-channels-methods">
-            <legend>{t("channels.configurationMethod")}</legend>
-            <div>
-              {(["quick", "manual"] as const).map((value) => (
-                <Radio
-                  key={value}
-                  name={`${methodId}-method`}
-                  value={value}
-                  checked={method === value}
-                  disabled={methodDisabled}
-                  label={
-                    <span
-                      className="runtime-channels-method-label"
-                      data-selected={method === value}
-                    >
-                      {t(`channels.${value}Setup`)}
-                    </span>
-                  }
-                  onChange={() => changeMethod(value)}
-                />
-              ))}
-            </div>
-          </fieldset>
-          <p>
-            {t(
-              method === "quick"
-                ? "channels.qrGuidance"
-                : "channels.manualGuidance",
-              {
-                name: t(`channels.provider_${provider}`),
-              },
-            )}
-          </p>
-          {method === "manual" && diagnostics?.configured && (
-            <p>{t("channels.manualReplacement")}</p>
-          )}
-          {method === "manual" && !manualSupported && (
-            <p>
-              {t("channels.manualUpgrade", {
-                name: t(`channels.provider_${provider}`),
-              })}
-            </p>
-          )}
-          {method === "manual" && manualSupported && (
-            <form
-              className="runtime-channels-form"
-              data-channel-binding
-              onSubmit={(event) => {
-                event.preventDefault();
-                if (
-                  !botId.trim() ||
-                  !secret.trim() ||
-                  credentialDisabled ||
-                  !capability.bindingReady
-                )
-                  return;
-                void perform(async (signal) => {
-                  await channelRequest(
-                    ep,
-                    provider === "wecom"
-                      ? "/wecom/bindings"
-                      : `/${provider}/bindings/manual`,
-                    {
-                      method: "POST",
-                      body: JSON.stringify(
+          {accountMode !== "manage" && (
+            <>
+              <fieldset className="runtime-channels-methods">
+                <legend>{t("channels.configurationMethod")}</legend>
+                <div>
+                  {(["quick", "manual"] as const).map((value) => (
+                    <Radio
+                      key={value}
+                      name={`${methodId}-method`}
+                      value={value}
+                      checked={method === value}
+                      disabled={methodDisabled}
+                      label={
+                        <span
+                          className="runtime-channels-method-label"
+                          data-selected={method === value}
+                        >
+                          {t(`channels.${value}Setup`)}
+                        </span>
+                      }
+                      onChange={() => changeMethod(value)}
+                    />
+                  ))}
+                </div>
+              </fieldset>
+              <p>
+                {t(
+                  method === "quick"
+                    ? "channels.qrGuidance"
+                    : "channels.manualGuidance",
+                  {
+                    name: t(`channels.provider_${provider}`),
+                  },
+                )}
+              </p>
+              {method === "manual" && diagnostics?.configured && !multiBot && (
+                <p>{t("channels.manualReplacement")}</p>
+              )}
+              {method === "manual" && !manualSupported && (
+                <p>
+                  {t("channels.manualUpgrade", {
+                    name: t(`channels.provider_${provider}`),
+                  })}
+                </p>
+              )}
+              {method === "manual" && manualSupported && (
+                <form
+                  className="runtime-channels-form"
+                  data-channel-binding
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    if (
+                      !botId.trim() ||
+                      !secret.trim() ||
+                      credentialDisabled ||
+                      !capability.bindingReady
+                    )
+                      return;
+                    void perform(async (signal) => {
+                      await channelRequest(
+                        ep,
                         provider === "wecom"
-                          ? { botId: botId.trim(), secret: secret.trim() }
+                          ? "/wecom/bindings"
+                          : `/${provider}/bindings/manual`,
+                        {
+                          method: "POST",
+                          body: JSON.stringify(
+                            provider === "wecom"
+                              ? { botId: botId.trim(), secret: secret.trim() }
+                              : provider === "feishu"
+                                ? {
+                                    appId: botId.trim(),
+                                    appSecret: secret.trim(),
+                                  }
+                                : {
+                                    clientId: botId.trim(),
+                                    clientSecret: secret.trim(),
+                                  },
+                          ),
+                          signal,
+                        },
+                      );
+                      if (!signal.aborted) {
+                        setSecret("");
+                        setBotId("");
+                        if (accountMode) onBound?.(botId.trim());
+                        else await refresh(signal);
+                      }
+                    }, true);
+                  }}
+                >
+                  <label>
+                    {t(
+                      provider === "wecom"
+                        ? "channels.wecomBotId"
+                        : provider === "feishu"
+                          ? "channels.feishuAppId"
+                          : "channels.dingtalkClientId",
+                    )}
+                    <input
+                      name={
+                        provider === "wecom"
+                          ? "botId"
                           : provider === "feishu"
-                            ? {
-                                appId: botId.trim(),
-                                appSecret: secret.trim(),
-                              }
-                            : {
-                                clientId: botId.trim(),
-                                clientSecret: secret.trim(),
-                              },
-                      ),
-                      signal,
-                    },
-                  );
-                  if (!signal.aborted) {
-                    setSecret("");
-                    setBotId("");
-                    await refresh(signal);
-                  }
-                });
-              }}
-            >
-              <label>
-                {t(
-                  provider === "wecom"
-                    ? "channels.wecomBotId"
-                    : provider === "feishu"
-                      ? "channels.feishuAppId"
-                      : "channels.dingtalkClientId",
-                )}
-                <input
-                  name={
-                    provider === "wecom"
-                      ? "botId"
-                      : provider === "feishu"
-                        ? "appId"
-                        : "clientId"
-                  }
-                  value={botId}
-                  required
-                  autoComplete="off"
-                  disabled={credentialDisabled}
-                  onChange={(event) => setBotId(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (
-                      event.key === "Enter" &&
-                      (event.nativeEvent.isComposing ||
-                        event.nativeEvent.keyCode === 229)
-                    )
-                      event.preventDefault();
-                  }}
-                />
-              </label>
-              <label>
-                {t(
-                  provider === "wecom"
-                    ? "channels.wecomSecret"
-                    : provider === "feishu"
-                      ? "channels.feishuAppSecret"
-                      : "channels.dingtalkClientSecret",
-                )}
-                <input
-                  name="secret"
-                  type="password"
-                  value={secret}
-                  required
-                  autoComplete="new-password"
-                  disabled={credentialDisabled}
-                  onChange={(event) => setSecret(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (
-                      event.key === "Enter" &&
-                      (event.nativeEvent.isComposing ||
-                        event.nativeEvent.keyCode === 229)
-                    )
-                      event.preventDefault();
-                  }}
-                />
-              </label>
-              <Button
-                color="primary"
-                size="sm"
-                type="submit"
-                disabled={
-                  credentialDisabled ||
-                  !capability.bindingReady ||
-                  !botId.trim() ||
-                  !secret.trim() ||
-                  uncertain
-                }
-              >
-                {t("channels.bindCredentials")}
-              </Button>
-            </form>
+                            ? "appId"
+                            : "clientId"
+                      }
+                      value={botId}
+                      required
+                      autoComplete="off"
+                      disabled={credentialDisabled}
+                      onChange={(event) => setBotId(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (
+                          event.key === "Enter" &&
+                          (event.nativeEvent.isComposing ||
+                            event.nativeEvent.keyCode === 229)
+                        )
+                          event.preventDefault();
+                      }}
+                    />
+                  </label>
+                  <label>
+                    {t(
+                      provider === "wecom"
+                        ? "channels.wecomSecret"
+                        : provider === "feishu"
+                          ? "channels.feishuAppSecret"
+                          : "channels.dingtalkClientSecret",
+                    )}
+                    <input
+                      name="secret"
+                      type="password"
+                      value={secret}
+                      required
+                      autoComplete="new-password"
+                      disabled={credentialDisabled}
+                      onChange={(event) => setSecret(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (
+                          event.key === "Enter" &&
+                          (event.nativeEvent.isComposing ||
+                            event.nativeEvent.keyCode === 229)
+                        )
+                          event.preventDefault();
+                      }}
+                    />
+                  </label>
+                  <Button
+                    color="primary"
+                    size="sm"
+                    type="submit"
+                    disabled={
+                      credentialDisabled ||
+                      !capability.bindingReady ||
+                      !botId.trim() ||
+                      !secret.trim() ||
+                      uncertain
+                    }
+                  >
+                    {t("channels.bindCredentials")}
+                  </Button>
+                </form>
+              )}
+            </>
           )}
           {uncertain && <p role="alert">{t("channels.uncertain")}</p>}
           <div className="runtime-channels-actions">
             {method === "quick" && wecomAuthorizationActions}
-            {method === "quick" && provider !== "wecom" && (
-              <Button
-                color="primary"
-                size="sm"
-                disabled={
-                  busy ||
-                  loading ||
-                  !capability.bindingReady ||
-                  uncertain ||
-                  (!!binding && !terminal.has(binding.status))
-                }
-                onClick={() => begin()}
-              >
-                {t(
-                  binding || diagnostics?.configured || pairingRequested
-                    ? "channels.newQr"
-                    : "channels.bind",
-                )}
-              </Button>
-            )}
+            {method === "quick" &&
+              provider !== "wecom" &&
+              accountMode !== "manage" && (
+                <Button
+                  color="primary"
+                  size="sm"
+                  disabled={
+                    busy ||
+                    loading ||
+                    !capability.bindingReady ||
+                    uncertain ||
+                    (!!binding && !terminal.has(binding.status))
+                  }
+                  onClick={() => begin()}
+                >
+                  {t(
+                    binding || diagnostics?.configured || pairingRequested
+                      ? "channels.newQr"
+                      : "channels.bind",
+                  )}
+                </Button>
+              )}
             {diagnostics?.configured && (
               <Button
                 color="danger"
@@ -728,7 +797,8 @@ function ProviderChannel({
                         setPairingRequested(false);
                         setWecomPairingComplete(false);
                         setUncertain(false);
-                        await refresh(signal);
+                        if (accountMode) onDeleted?.();
+                        else await refresh(signal);
                       }
                     });
                 }}
@@ -745,7 +815,13 @@ function ProviderChannel({
             >
               <h3>{t("channels.pairingTitle")}</h3>
               {provider === "feishu" && (
-                <p>{t("channels.feishuPairingDescription")}</p>
+                <p>
+                  {t(
+                    multiBot
+                      ? "channels.multiBotPairingDescription"
+                      : "channels.feishuPairingDescription",
+                  )}
+                </p>
               )}
               {provider === "wecom" && (
                 <p>{t("channels.wecomPairingDescription")}</p>
@@ -806,7 +882,7 @@ function ProviderChannel({
               )}
             </div>
           )}
-          {provider === "feishu" && (
+          {provider === "feishu" && accountMode !== "add" && (
             <section
               className="runtime-channels-permissions"
               aria-label={t("channels.groupsTitle")}
@@ -826,6 +902,7 @@ function ProviderChannel({
                       method: "POST",
                       body: JSON.stringify({
                         channel: provider,
+                        ...(accountId ? { appId: accountId } : {}),
                         chatId: chatId.trim(),
                         groupSessionScope: scope,
                       }),
@@ -892,9 +969,9 @@ function ProviderChannel({
               )}
               <ul className="runtime-channels-groups">
                 {groups.map((group) => (
-                  <li key={group.chatId}>
+                  <li key={`${group.appId || accountId || ""}:${group.chatId}`}>
                     <span>
-                      {group.chatName || group.chatId} ·{" "}
+                      {group.chatName || group.chatId} |{" "}
                       {t(
                         `channels.scope_${group.groupSessionScope || "group"}`,
                       )}
@@ -912,7 +989,7 @@ function ProviderChannel({
                         void perform(async (signal) => {
                           await channelRequest(
                             ep,
-                            `/chat-permissions?channel=${provider}&chat_id=${encodeURIComponent(group.chatId)}`,
+                            `/chat-permissions?channel=${provider}&chat_id=${encodeURIComponent(group.chatId)}${accountId ? `&appId=${encodeURIComponent(accountId)}` : ""}`,
                             { method: "DELETE", signal },
                           );
                           await refresh(signal);

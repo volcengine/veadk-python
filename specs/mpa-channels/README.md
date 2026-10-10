@@ -39,3 +39,10 @@ CON-14: Automations MPA channels management is limited to Studio admin/super_adm
 ## Configuration modes (2026-09-15)
 
 CON-15: All providers expose mutually exclusive Quick setup / Manual setup, defaulting to Quick setup on mount/provider/Runtime changes without persistence or automatic authorization. Manual Feishu uses POST `/api/v1/channels/feishu/bindings/manual` with `{appId, appSecret}` when `credentialBindingChannels` includes `feishu`; successful registration returns `{status: "BOUND", appId}` without credentials. Existing DingTalk/WeCom routes remain compatible. Both modes support configured bot replacement without first deleting the current binding. Method switches clear transient pairing/credentials, cancel frontend polling/SDK work and ignore late results; registration mutations prevent switching, and uncertain registration blocks new attempts across modes. Unsupported manual capability shows an upgrade message. The design and verification mapping are in [configuration modes](../../prd-spec/features/channel-configuration-modes/2026-09-15-channel-configuration-modes.md).
+
+
+## Feishu multi-bot accounts (2026-10-09)
+
+CON-16: multiBotChannels containing feishu opts into account management. GET root returns channels with appId and enabled; multiple Feishu records are valid. Select an account before querying diagnostics or permission CRUD, always forwarding appId. POST permission includes appId, DELETE retains chat_id plus appId. PATCH /feishu/accounts/{appId} sets enabled; DELETE root removes only that account after confirmation. QR/manual binding adds a different appId and refreshes selection without replacing other accounts. Legacy capability absence retains single-account flows. Account ambiguity is not registration uncertainty. Target changes abort reads/polling and ignore late completion; mutations prevent switching. Secret handling and administrator proxy authorization remain unchanged.
+
+See [design](../../prd-spec/features/mpa-feishu-multi-bot/2026-10-09-studio-multi-bot.md).

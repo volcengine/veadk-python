@@ -103,7 +103,14 @@
       "nextMonth": "Next month",
       "today": "Today",
       "nextOnly": "Next only",
-      "calendarHint": "The calendar shows expected executions. Complex Cron expressions show only the next execution returned by the server."
+      "calendarHint": "The calendar shows expected executions. Complex Cron expressions show only the next execution returned by the server.",
+      "botAccount": "Delivery bot",
+      "selectBot": "Select an enabled delivery bot.",
+      "botsLoading": "Loading Feishu bots…",
+      "botsFailed": "Could not load delivery bots. Try again.",
+      "botsUnauthorized": "You cannot read Feishu bots. Contact an administrator to configure delivery.",
+      "retryBots": "Reload bots",
+      "botDisabled": "Disabled"
     }
   },
   "actions": {

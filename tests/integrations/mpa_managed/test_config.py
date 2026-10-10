@@ -35,7 +35,8 @@ def test_studio_profile_uses_builtin_beijing_defaults_without_yaml(monkeypatch):
     assert "CLAW_SPACE_ID" not in profile.managed.runtime.env
     assert "RUNTIME_IAM_ROLE_TRN" not in profile.managed.runtime.env
     assert "RUNTIME_IAM_ROLE_NAME" not in profile.managed.runtime.env
-    assert profile.values["model_api_key"] == "test-model-key"
+    assert not profile.values.get("model_api_key")
+    assert profile.managed.model_key.mode == "ark"
     postgres = profile.managed.postgres
     assert postgres is not None
     assert postgres.mode == "auto"
@@ -56,12 +57,9 @@ def test_standalone_postgres_bootstrap_path_keeps_adk_default():
     )
 
 
-def test_studio_profile_requires_model_key_and_rejects_other_regions(monkeypatch):
+def test_studio_profile_discovers_model_key_and_rejects_other_regions(monkeypatch):
     monkeypatch.delenv("VEADK_MPA_CONFIG_MODEL_AGENT_API_KEY", raising=False)
-    with pytest.raises(
-        ConfigurationError, match="VEADK_MPA_CONFIG_MODEL_AGENT_API_KEY"
-    ):
-        load_studio_profile(region="cn-beijing")
+    assert load_studio_profile(region="cn-beijing").summary()["configured"] is True
     monkeypatch.setenv("VEADK_MPA_CONFIG_MODEL_AGENT_API_KEY", "test-model-key")
     with pytest.raises(ConfigurationError, match="selected region"):
         load_studio_profile(region="cn-shanghai")

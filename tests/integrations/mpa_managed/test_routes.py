@@ -107,7 +107,12 @@ def test_creation_routes_require_management_authorization(tmp_path):
             assert getattr(client, method)(path).status_code == 403
 
 
-def test_missing_model_key_is_actionable_and_safe(tmp_path, monkeypatch):
+def test_model_key_discovery_needs_no_secret_for_local_inspection(
+    tmp_path, monkeypatch
+):
+    from frontend.server import mpa_creation
+
+    monkeypatch.setattr(mpa_creation, "load_volcengine_credentials", lambda *_: None)
     monkeypatch.setenv(
         "VEADK_MPA_CREATE_CONFIG", str(tmp_path / "private-missing.yaml")
     )
@@ -119,8 +124,8 @@ def test_missing_model_key_is_actionable_and_safe(tmp_path, monkeypatch):
     with TestClient(app) as client:
         result = client.get("/web/mpa-creation/config?region=cn-beijing")
         assert result.status_code == 200
-        assert result.json()["configured"] is False
-        assert "VEADK_MPA_CONFIG_MODEL_AGENT_API_KEY" in result.json()["error"]
+        assert result.json()["configured"] is True
+        assert "VEADK_MPA_CONFIG_MODEL_AGENT_API_KEY" not in result.text
         assert "private-missing" not in result.text
         assert (
             client.post(
