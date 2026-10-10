@@ -37,7 +37,7 @@ Public signatures, result types, backend arguments, auth, retry behavior and mem
 | FR-2 | T-2 memory search | AC-2 handled failure distinguished from successful empty response | Memory tests: success, empty, failure, concurrent parents, OpenViking cancellation | pass (local) |
 | FR-3 | T-3 memory save | AC-3 event count/session, propagation and unchanged save arguments | Memory save tests: filtering, backend failure and cancellation | pass (local) |
 | FR-4 | T-4 protections | AC-4 no sensitive content; telemetry failures do not alter business calls/context | Helper tests with failing tracer/span plus integration parent tests | pass (local) |
-| FR-1–FR-4 | T-5 delivery | AC-5 bilingual docs and affected regression gates, actual PR recorded | Repository-local targeted pytest; all-files pre-commit; synchronize base before commit | pending |
+| FR-1–FR-4 | T-5 delivery | AC-5 bilingual docs and affected regression gates, actual PR recorded | Repository-local targeted pytest; all-files pre-commit; synchronize base before commit | pass (draft PR) |
 
 Test entry points: `tests/test_knowledgebase.py`, `tests/test_long_term_memory.py`, `tests/test_openviking_long_term_memory.py`, `tests/tools/builtin_tools/test_load_knowledgebase.py`; add colocated tracing-helper tests where existing tests organize tracing. Execute through repository `.venv` using `uv run --extra dev pytest`. No real services or credentials in fixtures. Use a controlled blocking backend for thread-cancellation semantics and clean it up before test teardown.
 
@@ -59,6 +59,6 @@ Design review: pass (2026-10-10). Verified actual public boundaries, context pro
 | Final source/security review | pass: backend arguments, filtering, successful empty responses, errors and cancellation preserved. No new exporter/configuration or sensitive content. |
 | Base and hooks | Fresh origin/main remains 171d8d86, already rebased and an ancestor of HEAD. All-files pre-commit passed Ruff and both secret scanners with complete extras. |
 | Full regression | pass: 6698 passed, 50 skipped, 4 xfailed, 88 dependency warnings, 427.41s. Skips do not prove behavior. First interrupted run had no result; restarted only after confirming absence. Local metrics export reported localhost:8000 unavailable, so remote observability reception is not proved. |
-| Delivery/deployment | pending: PR draft body prepared; retrieval update not committed/pushed. Deployed APMPlus reception and real performance remain unverified. |
+| Delivery/deployment | draft PR delivered: [#1161](https://github.com/volcengine/veadk-python/pull/1161), code commit e2c1e887. Remote PR head verified after push. No merge or deployment; APMPlus reception and real performance remain unverified. |
 
 Evidence: `/tmp/codex-retrieval-save-tests.log`, `/tmp/codex-veadk-retrieval-broad.log`, `/tmp/codex-veadk-complete-env-retry.log`, `/tmp/codex-veadk-complete-env-retest.log`, `/tmp/codex-retrieval-extras-final-hooks.log`, `/tmp/codex-veadk-complete-broad-resumed.log`.
