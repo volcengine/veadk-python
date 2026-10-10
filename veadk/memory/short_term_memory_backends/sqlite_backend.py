@@ -19,10 +19,12 @@ from typing import Any
 
 from google.adk.sessions import (
     BaseSessionService,
-    DatabaseSessionService,
 )
 from typing_extensions import override
 
+from veadk.memory.short_term_memory_backends.traced_database_service import (
+    TracedDatabaseSessionService as DatabaseSessionService,
+)
 from veadk.memory.short_term_memory_backends.base_backend import (
     BaseShortTermMemoryBackend,
 )
