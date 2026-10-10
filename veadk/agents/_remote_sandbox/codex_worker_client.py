@@ -23,6 +23,8 @@ from urllib.parse import quote
 
 import httpx
 
+from veadk.agents._remote_sandbox.request_tracing import worker_request_span
+
 
 class CodexWorkerError(RuntimeError):
     """A sanitized worker failure; never includes credential URLs or wire data."""
@@ -75,21 +77,43 @@ class CodexWorkerClient:
         return self._url.copy_with(path="/v1/codex-worker" + path)
 
     async def request(self, method, path, *, body=None, key=None):
+        with worker_request_span(method, path) as (trace_headers, span):
+            return await self._request(
+                method, path, body=body, key=key, trace_headers=trace_headers, span=span
+            )
+
+    async def _request(self, method, path, *, body, key, trace_headers, span):
         for attempt in range(3):
             try:
                 response = await self._http.request(
                     method,
                     self._endpoint(path),
                     json=body,
-                    headers={"Idempotency-Key": key} if key else None,
+                    headers={
+                        **trace_headers,
+                        **({"Idempotency-Key": key} if key else {}),
+                    },
                 )
             except httpx.TransportError:
+                if span:
+                    span.add_event(
+                        "worker.request.transport_error", {"attempt": attempt + 1}
+                    )
                 if attempt == 2:
                     raise CodexWorkerError(
                         "Worker request unavailable; execution may have started"
                     ) from None
                 await asyncio.sleep(0.1 * (attempt + 1))
                 continue
+            if span:
+                span.set_attribute("http.response.status_code", response.status_code)
+                span.add_event(
+                    "worker.request.response",
+                    {
+                        "attempt": attempt + 1,
+                        "http.response.status_code": response.status_code,
+                    },
+                )
             if response.status_code >= 400:
                 # POST retries only use a stable idempotency key. A 5xx can
                 # represent an accepted request, never generate a replacement key.
@@ -145,50 +169,63 @@ class CodexWorkerClient:
         cursor = after_event_id
         for attempt in range(4):
             try:
-                async with self._http.stream(
-                    "GET",
-                    self._endpoint(self.turn_path(sid, tid) + "/events"),
-                    headers={"Last-Event-ID": str(cursor)},
-                ) as response:
-                    if response.status_code != 200:
-                        raise CodexWorkerError(
-                            f"Worker event stream returned HTTP {response.status_code}"
-                        )
-                    data = []
-                    size = 0
-                    async for line in response.aiter_lines():
-                        size += len(line)
-                        if size > 4 * 1024 * 1024:
-                            raise CodexWorkerError("Worker event too large")
-                        if line.startswith("data:"):
-                            data.append(line[5:].lstrip())
-                        elif not line:
-                            size = 0
-                            if not data:
-                                continue
-                            try:
-                                event = json.loads("\n".join(data))
-                            except ValueError:
-                                raise CodexWorkerError("Invalid worker event") from None
-                            data = []
-                            if event.get("schemaVersion") != 1:
-                                raise CodexWorkerError(
-                                    "Unsupported worker event or expired stream"
-                                )
-                            if (
-                                event.get("sessionId") != sid
-                                or event.get("turnId") != tid
-                            ):
-                                raise CodexWorkerError("Worker event binding mismatch")
-                            sequence = event.get("eventId")
-                            if not isinstance(sequence, int) or sequence < 1:
-                                raise CodexWorkerError("Invalid worker event cursor")
-                            if sequence <= cursor:
-                                continue
-                            cursor = sequence
-                            yield event
-                            if event["type"] == "turn.completed":
-                                return
+                with worker_request_span(
+                    "GET", self.turn_path(sid, tid) + "/events", activate=False
+                ) as (trace_headers, span):
+                    async with self._http.stream(
+                        "GET",
+                        self._endpoint(self.turn_path(sid, tid) + "/events"),
+                        headers={**trace_headers, "Last-Event-ID": str(cursor)},
+                    ) as response:
+                        if span:
+                            span.set_attribute(
+                                "http.response.status_code", response.status_code
+                            )
+                        if response.status_code != 200:
+                            raise CodexWorkerError(
+                                f"Worker event stream returned HTTP {response.status_code}"
+                            )
+                        data = []
+                        size = 0
+                        async for line in response.aiter_lines():
+                            size += len(line)
+                            if size > 4 * 1024 * 1024:
+                                raise CodexWorkerError("Worker event too large")
+                            if line.startswith("data:"):
+                                data.append(line[5:].lstrip())
+                            elif not line:
+                                size = 0
+                                if not data:
+                                    continue
+                                try:
+                                    event = json.loads("\n".join(data))
+                                except ValueError:
+                                    raise CodexWorkerError(
+                                        "Invalid worker event"
+                                    ) from None
+                                data = []
+                                if event.get("schemaVersion") != 1:
+                                    raise CodexWorkerError(
+                                        "Unsupported worker event or expired stream"
+                                    )
+                                if (
+                                    event.get("sessionId") != sid
+                                    or event.get("turnId") != tid
+                                ):
+                                    raise CodexWorkerError(
+                                        "Worker event binding mismatch"
+                                    )
+                                sequence = event.get("eventId")
+                                if not isinstance(sequence, int) or sequence < 1:
+                                    raise CodexWorkerError(
+                                        "Invalid worker event cursor"
+                                    )
+                                if sequence <= cursor:
+                                    continue
+                                cursor = sequence
+                                yield event
+                                if event["type"] == "turn.completed":
+                                    return
             except httpx.TransportError:
                 pass
             if attempt < 3:

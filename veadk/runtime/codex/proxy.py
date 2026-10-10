@@ -55,6 +55,7 @@ from veadk.runtime.codex.execution_control import (
     TurnRequests,
 )
 from veadk.utils.logger import get_logger
+from veadk.runtime.codex.model_tracing import trace_model_request
 
 try:  # OpenTelemetry is optional; the shim must import without it.
     from opentelemetry import context as otel_context_api
@@ -1045,7 +1046,9 @@ class ResponsesShim:
                                 resp or {"model": model}, usage_acc
                             ),
                         )
-                result = await _call_backend_tolerating_reasoning(call_kwargs)
+                # Shim 服务协程独立于 Agent；恢复调用上下文，避免模型 Span 成为孤立链路。
+                with _otel_scope(turn_context.otel_context):
+                    result = await _call_backend_tolerating_reasoning(call_kwargs)
                 turn_context.requests.check_active()
                 resp = _to_dict(result)
                 _accumulate_usage(usage_acc, resp.get("usage"))
@@ -1427,7 +1430,7 @@ async def _call_backend_tolerating_reasoning(call_kwargs: dict[str, Any]) -> Any
     hard failure on a few models for quieter, worse answers on the rest.
     """
     try:
-        return await litellm.aresponses(**call_kwargs)
+        return await trace_model_request(lambda: litellm.aresponses(**call_kwargs))
     except Exception as e:  # noqa: BLE001 - re-raised unless it is this one case
         conversation = call_kwargs.get("input")
         if not _looks_like_reasoning_rejection(e) or not isinstance(conversation, list):
@@ -1443,7 +1446,9 @@ async def _call_backend_tolerating_reasoning(call_kwargs: dict[str, Any]) -> Any
             "codex_backend_reasoning_items_dropped removed=%d",
             len(conversation) - len(kept),
         )
-        return await litellm.aresponses(**{**call_kwargs, "input": kept})
+        return await trace_model_request(
+            lambda: litellm.aresponses(**{**call_kwargs, "input": kept})
+        )
 
 
 #: ``extra_body`` keys that the Responses transport cannot carry, so they are

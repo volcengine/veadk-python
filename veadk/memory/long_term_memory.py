@@ -34,6 +34,7 @@ from typing_extensions import Union, override
 from veadk.memory.long_term_memory_backends.base_backend import (
     BaseLongTermMemoryBackend,
 )
+from veadk.tracing.retrieval_tracing import retrieval_span
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -551,40 +552,48 @@ class LongTermMemory(BaseMemoryService, BaseModel):
             # Added 2 events to long term memory: index=main, user_id=user_123
             ```
         """
-        user_id = session.user_id
-        save_kwargs = dict(kwargs)
-        nested_kwargs = save_kwargs.pop("kwargs", None)
-        if isinstance(nested_kwargs, dict):
-            save_kwargs.update(nested_kwargs)
-        auto_save_memory_policy = save_kwargs.pop("auto_save_memory_policy", None)
-        app_name = self.app_name or getattr(session, "app_name", "")
-        include_assistant = (
-            self.backend == "openviking"
-            or self._backend.__class__.__name__ == "OpenVikingLTMBackend"
+        backend = (
+            self.backend
+            if isinstance(self.backend, str)
+            else type(self.backend).__name__
         )
-        event_strings = self._filter_and_convert_events(
-            session.events,
-            include_assistant=include_assistant,
-            auto_save_memory_policy=auto_save_memory_policy,
-        )
+        with retrieval_span("veadk.memory.save", backend=backend) as operation:
+            operation.set_attribute("session.id", session.id)
+            user_id = session.user_id
+            save_kwargs = dict(kwargs)
+            nested_kwargs = save_kwargs.pop("kwargs", None)
+            if isinstance(nested_kwargs, dict):
+                save_kwargs.update(nested_kwargs)
+            auto_save_memory_policy = save_kwargs.pop("auto_save_memory_policy", None)
+            app_name = self.app_name or getattr(session, "app_name", "")
+            include_assistant = (
+                self.backend == "openviking"
+                or self._backend.__class__.__name__ == "OpenVikingLTMBackend"
+            )
+            event_strings = self._filter_and_convert_events(
+                session.events,
+                include_assistant=include_assistant,
+                auto_save_memory_policy=auto_save_memory_policy,
+            )
 
-        logger.info(
-            f"Adding {len(event_strings)} events to long term memory: index={self.index}"
-        )
-        save_call = {
-            "user_id": user_id,
-            "event_strings": event_strings,
-            "session_id": session.id,
-            "app_name": app_name,
-            **save_kwargs,
-        }
-        if self._uses_openviking_backend():
-            await asyncio.to_thread(self._backend.save_memory, **save_call)
-        else:
-            self._backend.save_memory(**save_call)
-        logger.info(
-            f"Added {len(event_strings)} events to long term memory: index={self.index}, user_id={user_id}"
-        )
+            operation.set_attribute("veadk.memory.event_count", len(event_strings))
+            logger.info(
+                f"Adding {len(event_strings)} events to long term memory: index={self.index}"
+            )
+            save_call = {
+                "user_id": user_id,
+                "event_strings": event_strings,
+                "session_id": session.id,
+                "app_name": app_name,
+                **save_kwargs,
+            }
+            if self._uses_openviking_backend():
+                await asyncio.to_thread(self._backend.save_memory, **save_call)
+            else:
+                self._backend.save_memory(**save_call)
+            logger.info(
+                f"Added {len(event_strings)} events to long term memory: index={self.index}, user_id={user_id}"
+            )
 
     @override
     async def search_memory(
@@ -606,37 +615,46 @@ class LongTermMemory(BaseMemoryService, BaseModel):
                 An object containing a list of `MemoryEntry` items representing
                 the retrieved memory snippets relevant to the query.
         """
-        logger.info(f"Search memory with query={query}")
-
-        memory_chunks = []
-        try:
-            search_kwargs = {"app_name": app_name}
-            search_call = {
-                "query": query,
-                "top_k": self.top_k,
-                "user_id": user_id,
-                **search_kwargs,
-            }
-            if self._uses_openviking_backend():
-                memory_chunks = await asyncio.to_thread(
-                    self._backend.search_memory,
-                    **search_call,
-                )
-            else:
-                memory_chunks = self._backend.search_memory(**search_call)
-        except Exception as e:
-            logger.error(
-                f"Exception orrcus during memory search: {e}. Return empty memory chunks"
-            )
-
-        memory_events = []
-        for memory in memory_chunks:
-            memory_events.extend(self._convert_memory_chunk_to_entries(memory))
-
-        logger.info(
-            f"Return {len(memory_events)} memory events for query: {query} index={self.index} user_id={user_id}"
+        backend = (
+            self.backend
+            if isinstance(self.backend, str)
+            else type(self.backend).__name__
         )
-        return SearchMemoryResponse(memories=memory_events)
+        with retrieval_span("veadk.memory.search", backend=backend) as operation:
+            operation.set_attribute("veadk.retrieval.top_k", self.top_k)
+            logger.info(f"Search memory with query={query}")
+
+            memory_chunks = []
+            try:
+                search_kwargs = {"app_name": app_name}
+                search_call = {
+                    "query": query,
+                    "top_k": self.top_k,
+                    "user_id": user_id,
+                    **search_kwargs,
+                }
+                if self._uses_openviking_backend():
+                    memory_chunks = await asyncio.to_thread(
+                        self._backend.search_memory,
+                        **search_call,
+                    )
+                else:
+                    memory_chunks = self._backend.search_memory(**search_call)
+            except Exception as e:
+                operation.fail(e)
+                logger.error(
+                    f"Exception orrcus during memory search: {e}. Return empty memory chunks"
+                )
+
+            memory_events = []
+            for memory in memory_chunks:
+                memory_events.extend(self._convert_memory_chunk_to_entries(memory))
+
+            logger.info(
+                f"Return {len(memory_events)} memory events for query: {query} index={self.index} user_id={user_id}"
+            )
+            operation.set_attribute("veadk.retrieval.result_count", len(memory_events))
+            return SearchMemoryResponse(memories=memory_events)
 
     def _uses_openviking_backend(self) -> bool:
         return (

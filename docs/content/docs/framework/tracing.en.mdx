@@ -163,3 +163,7 @@ In a multi-agent scenario, spans are linked through `parent_span_id`, showing th
 <Callout type="info" title="OpenTelemetry Compatibility">
   VeADK's field naming follows the OpenTelemetry generative-AI conventions, so you can import tracing data directly into any OpenTelemetry-compatible system for analysis and visualization.
 </Callout>
+
+### Session event persistence duration
+
+VeADK's built-in SQLite, MySQL and PostgreSQL session backends emit `veadk.session.append_event` for actual non-partial event append calls, helping identify storage delays within execution. Streaming partial events are not counted as database saves, and custom session services are not automatically instrumented. Existing export settings apply; event bodies, session state and database URLs are not recorded. The duration covers the ADK storage operation, not an individual SQL statement.

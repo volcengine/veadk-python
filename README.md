@@ -182,3 +182,11 @@ Join our discussion group by scanning the QR code below:
 ## License
 
 This project is licensed under the [Apache 2.0 License](./LICENSE).
+
+## Codex 性能诊断
+
+The Codex path retains `call_llm` as a whole-turn compatibility record for session indexing and evaluation. Each Responses Shim backend `litellm.aresponses` call has a separate `codex.model.request` Span under the originating Agent context, including library-internal retries; the reasoning compatibility retry creates another Span. This is not a per-HTTP-attempt or TTFT measurement: the backend returns a complete non-streaming response. Model Spans do not duplicate whole-turn usage or record bodies, endpoints or raw exceptions.
+
+验证使用 `tests/runtime/codex/test_model_tracing.py` 与现有 `test_codex_tracing.py`、`test_codex_shim_rounds.py`；实际观测接收仍需按部署环境验证。
+
+The remote CodeEnv Worker client traces readiness, session creation, turn start/status/cancel and each SSE connection as CLIENT Spans, propagating W3C context. Retries, backoff, authentication, idempotency keys and event cursors preserve their existing semantics. Stream Spans are detached from ambient context across generator yields. Spans exclude endpoint, routing IDs, bodies and credentials. Subscription time includes caller consumption and must not be interpreted as remote execution time. Remote queue/start timing and cross-turn recovery still require receiver instrumentation.
