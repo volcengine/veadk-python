@@ -15,4 +15,4 @@
 - 更新 tracing 规范，提交前记录实际测试结果。
 
 ## 验证
-受影响测试：`uv run --extra dev --extra extensions --extra codex --extra sandbox pytest tests/memory/test_session_persistence_tracing.py tests/memory/test_postgres_schema.py tests/test_adk_compat.py tests/test_short_term_memory.py -q`：32 项通过。真实 ADK Runner 经本地 SQLite 保存事件／状态；父 Trace、关联标识、partial 事件不计时、异常脱敏、取消和采集故障不阻断均已验证。完整回归待完成。
+受影响测试：`uv run --extra dev --extra extensions --extra codex --extra sandbox pytest tests/memory/test_session_persistence_tracing.py tests/memory/test_postgres_schema.py tests/test_adk_compat.py tests/test_short_term_memory.py -q`：32 项通过。真实 ADK Runner 经本地 SQLite 保存事件／状态；父 Trace、关联标识、partial 事件不计时、异常脱敏、取消和采集故障不阻断均已验证。完整回归：6704 项通过、50 项跳过、4 项预期失败（484.07 秒）。跳过项不计作环境验证。
