@@ -23,6 +23,8 @@ from urllib.parse import quote
 
 import httpx
 
+from veadk.agents._remote_sandbox.request_tracing import worker_request_span
+
 
 class CodexWorkerError(RuntimeError):
     """A sanitized worker failure; never includes credential URLs or wire data."""
@@ -75,21 +77,43 @@ class CodexWorkerClient:
         return self._url.copy_with(path="/v1/codex-worker" + path)
 
     async def request(self, method, path, *, body=None, key=None):
+        with worker_request_span(method, path) as (trace_headers, span):
+            return await self._request(
+                method, path, body=body, key=key, trace_headers=trace_headers, span=span
+            )
+
+    async def _request(self, method, path, *, body, key, trace_headers, span):
         for attempt in range(3):
             try:
                 response = await self._http.request(
                     method,
                     self._endpoint(path),
                     json=body,
-                    headers={"Idempotency-Key": key} if key else None,
+                    headers={
+                        **trace_headers,
+                        **({"Idempotency-Key": key} if key else {}),
+                    },
                 )
             except httpx.TransportError:
+                if span:
+                    span.add_event(
+                        "worker.request.transport_error", {"attempt": attempt + 1}
+                    )
                 if attempt == 2:
                     raise CodexWorkerError(
                         "Worker request unavailable; execution may have started"
                     ) from None
                 await asyncio.sleep(0.1 * (attempt + 1))
                 continue
+            if span:
+                span.set_attribute("http.response.status_code", response.status_code)
+                span.add_event(
+                    "worker.request.response",
+                    {
+                        "attempt": attempt + 1,
+                        "http.response.status_code": response.status_code,
+                    },
+                )
             if response.status_code >= 400:
                 # POST retries only use a stable idempotency key. A 5xx can
                 # represent an accepted request, never generate a replacement key.

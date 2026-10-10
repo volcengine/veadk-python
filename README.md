@@ -188,3 +188,5 @@ This project is licensed under the [Apache 2.0 License](./LICENSE).
 Codex 路径保留 `call_llm` 作为整轮执行的兼容记录，供现有会话索引与评测使用；它不是单次模型请求耗时。Responses Shim 为每次 `litellm.aresponses` 调用生成 `codex.model.request` Span，并接续本轮 Agent 的 Trace 上下文。该 Span 包含库内部重试，reasoning 兼容重试会另生成一条；不等于底层每次 HTTP 尝试。此路径以非流式方式获取模型完整响应，不据此计算首 Token 耗时。模型 Span 不重复记录整轮 Token 用量，也不采集请求、响应、Endpoint 或异常正文。
 
 验证使用 `tests/runtime/codex/test_model_tracing.py` 与现有 `test_codex_tracing.py`、`test_codex_shim_rounds.py`；实际观测接收仍需按部署环境验证。
+
+远端 CodeEnv Worker 客户端为就绪检查、创建会话、启动、查询和取消请求生成 CLIENT Span，按 W3C 透传 Trace 上下文；一次请求 Span 包含已有重试及退避，记录每次响应或传输异常。身份认证与幂等 Key 保持原行为，Span 不保存 Endpoint、Session / Turn 路由 ID、请求正文或凭证。SSE 订阅、Worker 内部排队与启动、跨轮恢复关联仍需分别采集，客户端请求耗时不能代替这些阶段或任务总耗时。
