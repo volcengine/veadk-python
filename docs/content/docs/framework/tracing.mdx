@@ -161,3 +161,7 @@ Tracing 数据由一系列 **Span** 组成，每个 Span 记录一次操作（�
 <Callout type="info" title="与 OpenTelemetry 的兼容性">
   VeADK 的字段命名遵循 OpenTelemetry 生成式 AI 规范，你可以直接将 Tracing 数据导入到 OpenTelemetry 兼容的系统中进行分析和可视化。
 </Callout>
+
+### 会话事件保存耗时
+
+VeADK 内置 SQLite、MySQL、PostgreSQL 会话后端为实际保存事件的 `append_event` 调用生成 `veadk.session.append_event` Span，便于判断会话保存是否拖慢执行。流式 partial 事件不作为数据库保存计时；自定义会话后端不自动增加此埋点。复用现有上报配置，不记录事件正文、会话状态或数据库地址。该耗时覆盖 ADK 存储调用，不等于某条 SQL 的执行时间。
