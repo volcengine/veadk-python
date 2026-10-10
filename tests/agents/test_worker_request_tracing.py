@@ -114,3 +114,83 @@ async def test_worker_request_without_observation(monkeypatch):
         assert (await client.request("GET", "/readyz"))["status"] == "ready"
     finally:
         await client._http.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "outcome", ["complete", "reconnect", "close", "cancel", "failure"]
+)
+async def test_worker_stream_context_and_cleanup(monkeypatch, outcome):
+    import json
+
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    monkeypatch.setattr(trace, "get_tracer", provider.get_tracer)
+    requests = []
+
+    async def respond(request):
+        requests.append(request)
+        if outcome == "cancel":
+            raise asyncio.CancelledError("secret")
+        if outcome == "failure":
+            return httpx.Response(403)
+        sequence = len(requests)
+        terminal = outcome == "complete" or sequence == 2
+        event = {
+            "schemaVersion": 1,
+            "sessionId": "private-session",
+            "turnId": "private-turn",
+            "eventId": sequence,
+            "type": "turn.completed" if terminal else "tool.delta",
+            "payload": "secret",
+        }
+        return httpx.Response(200, content="data: " + json.dumps(event) + "\n\n")
+
+    client = CodexWorkerClient(
+        "https://worker.invalid?signature=secret", api_key="secret"
+    )
+    client._http = httpx.AsyncClient(
+        transport=httpx.MockTransport(respond), headers=client._headers
+    )
+    try:
+        with provider.get_tracer("test").start_as_current_span("agent") as parent:
+            stream = client.events("private-session", "private-turn")
+            if outcome == "cancel":
+                with pytest.raises(asyncio.CancelledError):
+                    await anext(stream)
+            elif outcome == "failure":
+                with pytest.raises(CodexWorkerError):
+                    await anext(stream)
+            else:
+                seen = []
+                async for event in stream:
+                    seen.append(event["eventId"])
+                    assert (
+                        trace.get_current_span().get_span_context()
+                        == parent.get_span_context()
+                    )
+                    if outcome == "close":
+                        await stream.aclose()
+                        break
+                assert seen == ([1, 2] if outcome == "reconnect" else [1])
+        spans = [
+            s for s in exporter.get_finished_spans() if s.name == "worker.turn.events"
+        ]
+        assert len(spans) == len(requests) == (2 if outcome == "reconnect" else 1)
+        for request, span in zip(requests, spans):
+            assert span.parent.span_id == parent.get_span_context().span_id
+            parts = request.headers["traceparent"].split("-")
+            assert parts[2] == f"{span.context.span_id:016x}"
+            assert request.headers["x-api-key"] == "secret"
+            assert "baggage" not in request.headers
+            assert "secret" not in span.to_json()
+            assert "private-session" not in span.to_json()
+        assert requests[0].headers["last-event-id"] == "0"
+        if outcome == "reconnect":
+            assert requests[1].headers["last-event-id"] == "1"
+        if outcome in {"cancel", "failure"}:
+            assert spans[0].status.status_code.name == "ERROR"
+    finally:
+        await client._http.aclose()
+        provider.shutdown()
