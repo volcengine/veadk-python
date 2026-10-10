@@ -37,7 +37,7 @@ Change ID：retrieval-diagnostics；修订：2026-10-10；状态：approved。
 | FR-2 | T-2 记忆检索 | AC-2 区分已处理失败与正常空结果 | 成功、空结果、失败、并发父关系、OpenViking 取消测试 | pass (local) |
 | FR-3 | T-3 记忆保存 | AC-3 事件数量 / 会话、关联和保存参数不变 | 过滤、后端失败及取消测试 | pass (local) |
 | FR-4 | T-4 采集保护 | AC-4 不含敏感正文；采集失败不改变业务调用与上下文 | tracer / span 故障 helper 测试及父关系集成测试 | pass (local) |
-| FR-1–FR-4 | T-5 交付 | AC-5 双语文档与受影响回归门禁、记录实际 PR | 仓库本地专项 pytest、全文件 pre-commit；提交前同步基线 | pending |
+| FR-1–FR-4 | T-5 交付 | AC-5 双语文档与受影响回归门禁、记录实际 PR | 仓库本地专项 pytest、全文件 pre-commit；提交前同步基线 | pass (draft PR) |
 
 测试入口：`tests/test_knowledgebase.py`、`tests/test_long_term_memory.py`、`tests/test_openviking_long_term_memory.py`、`tests/tools/builtin_tools/test_load_knowledgebase.py`；按现有 tracing 测试组织新增 helper 测试。使用仓库 `.venv`，命令为 `uv run --extra dev pytest`。fixture 不接真实服务，不使用凭证。线程取消使用受控阻塞后端，退出测试前完成清理。
 
@@ -59,6 +59,6 @@ Change ID：retrieval-diagnostics；修订：2026-10-10；状态：approved。
 | 最终源码 / 安全审查 | pass：保留后端参数、过滤、正常空结果、异常与取消语义；没有新增 exporter / 配置或敏感正文采集。 |
 | 基线与 hooks | 重新 fetch 后 origin/main 仍为 171d8d86，已完成 rebase 且为 HEAD 的祖先。保留完整 extras 的全文件 pre-commit 已通过 Ruff 和两项密钥扫描。 |
 | 全量回归 | pass：6698 项通过、50 项跳过、4 项预期失败、88 条依赖警告，耗时 427.41 秒。跳过不证明相关行为。首轮中断无结果，仅确认进程不存在后重跑。本地 metrics 导出报告 localhost:8000 不可用，不证明远端可观测接收。 |
-| 交付 / 部署 | pending：已准备 PR 描述草稿；检索更新尚未提交 / 推送。线上 APMPlus 接收与真实性能尚未验证。 |
+| 交付 / 部署 | 草稿 PR 已交付：[#1161](https://github.com/volcengine/veadk-python/pull/1161)，代码提交 e2c1e887。推送后已核验远端 PR 提交；没有合并或部署，APMPlus 接收与真实性能仍未验证。 |
 
 证据：`/tmp/codex-retrieval-save-tests.log`、`/tmp/codex-veadk-retrieval-broad.log`、`/tmp/codex-veadk-complete-env-retry.log`、`/tmp/codex-veadk-complete-env-retest.log`、`/tmp/codex-retrieval-extras-final-hooks.log`、`/tmp/codex-veadk-complete-broad-resumed.log`。
