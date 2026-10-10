@@ -6,7 +6,7 @@ Change ID: execution-diagnostics; date: 2026-10-10; status: in-review.
 Related contract: [execution tracing](../../../specs/execution-tracing/README.md).
 
 ## Evidence and scope
-The existing Codex `call_llm` Span covers a whole execution. The Responses Shim performs non-streaming `litellm.aresponses` requests. Worker HTTP requests are traced, but the SSE subscription is not. This design records the scope already authorized by the performance-diagnostics goal; it does not assert a new user approval or deployed capability.
+The existing Codex `call_llm` Span covers a whole execution. The Responses Shim performs non-streaming `litellm.aresponses` requests. At the design baseline, Worker HTTP requests were traced, while the SSE subscription was not. This design records the scope already authorized by the performance-diagnostics goal; it does not assert a new user approval or deployed capability.
 
 ## Requirements and design
 FR-1: Preserve whole-turn compatibility while recording each model backend call separately under the originating Agent context. No duplicate whole-turn usage or synthetic TTFT.
@@ -21,7 +21,7 @@ T-3 / AC-3: SSE tests prove per-connection parentage, cursor continuity, cancell
 T-4 / AC-4: Synchronize bilingual contracts and user documentation, run affected tests and pre-commit, and record actual results.
 
 ## Review and risks
-Direct review: no public signature, protocol, authentication, persistence, concurrency ownership or deployment configuration changes. Existing retry semantics remain authoritative. Async-generator context leakage is a blocking risk addressed by detached stream Spans. Client subscription time is not remote queue/start/execution time. Real Worker receiver propagation, APMPlus reception and deployed versions remain unverified. SSE implementation and acceptance are pending; prior HTTP/model test evidence is in PR #1161. This record reconciles existing work and precedes the SSE extension.
+Direct review: no public signature, protocol, authentication, persistence, concurrency ownership or deployment configuration changes. Existing retry semantics remain authoritative. Async-generator context leakage is a blocking risk addressed by detached stream Spans. Client subscription time is not remote queue/start/execution time. Real Worker receiver propagation, APMPlus reception and deployed versions remain unverified. SSE implementation and affected-test acceptance are complete in draft PR #1161; HTTP/model evidence is also recorded there. This record reconciles existing work and precedes the SSE extension.
 
 Verification (2026-10-10): 10 Worker tracing tests pass; 17 existing remote Sandbox tests pass (the initial combined run before adding new tests had 22 passes). SSE completion, reconnect/cursor, early close, cancellation and HTTP failure are covered. Full repository regression, live Codex smoke and APMPlus reception are not_run: isolated full-smoke dependencies and deployed receiver evidence are unavailable. Process deviation: SSE tests were added after the first implementation edit instead of first run failing; direct behavior assertions are now present. No deployed capability is claimed.
 
