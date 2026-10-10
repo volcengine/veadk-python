@@ -6,7 +6,7 @@
 
 - 变更 ID：`frontend-lockfile-sync`
 - 创建日期：2026-10-09
-- 修订日期：2026-10-09
+- 修订日期：2026-10-10
 - 状态：implemented
 - 相关组件规格：无；本变更仅恢复生成的依赖元数据，不改变组件契约
 
@@ -81,4 +81,5 @@ PR #23 在 Harness Sidecar Release Gate 的 `npm ci --ignore-scripts` 阶段失�
 - 2026-10-09：用户批准恢复完整锁文件并运行前端 gate。
 - 2026-10-09：从 `origin/main` 恢复被删除的 512 行锁文件内容；在 `d3370fd1` 加本工作区修复的差异范围内，依赖安装、受影响的覆盖率、完整前端测试和生产构建均通过。
 - 2026-10-09：`npm ci` 报告既有依赖审计问题（6 个 low、3 个 moderate、6 个 high、1 个 critical）；依赖修复不属于本次锁文件恢复范围。
+- 2026-10-10：提交 `5644e146` 再次引入相同的 512 行删除。从当前 `upstream/main` 恢复锁文件；`npm ci --ignore-scripts`、1,377 项 Node 测试、67 项 Vitest 测试、22 项 Sidecar coverage 测试和两项生产构建均通过。
 - 提交、推送和更新 PR 仍需单独授权。

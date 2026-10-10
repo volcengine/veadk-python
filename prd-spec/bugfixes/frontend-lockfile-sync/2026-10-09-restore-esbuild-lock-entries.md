@@ -6,7 +6,7 @@
 
 - Change ID: `frontend-lockfile-sync`
 - Created: 2026-10-09
-- Revised: 2026-10-09
+- Revised: 2026-10-10
 - Status: implemented
 - Related component specs: none; this change restores generated dependency metadata without changing component contracts
 
@@ -81,4 +81,5 @@ Alternative rejected: running a broad dependency upgrade. It would create unrela
 - 2026-10-09: The user approved restoring the complete lock file and running the frontend gates.
 - 2026-10-09: Restored the 512 deleted lock-file lines from `origin/main`; installation, affected coverage, complete frontend tests, and production build passed on diff scope `d3370fd1` plus this working-tree fix.
 - 2026-10-09: `npm ci` reported existing dependency audit findings (6 low, 3 moderate, 6 high, 1 critical); dependency remediation is outside this lock restoration.
+- 2026-10-10: Commit `5644e146` reintroduced the same 512-line deletion. Restored the lock file from current `upstream/main`; `npm ci --ignore-scripts`, 1,377 Node tests, 67 Vitest tests, 22 Sidecar coverage tests, and both production builds passed.
 - Commit, push, and PR updates remain separately authorized operations.
