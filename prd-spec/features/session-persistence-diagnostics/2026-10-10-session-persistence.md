@@ -15,4 +15,4 @@ Reviewed against existing factories and SDK identity tests. No method monkeypatc
 - Update tracing contract and record exact tests before commit.
 
 ## Verification
-Affected tests: `uv run --extra dev --extra extensions --extra codex --extra sandbox pytest tests/memory/test_session_persistence_tracing.py tests/memory/test_postgres_schema.py tests/test_adk_compat.py tests/test_short_term_memory.py -q`: 32 passed. Real ADK Runner persisted events/state through local SQLite; parent Trace, identifiers, partial-event bypass, error redaction, cancellation and telemetry fail-open verified. Full regression pending.
+Affected tests: `uv run --extra dev --extra extensions --extra codex --extra sandbox pytest tests/memory/test_session_persistence_tracing.py tests/memory/test_postgres_schema.py tests/test_adk_compat.py tests/test_short_term_memory.py -q`: 32 passed. Real ADK Runner persisted events/state through local SQLite; parent Trace, identifiers, partial-event bypass, error redaction, cancellation and telemetry fail-open verified. Full regression completed: 6704 passed, 50 skipped, 4 xfailed (484.07 s). Skips do not prove environment-dependent behavior.
