@@ -33,6 +33,8 @@ def operation_name(method, path):
         return "ready"
     if path == "/sessions":
         return "session.create"
+    if path.endswith("/events"):
+        return "turn.events"
     if path.endswith("/cancel"):
         return "turn.cancel"
     if path.endswith("/turns"):
@@ -43,11 +45,14 @@ def operation_name(method, path):
 
 
 @contextmanager
-def worker_request_span(method, path):
+def worker_request_span(method, path, *, activate=True):
     if trace is None:
         yield {}, None
         return
-    with trace.get_tracer("veadk.worker.client").start_as_current_span(
+    tracer = trace.get_tracer("veadk.worker.client")
+    # Streaming generators must not hold ambient context while yielding to callers.
+    factory = tracer.start_as_current_span if activate else tracer.start_span
+    with factory(
         "worker." + operation_name(method, path),
         kind=SpanKind.CLIENT,
         attributes={"http.request.method": method},
@@ -56,7 +61,9 @@ def worker_request_span(method, path):
     ) as span:
         headers = {}
         # 只透传 W3C Trace 上下文，避免全局 propagator 自动带出 baggage 或业务正文。
-        TraceContextTextMapPropagator().inject(headers)
+        TraceContextTextMapPropagator().inject(
+            headers, context=trace.set_span_in_context(span)
+        )
         try:
             yield headers, span
         except BaseException as error:
