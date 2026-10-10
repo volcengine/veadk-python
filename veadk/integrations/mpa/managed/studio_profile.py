@@ -19,13 +19,13 @@ from __future__ import annotations
 import os
 
 
-def studio_profile_values() -> dict:
-    """Return a fresh Beijing profile; model keys resolve with deployment identity."""
+def studio_profile_values(provider: str = "volcengine") -> dict:
+    """Return provider defaults; model keys resolve with deployment identity."""
     region = "cn-beijing"
     role = "IDRoleForArkClawShareAgent"
     model = "doubao-seed-2-0-pro-260215"
     registry = "agentkit-platform-2112682748-cn-beijing.cr.volces.com/mpa"
-    return {
+    values = {
         "region": region,
         "model-provider": "openai",
         "model-name": model,
@@ -92,3 +92,61 @@ def studio_profile_values() -> dict:
             "timeout-seconds": 1800,
         },
     }
+
+    if provider == "volcengine":
+        return values
+    if provider != "byteplus":
+        raise ValueError("Unsupported managed cloud provider")
+    from veadk.cli.studio_model_catalog import (
+        modelark_base_url,
+        studio_agent_model_name,
+    )
+
+    from .provider import managed_host
+
+    region = "ap-southeast-1"
+    model = studio_agent_model_name(provider)
+    values.update(
+        {
+            "cloud-provider": provider,
+            "region": region,
+            "model-name": model,
+            "model-api-base": modelark_base_url(provider),
+        }
+    )
+    managed = values["managed"]
+    managed["credential-file"] = os.getenv(
+        "VEADK_MPA_BYTEPLUS_CREDENTIAL_FILE", ""
+    ).strip()
+    managed_host("aidap", region, "byteplus")
+    managed["postgres"]["bootstrap-path"] = (
+        "/tmp/veadk-studio/mpa-pg-bootstrap-byteplus.sqlite3"
+    )
+    runtime = managed["runtime"]
+    runtime["image"] = (
+        os.getenv("VEADK_MPA_BYTEPLUS_RUNTIME_IMAGE", "").strip() or runtime["image"]
+    )
+    managed["worker"]["image"] = (
+        os.getenv("VEADK_MPA_BYTEPLUS_WORKER_IMAGE", "").strip()
+        or managed["worker"]["image"]
+    )
+    runtime["env"].update(
+        {
+            "CLOUD_PROVIDER": provider,
+            "AGENTKIT_CLOUD_PROVIDER": provider,
+            "BYTEPLUS_REGION": region,
+            "REGION": region,
+            "IDENTITY_REGION": region,
+            "MPA_CODEX_WORKER_DEFAULT_MODEL": model,
+            "MPA_SELECTABLE_MODELS": model,
+            "APIG_TOP_ENDPOINT": managed_host("apig", region, provider),
+        }
+    )
+    # The Worker SDK must resolve overseas services in the same way as Runtime.
+    managed["worker"]["env"] = {
+        "CLOUD_PROVIDER": provider,
+        "AGENTKIT_CLOUD_PROVIDER": provider,
+        "BYTEPLUS_REGION": region,
+        "REGION": region,
+    }
+    return values

@@ -17,6 +17,7 @@ import {
 import "../../components/composites/ModalButton/ModalButton.css";
 import "./MpaCreateDialog.css";
 import { runtimeNameProblem } from "../../create/runtimeName";
+import type { CloudProvider } from "../../adk/cloudProvider";
 import { validOpenViking, validPgTarget } from "../../adk/mpaCreationResources";
 
 const PG_CONSOLE_URL =
@@ -71,10 +72,12 @@ function initial(region: string): {
 
 export function MpaCreateDialog({
   region,
+  cloudProvider = "volcengine",
   onClose,
   onCreated,
 }: {
   region: string;
+  cloudProvider?: CloudProvider;
   onClose: () => void;
   onCreated: () => void;
 }) {
@@ -455,11 +458,21 @@ export function MpaCreateDialog({
                       )}
                     </p>
                     <a
-                      href={PG_CONSOLE_URL}
+                      href={
+                        cloudProvider === "byteplus"
+                          ? "https://console.byteplus.com/aidap/"
+                          : PG_CONSOLE_URL
+                      }
                       target="_blank"
                       rel="noopener noreferrer"
                     >
-                      {t(key("pgConsole"))}
+                      {t(
+                        key(
+                          cloudProvider === "byteplus"
+                            ? "pgConsoleByteplus"
+                            : "pgConsole",
+                        ),
+                      )}
                     </a>
                     {!autoPg && (
                       <>
@@ -506,11 +519,21 @@ export function MpaCreateDialog({
                   <>
                     <p>{t(key("openvikingDescription"))}</p>
                     <a
-                      href={OPENVIKING_CONSOLE_URL}
+                      href={
+                        cloudProvider === "byteplus"
+                          ? "https://console.byteplus.com/vikingdb/"
+                          : OPENVIKING_CONSOLE_URL
+                      }
                       target="_blank"
                       rel="noopener noreferrer"
                     >
-                      {t(key("openvikingConsole"))}
+                      {t(
+                        key(
+                          cloudProvider === "byteplus"
+                            ? "openvikingConsoleByteplus"
+                            : "openvikingConsole",
+                        ),
+                      )}
                     </a>
                     <label>
                       {t(key("openvikingUrl"))}

@@ -154,13 +154,16 @@ def parse_connection(result):
 
 
 class PGCloud:
-    def __init__(self, *, region, credentials):
+    def __init__(self, *, region, credentials, provider="volcengine"):
         self.region, self.credentials = region, credentials
+        self.provider = provider
 
     async def call(self, method, request_type, **params):
         def run():
             import volcenginesdkaidap
             import volcenginesdkcore
+
+            from .provider import managed_host
 
             credential = self.credentials()
             _debug_event(
@@ -181,7 +184,7 @@ class PGCloud:
                 credential.secret_access_key,
             )
             config.session_token, config.region = credential.session_token, self.region
-            config.host = "open.volcengineapi.com"
+            config.host = managed_host("aidap", self.region, self.provider)
             config.auto_retry = (
                 False  # CreateWorkspace has no client idempotency token.
             )

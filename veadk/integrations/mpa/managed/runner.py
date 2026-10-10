@@ -41,7 +41,11 @@ def main():
 def run():
     try:
         data = json.loads(sys.stdin.read(16384))
-        profile = load_profile(data["config"], region=data["region"])
+        profile = load_profile(
+            data["config"],
+            region=data["region"],
+            provider=data.get("provider", "volcengine"),
+        )
         profile = with_creation_images(profile, data.get("images", {}))
         profile = with_creation_resources(profile, data.get("resources", {}))
         profile = with_creation_tos(profile, data.get("tos", {}))

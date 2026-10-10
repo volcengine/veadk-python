@@ -119,7 +119,9 @@ CON-10 元数据可见性：区分初始化元数据缺失和显式冲突。具�
 
 在私有 SQLite 引导文件中保存无密钥的意图与资源身份。内置 Studio 配置临时使用 `/tmp/veadk-studio/mpa-pg-bootstrap.sqlite3`，避免云端创建写入只读代码目录；独立 YAML 未显式配置时仍使用 `.adk/mpa-pg-bootstrap.sqlite3`。同一实例上的所有创建进程必须共享该路径及操作系统锁。Studio 的 `/tmp` 路径在实例替换后不持久，也不被独立主机共享；状态丢失后，必须先检查云资源再重试结果不确定的创建。调用 CreateWorkspace 前保存意图，等待就绪前保存 ID。创建结果不确定时禁止盲目重试，按范围/标签发现或通过 ID 接管。确定的权限/参数拒绝允许修正后重试。取消、超时及后续失败保留资源，不替换已登记但删除的 Workspace。服务商错误脱敏；每次 SDK 请求刷新凭据并核验账号，凭据只在服务端使用，不进入配置/任务响应或引导状态文件。
 
-对引导状态已记录且由本流程创建的 Workspace，详情字段、预期归属标签暂时缺失或服务商返回 not-found，均在现有超时范围内视为等待就绪。已出现但冲突的身份或归属值立即失败。显式接管的 Workspace 保持严格校验。重试自有 Workspace 不再次调用 CreateWorkspace。
+对引导状态已记录且由本流程创建的 Workspace，详情字段、预期归属标签暂时缺失或服务商返回 not-found，均在现有超时范围内视为等待就绪。发现自有资源时，元数据不完整也进入同一就绪循环。已出现但冲突的身份或归属值立即失败，即使其他元数据尚未出现。显式接管的 Workspace 保持严格校验。重试正常或仍在创建中的自有 Workspace 不再次调用 CreateWorkspace。
+
+[终态创建失败恢复](../../prd-spec/bugfixes/mpa-pg-recovery/2026-10-10-terminal-create-failure.zh.md) 对两种服务商及管理/业务用途应用相同规则。仅经确认的 `CreateFailed`，且账号/地域/项目/名称/引擎/ID 完整匹配、现有标签没有冲突时，允许将自动绑定退出。失败资源缺失标签不代表允许接管或删除。SQLite 增量表 `failed_workspaces(scope,purpose,workspace_id)` 保存失败云资源 ID；在现有范围锁下，退出记录与解除意图原子执行。没有正常候选时，唯一新发现的失败候选可解释无 ID 意图；没有正常候选且存在多个未退出失败候选时仍视为歧义。旧退出失败不能解释更新请求的未知结果，退出资源状态变化则报错。本次刚发出的创建失败时结束当前任务，不重复购买；另一个请求可创建替代资源。显式 ID、运行状态 `Failed`、删除/未知状态和服务错误绝不触发替换。保留失败云资源，API、凭据、超时和取消规则不变。
 
 仍配置旧注册库 URL 时默认禁止自动创建。显式设置 `managed.postgres.legacy-urls: ignore` 后，新建任务使用全新的管理和业务 Workspace，本配置不读取两个旧 PG 环境 URL；已有智能体和数据库不迁移、不修改、不删除。另一种方案是通过 `init-admin-db --source-url-env ...` 准备新管理库，并原子复制已停止写入的源注册库。已有业务数据须指定业务 Workspace ID 且保持端点不变。协调写入方和 Runtime 切换后，管理员才可清除旧注册库 URL 并启用迁移后的创建。本操作不搬迁现有业务库，不修改运行中 Runtime 的环境变量。参见[设计与验证](../../prd-spec/features/mpa-space-scoped-resources/2026-09-23-auto-pg-workspaces.zh.md)。
 
@@ -174,3 +176,13 @@ SubnetIds 按非空、唯一成员判断相同，不受平台返回顺序影响�
 ## CON-16：部署账号方舟模型 Key
 
 [账号 Key 设计](../../prd-spec/features/mpa-model-key-discovery/2026-10-10-account-ark-key.zh.md)定义：内置 Studio 使用 `managed.model-key.mode: ark`，可选精确 ID/名称选择器（`VEADK_MPA_ARK_API_KEY_ID` / `VEADK_MPA_ARK_API_KEY_NAME`）。本地检查不需要模型明文 Key 或云访问。创建在资源变更前，使用刷新且经 STS 账号核验的部署凭据调用 ListApiKeys/GetRawApiKey。读取所有页面并去重 ID。精确选择器要求唯一匹配；否则多个候选按创建时刻选最新，同时间选择字符串 ID 字典序最大者。接受 CreateTime（兼容 CreatedAt/CreationTime）、正的 Unix 秒/毫秒或带时区 ISO 8601；任何候选时间缺失/异常时，在读取明文前失败。唯一候选无需时间字段。拒绝明确非 Active 状态，兼容缺少 Status 的旧响应。参见[最新 Key 后续设计](../../prd-spec/features/mpa-model-key-discovery/2026-10-10-latest-created-key.zh.md)。不使用掩码、不创建 Key。复制的 Profile 只向 Runtime 注入明文；原始云错误和凭据不进入事件、日志或任务/bootstrap 存储。调用超时有界，暂时错误最多三次尝试；取消后不继续变更。原请求哈希检查拒绝已提交的变更输入。CLI 默认显式 Key，通用智能体鉴权不变。默认部署角色已具备两个方舟动作；客户自管角色须授权。模型开通/访问及 Key IP 规则仍由操作者准备。
+
+## CON-17：BytePlus 托管创建
+
+Studio 服务端选择的云平台允许 BytePlus `ap-southeast-1` 托管创建 MPA，并保留现有火山引擎流程。浏览器不能指定云平台、账号或云接口地址；平台与地域不匹配时，在资源变更前失败。国内配置值保持不变。BytePlus 使用自己的 AK/SK/会话令牌，或显式指定的轮转 IAM 凭据文件，每次刷新凭据通过 `open.byteplusapi.com` STS 核验账号；不读取火山引擎环境凭据。Runtime、Skills、Tools SDK 客户端在线程内按平台上下文构造。Identity 及签名 VPC/ECS/APIG/AIDAP/Ark/IAM 请求选择对应平台接口。不支持的 API 或必要 IAM 策略显式失败，不回退国内服务，也不省略权限。
+
+BytePlus 默认使用现有海外 Studio 模型及地址，将平台/地域传入 Runtime 和 Worker，并使用 Runtime 的 `APIG_TOP_ENDPOINT` 覆盖项。可选 TOS 挂载使用海外地址。默认仍使用现有公开镜像；可信服务端覆盖项为 `VEADK_MPA_BYTEPLUS_RUNTIME_IMAGE` / `VEADK_MPA_BYTEPLUS_WORKER_IMAGE`。服务端可通过 `VEADK_MPA_BYTEPLUS_AIDAP_HOST` 覆盖 AIDAP 主机名；URL、路径及用户信息等无效输入在本地检查时失败。`VEADK_MPA_BYTEPLUS_CREDENTIAL_FILE` 显式指定轮转 IAM 文件；没有 BytePlus 环境凭据时，不会隐式读取国内挂载文件。可用区校验接受 `ap-southeast-1a` 和 `ap-southeast-1-a`，不改写资源 ID，并保留国内校验。浏览器及任务响应不包含凭据。BytePlus 任务在持久化指纹和子进程 stdin 中增加可信平台标记；默认任务及 PG 引导文件增加 `-byteplus` 后缀，保留国内恢复状态。共享 Workspace/数据库布局、锁/重试/取消/就绪检查及可选 OpenViking 语义不变。控制台链接跟随平台。镜像拉取、海外 API/策略可用性及真实就绪/聊天行为须单独实测；本地配置就绪不能证明云资源可用。参见[设计及验证](../../prd-spec/features/mpa-byteplus/2026-10-10-byteplus-creation.zh.md)。
+
+BytePlus 托管 IAM 默认通过 `open.byteplusapi.com` 调用，保留可信服务端 `IAM_OPENAPI_HOST` 覆盖；共享 IAM 工具与国内创建行为不变。
+
+BytePlus 托管 AIDAP 默认使用 `open.byteplusapi.com`，仍支持已校验的 `VEADK_MPA_BYTEPLUS_AIDAP_HOST` 覆盖。API 可访问不代表 Workspace 创建成功；继续保留失败状态及属主校验，不自动删除或接管失败的同名资源。

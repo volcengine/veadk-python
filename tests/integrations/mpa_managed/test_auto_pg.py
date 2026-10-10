@@ -16,6 +16,9 @@
 
 import asyncio
 import copy
+import hashlib
+import json
+from dataclasses import replace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -112,6 +115,446 @@ class FakePG:
 
     async def connection(self, ident):
         return f"postgresql://user_admin:fake@{ident}.example:5432/aidb?sslmode=require"
+
+
+def recovery_setup(tmp_path, monkeypatch, provider="volcengine"):
+    from veadk.integrations.mpa.managed.pg_bootstrap import BootstrapStore
+
+    region = "cn-beijing" if provider == "volcengine" else "ap-southeast-1"
+    profile = load_profile(auto_profile(tmp_path, monkeypatch))
+    profile = replace(
+        profile, region=region, values={**profile.values, "cloud_provider": provider}
+    )
+    assert profile.managed.postgres is not None
+    profile.managed.postgres = profile.managed.postgres.model_copy(
+        update={"timeout_seconds": 2}
+    )
+    monkeypatch.setattr(
+        "veadk.integrations.mpa.managed.pg_bootstrap.initialize_admin_database",
+        AsyncMock(),
+    )
+
+    class RegionalPG(FakePG):
+        async def create(self, name, project, tags):
+            await asyncio.sleep(0)
+            ident = await super().create(name, project, tags)
+            self.rows[ident]["region_id"] = region
+            return ident
+
+    store = BootstrapStore(profile.managed.postgres.bootstrap_path)
+    scope = hashlib.sha256(
+        json.dumps(["account", region, "default"]).encode()
+    ).hexdigest()[:32]
+    return profile, RegionalPG(), store, scope
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ["volcengine", "byteplus"])
+@pytest.mark.parametrize("purpose", ["admin", "business"])
+@pytest.mark.parametrize("returned_id", [False, True])
+async def test_terminal_create_failure_releases_shared_bootstrap_for_retry(
+    tmp_path, monkeypatch, provider, purpose, returned_id
+):
+    from veadk.integrations.mpa.managed.database import DeploymentError
+    from veadk.integrations.mpa.managed.pg_bootstrap import prepare_postgres
+    from veadk.integrations.mpa.managed.pg_cloud import PGCloudError
+
+    profile, cloud, store, scope = recovery_setup(tmp_path, monkeypatch, provider)
+    create = cloud.create
+    failed_id = ""
+
+    async def failed(name, project, tags):
+        nonlocal failed_id
+        ident = await create(name, project, tags)
+        if tags["veadk-pg-purpose"] == purpose:
+            failed_id = ident
+            cloud.rows[ident].update(workspace_status="CreateFailed", workspace_tags=[])
+            if not returned_id:
+                raise PGCloudError("create_workspace", "InternalError")
+        return ident
+
+    monkeypatch.setattr(cloud, "create", failed)
+    with pytest.raises(DeploymentError):
+        await prepare_postgres(profile, cloud, "account")
+    cloud.create = create
+    first, second = await asyncio.gather(
+        prepare_postgres(profile, cloud, "account"),
+        prepare_postgres(profile, cloud, "account"),
+    )
+    assert cloud.created == 3
+    assert first.shared_url == second.shared_url
+    assert first.admin_url == second.admin_url
+    assert cloud.rows[failed_id]["workspace_status"] == "CreateFailed"
+    assert failed_id in store.failed_ids(scope, purpose)
+    assert store.read(scope, purpose)[1] != failed_id
+
+
+@pytest.mark.asyncio
+async def test_retired_failure_cannot_resolve_a_new_uncertain_create(
+    tmp_path, monkeypatch
+):
+    from veadk.integrations.mpa.managed.database import DeploymentError
+    from veadk.integrations.mpa.managed.pg_bootstrap import prepare_postgres
+
+    profile, cloud, store, scope = recovery_setup(tmp_path, monkeypatch)
+    old = workspace("mpa_admin_workspace", "old-failed")
+    old["workspace_status"] = "CreateFailed"
+    cloud.rows["old-failed"] = old
+    cloud.fail = True
+    with pytest.raises(DeploymentError, match="uncertain"):
+        await prepare_postgres(profile, cloud, "account")
+    assert store.failed_ids(scope, "admin") == {"old-failed"}
+    cloud.fail = False
+    with pytest.raises(DeploymentError, match="uncertain"):
+        await prepare_postgres(profile, cloud, "account")
+    assert cloud.created == 1
+
+
+@pytest.mark.asyncio
+async def test_discovered_owned_metadata_enters_readiness_wait(tmp_path, monkeypatch):
+    from veadk.integrations.mpa.managed.database import DeploymentError
+    from veadk.integrations.mpa.managed.pg_bootstrap import prepare_postgres
+
+    profile, cloud, _, _ = recovery_setup(tmp_path, monkeypatch)
+    create, detail = cloud.create, cloud.detail
+
+    async def lost(*args):
+        await create(*args)
+        raise TimeoutError()
+
+    monkeypatch.setattr(cloud, "create", lost)
+    with pytest.raises(DeploymentError, match="uncertain"):
+        await prepare_postgres(profile, cloud, "account")
+    cloud.create = create
+    find = cloud.find
+
+    async def missing_tags(project, name):
+        rows = await find(project, name)
+        for row in rows:
+            row["workspace_tags"] = []
+        return rows
+
+    cloud.find = missing_tags
+    cloud.detail = AsyncMock(side_effect=detail)
+    resolved = await prepare_postgres(profile, cloud, "account")
+    assert resolved.managed.postgres.admin_workspace_id == "ws-1"
+    assert cloud.created == 2
+    assert cloud.detail.await_count == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("explicit", [False, True])
+async def test_failed_discovery_does_not_relax_scope_or_present_tags(
+    tmp_path, monkeypatch, explicit
+):
+    from veadk.integrations.mpa.managed.database import DeploymentError
+    from veadk.integrations.mpa.managed.pg_bootstrap import prepare_postgres
+
+    profile, cloud, store, scope = recovery_setup(tmp_path, monkeypatch)
+    row = workspace("mpa_admin_workspace", "foreign")
+    row.update(
+        workspace_status="CreateFailed",
+        workspace_tags=[{"key": "veadk-pg-scope", "value": "another-scope"}],
+    )
+    cloud.rows["foreign"] = row
+    if explicit:
+        assert profile.managed.postgres is not None
+        profile.managed.postgres.admin_workspace_id = "foreign"
+    with pytest.raises(DeploymentError):
+        await prepare_postgres(profile, cloud, "account")
+    assert cloud.created == 0
+    assert store.read(scope, "admin") is None
+
+
+@pytest.mark.asyncio
+async def test_explicit_failed_workspace_is_not_replaced(tmp_path, monkeypatch):
+    from veadk.integrations.mpa.managed.database import DeploymentError
+    from veadk.integrations.mpa.managed.pg_bootstrap import prepare_postgres
+
+    profile, cloud, store, scope = recovery_setup(tmp_path, monkeypatch)
+    row = workspace("mpa_admin_workspace", "explicit")
+    row["workspace_status"] = "CreateFailed"
+    cloud.rows["explicit"] = row
+    assert profile.managed.postgres is not None
+    profile.managed.postgres.admin_workspace_id = "explicit"
+    with pytest.raises(DeploymentError):
+        await prepare_postgres(profile, cloud, "account")
+    assert cloud.created == 0
+    assert store.failed_ids(scope, "admin") == set()
+
+
+@pytest.mark.asyncio
+async def test_multiple_failed_candidates_do_not_resolve_uncertain_intent(
+    tmp_path, monkeypatch
+):
+    from veadk.integrations.mpa.managed.database import DeploymentError
+    from veadk.integrations.mpa.managed.pg_bootstrap import prepare_postgres
+
+    profile, cloud, store, scope = recovery_setup(tmp_path, monkeypatch)
+    store.save(
+        scope, "admin", json.dumps(["mpa_admin_workspace", "PostgreSQL_17"]), "", True
+    )
+    for ident in ("failed-one", "failed-two"):
+        row = workspace("mpa_admin_workspace", ident)
+        row["workspace_status"] = "CreateFailed"
+        cloud.rows[ident] = row
+    with pytest.raises(DeploymentError, match="Multiple"):
+        await prepare_postgres(profile, cloud, "account")
+    assert cloud.created == 0
+    assert store.failed_ids(scope, "admin") == set()
+    assert store.read(scope, "admin")[2] == 1
+
+
+@pytest.mark.asyncio
+async def test_new_terminal_failure_stops_without_repurchase(tmp_path, monkeypatch):
+    from veadk.integrations.mpa.managed.database import DeploymentError
+    from veadk.integrations.mpa.managed.pg_bootstrap import prepare_postgres
+
+    profile, cloud, store, scope = recovery_setup(tmp_path, monkeypatch)
+    create = cloud.create
+
+    async def failed(*args):
+        ident = await create(*args)
+        cloud.rows[ident].update(workspace_status="CreateFailed", workspace_tags=[])
+        return ident
+
+    monkeypatch.setattr(cloud, "create", failed)
+    with pytest.raises(DeploymentError, match="creation failed"):
+        await prepare_postgres(profile, cloud, "account")
+    assert cloud.created == 1
+    assert store.read(scope, "admin") is None
+    assert store.failed_ids(scope, "admin") == {"ws-1"}
+
+
+@pytest.mark.asyncio
+async def test_operational_failure_of_used_workspace_is_never_replaced(
+    tmp_path, monkeypatch
+):
+    from veadk.integrations.mpa.managed.database import DeploymentError
+    from veadk.integrations.mpa.managed.pg_bootstrap import prepare_postgres
+
+    profile, cloud, store, scope = recovery_setup(tmp_path, monkeypatch)
+    await prepare_postgres(profile, cloud, "account")
+    cloud.rows["ws-1"]["workspace_status"] = "Failed"
+    with pytest.raises(DeploymentError):
+        await prepare_postgres(profile, cloud, "account")
+    assert cloud.created == 2
+    assert store.read(scope, "admin")[1] == "ws-1"
+    assert store.failed_ids(scope, "admin") == set()
+
+
+@pytest.mark.asyncio
+async def test_creating_workspace_with_present_conflict_fails_immediately(
+    tmp_path, monkeypatch
+):
+    from veadk.integrations.mpa.managed.database import DeploymentError
+    from veadk.integrations.mpa.managed.pg_bootstrap import prepare_postgres
+
+    profile, cloud, store, scope = recovery_setup(tmp_path, monkeypatch)
+    row = workspace("mpa_admin_workspace", "pending")
+    row.update(
+        workspace_status="Creating",
+        workspace_tags=[{"key": "veadk-pg-scope", "value": "another-scope"}],
+    )
+    cloud.rows["pending"] = row
+    store.save(
+        scope,
+        "admin",
+        json.dumps(["mpa_admin_workspace", "PostgreSQL_17"]),
+        "pending",
+        True,
+    )
+    with pytest.raises(DeploymentError, match="ownership tags differ"):
+        await prepare_postgres(profile, cloud, "account")
+    assert cloud.created == 0
+    assert store.read(scope, "admin")[1] == "pending"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("identity_conflict", [False, True])
+async def test_missing_metadata_does_not_hide_other_present_conflicts(
+    tmp_path, monkeypatch, identity_conflict
+):
+    from veadk.integrations.mpa.managed.database import DeploymentError
+    from veadk.integrations.mpa.managed.pg_bootstrap import prepare_postgres
+
+    profile, cloud, store, scope = recovery_setup(tmp_path, monkeypatch)
+    row = workspace("mpa_admin_workspace", "pending")
+    row.update(
+        workspace_status="Creating",
+        workspace_tags=[{"key": "veadk-pg-purpose", "value": "wrong-purpose"}],
+    )
+    if identity_conflict:
+        row.update(account_id="", region_id="foreign")
+    cloud.rows["pending"] = row
+    store.save(
+        scope,
+        "admin",
+        json.dumps(["mpa_admin_workspace", "PostgreSQL_17"]),
+        "pending",
+        True,
+    )
+    with pytest.raises(DeploymentError, match="differs|differ"):
+        await prepare_postgres(profile, cloud, "account")
+    assert cloud.created == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("account_id", "foreign"),
+        ("region_id", "foreign"),
+        ("project_name", "foreign"),
+        ("engine_version", "PostgreSQL_16"),
+        ("account_id", ""),
+        ("workspace_id", ""),
+    ],
+)
+async def test_failed_resource_requires_complete_matching_identity(
+    tmp_path, monkeypatch, field, value
+):
+    from veadk.integrations.mpa.managed.database import DeploymentError
+    from veadk.integrations.mpa.managed.pg_bootstrap import prepare_postgres
+
+    profile, cloud, store, scope = recovery_setup(tmp_path, monkeypatch)
+    row = workspace("mpa_admin_workspace", "failed")
+    row.update(workspace_status="CreateFailed", **{field: value})
+    cloud.rows["failed"] = row
+    with pytest.raises(DeploymentError):
+        await prepare_postgres(profile, cloud, "account")
+    assert cloud.created == 0
+    assert store.failed_ids(scope, "admin") == set()
+
+
+@pytest.mark.asyncio
+async def test_retired_resource_cannot_be_silently_readopted(tmp_path, monkeypatch):
+    from veadk.integrations.mpa.managed.database import DeploymentError
+    from veadk.integrations.mpa.managed.pg_bootstrap import prepare_postgres
+
+    profile, cloud, store, scope = recovery_setup(tmp_path, monkeypatch)
+    row = workspace("mpa_admin_workspace", "old-failed")
+    row["workspace_status"] = "CreateFailed"
+    cloud.rows["old-failed"] = row
+    cloud.fail = True
+    with pytest.raises(DeploymentError):
+        await prepare_postgres(profile, cloud, "account")
+    cloud.rows["old-failed"]["workspace_status"] = "Running"
+    cloud.fail = False
+    with pytest.raises(DeploymentError, match="state changed"):
+        await prepare_postgres(profile, cloud, "account")
+    assert cloud.created == 1
+    assert store.read(scope, "admin")[1] == ""
+
+
+@pytest.mark.asyncio
+async def test_failed_detail_api_error_does_not_release_uncertain_intent(
+    tmp_path, monkeypatch
+):
+    from veadk.integrations.mpa.managed.database import DeploymentError
+    from veadk.integrations.mpa.managed.pg_bootstrap import prepare_postgres
+    from veadk.integrations.mpa.managed.pg_cloud import PGCloudError
+
+    profile, cloud, store, scope = recovery_setup(tmp_path, monkeypatch)
+    row = workspace("mpa_admin_workspace", "failed")
+    row["workspace_status"] = "CreateFailed"
+    cloud.rows["failed"] = row
+    store.save(
+        scope, "admin", json.dumps(["mpa_admin_workspace", "PostgreSQL_17"]), "", True
+    )
+    cloud.detail = AsyncMock(side_effect=PGCloudError("detail", "AccessDenied"))
+    with pytest.raises(DeploymentError):
+        await prepare_postgres(profile, cloud, "account")
+    assert cloud.created == 0
+    assert store.failed_ids(scope, "admin") == set()
+    assert store.read(scope, "admin")[2] == 1
+
+
+@pytest.mark.asyncio
+async def test_cancellation_during_replacement_keeps_new_uncertain_intent(
+    tmp_path, monkeypatch
+):
+    from veadk.integrations.mpa.managed.database import DeploymentError
+    from veadk.integrations.mpa.managed.pg_bootstrap import prepare_postgres
+
+    profile, cloud, store, scope = recovery_setup(tmp_path, monkeypatch)
+    row = workspace("mpa_admin_workspace", "old-failed")
+    row["workspace_status"] = "CreateFailed"
+    cloud.rows["old-failed"] = row
+    entered = asyncio.Event()
+    create = cloud.create
+
+    async def pending(*args):
+        entered.set()
+        await asyncio.Future()
+
+    monkeypatch.setattr(cloud, "create", pending)
+    task = asyncio.create_task(prepare_postgres(profile, cloud, "account"))
+    await asyncio.wait_for(entered.wait(), 1)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    cloud.create = create
+    with pytest.raises(DeploymentError, match="uncertain"):
+        await prepare_postgres(profile, cloud, "account")
+    assert cloud.created == 0
+    assert store.failed_ids(scope, "admin") == {"old-failed"}
+    assert store.read(scope, "admin")[2] == 1
+
+
+@pytest.mark.asyncio
+async def test_healthy_candidate_is_reused_alongside_old_creation_failure(
+    tmp_path, monkeypatch
+):
+    from veadk.integrations.mpa.managed.pg_bootstrap import prepare_postgres
+
+    profile, cloud, store, scope = recovery_setup(tmp_path, monkeypatch)
+    failed = workspace("mpa_admin_workspace", "old-failed")
+    failed["workspace_status"] = "CreateFailed"
+    cloud.rows["old-failed"] = failed
+    healthy = await cloud.create(
+        "mpa_admin_workspace",
+        "default",
+        {"veadk-pg-scope": scope, "veadk-pg-purpose": "admin"},
+    )
+    store.save(
+        scope, "admin", json.dumps(["mpa_admin_workspace", "PostgreSQL_17"]), "", True
+    )
+    resolved = await prepare_postgres(profile, cloud, "account")
+    assert resolved.managed.postgres.admin_workspace_id == healthy
+    assert cloud.created == 2
+    assert store.failed_ids(scope, "admin") == {"old-failed"}
+
+
+def test_retirement_upgrades_old_state_and_isolates_other_scopes(tmp_path):
+    import sqlite3
+    from veadk.integrations.mpa.managed.pg_bootstrap import BootstrapStore
+
+    path = tmp_path / "old-bootstrap.sqlite3"
+    with sqlite3.connect(path) as db:
+        db.execute(
+            "CREATE TABLE workspaces (scope TEXT, purpose TEXT, config TEXT NOT NULL, workspace_id TEXT NOT NULL, intent INTEGER NOT NULL, PRIMARY KEY(scope,purpose))"
+        )
+        db.execute(
+            "INSERT INTO workspaces VALUES (?,?,?,?,?)",
+            ("scope", "admin", "config", "failed", 1),
+        )
+        db.execute(
+            "INSERT INTO workspaces VALUES (?,?,?,?,?)",
+            ("scope", "business", "config", "healthy", 1),
+        )
+        db.execute(
+            "INSERT INTO workspaces VALUES (?,?,?,?,?)",
+            ("other-scope", "admin", "config", "other", 1),
+        )
+    store = BootstrapStore(path)
+    store.retire_failed("scope", "admin", "failed", clear_intent=True)
+    reopened = BootstrapStore(path)
+    assert reopened.read("scope", "admin") is None
+    assert reopened.failed_ids("scope", "admin") == {"failed"}
+    assert reopened.read("scope", "business")[1] == "healthy"
+    assert reopened.read("other-scope", "admin")[1] == "other"
+    assert reopened.failed_ids("other-scope", "admin") == set()
 
 
 @pytest.mark.asyncio

@@ -48,7 +48,11 @@ class GatewayCloud:
             )
             config.session_token = credential.session_token
             config.region = self.runtime.region
-            config.host = f"apig.{config.region}.volcengineapi.com"
+            from .provider import managed_host
+
+            config.host = managed_host(
+                "apig", config.region, getattr(self.runtime, "provider", "volcengine")
+            )
             client = ApiClient(config)
             info = UniversalInfo(
                 method="POST",
@@ -112,14 +116,18 @@ class GatewayCloud:
         raise APIGClientError("Gateway pagination exceeded limit")
 
     async def available_zones(self):
+        from .provider import region_contains_zone
+
         result = await self.call("GetGatewayAvailableZones", {})
         zones = result.get("AvailableZones")
         if (
             not isinstance(zones, list)
             or any(
-                not isinstance(zone, str)
-                or not zone.startswith(self.runtime.region + "-")
-                or not zone[len(self.runtime.region) + 1 :]
+                not region_contains_zone(
+                    self.runtime.region,
+                    zone,
+                    getattr(self.runtime, "provider", "volcengine"),
+                )
                 for zone in zones
             )
             or len(set(zones)) != len(zones)

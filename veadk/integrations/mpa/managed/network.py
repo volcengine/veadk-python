@@ -26,6 +26,7 @@ from types import SimpleNamespace
 
 from veadk.integrations.mpa.managed.database import DeploymentError
 from veadk.integrations.mpa.managed.network_cloud import NetworkCloudError
+from veadk.integrations.mpa.managed.provider import region_contains_zone
 
 
 def same_subnet_ids(first: object, second: object) -> bool:
@@ -223,9 +224,9 @@ class AccountNetworkProvisioner:
         if (
             not isinstance(available_zones, list)
             or any(
-                not isinstance(zone, str)
-                or not zone.startswith(self.region + "-")
-                or not zone[len(self.region) + 1 :]
+                not region_contains_zone(
+                    self.region, zone, getattr(self.cloud, "provider", "volcengine")
+                )
                 for zone in available_zones
             )
             or len(set(available_zones)) != len(available_zones)
@@ -479,7 +480,12 @@ class AccountNetworkProvisioner:
                     "Subnet is outside the selected VPC or has no available IP addresses"
                 )
             zone = subnet.get("zone_id", "")
-            if not zone.startswith(self.region + "-") or zone in zones:
+            if (
+                not region_contains_zone(
+                    self.region, zone, getattr(self.cloud, "provider", "volcengine")
+                )
+                or zone in zones
+            ):
                 raise DeploymentError(
                     "Subnets must be in this region and in distinct zones"
                 )

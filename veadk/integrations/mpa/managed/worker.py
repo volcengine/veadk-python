@@ -21,10 +21,10 @@ import hashlib
 import json
 import uuid
 
+from ..mpa_tool import build_tos_mount_config
 from .config import WORKER_RESERVED_ENV_KEYS, validate_runtime_name
 from .database import DeploymentError, agent_suffix
 from .diagnostics import report, retry_worker
-from ..mpa_tool import build_tos_mount_config
 
 
 class WorkerCloud:
@@ -37,12 +37,17 @@ class WorkerCloud:
             from agentkit.sdk.tools.client import AgentkitToolsClient
 
             credential = self.runtime._credentials()
-            client = AgentkitToolsClient(
-                region=self.runtime.region,
-                access_key=credential.access_key_id,
-                secret_key=credential.secret_access_key,
-                session_token=credential.session_token,
-            )
+            from agentkit.platform.context import default_cloud_provider
+
+            with default_cloud_provider(
+                getattr(self.runtime, "provider", "volcengine")
+            ):
+                client = AgentkitToolsClient(
+                    region=self.runtime.region,
+                    access_key=credential.access_key_id,
+                    secret_key=credential.secret_access_key,
+                    session_token=credential.session_token,
+                )
             result = getattr(client, method)(
                 getattr(types, request_type).model_validate(values)
             )
@@ -136,6 +141,12 @@ async def _ensure_worker(
             tos_bucket=options.tos_bucket,
             region=region,
         ).model_dump(by_alias=True, exclude_none=True, mode="json")
+        if (
+            getattr(getattr(cloud, "runtime", None), "provider", "volcengine")
+            == "byteplus"
+        ):
+            for mount in expected_tos["MountPoints"]:
+                mount["Endpoint"] = f"https://tos-{region}.bytepluses.com"
     if (
         record.get("worker_id")
         and options.existing_id

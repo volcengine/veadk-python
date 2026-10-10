@@ -76,6 +76,8 @@ async def _read(
     for attempt in range(1, 4):
 
         def request():
+            from .provider import managed_host
+
             # Refresh and verify the deployment account for every signed call.
             credential = cloud._credentials()
             return volcengine_signed_request(
@@ -85,7 +87,7 @@ async def _read(
                 header={"X-Security-Token": credential.session_token or ""},
                 service="ark",
                 region=profile.region,
-                host="open.volcengineapi.com",
+                host=managed_host("ark", profile.region, profile.provider),
                 path="/",
                 query={"Action": action, "Version": "2024-01-01"},
                 timeout=(10, 30),

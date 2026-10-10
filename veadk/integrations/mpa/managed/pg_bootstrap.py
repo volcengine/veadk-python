@@ -47,6 +47,9 @@ class BootstrapStore:
             db.execute(
                 "CREATE TABLE IF NOT EXISTS workspaces (scope TEXT, purpose TEXT, config TEXT NOT NULL, workspace_id TEXT NOT NULL, intent INTEGER NOT NULL, PRIMARY KEY(scope,purpose))"
             )
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS failed_workspaces (scope TEXT, purpose TEXT, workspace_id TEXT NOT NULL, PRIMARY KEY(scope,purpose,workspace_id))"
+            )
 
     @contextmanager
     def connection(self):
@@ -97,6 +100,29 @@ class BootstrapStore:
                 (scope, purpose),
             )
 
+    def failed_ids(self, scope, purpose):
+        with self.connection() as db:
+            return {
+                row[0]
+                for row in db.execute(
+                    "SELECT workspace_id FROM failed_workspaces WHERE scope=? AND purpose=?",
+                    (scope, purpose),
+                )
+            }
+
+    def retire_failed(self, scope, purpose, ident, *, clear_intent):
+        """Retain a failed cloud identity without attributing it to later requests."""
+        with self.connection() as db:
+            db.execute(
+                "INSERT OR IGNORE INTO failed_workspaces VALUES (?,?,?)",
+                (scope, purpose, ident),
+            )
+            if clear_intent:
+                db.execute(
+                    "DELETE FROM workspaces WHERE scope=? AND purpose=? AND workspace_id IN ('',?)",
+                    (scope, purpose, ident),
+                )
+
 
 def validate_workspace(row, *, account, region, project, name, tags, owned):
     expected = {
@@ -106,28 +132,30 @@ def validate_workspace(row, *, account, region, project, name, tags, owned):
         "workspace_name": name,
         "engine_version": "PostgreSQL_17",
     }
+    missing_metadata = False
     for key, value in expected.items():
         actual = str(row.get(key) or "")
         if actual != value:
             if owned and not actual:
-                raise PGNotReady("PostgreSQL Workspace metadata is not ready yet")
+                missing_metadata = True
+                continue
             raise DeploymentError(
                 "PostgreSQL Workspace identity, scope or engine differs from configuration"
             )
-    if not row.get("workspace_id"):
-        if owned:
-            raise PGNotReady("PostgreSQL Workspace metadata is not ready yet")
+    if not row.get("workspace_id") and not owned:
         raise DeploymentError(
             "PostgreSQL Workspace identity, scope or engine differs from configuration"
         )
     actual = {t.get("key"): t.get("value") for t in row.get("workspace_tags") or []}
     for key, value in tags.items():
-        if owned and key not in actual:
-            raise PGNotReady("PostgreSQL Workspace ownership tags are not ready yet")
-        if (owned or key in actual) and actual.get(key) != value:
+        if key in actual and actual.get(key) != value:
             raise DeploymentError(
                 "PostgreSQL Workspace ownership tags differ from bootstrap state"
             )
+    if missing_metadata or not row.get("workspace_id"):
+        raise PGNotReady("PostgreSQL Workspace metadata is not ready yet")
+    if owned and any(key not in actual for key in tags):
+        raise PGNotReady("PostgreSQL Workspace ownership tags are not ready yet")
 
 
 async def ensure_workspace(store, cloud, settings, scope, account, region, purpose):
@@ -155,68 +183,90 @@ async def ensure_workspace(store, cloud, settings, scope, account, region, purpo
             "Configured Workspace ID differs from recorded bootstrap identity"
         )
     ident = ident or explicit
-    if not ident:
-        matches = await cloud.find(settings.project_name, name)
-        if len(matches) > 1:
-            raise DeploymentError(
-                "Multiple PostgreSQL Workspaces match; configure an explicit Workspace ID"
-            )
-        if matches:
-            row = matches[0]
-            validate_workspace(
-                row,
-                account=account,
-                region=region,
-                project=settings.project_name,
-                name=name,
-                tags=tags,
-                owned=owned,
-            )
-            ident = row["workspace_id"]
-        elif record:
-            raise DeploymentError(
-                "Previous Workspace creation outcome is uncertain; inspect AIDAP and recover by Workspace ID"
-            )
-        else:
-            store.save(scope, purpose, config, "", True)
-            owned = True
-            try:
-                ident = await cloud.create(name, settings.project_name, tags)
-            except asyncio.CancelledError:
-                raise
-            except PGCloudError as exc:
-                if exc.code.split(".")[0] in {
-                    "AccessDenied",
-                    "Forbidden",
-                    "Unauthorized",
-                    "InvalidAccessKeyId",
-                    "SignatureDoesNotMatch",
-                    "InvalidToken",
-                    "ExpiredToken",
-                    "InvalidParameter",
-                    "InvalidParameterValue",
-                    "MissingParameter",
-                }:
-                    store.rejected(scope, purpose)
-                raise
-            except Exception:
-                raise DeploymentError(
-                    "Workspace creation outcome is uncertain; inspect AIDAP before retrying"
-                ) from None
-    if explicit and not (record and record[1]):
-        # Validate adoption before pinning an operator-supplied identity.
-        row = await cloud.detail(ident)
-        validate_workspace(
-            row,
-            account=account,
-            region=region,
-            project=settings.project_name,
-            name=name,
-            tags=tags,
-            owned=owned,
-        )
-    store.save(scope, purpose, config, ident, owned)
+    dispatched = False
+    validation = dict(
+        account=account,
+        region=region,
+        project=settings.project_name,
+        name=name,
+        tags=tags,
+    )
     while True:
+        if not ident:
+            retired = store.failed_ids(scope, purpose)
+            candidates, failed = [], []
+            for row in await cloud.find(settings.project_name, name):
+                candidate_id = row.get("workspace_id")
+                if candidate_id in retired:
+                    if row.get("workspace_status") != "CreateFailed":
+                        raise DeploymentError(
+                            "Retired PostgreSQL Workspace state changed; inspect AIDAP before retrying"
+                        )
+                    continue
+                if row.get("workspace_status") == "CreateFailed":
+                    # Confirm terminal creation failure before changing local state.
+                    validate_workspace(row, **validation, owned=False)
+                    row = await cloud.detail(candidate_id)
+                if row.get("workspace_status") == "CreateFailed":
+                    validate_workspace(row, **validation, owned=False)
+                    failed.append(row["workspace_id"])
+                else:
+                    candidates.append(row)
+            if len(candidates) > 1 or record and not candidates and len(failed) > 1:
+                raise DeploymentError(
+                    "Multiple PostgreSQL Workspaces match; configure an explicit Workspace ID"
+                )
+            for failed_id in failed:
+                clear_intent = bool(owned and record and not candidates)
+                store.retire_failed(
+                    scope, purpose, failed_id, clear_intent=clear_intent
+                )
+                if clear_intent:
+                    record, owned = None, False
+            if candidates:
+                row = candidates[0]
+                try:
+                    validate_workspace(row, **validation, owned=owned)
+                except PGNotReady:
+                    # Owned discovery metadata is subject to the same readiness wait.
+                    if not row.get("workspace_id"):
+                        raise
+                ident = row["workspace_id"]
+            elif record:
+                raise DeploymentError(
+                    "Previous Workspace creation outcome is uncertain; inspect AIDAP and recover by Workspace ID"
+                )
+            else:
+                store.save(scope, purpose, config, "", True)
+                owned, dispatched = True, True
+                try:
+                    ident = await cloud.create(name, settings.project_name, tags)
+                except asyncio.CancelledError:
+                    raise
+                except PGCloudError as exc:
+                    if exc.code.split(".")[0] in {
+                        "AccessDenied",
+                        "Forbidden",
+                        "Unauthorized",
+                        "InvalidAccessKeyId",
+                        "SignatureDoesNotMatch",
+                        "InvalidToken",
+                        "ExpiredToken",
+                        "InvalidParameter",
+                        "InvalidParameterValue",
+                        "MissingParameter",
+                    }:
+                        store.rejected(scope, purpose)
+                    raise
+                except Exception:
+                    raise DeploymentError(
+                        "Workspace creation outcome is uncertain; inspect AIDAP before retrying"
+                    ) from None
+        if explicit and not (record and record[1]):
+            # Validate adoption before pinning an operator-supplied identity.
+            row = await cloud.detail(ident)
+            validate_workspace(row, **validation, owned=owned)
+        store.save(scope, purpose, config, ident, owned)
         try:
             try:
                 row = await cloud.detail(ident)
@@ -229,15 +279,21 @@ async def ensure_workspace(store, cloud, settings, scope, account, region, purpo
                         "PostgreSQL Workspace detail is not visible yet"
                     ) from None
                 raise
-            validate_workspace(
-                row,
-                account=account,
-                region=region,
-                project=settings.project_name,
-                name=name,
-                tags=tags,
-                owned=owned,
-            )
+            if row.get("workspace_status") == "CreateFailed" and owned and not explicit:
+                validate_workspace(row, **validation, owned=False)
+                store.retire_failed(scope, purpose, ident, clear_intent=True)
+                if dispatched:
+                    raise DeploymentError(
+                        "PostgreSQL Workspace creation failed; correct AIDAP permissions or configuration before retrying"
+                    )
+                ident, record, owned = "", None, False
+                continue
+            try:
+                validate_workspace(row, **validation, owned=owned)
+            except PGNotReady:
+                # Terminal/unknown states cannot masquerade as delayed metadata.
+                check_ready(row.get("workspace_status"))
+                raise
             check_ready(row.get("workspace_status"))
             connection = await cloud.connection(ident)
             return ident, connection

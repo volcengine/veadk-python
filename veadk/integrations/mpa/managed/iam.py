@@ -137,6 +137,13 @@ class IamCloud:
                 # deployments from replacing each other's credentials/session.
                 client = object.__new__(IamService)
                 IamService.__init__(client)
+                if getattr(self.runtime, "provider", "volcengine") == "byteplus":
+                    from .provider import managed_host
+
+                    client.set_host(
+                        managed_host("iam", self.runtime.region, "byteplus")
+                    )
+                    client.service_info.credentials.region = self.runtime.region
                 client.set_ak(credential.access_key_id)
                 client.set_sk(credential.secret_access_key)
                 client.set_session_token(credential.session_token)

@@ -410,6 +410,12 @@ class Profile:
     shared_url: str
     openviking_enabled: bool | None = None
 
+    @property
+    def provider(self):
+        from veadk.utils.cloud_provider import normalize_cloud_provider
+
+        return normalize_cloud_provider(self.values.get("cloud_provider"))
+
     def image_defaults(self):
         runtime_image = self.managed.runtime.image or (
             (self.template or {}).get("ArtifactUrl", "")
@@ -630,16 +636,18 @@ def _read_configuration_file(path: Path, *, template: bool = False) -> str:
         ) from None
 
 
-def load_studio_profile(*, region: str = "") -> Profile:
+def load_studio_profile(*, region: str = "", provider: str = "volcengine") -> Profile:
     """Load the code-owned Studio profile without a configuration file."""
-    return load_profile(None, region=region)
+    return load_profile(None, region=region, provider=provider)
 
 
-def load_profile(path: str | Path | None, *, region: str = "") -> Profile:
+def load_profile(
+    path: str | Path | None, *, region: str = "", provider: str = "volcengine"
+) -> Profile:
     try:
         file = Path(path) if path is not None else None
         if file is None:
-            values = studio_profile_values()
+            values = studio_profile_values(provider)
         else:
             try:
                 values = yaml.safe_load(_read_configuration_file(file))
@@ -696,8 +704,20 @@ def load_profile(path: str | Path | None, *, region: str = "") -> Profile:
             and managed.postgres is not None
             and managed.postgres.legacy_urls == "ignore"
         )
+        from veadk.utils.cloud_provider import normalize_cloud_provider
+
+        selected_provider = normalize_cloud_provider(
+            values.get("cloud-provider", "volcengine")
+        )
+        if selected_provider != normalize_cloud_provider(provider):
+            raise ConfigurationError("Configuration belongs to another cloud provider")
         selected = str(values.get("region", "cn-beijing"))
-        if not re.fullmatch(r"cn-[a-z]+", selected) or region and selected != region:
+        valid_region = (
+            selected == "ap-southeast-1"
+            if selected_provider == "byteplus"
+            else bool(re.fullmatch(r"cn-[a-z]+", selected))
+        )
+        if not valid_region or region and selected != region:
             raise ConfigurationError("No managed configuration for the selected region")
         NetworkOptions(
             managed.network.vpc_cidr,
@@ -775,7 +795,11 @@ def load_profile(path: str | Path | None, *, region: str = "") -> Profile:
                 or values.get("model_api_key")
                 or values.get("model_provider") != "openai"
                 or str(values.get("model_api_base", "")).rstrip("/")
-                != f"https://ark.{selected}.volces.com/api/v3"
+                != (
+                    "https://ark.ap-southeast.bytepluses.com/api/v3"
+                    if selected_provider == "byteplus"
+                    else f"https://ark.{selected}.volces.com/api/v3"
+                )
                 or any(
                     key in managed.runtime.env
                     for key in (

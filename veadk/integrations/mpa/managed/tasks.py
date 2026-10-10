@@ -299,6 +299,8 @@ class CreationTasks:
                     if key in payload
                 },
             }
+            if payload.get("provider") == "byteplus":
+                data["provider"] = "byteplus"
             if studio_runtime_owner is not None:
                 data["studioRuntimeOwner"] = studio_runtime_owner
             if secrets.get("openvikingApiKey"):

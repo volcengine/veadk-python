@@ -25,6 +25,8 @@ managed:
 
 同一范围的所有 Studio/CLI 进程必须使用**同一协调主机上的同一持久引导文件路径**，重启和重新部署时须保留。私有 SQLite 文件仅保存意图和 ID，不保存密码。任务取消/失败保留资源。创建响应丢失后，重试会发现带标签的 Workspace；结果仍不明确时，应检查 AIDAP 并配置匹配的 ID。不要通过删除状态强制再次创建。确定的 IAM/参数拒绝可修正后重试。不自动删除任何 Workspace。
 
+明确为 `CreateFailed` 的 Workspace 不再永久阻塞后续自动创建请求。流程核验其范围，保留失败云资源，将 ID 单独记录后解除失败绑定。重试可创建替代资源，本次新购买失败不会在同一任务内重复购买。显式 Workspace ID、运行故障和未知结果仍需核查，不能盲目替换。之前已退出的失败资源不能用于授权重发更新的超时请求。参见[恢复规则](../../../../specs/studio-mpa-creation/README.zh.md)的 CON-13。
+
 ### 已有部署切换
 
 旧共享注册库 URL 仍配置时，自动模式默认拒绝创建。如果新建任务可以舍弃旧 MPA 的资源关系，CLI 用户在私有 YAML 中设置 `managed.postgres.legacy-urls: ignore`；Studio 内置配置已采用该设置。即使 Studio 进程环境仍有 `SHARED_APIG_DATABASE_URL` 和 `DEPLOYMENT_DATABASE_ADMIN_URL`，该配置也不读取它们。新智能体从全新的管理与业务 Workspace 开始；旧智能体、数据库、Runtime 连接和记录都不修改或删除。不要用该设置以相同智能体 ID 继续未完成的旧创建任务。
@@ -283,3 +285,9 @@ managed:
 ```
 
 Ark 模式要求 `model-provider: openai` 和所选地域方舟 `/api/v3/` 地址；拒绝引用 Runtime/模板来源及模型 Key/provider/base 环境覆盖。明文不进入配置/任务响应、本地 bootstrap/任务存储或日志。Runtime 环境配置包含 Key，须保护访问权限。使用内置自动创建时可以移除 `.env` 里旧创建模型 Key 与 `VEADK_MPA_CONFIG_PGPASSWORD` 赋值，保留其他启动配置和部署凭据。其他 CLI 配置仍可使用其显式引用的环境变量。
+
+### BytePlus 托管创建 MPA
+
+在服务端进程中设置 `BYTEPLUS_ACCESS_KEY` / `BYTEPLUS_SECRET_KEY`，使用 `uv run veadk studio --provider byteplus --open` 启动。MPA 创建目前面向 `ap-southeast-1`，沿用三步表单及共享管理/业务 Workspace 布局。平台由服务端决定，不复用国内凭据及恢复文件。角色部署时，显式设置 `VEADK_MPA_BYTEPLUS_CREDENTIAL_FILE` 指向轮转凭据文件。默认模型为现有海外 Studio ModelArk 模型；方舟 Key 发现要求海外 ListApiKeys/GetRawApiKey 权限及一个已有可用 Key。
+
+目前没有海外默认镜像，仍使用现有公开 MPA/Worker 镜像，可通过服务端 `VEADK_MPA_BYTEPLUS_RUNTIME_IMAGE` / `VEADK_MPA_BYTEPLUS_WORKER_IMAGE` 覆盖；海外拉取及镜像兼容性需实际创建验证。`VEADK_MPA_BYTEPLUS_AIDAP_HOST` 可选指定部署对应的 AIDAP 主机名。服务开通、IAM 策略/API 可用性、配额及模型访问是账号前置条件；表单配置就绪不能证明这些资源可用。海外服务缺失时显式失败，不回退火山引擎。火山引擎默认配置及通用智能体聊天保持不变。

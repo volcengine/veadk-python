@@ -957,3 +957,74 @@ it("preserves the runtime role stage and actionable IAM error for retry", async 
     JSON.parse(sessionStorage.getItem("mpa-create:cn-beijing")!).input.agentId,
   ).toBe(input.agentId);
 });
+
+it("uses overseas console links and submits the BytePlus region without browser provider overrides", async () => {
+  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
+    configured: true,
+    region: "ap-southeast-1",
+    postgresMode: "auto",
+  });
+  vi.mocked(api.startMpaCreation).mockReturnValue(new Promise(() => {}));
+  await act(async () =>
+    root.render(
+      <MpaCreateDialog
+        region="ap-southeast-1"
+        cloudProvider="byteplus"
+        onClose={() => {}}
+        onCreated={() => {}}
+      />,
+    ),
+  );
+  await edit("name", "overseas-agent");
+  await act(async () => button("next").click());
+  expect(document.querySelector("a")?.href).toBe(
+    "https://console.byteplus.com/aidap/",
+  );
+  expect(document.body.textContent).toContain(
+    "myAgents.mpaCreate.pgConsoleByteplus",
+  );
+  expect(field("pgHost")).toBeFalsy();
+  await act(async () => button("next").click());
+  expect(document.querySelector("a")?.href).toBe(
+    "https://console.byteplus.com/vikingdb/",
+  );
+  await act(async () => button("submit").click());
+  const input = vi.mocked(api.startMpaCreation).mock.calls[0][0];
+  expect(input.region).toBe("ap-southeast-1");
+  expect(input.name).toBe("overseas-agent");
+  expect(input).not.toHaveProperty("provider");
+  expect(sessionStorage.getItem("mpa-create:ap-southeast-1")).toContain(
+    "overseas-agent",
+  );
+  expect(sessionStorage.getItem("mpa-create:cn-beijing")).toBeNull();
+});
+
+it("keeps BytePlus preparation errors visible and allows rechecking", async () => {
+  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
+    configured: false,
+    region: "ap-southeast-1",
+    error: "Configure BytePlus deployment credentials",
+  });
+  await act(async () =>
+    root.render(
+      <MpaCreateDialog
+        region="ap-southeast-1"
+        cloudProvider="byteplus"
+        onClose={() => {}}
+        onCreated={() => {}}
+      />,
+    ),
+  );
+  await edit("name", "overseas-agent");
+  await goToFinal();
+  expect(button("submit").disabled).toBe(true);
+  expect(document.body.textContent).toContain(
+    "Configure BytePlus deployment credentials",
+  );
+  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
+    configured: true,
+    region: "ap-southeast-1",
+  });
+  await act(async () => button("reload").click());
+  expect(button("submit").disabled).toBe(false);
+});

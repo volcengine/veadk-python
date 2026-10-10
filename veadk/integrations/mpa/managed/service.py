@@ -159,6 +159,7 @@ async def ensure_workload_identity(profile: Profile, cloud, agent_id: str):
         session_token=credential.session_token,
         region=profile.region,
         enable_vefaas_iam_fallback=False,
+        provider=profile.provider,
     )
     try:
         return await asyncio.to_thread(
@@ -227,7 +228,9 @@ async def provision(
     )
     validate_postgres_layout(profile)
     cloud = RuntimeCloud(
-        region=profile.region, credential_file=profile.managed.credential_file
+        region=profile.region,
+        credential_file=profile.managed.credential_file,
+        provider=profile.provider,
     )
     progress("checking")
     account = await cloud.account_id()
@@ -250,7 +253,11 @@ async def provision(
 
         profile = await prepare_postgres(
             profile,
-            PGCloud(region=profile.region, credentials=cloud._credentials),
+            PGCloud(
+                region=profile.region,
+                credentials=cloud._credentials,
+                provider=profile.provider,
+            ),
             account,
             progress=progress,
         )

@@ -36,14 +36,17 @@ class NetworkCloudError(DeploymentError):
 
 
 class NetworkCloud:
-    def __init__(self, *, region, credentials):
+    def __init__(self, *, region, credentials, provider="volcengine"):
         self.region, self.credentials = region, credentials
+        self.provider = provider
 
     async def call(self, method, request_type, *, ecs=False, **params):
         def run():
             import volcenginesdkcore
             import volcenginesdkecs
             import volcenginesdkvpc
+
+            from .provider import managed_host
 
             credential = self.credentials()
             config: Any = volcenginesdkcore.Configuration()
@@ -52,7 +55,9 @@ class NetworkCloud:
                 credential.secret_access_key,
             )
             config.session_token, config.region = credential.session_token, self.region
-            config.host = f"{'ecs' if ecs else 'vpc'}.{self.region}.volcengineapi.com"
+            config.host = managed_host(
+                "ecs" if ecs else "vpc", self.region, self.provider
+            )
             sdk = volcenginesdkecs if ecs else volcenginesdkvpc
             client_type = volcenginesdkecs.ECSApi if ecs else volcenginesdkvpc.VPCApi
             request = getattr(sdk, request_type)(**params)
