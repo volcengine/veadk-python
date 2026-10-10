@@ -15,3 +15,7 @@ CON-4：仅记录固定操作名与错误类型，不记录凭证、URL、正文
 ## 检索边界
 
 CON-5（本地已实现，尚未部署）：`veadk.knowledge.search`、`veadk.memory.search`、`veadk.memory.save` 继承既有上下文与 Provider。只记录后端类型、实际 top_k / 结果数量或会话 / 事件数量，不记录查询、正文、用户 ID、索引和 URL。记忆检索的已处理后端错误保留空返回，但 Span 标 ERROR；正常空结果是成功。取消时结束调用方边界，不声称同步线程或后端已停止。不新增导出器及持久化状态。设计及待执行验收见[检索诊断](../../prd-spec/features/retrieval-diagnostics/2026-10-10-retrieval-diagnostics.zh.md)。
+
+## 会话持久化
+
+CON-6（本地已实现，未部署）：VeADK 内置 SQLite、MySQL、PostgreSQL 工厂通过内部 DatabaseSessionService 子类，将非 partial 的 append_event 调用记录为 `veadk.session.append_event`。Span 包含 ADK 存储操作中的序列化、状态更新和数据库调用，不拆分各条 SQL，也不证明远端持久化提交。仅记录实际会话／执行标识与错误类型。采样和上报由现有 Provider 管理。参数、返回事件、错误、取消、缓存及调用方自定义 SessionService 保持不变。设计：[会话持久化诊断](../../prd-spec/features/session-persistence-diagnostics/2026-10-10-session-persistence.zh.md)。
