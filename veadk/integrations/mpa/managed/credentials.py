@@ -30,10 +30,22 @@ class Credentials:
 
 
 def load_volcengine_credentials(credential_file: str = "") -> Credentials:
+    """Preserve the domestic credential contract for existing callers."""
+    return load_provider_credentials("volcengine", credential_file)
+
+
+def load_provider_credentials(provider: str, credential_file: str = "") -> Credentials:
     """Read each call; an explicitly configured rotating file takes priority."""
+    if provider not in {"volcengine", "byteplus"}:
+        raise ValueError("Unsupported managed cloud provider")
+    prefix = "BYTEPLUS" if provider == "byteplus" else "VOLCENGINE"
     if not credential_file and not (
-        os.getenv("VOLCENGINE_ACCESS_KEY") and os.getenv("VOLCENGINE_SECRET_KEY")
+        os.getenv(prefix + "_ACCESS_KEY") and os.getenv(prefix + "_SECRET_KEY")
     ):
+        if provider == "byteplus":
+            raise ValueError(
+                "Configure BytePlus deployment credentials or an explicit IAM file"
+            )
         credential_file = "/var/run/secrets/iam/credential"
     if credential_file:
         try:
@@ -53,8 +65,8 @@ def load_volcengine_credentials(credential_file: str = "") -> Credentials:
             raise ValueError(
                 "Deployment credential file is unavailable or invalid"
             ) from None
-    ak = os.getenv("VOLCENGINE_ACCESS_KEY", "")
-    sk = os.getenv("VOLCENGINE_SECRET_KEY", "")
+    ak = os.getenv(prefix + "_ACCESS_KEY", "")
+    sk = os.getenv(prefix + "_SECRET_KEY", "")
     if not ak or not sk:
         raise ValueError(
             "Configure deployment credentials or a rotating credential file"
@@ -62,5 +74,6 @@ def load_volcengine_credentials(credential_file: str = "") -> Credentials:
     return Credentials(
         ak,
         sk,
-        os.getenv("VOLCENGINE_SESSION_TOKEN") or os.getenv("VOLC_SESSIONTOKEN", ""),
+        os.getenv(prefix + "_SESSION_TOKEN")
+        or (os.getenv("VOLC_SESSIONTOKEN", "") if provider == "volcengine" else ""),
     )

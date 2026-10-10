@@ -102,7 +102,8 @@ class NetworkCloud:
 
     async def create_subnet(self, request):
         self.calls.append(("subnet", copy.deepcopy(request)))
-        sid = "subnet-auto"
+        count = sum(kind == "subnet" for kind, _ in self.calls)
+        sid = "subnet-auto" if count == 1 else f"subnet-auto-{count}"
         self.subnet_rows[sid] = {**self.subnet_row(sid, request["vpc_id"]), **request}
         if self.lose == "subnet":
             self.lose = ""

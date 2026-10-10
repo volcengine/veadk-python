@@ -177,6 +177,111 @@ def test_platform_wait_stops_on_error_or_timeout(status, error):
     asyncio.run(run())
 
 
+@pytest.mark.parametrize("resume", [False, True])
+@pytest.mark.parametrize("explicit", [False, True])
+def test_subnet_permutation_finishes_fresh_or_pending_runtime_without_duplicates(
+    resume, explicit
+):
+    async def run():
+        svc, registry, cloud, databases = deployer()
+        subnets = ["subnet-one", "subnet-two"]
+        cloud.network.subnet_rows["subnet-two"] = cloud.network.subnet_row(
+            "subnet-two", "vpc-one"
+        )
+        cloud.network.subnet_rows["subnet-two"]["zone_id"] = "cn-beijing-b"
+        registry.network.row = {"vpc_id": "vpc-one", "subnet_ids": subnets.copy()}
+        payload = template()
+        payload["NetworkConfiguration"] = (
+            {
+                "VpcConfiguration": {
+                    "VpcId": "vpc-one",
+                    "SubnetIds": subnets.copy(),
+                }
+            }
+            if explicit
+            else {}
+        )
+        before = copy.deepcopy(payload)
+        create = cloud.create
+
+        async def reordered_create(request):
+            rid = await create(request)
+            private = cloud.runtimes[rid]["NetworkConfigurations"][0]
+            private["VpcConfiguration"] = {
+                **private["VpcConfiguration"],
+                "SubnetIds": list(reversed(subnets)),
+            }
+            return rid
+
+        cloud.create = reordered_create
+        digest, token = None, None
+        if resume:
+            get = cloud.get
+            cloud.get = AsyncMock(side_effect=TimeoutError("platform read interrupted"))
+            with pytest.raises(TimeoutError):
+                await svc.deploy(payload)
+            cloud.get = get
+            assert registry.row["pending"] and registry.row["runtime_id"] == "r-agent"
+            digest = registry.row["request_hash"]
+            token = registry.row["client_token"]
+            changed = copy.deepcopy(payload)
+            changed["ArtifactUrl"] = "different:image"
+            with pytest.raises(DeploymentError, match="unfinished"):
+                await svc.deploy(changed)
+        result = await svc.deploy(payload)
+        assert result["runtime_id"] == "r-agent" and result["state"] == "ready"
+        assert not registry.row["pending"]
+        assert len(cloud.creates) == len(cloud.updates) == len(cloud.space_creates) == 1
+        assert not cloud.network.calls
+        assert databases.seeded[-1] == (result["database_name"], "agent-one", "r-agent")
+        env = mod.env_map(cloud.runtimes["r-agent"])
+        assert env["AGENTKIT_RUNTIME_ID"] == "r-agent"
+        assert env["A2A_PUBLIC_URL"] == "https://public.example"
+        assert env["CODEX_MCP_RUNTIME_API_KEY"] == "runtime-key"
+        assert registry.network.row["subnet_ids"] == subnets
+        assert payload == before
+        if resume:
+            assert registry.row["request_hash"] == digest
+            assert registry.row["client_token"] == token
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    "subnets",
+    [
+        ["subnet-one"],
+        ["subnet-one", "subnet-other"],
+        ["subnet-one", "subnet-two", "subnet-other"],
+        ["subnet-one", "subnet-two", "subnet-two"],
+        [],
+        "subnet-one",
+        ["subnet-one", None],
+    ],
+)
+def test_runtime_validation_rejects_changed_or_invalid_subnet_members(subnets):
+    payload = template()
+    payload["NetworkConfiguration"]["VpcConfiguration"]["SubnetIds"] = [
+        "subnet-one",
+        "subnet-two",
+    ]
+    runtime = {
+        "RoleName": payload["RoleName"],
+        "Envs": payload["Envs"] + [{"Key": "PGDATABASE", "Value": "test_db"}],
+        "NetworkConfigurations": [
+            {"NetworkType": "public"},
+            {
+                "NetworkType": "private",
+                "VpcConfiguration": {"VpcId": "vpc-one", "SubnetIds": subnets},
+            },
+        ],
+    }
+    with pytest.raises(DeploymentError, match="migration"):
+        mod.validate_runtime(
+            runtime, agent_id="agent-one", database="test_db", template=payload
+        )
+
+
 def test_deployment_rejects_incomplete_network_before_creating_resources():
     async def run():
         svc, registry, cloud, _ = deployer()

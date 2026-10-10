@@ -151,6 +151,77 @@ def test_network_discovery_paginates_and_filters_exact_names():
     asyncio.run(run())
 
 
+@pytest.mark.parametrize("collection", ["vpcs", "subnets"])
+@pytest.mark.parametrize("serialization", ["sdk", "absent"])
+def test_discovery_accepts_confirmed_empty_sdk_results(collection, serialization):
+    import volcenginesdkvpc
+
+    response_type = (
+        volcenginesdkvpc.DescribeVpcsResponse
+        if collection == "vpcs"
+        else volcenginesdkvpc.DescribeSubnetsResponse
+    )
+    response = response_type(total_count=0).to_dict()
+    assert response[collection] is None
+    if serialization == "absent":
+        del response[collection]
+    cloud = NetworkCloud(region="r", credentials=None)
+    cloud.call = AsyncMock(return_value=response)
+    discover = cloud.find_vpcs if collection == "vpcs" else cloud.subnets
+    assert asyncio.run(discover("name-or-vpc")) == []
+    cloud.call.assert_awaited_once()
+    assert cloud.call.call_args.kwargs["page_number"] == 1
+
+
+@pytest.mark.parametrize("collection", ["vpcs", "subnets"])
+@pytest.mark.parametrize(
+    "response",
+    [
+        {},
+        {"total_count": 1},
+        {"total_count": -1},
+        {"total_count": None},
+        {"total_count": False},
+        {"total_count": "0"},
+        {"total_count": 0.0},
+        {"items": "", "total_count": 0},
+        {"items": {}, "total_count": 0},
+    ],
+)
+def test_discovery_rejects_unconfirmed_or_malformed_empty_results(collection, response):
+    payload = {**response, collection: response.get("items")}
+    cloud = NetworkCloud(region="r", credentials=None)
+    cloud.call = AsyncMock(return_value=payload)
+    discover = cloud.find_vpcs if collection == "vpcs" else cloud.subnets
+    with pytest.raises(DeploymentError, match="invalid results"):
+        asyncio.run(discover("name-or-vpc"))
+    cloud.call.assert_awaited_once()
+
+
+@pytest.mark.parametrize("collection", ["vpcs", "subnets"])
+def test_discovery_rejects_null_zero_page_after_populated_page(collection):
+    cloud = NetworkCloud(region="r", credentials=None)
+    cloud.call = AsyncMock(
+        side_effect=[
+            {collection: [{}] * 100, "total_count": 100},
+            {collection: None, "total_count": 0},
+        ]
+    )
+    discover = cloud.find_vpcs if collection == "vpcs" else cloud.subnets
+    with pytest.raises(DeploymentError, match="invalid results"):
+        asyncio.run(discover("name-or-vpc"))
+    assert cloud.call.await_count == 2
+
+
+def test_empty_discovery_does_not_hide_provider_errors():
+    cloud = NetworkCloud(region="r", credentials=None)
+    cloud.call = AsyncMock(
+        side_effect=NetworkCloudError("describe_subnets", "AccessDenied")
+    )
+    with pytest.raises(NetworkCloudError, match="AccessDenied"):
+        asyncio.run(cloud.subnets("vpc"))
+
+
 @pytest.mark.parametrize(
     "method,args,message",
     [

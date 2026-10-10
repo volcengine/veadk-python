@@ -1214,7 +1214,7 @@ export function MyAgents({
   let createAgent: (() => void) | undefined;
   if (activeType === "general" && canCreateRuntimeAgents) {
     createAgent = () => onCreateAgent(region, "general");
-  } else if (activeType === "mpa" && canCreateRuntimeAgents && cloudProvider === "volcengine") {
+  } else if (activeType === "mpa" && canCreateRuntimeAgents) {
     createAgent = () => setMpaCreateRegion(region);
   } else if (isSandboxMyAgentType(activeType) && canCreatePersonalAgents) {
     createAgent = () => onCreateSandboxAgent(activeType);
@@ -1407,7 +1407,7 @@ export function MyAgents({
           </div>
         )}
       </ResourceResults>
-      {mpaCreateRegion && <MpaCreateDialog key={mpaCreateRegion} region={mpaCreateRegion}
+      {mpaCreateRegion && <MpaCreateDialog key={mpaCreateRegion} region={mpaCreateRegion} cloudProvider={cloudProvider}
         onClose={() => setMpaCreateRegion(null)}
         onCreated={() => {
           invalidateRuntimeAgentCache();

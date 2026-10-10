@@ -16,23 +16,28 @@
 
 from __future__ import annotations
 
+import os
 
-def studio_profile_values() -> dict:
-    """Return a fresh Beijing profile; secrets remain server environment values."""
-    account = "2112682748"
+
+def studio_profile_values(provider: str = "volcengine") -> dict:
+    """Return provider defaults; model keys resolve with deployment identity."""
     region = "cn-beijing"
     role = "IDRoleForArkClawShareAgent"
     model = "doubao-seed-2-0-pro-260215"
-    registry = f"agentkit-platform-{account}-{region}.cr.volces.com/mpa"
-    return {
+    registry = "agentkit-platform-2112682748-cn-beijing.cr.volces.com/mpa"
+    values = {
         "region": region,
-        "account-id": account,
         "model-provider": "openai",
         "model-name": model,
         "model-api-base": "https://ark.cn-beijing.volces.com/api/v3/",
-        "model-api-key": "${VEADK_MPA_CONFIG_MODEL_AGENT_API_KEY}",
         "managed": {
             "version": 1,
+            "model-key": {
+                "mode": "ark",
+                "api-key-id": os.getenv("VEADK_MPA_ARK_API_KEY_ID", "").strip(),
+                "api-key-name": os.getenv("VEADK_MPA_ARK_API_KEY_NAME", "").strip(),
+            },
+            "iam": {"mode": "auto"},
             "postgres": {
                 "mode": "auto",
                 "legacy-urls": "ignore",
@@ -58,7 +63,6 @@ def studio_profile_values() -> dict:
                     "APPCENTER_RESOURCE_DISCOVERY_ENABLED": "false",
                     "CHANNEL_ADMIN_AUTH_MODE": "runtime_key",
                     "CHANNEL_BACKEND": "postgresql",
-                    "CLAW_SPACE_ID": f"csi-{account}",
                     "CLOUD_PROVIDER": "volcengine",
                     "FORCE_APMPLUS_EXPORTER_REGISTRATION": "true",
                     "IDENTITY_REGION": region,
@@ -73,8 +77,6 @@ def studio_profile_values() -> dict:
                     ),
                     "MPA_SESSION_MEMORY_BACKEND": "postgresql",
                     "REGION": region,
-                    "RUNTIME_IAM_ROLE_NAME": role,
-                    "RUNTIME_IAM_ROLE_TRN": f"trn:iam::{account}:role/{role}",
                     "RUNTIME_PROVIDER": "VEFAAS",
                     "SCHEDULED_TASK_BACKEND": "postgresql",
                     "ENABLE_APMPLUS": "true",
@@ -85,9 +87,66 @@ def studio_profile_values() -> dict:
             },
             "worker": {
                 "image": f"{registry}/mpa_codex_worker:latest",
-                "reference-id": "t-yeuujqfldstkidoad4p0",
                 "role-name": role,
             },
             "timeout-seconds": 1800,
         },
     }
+
+    if provider == "volcengine":
+        return values
+    if provider != "byteplus":
+        raise ValueError("Unsupported managed cloud provider")
+    from veadk.cli.studio_model_catalog import (
+        modelark_base_url,
+        studio_agent_model_name,
+    )
+
+    from .provider import managed_host
+
+    region = "ap-southeast-1"
+    model = studio_agent_model_name(provider)
+    values.update(
+        {
+            "cloud-provider": provider,
+            "region": region,
+            "model-name": model,
+            "model-api-base": modelark_base_url(provider),
+        }
+    )
+    managed = values["managed"]
+    managed["credential-file"] = os.getenv(
+        "VEADK_MPA_BYTEPLUS_CREDENTIAL_FILE", ""
+    ).strip()
+    managed_host("aidap", region, "byteplus")
+    managed["postgres"]["bootstrap-path"] = (
+        "/tmp/veadk-studio/mpa-pg-bootstrap-byteplus.sqlite3"
+    )
+    runtime = managed["runtime"]
+    runtime["image"] = (
+        os.getenv("VEADK_MPA_BYTEPLUS_RUNTIME_IMAGE", "").strip() or runtime["image"]
+    )
+    managed["worker"]["image"] = (
+        os.getenv("VEADK_MPA_BYTEPLUS_WORKER_IMAGE", "").strip()
+        or managed["worker"]["image"]
+    )
+    runtime["env"].update(
+        {
+            "CLOUD_PROVIDER": provider,
+            "AGENTKIT_CLOUD_PROVIDER": provider,
+            "BYTEPLUS_REGION": region,
+            "REGION": region,
+            "IDENTITY_REGION": region,
+            "MPA_CODEX_WORKER_DEFAULT_MODEL": model,
+            "MPA_SELECTABLE_MODELS": model,
+            "APIG_TOP_ENDPOINT": managed_host("apig", region, provider),
+        }
+    )
+    # The Worker SDK must resolve overseas services in the same way as Runtime.
+    managed["worker"]["env"] = {
+        "CLOUD_PROVIDER": provider,
+        "AGENTKIT_CLOUD_PROVIDER": provider,
+        "BYTEPLUS_REGION": region,
+        "REGION": region,
+    }
+    return values

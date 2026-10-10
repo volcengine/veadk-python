@@ -26,12 +26,13 @@ import httpx
 from sqlalchemy.engine import make_url
 
 from veadk.integrations.mpa.managed.database import DeploymentError, agent_suffix
-from veadk.integrations.mpa.tags import MPA_AGENT_TYPE_TAG, MPA_AGENT_TYPE_VALUE
 from veadk.integrations.mpa.managed.network import (
     AccountNetworkProvisioner,
     NetworkOptions,
+    vpc_configuration_matches,
 )
 from veadk.integrations.mpa.managed.network_cloud import NetworkCloud
+from veadk.integrations.mpa.tags import MPA_AGENT_TYPE_TAG, MPA_AGENT_TYPE_VALUE
 
 
 def asyncpg_registry_url(url: str) -> str:
@@ -48,24 +49,38 @@ def asyncpg_registry_url(url: str) -> str:
 
 
 class RuntimeCloud:
-    def __init__(self, *, region: str, credential_file: str):
+    def __init__(self, *, region: str, credential_file: str, provider="volcengine"):
         self.region, self.credential_file = region, credential_file
         self.account = ""
-        self.network = NetworkCloud(region=region, credentials=self._credentials)
+        self.provider = provider
+        self.network = NetworkCloud(
+            region=region, credentials=self._credentials, provider=provider
+        )
 
     def _credentials(self):
         from agentkit.auth.sts import get_caller_identity
+
         from veadk.integrations.mpa.managed.credentials import (
+            load_provider_credentials,
             load_volcengine_credentials,
         )
 
-        credential = load_volcengine_credentials(self.credential_file)
+        from .provider import managed_host
+
+        credential = (
+            load_volcengine_credentials(self.credential_file)
+            if self.provider == "volcengine"
+            else load_provider_credentials(self.provider, self.credential_file)
+        )
         account = str(
             get_caller_identity(
                 credential.access_key_id,
                 credential.secret_access_key,
                 credential.session_token,
                 region=self.region,
+                host=managed_host("sts", self.region, self.provider)
+                if self.provider == "byteplus"
+                else None,
             ).get("AccountId")
             or ""
         )
@@ -82,12 +97,15 @@ class RuntimeCloud:
 
         credential = self._credentials()
         client_type = AgentkitSkillsClient if skills else AgentkitRuntimeClient
-        return client_type(
-            region=self.region,
-            access_key=credential.access_key_id,
-            secret_key=credential.secret_access_key,
-            session_token=credential.session_token,
-        )
+        from agentkit.platform.context import default_cloud_provider
+
+        with default_cloud_provider(self.provider):
+            return client_type(
+                region=self.region,
+                access_key=credential.access_key_id,
+                secret_key=credential.secret_access_key,
+                session_token=credential.session_token,
+            )
 
     async def account_id(self):
         await asyncio.to_thread(self._client)
@@ -293,11 +311,7 @@ def validate_runtime(runtime, *, agent_id, database, template):
             )
         actual = nets["private"].get("VpcConfiguration") or {}
         wanted = template["NetworkConfiguration"]["VpcConfiguration"]
-        if any(
-            actual.get(k) != wanted.get(k)
-            for k in ("VpcId", "SubnetIds", "EnableSharedInternetAccess")
-            if k in wanted
-        ):
+        if not vpc_configuration_matches(actual, wanted):
             raise DeploymentError(
                 "Changing the Runtime VPC configuration requires a separate migration"
             )
@@ -352,8 +366,9 @@ class AgentRuntimeDeployer:
         legacy_tag_items: list[dict] | None = None,
     ) -> dict:
         from agentkit.sdk.runtime.types import CreateRuntimeRequest
-        from veadk.integrations.mpa.managed.skills import ensure_skill_space
+
         from veadk.integrations.mpa.managed.config import validate_runtime_name
+        from veadk.integrations.mpa.managed.skills import ensure_skill_space
 
         if runtime_name:
             runtime_name = validate_runtime_name(runtime_name)
@@ -431,6 +446,7 @@ class AgentRuntimeDeployer:
                 region=self.region,
                 agent_id=agent_id,
                 project_name=template.get("ProjectName") or "",
+                runtime_name=runtime_name,
                 configured_id=source_env.get("SKILL_SPACE_ID", "").strip(),
                 current_id=env_map(current).get("SKILL_SPACE_ID", "").strip()
                 if current

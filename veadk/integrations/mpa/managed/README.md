@@ -25,6 +25,8 @@ After creation submission, prepare/reuse `mpa_admin_workspace/mpa_admin_db`, the
 
 All Studio/CLI processes for a scope must use the **same durable bootstrap file path on one coordinator host**. Preserve this file across restarts and redeployments. The private SQLite file contains only intents and IDs, never passwords. Cancelled/failed jobs retain resources. If a create response is lost, retry discovers the tagged Workspace; if its outcome is still uncertain, inspect AIDAP and provide the matching ID. Do not delete state to force another creation. Confirmed IAM/parameter rejections can be retried after correction. No Workspace is automatically deleted.
 
+Confirmed `CreateFailed` Workspaces no longer permanently block later automatic requests. The bootstrap validates their scope, retains their cloud resources and records their IDs separately before releasing the failed binding. Retry may create a replacement; a newly failed purchase is not repeated in the same task. Explicit Workspace IDs, operational failures and uncertain outcomes still require inspection rather than blind replacement. Previously retired failures cannot authorize repeating a newer timed-out request. See CON-13 in the [recovery contract](../../../../specs/studio-mpa-creation/README.md).
+
 ### Existing installation cutover
 
 Automatic mode refuses to run while the old shared registry URL remains configured by default. If old MPA resources may be abandoned for **new** creations, CLI users set `managed.postgres.legacy-urls: ignore` in their private YAML; Studio's built-in profile already uses this setting. Both paths then ignore `SHARED_APIG_DATABASE_URL` and `DEPLOYMENT_DATABASE_ADMIN_URL` even if they remain in the process environment. New agents start with fresh admin and business Workspaces; old agents, databases, Runtime connections and records are not changed or deleted. Do not use this setting to resume an unfinished old creation task under the same agent ID.
@@ -49,11 +51,22 @@ Gateway resources are created and saved before Runtime deployment. Later agents
 reuse the same records. Account locks and saved creation intents protect
 concurrent requests and retries from duplicate creation.
 
+New gateways use the standard type with two 1c2g nodes, small_1 CLB, public/private
+access and traffic billing. Deployment credentials need `apig:GetGatewayAvailableZones`.
+The service queries APIG-supported zones and reuses or creates two same-VPC subnets
+in different supported zones; missing companions have independently persisted
+requests/tokens. Existing registered/adopted gateways and Runtime network selections
+are preserved. New Runtimes use the prepared selection. `ExceededQuota` is a definite
+rejection and permits retry after correction; unknown outcomes still require
+discovery. Historical unknown flags require an audited, scoped repair.
+
 Existing records are retained, including previously adopted resources. This
 change does not move existing agents or replace an exhausted VPC. A quota or
 permission error remains a failure; increasing quota or migrating the shared
 network is a separate operation. Restart local Studio (or redeploy cloud Studio)
 to load the updated defaults. Explicit CLI network/APIG adoption remains supported.
+
+Runtime subnet IDs may be returned in a different order by AgentKit. An identical unique selection is accepted during creation and retry; real membership/VPC/shared-egress changes remain migration errors. Retry preserves the original requested or matching registered order, including existing pending request hashes. After updating VeADK, use the same agent ID and original inputs to resume a task stopped by this ordering mismatch; do not delete records or recreate resources.
 
 ## CLI YAML and manual / legacy server setup
 
@@ -63,7 +76,7 @@ to load the updated defaults. Explicit CLI network/APIG adoption remains support
 4. Configure deployment credentials through a rotating `managed.credential-file` or `VOLCENGINE_ACCESS_KEY` / `VOLCENGINE_SECRET_KEY` and optional `VOLCENGINE_SESSION_TOKEN`. Without an explicit file or environment key pair, the mounted `/var/run/secrets/iam/credential` is used. Each cloud call refreshes credentials; Runtime, VPC, worker and APIG use the same verified account.
 5. Select a template source: `managed.from-runtime`, a private JSON `managed.template-file`, or the flat image/model/PostgreSQL fields. Reference mode removes agent-specific channel credentials and Skill Space identity. Configure `managed.worker.image` for a dedicated worker (optional `reference-id` for worker environment settings), or use an explicit `existing-id` after verifying compatibility.
 6. For a private PostgreSQL host, set the reachable `managed.network.vpc-id` and `subnet-ids`. Automatic network creation does **not** configure database allowlists, peering, or cross-VPC routes. An explicit `managed.apig.adopt-id` requires that VPC ID and a compatible gateway. Otherwise the account's registered gateway is reused or created.
-7. Supply the private YAML explicitly with the CLI `--config` option. Studio does not read this file or `VEADK_MPA_CREATE_CONFIG`; it uses the code-owned Beijing profile and requires `VEADK_MPA_CONFIG_MODEL_AGENT_API_KEY` plus deployment STS credentials in its server environment. Other Studio regions display a configuration error.
+7. Supply the private YAML explicitly with the CLI `--config` option. Studio does not read this file or `VEADK_MPA_CREATE_CONFIG`; it uses the code-owned Beijing profile and requires deployment AK/SK or STS credentials in its server environment, then discovers an existing Ark model key in that account. Other Studio regions display a configuration error.
 
 The deployment identity needs access to AgentKit Runtime, Skill Space and Tool operations, VPC/subnet operations, APIG/IM Gateway operations and `GetCallerIdentity`. The Runtime/worker roles separately need the permissions and mounted credentials required by their images. IAM policies, PostgreSQL cloud instances, model services and network connectivity are operator prerequisites, not automatically created resources.
 
@@ -116,7 +129,7 @@ VPC/APIG still share by account and region. Deployment JSON records retain both 
 
 ## Use in Studio
 
-After a new `veadk studio deploy`, managed creation automatically reuses that Studio's UserPool, client, Identity region, and `/oauth/callback` from server-side VeFaaS environment. Studio uses built-in Beijing account, Runtime/worker image and model defaults without any creation YAML. Its model API key stays in `VEADK_MPA_CONFIG_MODEL_AGENT_API_KEY`. For standalone CLI YAML profiles, explicitly different `user-pool-name`, `user-pool-client-name`, `identity-callback-url`, `identity-region`, or corresponding `managed.runtime.env` values fail configuration inspection before cloud writes. A Studio deployed before this capability must be redeployed to receive the values. Standalone `veadk mpa provision` without these Studio environment values continues to use explicit YAML. The shared PostgreSQL Workspace is created later during MPA creation and is not the deployment-time Identity store.
+After a new `veadk studio deploy`, managed creation automatically reuses that Studio's UserPool, client, Identity region, and `/oauth/callback` from server-side VeFaaS environment. Studio uses built-in Beijing Runtime/worker image and model defaults without any creation YAML; its deployment account comes from STS. Its model API key is read with deployment credentials during creation (see Ark key discovery below). For standalone CLI YAML profiles, explicitly different `user-pool-name`, `user-pool-client-name`, `identity-callback-url`, `identity-region`, or corresponding `managed.runtime.env` values fail configuration inspection before cloud writes. A Studio deployed before this capability must be redeployed to receive the values. Standalone `veadk mpa provision` without these Studio environment values continues to use explicit YAML. The shared PostgreSQL Workspace is created later during MPA creation and is not the deployment-time Identity store.
 
 Choose **Agents → MPA agents → Create MPA agent**. The three steps collect basic information, automatic PostgreSQL preparation, and optional OpenViking service URL/resource ID/API Key. Enter a Runtime name (4–64 ASCII letters, digits, underscores or hyphens). The server generates the agent ID and injects it into Agent and Worker; it is not shown as an input. New creations use `agentkit-platform-2112682748-cn-beijing.cr.volces.com/mpa/mpa_agent:latest` and `agentkit-platform-2112682748-cn-beijing.cr.volces.com/mpa/mpa_codex_worker:latest` without image inputs. Already-submitted tasks retain their image selection for retry. Existing Runtimes are not renamed or automatically upgraded. The PG step links to the [Volcengine AIDAP console](https://console.volcengine.com/aidap/region:aidap+cn-beijing/); the service obtains Workspace connections after submission. The OpenViking step links to the [context-management console](https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing/ov-6689fabdf032294/context-management?accountId=default&userId=default&projectName=default); this is a console page, not the service URL to enter. PG credentials stay server-configured. Enter the OpenViking URL, resource ID and masked API Key together to inject `OPENVIKING_URL`, `OPENVIKING_RESOURCE_ID`, `OPENVIKING_API_KEY` and `OPENVIKING_USER=default`. Leave all three blank to omit these variables, including inherited template/reference values. The key is not saved in browser drafts or task SQLite and must be re-entered after a browser restart. Review the resource plan and submit on step three. The workflow prepares account network/APIG/IM Gateway, a worker, an isolated business database and Skill Space, then deploys and checks Runtime and application readiness. Successful creation refreshes the directory.
 
@@ -229,4 +242,58 @@ Flat creation defaults to `ENABLE_A2A=true` and `DISABLE_JWT_AUTH=true`. The inn
 
 ### Managed sandbox template naming
 
-New managed sandbox templates use the trimmed agent ID with every `-` replaced by `_` (for example, `mi-example` → `mi_example`). Existing worker IDs remain authoritative and are never renamed. A pre-change unfinished creation intent retains its hashed name only when the complete legacy request matches the persisted worker_hash; its ClientToken is preserved. Other payload changes and unrelated same-name resources remain errors. Scoped ownership tags and Runtime ToolId bindings are unchanged.
+New named Studio requests use the entered, validated Runtime name unchanged as the sandbox template Name (4–64 ASCII letters, digits, hyphens or underscores). Legacy CLI requests without a name still use the trimmed agent ID with `-` replaced by `_`. Internal agent IDs, database/Skill Space/channel identities, scoped ownership tags and Runtime ToolId bindings are unchanged. Existing worker IDs are authoritative and are never renamed. New pending intents persist `worker_name` in deployment JSON and reject later name changes. Older pending intents without that field replay a normalized-ID or hashed name only when the complete candidate payload matches the persisted worker_hash, preserving ClientToken. Other payload changes and unrelated same-name resources remain errors.
+
+### Automatic MPA runtime role
+
+Built-in Studio prepares `IDRoleForArkClawShareAgent` in the verified deployment account before preparing resources. It reuses a compatible role and adds missing approved policy bindings; it never replaces trust or policy contents. Explicit CLI profiles default to `managed.iam.mode: existing`; `auto` opts in for fresh default-role configurations only. See the [permission baseline and recovery rules](../../../../prd-spec/features/mpa-runtime-iam/2026-10-09-managed-runtime-role.md). The Studio execution role needs `iam:CreatePolicy` in addition to GetRole/CreateRole/GetPolicy/ListAttachedRolePolicies/AttachRolePolicy. Redeploy or update an existing Studio execution policy before using this capability. Retry the same agent ID after administrator repair; cancellation retains shared IAM resources.
+
+### Deployment account in Studio
+
+Studio uses the account returned by deployment-credential STS verification; it no longer requires the original image-registry account. Role TRN and compatibility Space ID for a fresh Runtime use the verified account. Explicit YAML `account-id` still restricts CLI deployments. Default image URLs and Worker reference IDs are unchanged; ensure the deployment account can access them or supply accessible resources. Existing Runtimes are not automatically migrated.
+
+Managed network descriptions use the provider-compatible `mpa-account-network-v1-<scope hash>`. Retry automatically corrects a legacy description-only intent after a definite rejection when no resource exists; changed payloads receive a new token. Existing scoped resources are retained. Uncertain outcomes require discovery and never trigger a duplicate create.
+
+### Worker without a reference template
+
+Built-in Studio uses startup settings supplied by the configured Worker image, without duplicate port/mode/directory environment entries; it no longer reads a Tool from the previous account. The image must still be accessible to the deployment account. Restart Studio to load changed defaults, then retry an agent that failed before Worker creation. Already dispatched requests retain their original payload/token; do not reset their registry intent.
+
+For a private CLI profile, configure startup values directly:
+
+```yaml
+managed:
+  worker:
+    image: registry.example/agentkit/mpa_codex_worker:release-tag
+    env:
+      MPA_RUNTIME_PROFILE: codex-headless
+      MPA_AIO_ENTRYPOINT_MODE: minimal
+      CUSTOM_SETTING: ${WORKER_CUSTOM_SETTING}
+```
+
+`managed.worker.env` accepts uppercase string keys and whole server environment references. It overrides filtered environment values from an optional accessible `reference-id`. Agent/Runtime/Tool/Skill Space bindings, inherited channel/Runtime credentials and control database URLs are reserved. A missing explicit reference remains an error. Environment settings with `existing-id` are rejected because existing Tools are not updated. Secrets do not enter config summaries/repr or deployment records; use server references rather than committing values. Model credentials are delivered per session by Runtime, not copied from the old Tool.
+
+New named MPA deployments use `Skills for MPA agent <runtime_name>` as the Skill Space description, so the entered name is visible in the cloud console. The generated space Name, display_name tag, internal agent ID and bindings stay unchanged. Existing spaces keep their descriptions; pre-upgrade pending requests recover their exact original description, while other input changes remain errors. Calls without a Runtime name retain the internal-ID description.
+
+## Ark model key discovery
+
+Built-in Studio no longer reads `VEADK_MPA_CONFIG_MODEL_AGENT_API_KEY`. Keep deployment credentials in your private environment or mounted credential source; do not commit them. The current deployment account needs `ark:ListApiKeys` and `ark:GetRawApiKey` permissions and an existing usable Ark key in project `default`. Model activation, model permissions and key IP restrictions must permit Runtime inference. No key is created automatically.
+
+Without a selector, multiple eligible keys automatically select the newest creation time; a single candidate is used directly. Creation reads only the selected raw value server-side and injects `MODEL_AGENT_API_KEY` into Runtime. Optional `VEADK_MPA_ARK_API_KEY_ID` or `VEADK_MPA_ARK_API_KEY_NAME` selects an exact identifier/name instead (not a secret). Non-Active statuses are excluded when present; legacy missing Status is supported. Newest selection accepts CreateTime (CreatedAt/CreationTime compatibility), Unix seconds/milliseconds or timezone-qualified ISO 8601; equal times use the lexicographically greatest string ID. Missing/invalid timestamps among multiple candidates, missing matches, ambiguous explicit names, or authorization/network failures stop at checking. No masked key or arbitrary first match is used. Pending request hashes reject changed credentials on retry, including when a newer key is created during a partial deployment.
+
+Standalone CLI profiles retain explicit `model-api-key` by default. Fresh Ark profiles may instead omit it and configure:
+
+```yaml
+managed:
+  model-key:
+    mode: ark
+    project-name: default
+    api-key-id: "<KEY_ID>"  # Optional; omit to select the newest eligible key.
+```
+
+Ark mode requires `model-provider: openai` and the selected region's Ark `/api/v3/` base; it rejects reference/template sources and model key/provider/base environment overrides. Raw keys never enter config/task responses, local bootstrap/task storage, or logs. Runtime environment configuration contains the key and must be protected. You may remove the obsolete creation model-key and `VEADK_MPA_CONFIG_PGPASSWORD` assignments from `.env` when using built-in automatic creation; retain other startup configuration and deployment credentials. Other CLI profiles may still use their explicitly referenced environment variables.
+
+### BytePlus managed MPA creation
+
+Start Studio with `BYTEPLUS_ACCESS_KEY` / `BYTEPLUS_SECRET_KEY` in the server process and `uv run veadk studio --provider byteplus --open`. MPA creation currently targets `ap-southeast-1`, using the same three-step form and shared admin/business Workspace layout. Provider selection is server-owned; domestic credentials and recovery files are not reused. In role-based deployments, set `VEADK_MPA_BYTEPLUS_CREDENTIAL_FILE` to the rotating credential file explicitly. The default model is the existing overseas Studio ModelArk model; Ark key discovery requires overseas ListApiKeys/GetRawApiKey permissions and an existing usable key.
+
+There are no overseas image defaults yet. The existing public MPA/Worker images remain defaults, with optional server overrides `VEADK_MPA_BYTEPLUS_RUNTIME_IMAGE` / `VEADK_MPA_BYTEPLUS_WORKER_IMAGE`; overseas image pull and image compatibility require a real creation test. `VEADK_MPA_BYTEPLUS_AIDAP_HOST` optionally selects a deployment-specific AIDAP hostname. Cloud service activation, IAM policy/API availability, quotas and model access are account prerequisites; a locally configured form does not prove they are available. Missing overseas services fail instead of falling back to Volcengine. Existing Volcengine defaults and general-agent chat remain unchanged.

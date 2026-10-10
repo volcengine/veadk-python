@@ -2,7 +2,7 @@
 
 [English](README.md)
 
-修订日期：2026-09-15。组件 ID：studio-mpa-cron-tasks。
+修订日期：2026-10-10。组件 ID：studio-mpa-cron-tasks。
 
 Studio 展示所选 Runtime 内按用户隔离的定时任务。MPA 负责持久化、授权、调度和执行；Studio 服务端负责 Runtime 访问检查、可信用户身份及网关凭证。不获取 TOP/JWT，不回退到全用户读取。MPA 撤销提交 `91fd6a3` 后，本契约替代之前的全用户查看器。
 
@@ -34,3 +34,8 @@ Studio 展示所选 Runtime 内按用户隔离的定时任务。MPA 负责持久
 任务编辑器不展示执行 Agent 输入框。新任务自动使用所选 Runtime ID 作为 agentId；编辑和复制保留原值。
 
 创建新任务不传 agentId，由 Runtime 使用配置中的 Agent 展示名称，缺失时回退运行时 Agent 名称。显式值及编辑/复制原值不变。此规则替代此前默认填写 Runtime ID 的处理。用户于 2026-09-15 明确批准；复核确认不改变鉴权和执行路由。
+
+
+## 飞书投递账号（2026-10-09）
+
+声明多机器人能力的 Runtime 在创建/编辑/复制时须明确选择启用的飞书 appId，并保存 delivery.appId。多个账号不默认选择第一项；未变更投递保留话题元数据，Web 投递移除 appId。缺失/停用账号、权限/读取失败阻止飞书保存并给出可执行错误。旧 Runtime 保留现有行为。账号选择使用既有管理员授权渠道 API，不放宽任务用户身份边界，不回退其他账号。见[设计](../../prd-spec/features/mpa-feishu-multi-bot/2026-10-09-studio-multi-bot.zh.md)。

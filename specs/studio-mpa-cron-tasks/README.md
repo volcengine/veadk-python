@@ -2,7 +2,7 @@
 
 [中文版](README.zh.md)
 
-Revised 2026-09-15. Component ID: studio-mpa-cron-tasks.
+Revised 2026-10-10. Component ID: studio-mpa-cron-tasks.
 
 Studio presents the selected Runtime's user-scoped scheduled tasks. MPA owns persistence, authorization, scheduling and execution. The Studio server owns Runtime access checks, trusted principal resolution and gateway credentials. No TOP/JWT acquisition or all-user fallback is performed. This contract supersedes the prior all-user viewer after MPA revert `91fd6a3`.
 
@@ -34,3 +34,8 @@ See the [implementation and acceptance record](../../prd-spec/features/studio-mp
 The task editor hides executor Agent input. New tasks automatically use the selected Runtime ID as agentId; edits/copies preserve the original value.
 
 New task creation omits agentId. The Runtime resolves the configured Agent display name, falling back to its runtime agent name. Explicit IDs and edit/copy values remain unchanged. This supersedes the previous Runtime ID default. Approved by the user on 2026-09-15; review found no authentication or execution routing changes.
+
+
+## Feishu delivery accounts (2026-10-09)
+
+For multi-bot-capable Runtime, create/edit/copy explicitly selects an enabled Feishu appId and saves delivery.appId. Multiple accounts never default to the first; unchanged delivery preserves thread metadata, and Web delivery removes appId. Missing/disabled accounts and permission/read failures block Feishu save with an actionable error. Legacy runtimes retain existing behavior. Bot choices use existing administrator-authorized channel APIs, without weakening task principal boundaries or falling back to another account. See [design](../../prd-spec/features/mpa-feishu-multi-bot/2026-10-09-studio-multi-bot.md).

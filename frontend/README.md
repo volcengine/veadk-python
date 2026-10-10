@@ -1824,3 +1824,31 @@ MPA creation defaults to A2A discovery (`ENABLE_A2A=true`, `DISABLE_JWT_AUTH=fal
 MPA name validation highlights invalid input and its message in the theme danger color, offers a valid-name placeholder, and visibly disables Next until corrected. Shared Button disabled states are dimmed consistently; loading retains its own appearance.
 
 MPA 名称校验使用主题错误色显示非法输入及错误提示，并提供合法名称示例；名称修正前“下一步”明显置灰。共享 Button 的禁用态统一降低透明度，加载态保留原有外观。
+
+MPA Agent details currently expose only Basic information. Other tabs and the Profile configuration action are hidden; this page does not query Profile status or submit Profile operations. General Agent pages and chat session protocols are unchanged.
+
+MPA 智能体详情当前仅显示基本信息。其他页面及 Profile 配置操作隐藏；本页不查询 Profile 状态或提交 Profile 操作。普通智能体页面与聊天会话协议保持不变。
+
+### MPA Feishu multi-bot accounts / MPA 飞书多机器人
+
+Runtimes advertising `multiBotChannels: ["feishu"]` expose a robot selector in
+Automations → Messaging channels → MPA agent messaging channels. Add bots with
+QR or manual binding, then manage enablement, unbinding, diagnostics and group
+permissions for the selected `appId`. Adding a different bot preserves existing
+accounts. Feishu scheduled tasks select an enabled delivery bot; switching to
+Web delivery removes `delivery.appId`. Channel management requires Studio
+administrator access. A failed or unauthorized account lookup blocks Feishu
+task submission instead of selecting an arbitrary bot. Older runtimes keep the
+single-bot interface. Compatible MPA images must be deployed separately.
+
+Runtime 声明 `multiBotChannels: ["feishu"]` 后，可在“自动化 → 消息渠道 →
+MPA 智能体消息渠道”中选择机器人。扫码或手动添加后，启停、解绑、诊断和群权限
+均按选中的 `appId` 管理；新增不同机器人保留既有绑定。飞书定时任务须选择已启用
+的投递机器人，切换 Web 投递会清除 `delivery.appId`。渠道管理需要 Studio 管理员
+权限；账号读取失败或无权限时阻止飞书任务提交，不任意选择机器人。旧 Runtime
+保持单机器人界面，兼容的 MPA 镜像需另行部署。
+
+Contracts and verification / 契约与验证：
+[channels](../specs/mpa-channels/README.md),
+[tasks](../specs/studio-mpa-cron-tasks/README.md),
+[design](../prd-spec/features/mpa-feishu-multi-bot/2026-10-09-studio-multi-bot.md).

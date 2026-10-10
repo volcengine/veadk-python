@@ -3074,9 +3074,7 @@ def _run_frontend_server(
             )
         return principal.owner_id
 
-    mount_mpa_creation_routes(
-        app, owner=_mpa_creation_owner, supported=provider == "volcengine"
-    )
+    mount_mpa_creation_routes(app, owner=_mpa_creation_owner, provider=provider)
 
     mount_feishu_bot_setup_routes(
         app,

@@ -25,6 +25,7 @@ from .config import (
     with_creation_tos,
 )
 from .diagnostics import classify_error, diagnostic_scope, report
+from .iam import IamError
 from .service import provision
 
 
@@ -40,7 +41,11 @@ def main():
 def run():
     try:
         data = json.loads(sys.stdin.read(16384))
-        profile = load_profile(data["config"], region=data["region"])
+        profile = load_profile(
+            data["config"],
+            region=data["region"],
+            provider=data.get("provider", "volcengine"),
+        )
         profile = with_creation_images(profile, data.get("images", {}))
         profile = with_creation_resources(profile, data.get("resources", {}))
         profile = with_creation_tos(profile, data.get("tos", {}))
@@ -75,7 +80,7 @@ def run():
     except Exception as error:
         report("provision", classify_error(error))
         # Error text can contain SDK request payloads, URLs and credentials.
-        emit(error="creationFailed")
+        emit(error=error.key if isinstance(error, IamError) else "creationFailed")
         return 1
 
 

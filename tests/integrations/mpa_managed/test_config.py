@@ -31,8 +31,12 @@ def test_studio_profile_uses_builtin_beijing_defaults_without_yaml(monkeypatch):
     monkeypatch.setenv("VEADK_MPA_CONFIG_MODEL_AGENT_API_KEY", "test-model-key")
     profile = load_studio_profile(region="cn-beijing")
 
-    assert profile.values["account_id"] == "2112682748"
-    assert profile.values["model_api_key"] == "test-model-key"
+    assert not profile.values.get("account_id")
+    assert "CLAW_SPACE_ID" not in profile.managed.runtime.env
+    assert "RUNTIME_IAM_ROLE_TRN" not in profile.managed.runtime.env
+    assert "RUNTIME_IAM_ROLE_NAME" not in profile.managed.runtime.env
+    assert not profile.values.get("model_api_key")
+    assert profile.managed.model_key.mode == "ark"
     postgres = profile.managed.postgres
     assert postgres is not None
     assert postgres.mode == "auto"
@@ -40,7 +44,8 @@ def test_studio_profile_uses_builtin_beijing_defaults_without_yaml(monkeypatch):
     assert profile.managed.network.vpc_id == ""
     assert profile.managed.network.subnet_ids == []
     assert profile.managed.apig.adopt_id == ""
-    assert profile.managed.worker.reference_id == "t-yeuujqfldstkidoad4p0"
+    assert profile.managed.worker.reference_id == ""
+    assert profile.managed.worker.env == {}
     assert profile.summary()["configured"] is True
     assert "test-model-key" not in str(profile.summary())
 
@@ -52,12 +57,9 @@ def test_standalone_postgres_bootstrap_path_keeps_adk_default():
     )
 
 
-def test_studio_profile_requires_model_key_and_rejects_other_regions(monkeypatch):
+def test_studio_profile_discovers_model_key_and_rejects_other_regions(monkeypatch):
     monkeypatch.delenv("VEADK_MPA_CONFIG_MODEL_AGENT_API_KEY", raising=False)
-    with pytest.raises(
-        ConfigurationError, match="VEADK_MPA_CONFIG_MODEL_AGENT_API_KEY"
-    ):
-        load_studio_profile(region="cn-beijing")
+    assert load_studio_profile(region="cn-beijing").summary()["configured"] is True
     monkeypatch.setenv("VEADK_MPA_CONFIG_MODEL_AGENT_API_KEY", "test-model-key")
     with pytest.raises(ConfigurationError, match="selected region"):
         load_studio_profile(region="cn-shanghai")
@@ -556,6 +558,59 @@ def test_runtime_environment_resolves_secret_refs_without_exposing_values(
                 tmp_path,
                 monkeypatch,
                 runtime={"env": {"MODEL_AGENT_API_KEY": "${TEST_RUNTIME_SECRET}"}},
+            )
+        )
+
+
+def test_worker_environment_resolves_secret_refs_safely(tmp_path, monkeypatch):
+    monkeypatch.setenv("TEST_WORKER_SECRET", "private-test-value")
+    path = profile_file(
+        tmp_path,
+        monkeypatch,
+        worker={"image": "worker:v1", "env": {"ARK_API_KEY": "${TEST_WORKER_SECRET}"}},
+    )
+    profile = load_profile(path)
+    assert profile.managed.worker.env == {"ARK_API_KEY": "private-test-value"}
+    assert "private-test-value" not in str(profile.summary())
+    assert "private-test-value" not in repr(profile.managed.worker)
+    monkeypatch.delenv("TEST_WORKER_SECRET")
+    with pytest.raises(ConfigurationError, match="TEST_WORKER_SECRET"):
+        load_profile(path)
+
+
+@pytest.mark.parametrize(
+    "env",
+    [
+        {"NOT A KEY": "private-test-value"},
+        {"MPA_AGENT_ID": "private-test-value"},
+        {"AGENTKIT_RUNTIME_ID": "private-test-value"},
+        {"AGENTKIT_TOOL_ID": "private-test-value"},
+        {"SKILL_SPACE_ID": "private-test-value"},
+        {"CODEX_MCP_RUNTIME_API_KEY": "private-test-value"},
+        {"SHARED_APIG_DATABASE_URL": "private-test-value"},
+        {"DEPLOYMENT_DATABASE_ADMIN_URL": "private-test-value"},
+        {"FEISHU_APP_SECRET": "private-test-value"},
+        {"SETTING": 123},
+        [],
+    ],
+)
+def test_worker_environment_validation_is_safe(tmp_path, monkeypatch, env):
+    with pytest.raises(ConfigurationError) as error:
+        load_profile(
+            profile_file(
+                tmp_path, monkeypatch, worker={"image": "worker:v1", "env": env}
+            )
+        )
+    assert "private-test-value" not in str(error.value)
+
+
+def test_existing_worker_rejects_ignored_environment(tmp_path, monkeypatch):
+    with pytest.raises(ConfigurationError):
+        load_profile(
+            profile_file(
+                tmp_path,
+                monkeypatch,
+                worker={"existing-id": "t-worker", "env": {"SETTING": "value"}},
             )
         )
 

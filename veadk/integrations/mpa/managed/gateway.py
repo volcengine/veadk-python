@@ -91,6 +91,7 @@ class SharedAPIGService:
                                 "AccessDenied",
                                 "Unauthorized",
                                 "LimitExceeded",
+                                "ExceededQuota",
                             )
                         ):
                             record["create_requested"] = False
@@ -154,6 +155,7 @@ class SharedAPIGService:
                             "AccessDenied",
                             "Unauthorized",
                             "LimitExceeded",
+                            "ExceededQuota",
                         )
                     ):
                         record["im_create_requested"] = False

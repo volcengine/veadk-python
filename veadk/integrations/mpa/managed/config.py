@@ -40,6 +40,22 @@ from .studio_profile import studio_profile_values
 
 ADMIN_DATABASE_NAME = "mpa_admin_db"
 ADMIN_WORKSPACE_NAME = "mpa_admin_workspace"
+WORKER_RESERVED_ENV_KEYS = frozenset(
+    {
+        "MPA_AGENT_ID",
+        "AGENTKIT_RUNTIME_ID",
+        "AGENTKIT_TOOL_ID",
+        "AGENTKIT_TOOL_REGION",
+        "SKILL_SPACE_ID",
+        "CODEX_MCP_RUNTIME_API_KEY",
+        "A2A_PUBLIC_URL",
+        "FEISHU_APP_ID",
+        "FEISHU_APP_SECRET",
+        "CHANNEL_STATE_ENCRYPTION_KEY",
+        "DEPLOYMENT_DATABASE_ADMIN_URL",
+        "SHARED_APIG_DATABASE_URL",
+    }
+)
 STUDIO_MPA_IDENTITY_FIELDS = (
     ("VEADK_STUDIO_MPA_USER_POOL_NAME", "user_pool_name", "MPA_USER_POOL_NAME"),
     (
@@ -197,6 +213,7 @@ class Worker(Options):
     image: str = ""
     reference_id: str = ""
     role_name: str = "IDRoleForArkClawShareAgent"
+    env: dict[str, str] = Field(default_factory=dict, repr=False)
     tos_access_key: str = Field(default="", repr=False)
     tos_secret_key: str = Field(default="", repr=False)
     tos_bucket: str = ""
@@ -210,6 +227,17 @@ class Worker(Options):
     def strip_tos_values(cls, value: str) -> str:
         return value.strip()
 
+    @field_validator("env")
+    @classmethod
+    def validate_environment(cls, value: dict[str, str]) -> dict[str, str]:
+        if any(
+            not re.fullmatch(r"[A-Z_][A-Z0-9_]*", key)
+            or key in WORKER_RESERVED_ENV_KEYS
+            for key in value
+        ):
+            raise ValueError("Invalid or provisioner-owned worker environment key")
+        return value
+
     @model_validator(mode="after")
     def validate_source(self):
         if bool(self.existing_id) == bool(self.image):
@@ -219,6 +247,8 @@ class Worker(Options):
             raise ValueError("TOS access key, secret key, and bucket are all required")
         if self.existing_id and all(tos_values):
             raise ValueError("TOS mount settings require a newly created worker")
+        if self.existing_id and self.env:
+            raise ValueError("Environment settings require a newly created worker")
         return self
 
 
@@ -317,11 +347,32 @@ class PostgresWorkspaces(Options):
         return self
 
 
+class Iam(Options):
+    mode: Literal["existing", "auto"] = "existing"
+
+
+class ModelKey(Options):
+    mode: Literal["explicit", "ark"] = "explicit"
+    api_key_id: str = Field(default="", max_length=128, pattern=r"^[A-Za-z0-9_-]*$")
+    api_key_name: str = Field(default="", max_length=128)
+    project_name: str = Field(default="default", min_length=1, max_length=128)
+
+    @model_validator(mode="after")
+    def validate_selection(self):
+        if self.api_key_id and self.api_key_name:
+            raise ValueError("Choose an Ark API Key ID or name, not both")
+        if self.mode == "explicit" and (self.api_key_id or self.api_key_name):
+            raise ValueError("Ark API Key selectors require ark mode")
+        return self
+
+
 class Managed(Options):
     version: Literal[1]
     database_admin_url_env: str = "DEPLOYMENT_DATABASE_ADMIN_URL"
     shared_database_url_env: str = "SHARED_APIG_DATABASE_URL"
     postgres: PostgresWorkspaces | None = None
+    iam: Iam = Field(default_factory=Iam)
+    model_key: ModelKey = Field(default_factory=ModelKey)
     credential_file: str = ""
     from_runtime: str = ""
     template_file: str = ""
@@ -335,6 +386,17 @@ class Managed(Options):
     def validate_source(self):
         if self.from_runtime and self.template_file:
             raise ValueError("Choose one template source")
+        if self.iam.mode == "auto":
+            from .iam import ROLE_NAME
+
+            if (
+                self.from_runtime
+                or self.template_file
+                or self.worker.existing_id
+                or self.worker.role_name != ROLE_NAME
+                or self.runtime.role_name not in (None, ROLE_NAME)
+            ):
+                raise ValueError("Automatic IAM requires fresh default MPA roles")
         return self
 
 
@@ -347,6 +409,12 @@ class Profile:
     admin_url: str
     shared_url: str
     openviking_enabled: bool | None = None
+
+    @property
+    def provider(self):
+        from veadk.utils.cloud_provider import normalize_cloud_provider
+
+        return normalize_cloud_provider(self.values.get("cloud_provider"))
 
     def image_defaults(self):
         runtime_image = self.managed.runtime.image or (
@@ -568,16 +636,18 @@ def _read_configuration_file(path: Path, *, template: bool = False) -> str:
         ) from None
 
 
-def load_studio_profile(*, region: str = "") -> Profile:
+def load_studio_profile(*, region: str = "", provider: str = "volcengine") -> Profile:
     """Load the code-owned Studio profile without a configuration file."""
-    return load_profile(None, region=region)
+    return load_profile(None, region=region, provider=provider)
 
 
-def load_profile(path: str | Path | None, *, region: str = "") -> Profile:
+def load_profile(
+    path: str | Path | None, *, region: str = "", provider: str = "volcengine"
+) -> Profile:
     try:
         file = Path(path) if path is not None else None
         if file is None:
-            values = studio_profile_values()
+            values = studio_profile_values(provider)
         else:
             try:
                 values = yaml.safe_load(_read_configuration_file(file))
@@ -594,9 +664,15 @@ def load_profile(path: str | Path | None, *, region: str = "") -> Profile:
             isinstance(managed_values.get("postgres"), dict)
             and managed_values["postgres"].get("mode") == "auto"
         )
+        if "model-key" in managed_values:
+            managed_values["model-key"] = _resolve(managed_values["model-key"])
+        elif "model_key" in managed_values:
+            managed_values["model_key"] = _resolve(managed_values["model_key"])
         worker_values = managed_values.get("worker")
         if isinstance(worker_values, dict):
             worker_values = dict(worker_values)
+            if "env" in worker_values:
+                worker_values["env"] = _resolve(worker_values["env"])
             flat_tos = _resolve(
                 {
                     key: values.get(key, "")
@@ -628,8 +704,20 @@ def load_profile(path: str | Path | None, *, region: str = "") -> Profile:
             and managed.postgres is not None
             and managed.postgres.legacy_urls == "ignore"
         )
+        from veadk.utils.cloud_provider import normalize_cloud_provider
+
+        selected_provider = normalize_cloud_provider(
+            values.get("cloud-provider", "volcengine")
+        )
+        if selected_provider != normalize_cloud_provider(provider):
+            raise ConfigurationError("Configuration belongs to another cloud provider")
         selected = str(values.get("region", "cn-beijing"))
-        if not re.fullmatch(r"cn-[a-z]+", selected) or region and selected != region:
+        valid_region = (
+            selected == "ap-southeast-1"
+            if selected_provider == "byteplus"
+            else bool(re.fullmatch(r"cn-[a-z]+", selected))
+        )
+        if not valid_region or region and selected != region:
             raise ConfigurationError("No managed configuration for the selected region")
         NetworkOptions(
             managed.network.vpc_cidr,
@@ -700,6 +788,30 @@ def load_profile(path: str | Path | None, *, region: str = "") -> Profile:
                 and not (auto and str(k).replace("-", "_").startswith("pg_"))
             }
         )
+        if managed.model_key.mode == "ark":
+            if (
+                template
+                or managed.from_runtime
+                or values.get("model_api_key")
+                or values.get("model_provider") != "openai"
+                or str(values.get("model_api_base", "")).rstrip("/")
+                != (
+                    "https://ark.ap-southeast.bytepluses.com/api/v3"
+                    if selected_provider == "byteplus"
+                    else f"https://ark.{selected}.volces.com/api/v3"
+                )
+                or any(
+                    key in managed.runtime.env
+                    for key in (
+                        "MODEL_AGENT_API_KEY",
+                        "MODEL_AGENT_PROVIDER",
+                        "MODEL_AGENT_API_BASE",
+                    )
+                )
+            ):
+                raise ConfigurationError(
+                    "Ark key discovery requires a fresh Ark model configuration without key overrides"
+                )
         reuse_studio_identity(values, managed.runtime.env)
         if not template and not managed.from_runtime:
             for key in (
@@ -712,6 +824,8 @@ def load_profile(path: str | Path | None, *, region: str = "") -> Profile:
                 "model_api_key",
                 "model_name",
             ):
+                if key == "model_api_key" and managed.model_key.mode == "ark":
+                    continue
                 if auto and key.startswith("pg_"):
                     continue
                 if key == "image" and managed.runtime.image:

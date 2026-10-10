@@ -103,7 +103,14 @@
       "nextMonth": "下个月",
       "today": "今天",
       "nextOnly": "仅下次",
-      "calendarHint": "日历展示预计执行安排；复杂 Cron 仅显示服务端给出的下一次执行时间。"
+      "calendarHint": "日历展示预计执行安排；复杂 Cron 仅显示服务端给出的下一次执行时间。",
+      "botAccount": "投递机器人",
+      "selectBot": "请选择已启用的投递机器人。",
+      "botsLoading": "正在读取飞书机器人…",
+      "botsFailed": "读取投递机器人失败，请重试。",
+      "botsUnauthorized": "无权读取飞书机器人，请联系管理员配置投递。",
+      "retryBots": "重新读取机器人",
+      "botDisabled": "已停用"
     }
   },
   "actions": {

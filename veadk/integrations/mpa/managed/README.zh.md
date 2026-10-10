@@ -25,6 +25,8 @@ managed:
 
 同一范围的所有 Studio/CLI 进程必须使用**同一协调主机上的同一持久引导文件路径**，重启和重新部署时须保留。私有 SQLite 文件仅保存意图和 ID，不保存密码。任务取消/失败保留资源。创建响应丢失后，重试会发现带标签的 Workspace；结果仍不明确时，应检查 AIDAP 并配置匹配的 ID。不要通过删除状态强制再次创建。确定的 IAM/参数拒绝可修正后重试。不自动删除任何 Workspace。
 
+明确为 `CreateFailed` 的 Workspace 不再永久阻塞后续自动创建请求。流程核验其范围，保留失败云资源，将 ID 单独记录后解除失败绑定。重试可创建替代资源，本次新购买失败不会在同一任务内重复购买。显式 Workspace ID、运行故障和未知结果仍需核查，不能盲目替换。之前已退出的失败资源不能用于授权重发更新的超时请求。参见[恢复规则](../../../../specs/studio-mpa-creation/README.zh.md)的 CON-13。
+
 ### 已有部署切换
 
 旧共享注册库 URL 仍配置时，自动模式默认拒绝创建。如果新建任务可以舍弃旧 MPA 的资源关系，CLI 用户在私有 YAML 中设置 `managed.postgres.legacy-urls: ignore`；Studio 内置配置已采用该设置。即使 Studio 进程环境仍有 `SHARED_APIG_DATABASE_URL` 和 `DEPLOYMENT_DATABASE_ADMIN_URL`，该配置也不读取它们。新智能体从全新的管理与业务 Workspace 开始；旧智能体、数据库、Runtime 连接和记录都不修改或删除。不要用该设置以相同智能体 ID 继续未完成的旧创建任务。
@@ -47,9 +49,18 @@ Studio 不固定已有 VPC/子网/APIG ID。准备 PostgreSQL 后，按核验后
 在部署 Runtime 前创建并保存，后续智能体复用相同记录。账号锁和持久化创建意图
 保护并发请求及重试，避免重复创建。
 
+新网关采用标准型、两个 1c2g 节点、small_1 CLB、公私网接入和 traffic 计费。
+部署凭据需要 `apig:GetGatewayAvailableZones`。服务查询 APIG 支持的可用区，
+复用或创建同 VPC、不同受支持可用区的两个子网；缺失的伴随子网独立保存请求/token。
+保留已有登记/接管网关和 Runtime 网络选择，新 Runtime 使用准备好的子网。
+`ExceededQuota` 是明确拒绝，修正后可重试；未知结果仍须先查询恢复。
+历史未知标记需经过审计、限定范围后修复。
+
 已有记录（包括此前接管的资源）保持不变。本次不迁移已有智能体，也不替换配额
 耗尽的 VPC。配额或权限错误仍报告失败；提高配额或迁移共享网络属于独立操作。
 重启本地 Studio（云端则重新部署）后加载新默认配置。CLI 显式网络/APIG 接管仍受支持。
+
+AgentKit 返回的 Runtime 子网 ID 顺序可能不同。创建和重试接受成员相同且无重复的选择；实际成员、VPC 或共享公网出口变化仍视为迁移错误。重试保留原请求或成员一致的注册顺序，包括已有待完成请求的哈希。更新 VeADK 后，对因顺序误判停止的任务使用同一智能体 ID 和原始输入重试即可；不要删除记录或重建资源。
 
 ## CLI YAML 与手动 / 旧模式服务端配置
 
@@ -59,13 +70,13 @@ Studio 不固定已有 VPC/子网/APIG ID。准备 PostgreSQL 后，按核验后
 4. 使用轮换的 `managed.credential-file`，或 `VOLCENGINE_ACCESS_KEY` / `VOLCENGINE_SECRET_KEY` 与可选 `VOLCENGINE_SESSION_TOKEN` 配置部署凭据。没有显式文件和环境密钥对时，使用挂载的 `/var/run/secrets/iam/credential`。每次云调用刷新凭据；Runtime、VPC、worker、APIG 使用同一经核验账号。
 5. 选择一个模板来源：`managed.from-runtime`、私有 JSON `managed.template-file`，或平铺的镜像/模型/PostgreSQL 字段。参考实例模式会移除智能体专属渠道凭据和 Skill Space 身份。通过 `managed.worker.image` 创建专属 worker（可选 `reference-id` 复用 worker 环境配置），或在核验兼容性后显式使用 `existing-id`。
 6. PostgreSQL 使用私网地址时，设置可访问它的 `managed.network.vpc-id` 和 `subnet-ids`。自动创建网络**不会**配置数据库白名单、对等连接或跨 VPC 路由。显式 `managed.apig.adopt-id` 要求提供该 VPC ID 且网关兼容；否则复用或创建账号登记的网关。
-7. CLI 通过 `--config` 显式传入私有 YAML。Studio 不读取该文件或 `VEADK_MPA_CREATE_CONFIG`；它使用代码内置的北京地域配置，服务端环境仍须提供 `VEADK_MPA_CONFIG_MODEL_AGENT_API_KEY` 与部署 STS 凭据。Studio 选择其他地域时返回配置错误。
+7. CLI 通过 `--config` 显式传入私有 YAML。Studio 不读取该文件或 `VEADK_MPA_CREATE_CONFIG`；它使用代码内置的北京地域配置，服务端环境须提供部署 AK/SK 或 STS 凭据，创建时自动发现该账号的现有方舟模型 Key。Studio 选择其他地域时返回配置错误。
 
 部署身份需要 AgentKit Runtime、Skill Space、Tool、VPC/子网、APIG/IM Gateway 及 `GetCallerIdentity` 操作权限。Runtime/worker 角色还须单独拥有对应镜像所需权限和挂载凭据。IAM 策略、PostgreSQL 云实例、模型服务和网络连通性由运维准备，不会自动创建。
 
 ## 在 Studio 使用
 
-新执行 `veadk studio deploy` 后，托管创建会从服务端 VeFaaS 环境自动复用该 Studio 的 UserPool、客户端、Identity 地域和 `/oauth/callback`。Studio 无需创建 YAML，直接使用代码内置的北京地域账号、Runtime/worker 镜像及模型默认值；模型 API Key 仍从 `VEADK_MPA_CONFIG_MODEL_AGENT_API_KEY` 读取。独立 CLI YAML 若显式填写不同的 `user-pool-name`、`user-pool-client-name`、`identity-callback-url`、`identity-region` 或对应的 `managed.runtime.env` 值，配置检查会在云写入前失败。此前部署的 Studio 须重新部署才能获得这些值。没有 Studio 环境值的独立 `veadk mpa provision` 仍使用显式 YAML。共享 PostgreSQL Workspace 在后续创建 MPA 时才准备，并非部署时的 Identity 存储。
+新执行 `veadk studio deploy` 后，托管创建会从服务端 VeFaaS 环境自动复用该 Studio 的 UserPool、客户端、Identity 地域和 `/oauth/callback`。Studio 无需创建 YAML，直接使用代码内置的北京地域 Runtime/worker 镜像及模型默认值，部署账号来自 STS；模型 API Key 在创建时使用部署凭据读取（见下文方舟 Key 自动发现）。独立 CLI YAML 若显式填写不同的 `user-pool-name`、`user-pool-client-name`、`identity-callback-url`、`identity-region` 或对应的 `managed.runtime.env` 值，配置检查会在云写入前失败。此前部署的 Studio 须重新部署才能获得这些值。没有 Studio 环境值的独立 `veadk mpa provision` 仍使用显式 YAML。共享 PostgreSQL Workspace 在后续创建 MPA 时才准备，并非部署时的 Identity 存储。
 
 选择**智能体 → MPA 智能体 → 创建 MPA 智能体**。三步依次填写基础信息、PostgreSQL 自动准备说明，以及可选的 OpenViking 服务地址/资源 ID/API Key。填写 Runtime 名称（4–64 个 ASCII 字母、数字、下划线或连字符）。服务端生成智能体 ID 并注入 Agent 和 Worker，不再显示 ID 输入框。新创建使用 `agentkit-platform-2112682748-cn-beijing.cr.volces.com/mpa/mpa_agent:latest` 和 `agentkit-platform-2112682748-cn-beijing.cr.volces.com/mpa/mpa_codex_worker:latest`，不再显示镜像输入框。已提交任务重试保留原镜像选择。已有 Runtime 不会被重命名或自动升级。PG 步骤提供[火山引擎 AIDAP 控制台](https://console.volcengine.com/aidap/region:aidap+cn-beijing/)入口；服务端在提交后取得 Workspace 连接。OpenViking 步骤提供[上下文管理控制台](https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing/ov-6689fabdf032294/context-management?accountId=default&userId=default&projectName=default)入口；该页面地址不是要填写的服务地址。PG 凭据仍由服务端配置。同时填写 OpenViking 地址、资源 ID 和遮罩的 API Key 时，注入 `OPENVIKING_URL`、`OPENVIKING_RESOURCE_ID`、`OPENVIKING_API_KEY` 和 `OPENVIKING_USER=default`。三项全空时不注入这些变量，模板或参考 Runtime 中的旧值也不会继承。密钥不保存到浏览器草稿或任务 SQLite，浏览器重启后须重新填写。查看资源计划后在第三步提交。流程依次准备账号网络/APIG/IM Gateway、worker、独立业务库和 Skill Space，然后部署并检查 Runtime 和应用就绪状态。成功后刷新列表。
 
@@ -225,4 +236,58 @@ Flat 创建默认设置 `ENABLE_A2A=true` 和 `DISABLE_JWT_AUTH=true`。绕过�
 
 ### 托管沙箱模板命名
 
-新托管沙箱模板使用去掉两端空白、将所有 `-` 替换为 `_` 的智能体 ID（例如 `mi-example` → `mi_example`）。已有 worker ID 仍为权威绑定，不重命名。变更前未完成的创建意图，仅在完整旧请求与已存 worker_hash 匹配时保留哈希名称，并保留 ClientToken。其他请求变更和无关同名资源仍报错。作用域所有权标签及 Runtime ToolId 绑定不变。
+新的 Studio 名称请求直接使用经过校验的手填 Runtime 名称作为沙箱模板 Name（4–64 个 ASCII 字母、数字、连字符或下划线）。未提供名称的旧 CLI 请求仍使用去除首尾空白、将 `-` 替换为 `_` 的智能体 ID。内部智能体 ID、数据库/技能空间/渠道标识、作用域归属标签及 Runtime ToolId 绑定不变。已有 worker ID 为权威绑定，不重命名。新的未完成意图在部署 JSON 中保存 `worker_name`，拒绝后续名称变化。没有该字段的旧意图，仅在完整候选请求与已存 worker_hash 匹配时重放标准化 ID 名称或哈希名称，保留 ClientToken。其他请求变化及无关同名资源仍报错。
+
+### 自动准备 MPA 运行角色
+
+内置 Studio 在准备资源之前，在核验的部署账号下准备 `IDRoleForArkClawShareAgent`。复用兼容角色并补齐已批准策略绑定，不替换信任或策略内容。显式 CLI 配置默认 `managed.iam.mode: existing`；仅全新默认角色配置可通过 `auto` 启用。参见[权限基线与恢复规则](../../../../prd-spec/features/mpa-runtime-iam/2026-10-09-managed-runtime-role.zh.md)。Studio 执行角色除 GetRole/CreateRole/GetPolicy/ListAttachedRolePolicies/AttachRolePolicy 外，还需 `iam:CreatePolicy`。使用此能力前，重新部署或更新已有 Studio 执行策略。管理员修复后以同一智能体 ID 重试；取消保留共享 IAM 资源。
+
+### Studio 部署账号
+
+Studio 使用部署凭据经 STS 核验返回的账号，不再要求原镜像仓库账号。新建 Runtime 的角色 TRN 和兼容 Space ID 使用核验账号。显式 YAML 的 `account-id` 仍限制 CLI 部署。默认镜像 URL 和 Worker 参考 ID 保持不变；请确保部署账号可访问它们，或提供可访问的资源。现有 Runtime 不自动迁移。
+
+托管网络描述使用符合服务商格式的 `mpa-account-network-v1-<scope hash>`。旧意图仅描述不同且明确被拒绝、无资源时，重试自动修正；变化的请求体使用新 token。保留已有范围资源。结果不确定时必须先查询，不触发重复创建。
+
+### 不依赖参考模板的 Worker
+
+内置 Studio 使用已配置 Worker 镜像提供的启动设置，不重复注入端口/模式/目录环境变量，不再读取旧账号的 Tool。部署账号仍须有镜像访问权限。重启 Studio 加载修改后的默认值，再重试尚未开始 Worker 创建就失败的智能体。已发送请求保留原载荷/token；不要重置注册库中的意图。
+
+私有 CLI 配置可以直接指定启动值：
+
+```yaml
+managed:
+  worker:
+    image: registry.example/agentkit/mpa_codex_worker:release-tag
+    env:
+      MPA_RUNTIME_PROFILE: codex-headless
+      MPA_AIO_ENTRYPOINT_MODE: minimal
+      CUSTOM_SETTING: ${WORKER_CUSTOM_SETTING}
+```
+
+`managed.worker.env` 接受大写字符串键及完整服务端环境变量引用，覆盖可选且可访问 `reference-id` 中已过滤的环境设置。智能体/Runtime/Tool/技能空间绑定、继承的渠道/Runtime 凭据及控制库地址为保留字段。显式参考模板缺失仍报错。`existing-id` 不允许环境设置，因为不会更新已有 Tool。密钥不进入配置摘要/repr 或部署记录；使用服务端引用，不提交实际值。模型凭据由 Runtime 按会话下发，不从旧 Tool 复制。
+
+新的名称 MPA 部署使用 `Skills for MPA agent <runtime_name>` 作为技能空间描述，便于在云控制台辨认手填名称。生成的空间 Name、display_name 标签、内部智能体 ID 及绑定保持不变。已有空间保留原描述；升级前待完成请求按原描述准确恢复，其他输入变化仍报错。不提供 Runtime 名称的调用保留内部 ID 描述。
+
+## 方舟模型 Key 自动发现
+
+内置 Studio 不再读取 `VEADK_MPA_CONFIG_MODEL_AGENT_API_KEY`。部署凭据保留在私有环境或挂载凭据源中，不提交到仓库。当前部署账号需要 `ark:ListApiKeys` 和 `ark:GetRawApiKey` 权限，以及 `default` 项目下现有可用的方舟 Key。模型开通、模型访问权限和 Key IP 限制必须允许 Runtime 推理。不自动创建 Key。
+
+没有选择器时，多个候选 Key 自动按创建时间选最新；只有一个候选时直接使用。服务端只读取选中 Key 的明文，向 Runtime 注入 `MODEL_AGENT_API_KEY`。可选的 `VEADK_MPA_ARK_API_KEY_ID` 或 `VEADK_MPA_ARK_API_KEY_NAME` 优先按精确 ID/名称选择（不是密钥）。有状态时排除非 Active，兼容缺少 Status 的旧响应。最新选择接受 CreateTime（兼容 CreatedAt/CreationTime）、Unix 秒/毫秒或带时区 ISO 8601；同时间选择字符串 ID 字典序最大者。多个候选时间缺失/异常、无匹配、显式名称重名或鉴权/网络失败，在 checking 阶段停止。不使用掩码或任意第一项。重试仍由请求哈希拒绝凭据变化，包括部分部署期间出现更晚创建的 Key。
+
+独立 CLI 配置默认保留显式 `model-api-key`。全新方舟配置可以改为省略该字段，并配置：
+
+```yaml
+managed:
+  model-key:
+    mode: ark
+    project-name: default
+    api-key-id: "<KEY_ID>"  # 可选；省略则选择最新候选 Key。
+```
+
+Ark 模式要求 `model-provider: openai` 和所选地域方舟 `/api/v3/` 地址；拒绝引用 Runtime/模板来源及模型 Key/provider/base 环境覆盖。明文不进入配置/任务响应、本地 bootstrap/任务存储或日志。Runtime 环境配置包含 Key，须保护访问权限。使用内置自动创建时可以移除 `.env` 里旧创建模型 Key 与 `VEADK_MPA_CONFIG_PGPASSWORD` 赋值，保留其他启动配置和部署凭据。其他 CLI 配置仍可使用其显式引用的环境变量。
+
+### BytePlus 托管创建 MPA
+
+在服务端进程中设置 `BYTEPLUS_ACCESS_KEY` / `BYTEPLUS_SECRET_KEY`，使用 `uv run veadk studio --provider byteplus --open` 启动。MPA 创建目前面向 `ap-southeast-1`，沿用三步表单及共享管理/业务 Workspace 布局。平台由服务端决定，不复用国内凭据及恢复文件。角色部署时，显式设置 `VEADK_MPA_BYTEPLUS_CREDENTIAL_FILE` 指向轮转凭据文件。默认模型为现有海外 Studio ModelArk 模型；方舟 Key 发现要求海外 ListApiKeys/GetRawApiKey 权限及一个已有可用 Key。
+
+目前没有海外默认镜像，仍使用现有公开 MPA/Worker 镜像，可通过服务端 `VEADK_MPA_BYTEPLUS_RUNTIME_IMAGE` / `VEADK_MPA_BYTEPLUS_WORKER_IMAGE` 覆盖；海外拉取及镜像兼容性需实际创建验证。`VEADK_MPA_BYTEPLUS_AIDAP_HOST` 可选指定部署对应的 AIDAP 主机名。服务开通、IAM 策略/API 可用性、配额及模型访问是账号前置条件；表单配置就绪不能证明这些资源可用。海外服务缺失时显式失败，不回退火山引擎。火山引擎默认配置及通用智能体聊天保持不变。

@@ -37,22 +37,27 @@ from veadk.integrations.mpa.managed.config import (
     ConfigurationError,
     load_studio_profile,
     validate_creation_resources,
+    validate_creation_tos,
     validate_image_reference,
     validate_runtime_name,
-    validate_creation_tos,
     with_creation_images,
     with_creation_resources,
     with_creation_tos,
 )
-from veadk.integrations.mpa.managed.credentials import load_volcengine_credentials
+from veadk.integrations.mpa.managed.credentials import (
+    load_provider_credentials,
+    load_volcengine_credentials,
+)
 from veadk.integrations.mpa.managed.tasks import CreationTasks, TaskError, owner_key
 
 
-def _studio_task_path() -> Path:
+def _studio_task_path(provider="volcengine") -> Path:
     return Path(
         os.getenv(
             "VEADK_MPA_TASK_DB",
-            "/tmp/veadk-studio/mpa-creation.sqlite3",
+            "/tmp/veadk-studio/mpa-creation-byteplus.sqlite3"
+            if provider == "byteplus"
+            else "/tmp/veadk-studio/mpa-creation.sqlite3",
         )
     )
 
@@ -63,7 +68,7 @@ class CreationRequest(BaseModel):
     agentId: str = Field(default="", pattern=r"^[a-z0-9][a-z0-9_-]{0,63}$")
     name: str = ""
     description: str = Field(default="", max_length=512)
-    region: str = Field(pattern=r"^cn-[a-z]+$", max_length=32)
+    region: str = Field(pattern=r"^(cn-[a-z]+|ap-southeast-1)$", max_length=32)
     runtimeImage: str = Field(default="", max_length=1024)
     workerImage: str = Field(default="", max_length=1024)
     pgHost: str = Field(default="", max_length=255)
@@ -95,26 +100,36 @@ class CreationRequest(BaseModel):
 
 
 def mount_mpa_creation_routes(
-    app: FastAPI, *, owner, service: CreationTasks | None = None, supported=True
+    app: FastAPI,
+    *,
+    owner,
+    service: CreationTasks | None = None,
+    supported=True,
+    provider="volcengine",
 ):
     tasks = service
 
     def get_tasks():
         nonlocal tasks
         if tasks is None:
-            task_path = _studio_task_path()
+            task_path = _studio_task_path(provider)
             tasks = CreationTasks(task_path)
         return tasks
 
     def profile(region):
         if not supported:
-            raise ConfigurationError("MPA creation requires the Volcengine provider")
-        result = load_studio_profile(region=region)
+            raise ConfigurationError("MPA creation is unavailable for this provider")
+        result = load_studio_profile(region=region, provider=provider)
         try:
-            load_volcengine_credentials(result.managed.credential_file)
+            if provider == "volcengine":
+                load_volcengine_credentials(result.managed.credential_file)
+            else:
+                load_provider_credentials(provider, result.managed.credential_file)
         except ValueError:
             raise ConfigurationError(
-                "Configure server deployment credentials"
+                "Configure server BytePlus deployment credentials (BYTEPLUS_ACCESS_KEY/BYTEPLUS_SECRET_KEY or VEADK_MPA_BYTEPLUS_CREDENTIAL_FILE)"
+                if provider == "byteplus"
+                else "Configure server deployment credentials"
             ) from None
         return None, result
 
@@ -143,6 +158,8 @@ def mount_mpa_creation_routes(
         try:
             path, config = profile(body.region)
             payload = body.model_dump(mode="json")
+            if provider == "byteplus":
+                payload["provider"] = provider
             if not payload["agentId"]:
                 payload["agentId"] = (
                     "mi-"

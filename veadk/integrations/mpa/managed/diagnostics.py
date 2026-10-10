@@ -17,15 +17,15 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
-import logging
 from typing import TypeVar
 
+import requests
 from agentkit.auth.errors import AuthError, NetworkError
 from agentkit.toolkit.errors import ApiError
-import requests
 
 from .database import DeploymentError
 
@@ -52,6 +52,8 @@ CATEGORIES = {
     "protocol_error",
 }
 OPERATIONS = {
+    "list_model_keys",
+    "get_model_key",
     "get_reference_worker",
     "find_worker",
     "create_worker",
@@ -90,6 +92,12 @@ CODE_CATEGORIES = {
     "RequestTimeout": "timeout",
 }
 DEPLOYMENT_CATEGORIES = {
+    "iamPermissionDenied": "permission",
+    "iamTrustConflict": "ownership",
+    "iamPolicyConflict": "ownership",
+    "iamOwnershipConflict": "ownership",
+    "iamVerificationFailed": "resource_failed",
+    "iamConfigurationConflict": "configuration_changed",
     "Worker ownership metadata is incomplete": "metadata_missing",
     "Worker ownership does not match this agent": "ownership",
     "Worker is missing or belongs to another project": "ownership",

@@ -22,9 +22,38 @@ import ipaddress
 import time
 import uuid
 from dataclasses import dataclass
+from types import SimpleNamespace
 
 from veadk.integrations.mpa.managed.database import DeploymentError
 from veadk.integrations.mpa.managed.network_cloud import NetworkCloudError
+from veadk.integrations.mpa.managed.provider import region_contains_zone
+
+
+def same_subnet_ids(first: object, second: object) -> bool:
+    """Compare valid subnet selections without depending on provider ordering."""
+    if not isinstance(first, list) or not isinstance(second, list):
+        return False
+    for selection in (first, second):
+        if (
+            not 1 <= len(selection) <= 5
+            or any(not isinstance(sid, str) or not sid.strip() for sid in selection)
+            or len(set(selection)) != len(selection)
+        ):
+            return False
+    return set(first) == set(second)
+
+
+def vpc_configuration_matches(actual: dict, requested: dict) -> bool:
+    """Check supplied immutable network fields, treating subnets as members."""
+    for key in ("VpcId", "SubnetIds", "EnableSharedInternetAccess"):
+        if key not in requested:
+            continue
+        if key == "SubnetIds":
+            if not same_subnet_ids(actual.get(key), requested[key]):
+                return False
+        elif actual.get(key) != requested[key]:
+            return False
+    return True
 
 
 @dataclass(frozen=True)
@@ -79,7 +108,8 @@ class AccountNetworkProvisioner:
         self.timeout, self.interval = timeout, interval
         suffix = hashlib.sha256(f"{account}:{region}".encode()).hexdigest()[:20]
         self.name = f"mpa-network-{suffix}"
-        self.marker = f"mpa-account-network:v1:{suffix}"
+        self.marker = f"mpa-account-network-v1-{suffix}"
+        self.legacy_marker = f"mpa-account-network:v1:{suffix}"
 
     async def _wait(self, fetch, resource_id, kind):
         deadline = time.monotonic() + self.timeout
@@ -107,14 +137,6 @@ class AccountNetworkProvisioner:
 
     async def _create(self, entry, record, kind, request, matches):
         intent = kind + "_request"
-        if (
-            record.get(intent)
-            and {k: v for k, v in record[intent].items() if k != "client_token"}
-            != request
-        ):
-            raise DeploymentError(
-                f"Unfinished {kind} creation has different inputs; resume its original configuration"
-            )
         # Verify resources found by stable name. Never take over an arbitrary VPC.
         matches = [
             r for r in matches if r.get(f"{kind}_name") == request[f"{kind}_name"]
@@ -123,12 +145,40 @@ class AccountNetworkProvisioner:
             raise DeploymentError(
                 f"Multiple managed {kind} resources found; reconcile before continuing"
             )
+        previous = {
+            k: v for k, v in record.get(intent, {}).items() if k != "client_token"
+        }
+        if previous and previous != request:
+            legacy = {**request, "description": self.legacy_marker}
+            if previous != legacy:
+                raise DeploymentError(
+                    f"Unfinished {kind} creation has different inputs; resume its original configuration"
+                )
+            resource = record.get("vpc_id" if kind == "vpc" else "subnet_ids")
+            if (
+                record.get(kind + "_dispatched") is False
+                and not resource
+                and not matches
+            ):
+                # A changed body needs a fresh token, only after definite rejection.
+                record[intent] = {**request, "client_token": str(uuid.uuid4())}
+            elif matches:
+                request = previous
+            else:
+                raise DeploymentError(
+                    f"{kind} creation outcome unknown; retry discovery; no duplicate create issued"
+                )
         if matches:
             row = matches[0]
             fields = ("description", "cidr_block") + (
                 ("vpc_id", "zone_id") if kind == "subnet" else ()
             )
-            if any(row.get(k) != request[k] for k in fields):
+            if any(
+                row.get(k) not in {self.marker, self.legacy_marker}
+                if k == "description"
+                else row.get(k) != request[k]
+                for k in fields
+            ):
                 raise DeploymentError(
                     f"{kind} name exists without matching network ownership/configuration"
                 )
@@ -155,6 +205,139 @@ class AccountNetworkProvisioner:
                 await entry.save(record)
             raise
 
+    def _free_cidr(self, vpc, subnets):
+        try:
+            block = ipaddress.IPv4Network(vpc["cidr_block"])
+            occupied = [ipaddress.IPv4Network(s["cidr_block"]) for s in subnets]
+            return next(
+                str(n)
+                for n in block.subnets(new_prefix=self.options.subnet_prefix)
+                if not any(n.overlaps(other) for other in occupied)
+            )
+        except (ValueError, KeyError, StopIteration):
+            raise DeploymentError(
+                "No free subnet CIDR in VPC; choose a suitable subnet prefix or existing subnet"
+            ) from None
+
+    async def gateway_network(self, entry, network, available_zones):
+        """Prepare standard APIG subnets while the caller holds the account lock."""
+        if (
+            not isinstance(available_zones, list)
+            or any(
+                not region_contains_zone(
+                    self.region, zone, getattr(self.cloud, "provider", "volcengine")
+                )
+                for zone in available_zones
+            )
+            or len(set(available_zones)) != len(available_zones)
+            or len(available_zones) < 2
+        ):
+            raise DeploymentError("APIG requires at least two valid available zones")
+        config = dict(network["VpcConfiguration"])
+        vpc_id = config["VpcId"]
+        record = await entry.read()
+        if record.get("vpc_id") != vpc_id:
+            raise DeploymentError("APIG network differs from the registered VPC")
+        vpc = await self._wait(self.cloud.vpc, vpc_id, "vpc")
+        rows = await self.cloud.subnets(vpc_id)
+        # DescribeSubnets may lag behind a ready GetSubnet. Reserve all known
+        # primary CIDRs before allocating companions, even if listing is empty.
+        initial = [
+            await self._wait(self.cloud.subnet, sid, "subnet")
+            for sid in config["SubnetIds"]
+        ]
+        if any(row.get("vpc_id") != vpc_id for row in initial):
+            raise DeploymentError("APIG subnet is outside the registered VPC")
+        known = {row["subnet_id"]: row for row in rows + initial}
+        rows = list(known.values())
+        intents = record.setdefault("gateway_subnet_intents", {})
+        recovered = []
+
+        async def companion(zone) -> dict:
+            slot = intents.setdefault(zone, {})
+            intent = slot.get("subnet_request")
+            name = self.name + "-subnet-" + zone
+            cidr = intent["cidr_block"] if intent else self._free_cidr(vpc, rows)
+            try:
+                block = ipaddress.IPv4Network(cidr)
+                if (
+                    block.prefixlen != self.options.subnet_prefix
+                    or not block.subnet_of(ipaddress.IPv4Network(vpc["cidr_block"]))
+                    or any(
+                        block.overlaps(ipaddress.IPv4Network(row["cidr_block"]))
+                        for row in rows
+                        if row.get("subnet_name") != name
+                    )
+                ):
+                    raise ValueError()
+            except (ValueError, KeyError):
+                raise DeploymentError(
+                    "APIG companion subnet CIDR/configuration conflicts; reconcile before continuing"
+                ) from None
+            request = dict(
+                vpc_id=vpc_id,
+                zone_id=zone,
+                cidr_block=cidr,
+                subnet_name=name,
+                description=self.marker,
+            )
+
+            async def save(pending):
+                intents[zone] = pending
+                await entry.save(record)
+
+            subnet_id = await self._create(
+                SimpleNamespace(save=save), slot, "subnet", request, rows
+            )
+            subnet = await self._wait(self.cloud.subnet, subnet_id, "subnet")
+            if subnet.get("vpc_id") != vpc_id or not _available(subnet):
+                raise DeploymentError(
+                    "APIG companion subnet is unavailable/outside VPC"
+                )
+            if subnet.get("zone_id") != zone:
+                raise DeploymentError("APIG companion subnet has a different zone")
+            slot["subnet_ids"] = [subnet_id]
+            await save(slot)
+            return subnet
+
+        # Resolve persisted intents first. Another subnet cannot hide an unknown
+        # dispatch or cause a second create in a different zone on retry.
+        for zone in sorted(intents):
+            if zone not in available_zones:
+                raise DeploymentError("Pending APIG subnet zone is no longer available")
+            subnet = await companion(zone)
+            recovered.append(subnet)
+            rows = [r for r in rows if r["subnet_id"] != subnet["subnet_id"]] + [subnet]
+
+        selected, zones = [], set()
+        for row in initial + recovered + sorted(rows, key=lambda row: row["subnet_id"]):
+            zone = row.get("zone_id")
+            if zone not in available_zones or zone in zones or not _available(row):
+                continue
+            subnet = await self._wait(self.cloud.subnet, row["subnet_id"], "subnet")
+            if (
+                subnet.get("vpc_id") != vpc_id
+                or subnet.get("zone_id") != zone
+                or not _available(subnet)
+            ):
+                raise DeploymentError("APIG subnet identity/network changed")
+            selected.append(subnet["subnet_id"])
+            zones.add(zone)
+            if len(selected) == 2:
+                break
+        for zone in sorted(available_zones):
+            if len(selected) == 2:
+                break
+            if zone in zones:
+                continue
+            subnet = await companion(zone)
+            selected.append(subnet["subnet_id"])
+            zones.add(zone)
+            rows.append(subnet)
+        record["subnet_ids"] = selected
+        await entry.save(record)
+        return {**network, "VpcConfiguration": {**config, "SubnetIds": selected}}
+
     async def ensure(
         self, entry, requested=None, *, current=None, project_name="default"
     ):
@@ -166,6 +349,7 @@ class AccountNetworkProvisioner:
             raise DeploymentError("MPA requires public/private Runtime network access")
         if config.get("SubnetIds") and not config.get("VpcId"):
             raise DeploymentError("SubnetIds require a VpcId")
+        requested_subnets = config.get("SubnetIds")
         if current is not None:
             nets = {
                 n["NetworkType"].lower(): n
@@ -180,13 +364,22 @@ class AccountNetworkProvisioner:
                 raise DeploymentError(
                     "Existing Runtime has no complete VPC network; create a new Runtime for migration"
                 )
-            for key in ("VpcId", "SubnetIds", "EnableSharedInternetAccess"):
-                if key in config and config[key] != active.get(key):
-                    raise DeploymentError(
-                        "Changing the Runtime VPC configuration requires a separate migration"
-                    )
+            if not vpc_configuration_matches(active, config):
+                raise DeploymentError(
+                    "Changing the Runtime VPC configuration requires a separate migration"
+                )
             config = dict(active)
+            if requested_subnets is not None:
+                config["SubnetIds"] = list(requested_subnets)
         record = await entry.read()
+        if (
+            current is not None
+            and requested_subnets is None
+            and same_subnet_ids(config.get("SubnetIds"), record.get("subnet_ids"))
+        ):
+            # Keep the original creation order so provider permutations cannot
+            # change the persisted request hash on same-agent recovery.
+            config["SubnetIds"] = list(record["subnet_ids"])
         gateway = await entry.gateway()
         vpcs = {
             v
@@ -214,7 +407,7 @@ class AccountNetworkProvisioner:
             await entry.save(record)
         vpc = await self._wait(self.cloud.vpc, vpc_id, "vpc")
         if record.get("managed_vpc") and (
-            vpc.get("description") != self.marker
+            vpc.get("description") not in {self.marker, self.legacy_marker}
             or vpc.get("cidr_block") != record["vpc_request"]["cidr_block"]
         ):
             raise DeploymentError(
@@ -259,22 +452,7 @@ class AccountNetworkProvisioner:
                             "Unfinished subnet creation has different prefix; resume its original configuration"
                         )
                 else:
-                    try:
-                        block = ipaddress.IPv4Network(vpc["cidr_block"])
-                        occupied = [
-                            ipaddress.IPv4Network(s["cidr_block"]) for s in subnets
-                        ]
-                        cidr = next(
-                            str(n)
-                            for n in block.subnets(
-                                new_prefix=self.options.subnet_prefix
-                            )
-                            if not any(n.overlaps(other) for other in occupied)
-                        )
-                    except (ValueError, KeyError, StopIteration):
-                        raise DeploymentError(
-                            "No free subnet CIDR in VPC; choose a suitable subnet prefix or existing subnet"
-                        ) from None
+                    cidr = self._free_cidr(vpc, subnets)
                 request = dict(
                     vpc_id=vpc_id,
                     zone_id=zone,
@@ -302,7 +480,12 @@ class AccountNetworkProvisioner:
                     "Subnet is outside the selected VPC or has no available IP addresses"
                 )
             zone = subnet.get("zone_id", "")
-            if not zone.startswith(self.region + "-") or zone in zones:
+            if (
+                not region_contains_zone(
+                    self.region, zone, getattr(self.cloud, "provider", "volcengine")
+                )
+                or zone in zones
+            ):
                 raise DeploymentError(
                     "Subnets must be in this region and in distinct zones"
                 )

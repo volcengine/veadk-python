@@ -12,9 +12,10 @@ vi.mock("../src/adk/client", () => ({
     }
   },
 }));
-vi.mock("react-i18next", () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
-}));
+vi.mock("react-i18next", () => {
+  const t = (key: string) => key;
+  return { useTranslation: () => ({ t }) };
+});
 vi.mock("@openai/apps-sdk-ui/components/Button", () => ({
   Button: ({ color: _c, variant: _v, size: _s, children, ...props }: any) => (
     <button {...props}>{children}</button>
@@ -977,3 +978,329 @@ it.each(["feishu", "wecom", "dingtalk"])(
     ).toBe(true);
   },
 );
+
+const botAccounts = [
+  { channel: "feishu", appId: "bot-a", appName: "Bot A", enabled: true },
+  { channel: "feishu", appId: "bot-b", appName: "Bot B", enabled: true },
+];
+function multiBotFixture(accounts = botAccounts) {
+  request.mockImplementation(async (_ep, path, init) => {
+    if (path === "/capabilities")
+      return {
+        serverSideBinding: true,
+        bindingReady: true,
+        channels: ["feishu", "wecom", "dingtalk"],
+        credentialBindingChannels: ["feishu"],
+        multiBotChannels: ["feishu"],
+        accountScopedPermissions: true,
+      };
+    if (path === "") return { channels: accounts };
+    if (path.includes("/diagnostics")) {
+      if (!path.includes("appId=")) throw new ChannelApiError(409);
+      return {
+        configured: true,
+        appId: new URLSearchParams(path.split("?")[1]).get("appId"),
+        gatewayConfigured: true,
+        routeConfigured: true,
+        missingConfiguration: [],
+        deliveryHealth: "not_observed",
+      };
+    }
+    if (path.startsWith("/chat-permissions") && !init?.method)
+      return {
+        permissions: [
+          {
+            channel: "feishu",
+            appId: "bot-b",
+            chatId: "same-group",
+            chatName: "Shared group",
+          },
+        ],
+      };
+    if (path === "/feishu/bindings/manual")
+      return { status: "BOUND", appId: "bot-c" };
+    return { success: true };
+  });
+}
+async function selectBot(appId: string) {
+  const select = host.querySelector<HTMLSelectElement>(
+    ".runtime-channels-accounts select",
+  )!;
+  expect(select).not.toBeNull();
+  await act(async () => {
+    select.value = appId;
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+}
+it("lists multi-bot accounts and never requests ambiguous diagnostics", async () => {
+  multiBotFixture();
+  await render();
+  expect(host.textContent).toContain("Bot A");
+  expect(host.textContent).toContain("Bot B");
+  expect(host.textContent).toContain("channels.selectAccount");
+  expect(
+    request.mock.calls.some(([, path]) => path.includes("/diagnostics")),
+  ).toBe(false);
+  await selectBot("bot-b");
+  expect(request).toHaveBeenCalledWith(
+    expect.anything(),
+    "/feishu/diagnostics?appId=bot-b",
+    expect.anything(),
+  );
+  expect(request).toHaveBeenCalledWith(
+    expect.anything(),
+    "/chat-permissions?channel=feishu&appId=bot-b",
+    expect.anything(),
+  );
+  expect(host.textContent).not.toContain("channels.uncertain");
+});
+it("scopes permission writes and deletions to the selected bot", async () => {
+  multiBotFixture();
+  await render();
+  await selectBot("bot-b");
+  const input = host.querySelector<HTMLInputElement>(
+    ".runtime-channels-permissions input",
+  )!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      "value",
+    )!.set!.call(input, "group-new");
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  // Submit after React commits the controlled input.
+  await act(async () =>
+    host
+      .querySelector(".runtime-channels-permissions form")!
+      .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })),
+  );
+  const saves = request.mock.calls.filter(
+    ([, path, init]) => path === "/chat-permissions" && init?.method === "POST",
+  );
+  expect(saves).toHaveLength(1);
+  expect(JSON.parse(String(saves[0][2]?.body))).toMatchObject({
+    appId: "bot-b",
+    chatId: "group-new",
+  });
+  await act(async () =>
+    host
+      .querySelector<HTMLButtonElement>(".runtime-channels-remove-group")!
+      .click(),
+  );
+  expect(request).toHaveBeenCalledWith(
+    expect.anything(),
+    "/chat-permissions?channel=feishu&chat_id=same-group&appId=bot-b",
+    expect.objectContaining({ method: "DELETE" }),
+  );
+});
+it("toggles and unbinds only the selected account", async () => {
+  multiBotFixture();
+  vi.stubGlobal("confirm", vi.fn().mockReturnValue(true));
+  await render();
+  await selectBot("bot-b");
+  await click("channels.disableAccount");
+  expect(request).toHaveBeenCalledWith(
+    expect.anything(),
+    "/feishu/accounts/bot-b",
+    expect.objectContaining({ method: "PATCH", body: '{"enabled":false}' }),
+  );
+  await click("channels.unbind");
+  expect(request).toHaveBeenCalledWith(
+    expect.anything(),
+    "?channel=feishu&appId=bot-b",
+    expect.objectContaining({ method: "DELETE" }),
+  );
+  expect(
+    request.mock.calls.some(
+      ([, path, init]) => init?.method === "DELETE" && path.includes("bot-a"),
+    ),
+  ).toBe(false);
+});
+it("adds a bot through the existing form without replacement guidance or deleting another bot", async () => {
+  multiBotFixture();
+  await render();
+  await click("channels.addAccount");
+  await act(async () =>
+    host.querySelector<HTMLInputElement>('input[value="manual"]')!.click(),
+  );
+  await act(async () => {
+    for (const [name, value] of [
+      ["appId", "bot-c"],
+      ["secret", "fake-secret"],
+    ]) {
+      const input = host.querySelector<HTMLInputElement>(
+        `input[name="${name}"]`,
+      )!;
+      Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        "value",
+      )!.set!.call(input, value);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+  });
+  expect(host.textContent).not.toContain("channels.manualReplacement");
+  await act(async () =>
+    host
+      .querySelector("form[data-channel-binding]")!
+      .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })),
+  );
+  expect(request).toHaveBeenCalledWith(
+    expect.anything(),
+    "/feishu/bindings/manual",
+    expect.objectContaining({
+      body: '{"appId":"bot-c","appSecret":"fake-secret"}',
+    }),
+  );
+  expect(
+    request.mock.calls.some(([, , init]) => init?.method === "DELETE"),
+  ).toBe(false);
+  expect(JSON.stringify(sessionStorage)).not.toContain("fake-secret");
+});
+
+it("shows an empty account list without issuing unscoped reads", async () => {
+  multiBotFixture([]);
+  await render();
+  expect(host.textContent).toContain("channels.noAccounts");
+  expect(
+    request.mock.calls.some(
+      ([, path]) =>
+        path.includes("diagnostics") || path.includes("chat-permissions"),
+    ),
+  ).toBe(false);
+  await click("channels.addAccount");
+  expect(host.querySelector('input[value="quick"]')).not.toBeNull();
+  await click("channels.cancelAddAccount");
+  expect(host.querySelector('input[value="quick"]')).toBeNull();
+});
+it("reports a failed account list distinctly and recovers on refresh", async () => {
+  multiBotFixture();
+  const original = request.getMockImplementation()!;
+  request.mockImplementation((ep, path, init) =>
+    path === ""
+      ? Promise.reject(new ChannelApiError(502))
+      : original(ep, path, init),
+  );
+  await render();
+  expect(host.textContent).toContain("channels.accountsFailed");
+  expect(host.textContent).not.toContain("channels.noAccounts");
+  multiBotFixture();
+  await click("common.retry");
+  expect(host.textContent).toContain("Bot B");
+});
+it("requires permission to list accounts and never exposes upstream error bodies", async () => {
+  multiBotFixture();
+  const original = request.getMockImplementation()!;
+  request.mockImplementation((ep, path, init) =>
+    path === ""
+      ? Promise.reject(new ChannelApiError(403))
+      : original(ep, path, init),
+  );
+  await render();
+  expect(host.textContent).toContain("channels.unauthorized");
+});
+it("can enable a disabled account", async () => {
+  multiBotFixture([{ ...botAccounts[0], enabled: false }]);
+  await render();
+  expect(
+    host.querySelector<HTMLSelectElement>(".runtime-channels-accounts select")
+      ?.value,
+  ).toBe("bot-a");
+  await click("channels.enableAccount");
+  expect(request).toHaveBeenCalledWith(
+    expect.anything(),
+    "/feishu/accounts/bot-a",
+    expect.objectContaining({ method: "PATCH", body: '{"enabled":true}' }),
+  );
+});
+it("locks account switching during a write and handles a toggle failure", async () => {
+  multiBotFixture();
+  const original = request.getMockImplementation()!;
+  let failWrite!: (error: unknown) => void;
+  request.mockImplementation((ep, path, init) =>
+    init?.method === "PATCH"
+      ? new Promise((_done, fail) => {
+          failWrite = fail;
+        })
+      : original(ep, path, init),
+  );
+  await render();
+  await selectBot("bot-b");
+  await click("channels.disableAccount");
+  expect(
+    host.querySelector<HTMLSelectElement>(".runtime-channels-accounts select")
+      ?.disabled,
+  ).toBe(true);
+  await act(async () => failWrite(new ChannelApiError(502)));
+  expect(host.textContent).toContain("channels.requestFailed");
+  expect(host.textContent).toContain("Bot A");
+});
+it("aborts an old account diagnostic and ignores its late response", async () => {
+  multiBotFixture();
+  const original = request.getMockImplementation()!;
+  let finish!: (data: unknown) => void;
+  let oldSignal!: AbortSignal;
+  request.mockImplementation((ep, path, init) =>
+    path === "/feishu/diagnostics?appId=bot-a"
+      ? new Promise((done) => {
+          finish = done;
+          oldSignal = init!.signal as AbortSignal;
+        })
+      : original(ep, path, init),
+  );
+  await render();
+  await selectBot("bot-a");
+  await selectBot("bot-b");
+  expect(oldSignal.aborted).toBe(true);
+  await act(async () =>
+    finish({
+      configured: true,
+      appId: "bot-a",
+      appName: "Stale bot",
+      missingConfiguration: [],
+    }),
+  );
+  expect(host.textContent).not.toContain("Stale bot");
+});
+it("does not treat an ambiguous diagnostic as uncertain registration", async () => {
+  multiBotFixture();
+  const original = request.getMockImplementation()!;
+  request.mockImplementation((ep, path, init) =>
+    path.includes("diagnostics")
+      ? Promise.reject(new ChannelApiError(409))
+      : original(ep, path, init),
+  );
+  await render();
+  await selectBot("bot-b");
+  expect(host.textContent).toContain("channels.accountConflict");
+  expect(host.textContent).not.toContain("channels.uncertain");
+});
+it("still blocks uncertain registration when adding a bot", async () => {
+  multiBotFixture();
+  const original = request.getMockImplementation()!;
+  request.mockImplementation((ep, path, init) =>
+    path === "/feishu/bindings"
+      ? Promise.reject(new ChannelApiError(409))
+      : original(ep, path, init),
+  );
+  await render();
+  await click("channels.addAccount");
+  await click("channels.bind");
+  expect(host.textContent).toContain("channels.uncertain");
+});
+it("adds via QR and selects the returned appId", async () => {
+  multiBotFixture();
+  const original = request.getMockImplementation()!;
+  request.mockImplementation((ep, path, init) =>
+    path === "/feishu/bindings"
+      ? Promise.resolve({ ...pending, status: "BOUND", appId: "bot-b" })
+      : original(ep, path, init),
+  );
+  await render();
+  await click("channels.addAccount");
+  await click("channels.bind");
+  expect(
+    host.querySelector<HTMLSelectElement>(".runtime-channels-accounts select")
+      ?.value,
+  ).toBe("bot-b");
+  expect(host.textContent).not.toContain("channels.feishuPairingDescription");
+});

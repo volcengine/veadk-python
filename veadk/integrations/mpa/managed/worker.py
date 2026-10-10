@@ -21,9 +21,10 @@ import hashlib
 import json
 import uuid
 
+from ..mpa_tool import build_tos_mount_config
+from .config import WORKER_RESERVED_ENV_KEYS, validate_runtime_name
 from .database import DeploymentError, agent_suffix
 from .diagnostics import report, retry_worker
-from ..mpa_tool import build_tos_mount_config
 
 
 class WorkerCloud:
@@ -36,12 +37,17 @@ class WorkerCloud:
             from agentkit.sdk.tools.client import AgentkitToolsClient
 
             credential = self.runtime._credentials()
-            client = AgentkitToolsClient(
-                region=self.runtime.region,
-                access_key=credential.access_key_id,
-                secret_key=credential.secret_access_key,
-                session_token=credential.session_token,
-            )
+            from agentkit.platform.context import default_cloud_provider
+
+            with default_cloud_provider(
+                getattr(self.runtime, "provider", "volcengine")
+            ):
+                client = AgentkitToolsClient(
+                    region=self.runtime.region,
+                    access_key=credential.access_key_id,
+                    secret_key=credential.secret_access_key,
+                    session_token=credential.session_token,
+                )
             result = getattr(client, method)(
                 getattr(types, request_type).model_validate(values)
             )
@@ -94,8 +100,11 @@ async def ensure_worker(
     region,
     agent_id,
     project="default",
+    runtime_name: str = "",
     timeout: float = 600,
 ):
+    if runtime_name:
+        runtime_name = validate_runtime_name(runtime_name)
     try:
         return await asyncio.wait_for(
             _ensure_worker(
@@ -106,6 +115,7 @@ async def ensure_worker(
                 region=region,
                 agent_id=agent_id,
                 project=project,
+                runtime_name=runtime_name,
             ),
             timeout=timeout,
         )
@@ -116,7 +126,9 @@ async def ensure_worker(
         raise TimeoutError() from error
 
 
-async def _ensure_worker(entry, cloud, options, *, account, region, agent_id, project):
+async def _ensure_worker(
+    entry, cloud, options, *, account, region, agent_id, project, runtime_name
+):
     record = await entry.read()
     suffix = agent_suffix(account, region, agent_id)
     owned = {"managed_by": "mpa-deployment", "mpa_agent_key": suffix}
@@ -129,6 +141,12 @@ async def _ensure_worker(entry, cloud, options, *, account, region, agent_id, pr
             tos_bucket=options.tos_bucket,
             region=region,
         ).model_dump(by_alias=True, exclude_none=True, mode="json")
+        if (
+            getattr(getattr(cloud, "runtime", None), "provider", "volcengine")
+            == "byteplus"
+        ):
+            for mount in expected_tos["MountPoints"]:
+                mount["Endpoint"] = f"https://tos-{region}.bytepluses.com"
     if (
         record.get("worker_id")
         and options.existing_id
@@ -136,29 +154,25 @@ async def _ensure_worker(entry, cloud, options, *, account, region, agent_id, pr
     ):
         raise DeploymentError("Worker differs from registered binding")
     if not tool_id:
+        name = runtime_name or agent_id.strip().replace("-", "_")
+        if record.get("worker_name") and record["worker_name"] != name:
+            raise DeploymentError(
+                "Unfinished worker configuration changed; resume original inputs"
+            )
         env = {}
         if options.reference_id:
             source = await retry_worker(
                 "get_reference_worker", lambda: cloud.get(options.reference_id)
             )
-            excluded = {
-                "MPA_AGENT_ID",
-                "AGENTKIT_RUNTIME_ID",
-                "SKILL_SPACE_ID",
-                "CODEX_MCP_RUNTIME_API_KEY",
-                "A2A_PUBLIC_URL",
-                "FEISHU_APP_ID",
-                "FEISHU_APP_SECRET",
-                "CHANNEL_STATE_ENCRYPTION_KEY",
-            }
             env = {
                 item["Key"]: item.get("Value", "")
                 for item in source.get("Envs", [])
-                if item["Key"] not in excluded
+                if item["Key"] not in WORKER_RESERVED_ENV_KEYS
             }
+        env.update(options.env)
         env["MPA_AGENT_ID"] = agent_id
         request = {
-            "Name": agent_id.strip().replace("-", "_"),
+            "Name": name,
             "ToolType": "Private",
             "ImageUrl": options.image,
             "Command": "/opt/gem/run.sh",
@@ -184,15 +198,25 @@ async def _ensure_worker(entry, cloud, options, *, account, region, agent_id, pr
         ).hexdigest()
         if record.get("worker_hash") and record["worker_hash"] != digest:
             # Preserve the exact pre-upgrade payload for an unfinished intent.
-            legacy_request = {**request, "Name": "mpa_worker_" + suffix}
-            legacy_digest = hashlib.sha256(
-                json.dumps(legacy_request, sort_keys=True).encode()
-            ).hexdigest()
-            if record["worker_hash"] != legacy_digest:
+            if record.get("worker_name"):
                 raise DeploymentError(
                     "Unfinished worker configuration changed; resume original inputs"
                 )
-            request, digest = legacy_request, legacy_digest
+            for legacy_name in (
+                agent_id.strip().replace("-", "_"),
+                "mpa_worker_" + suffix,
+            ):
+                legacy_request = {**request, "Name": legacy_name}
+                legacy_digest = hashlib.sha256(
+                    json.dumps(legacy_request, sort_keys=True).encode()
+                ).hexdigest()
+                if record["worker_hash"] == legacy_digest:
+                    request, digest = legacy_request, legacy_digest
+                    break
+            else:
+                raise DeploymentError(
+                    "Unfinished worker configuration changed; resume original inputs"
+                )
         matches = await retry_worker("find_worker", lambda: cloud.find(request["Name"]))
         if matches:
             if len(matches) != 1 or not record.get("worker_token"):
@@ -202,6 +226,9 @@ async def _ensure_worker(entry, cloud, options, *, account, region, agent_id, pr
             tool_id = matches[0].get("ToolId", "")
         else:
             record.setdefault("worker_token", str(uuid.uuid4()))
+            # Keep legacy intents identifiable across repeated lost responses.
+            if not record.get("worker_hash"):
+                record["worker_name"] = request["Name"]
             record.update(worker_hash=digest, worker_managed=True)
             await entry.save(record)
             create_request = {**request, "ClientToken": record["worker_token"]}
