@@ -40,6 +40,29 @@ VOLCENGINE_CREDENTIALS = {
 }
 
 
+def _mpa_p0_compat_manifest(**overrides: object) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "schemaVersion": 1,
+        "veadkRevision": "a" * 40,
+        "runtimeRevision": "b" * 40,
+        "runtimeImageDigest": "sha256:" + "c" * 64,
+        "mpaProfileSchemaVersion": 1,
+        "agentkitSdkVersion": "0.8.5",
+        "runtimeExecutionCapability": "urn:veadk:mpa:execution:v1",
+        "sessionExecutionConfigSchemaVersion": 1,
+        "workerProtocol": "codex",
+        "workerRequiredEndpoints": [
+            "/health",
+            "/ready",
+            "/v1/sessions",
+            "/v1/sessions/{session_id}/turns",
+            "/v1/sessions/{session_id}/events",
+        ],
+    }
+    payload.update(overrides)
+    return payload
+
+
 def test_parse_github_repo_url_accepts_common_forms() -> None:
     from veadk.cli.github_cicd import parse_github_repo_url
 
@@ -953,6 +976,60 @@ def test_studio_endpoint_creates_github_delivery_cicd_pipeline(
     assert captured["volcengine_session_token"] == "token_test"
 
 
+def test_mpa_github_delivery_cicd_rejects_incompatible_manifest_before_push(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    app = _create_studio_app(monkeypatch, tmp_path, developers="developer")
+    cicd_calls: list[dict[str, Any]] = []
+
+    def fake_create_github_delivery_cicd_pipeline(**kwargs: Any) -> dict[str, Any]:
+        cicd_calls.append(kwargs)
+        return {
+            "pipelineId": "github-acme-demo-main",
+            "status": "cicd-bound",
+            "phase": "ready",
+            "runtimeId": "rt-1",
+            "github": {"branch": "main", "pullRequestUrl": ""},
+            "cicd": {
+                "enabled": True,
+                "workflowPath": ".github/workflows/publish-agentkit.yml",
+            },
+        }
+
+    monkeypatch.setattr(
+        "veadk.cli.github_cicd.create_github_delivery_cicd_pipeline",
+        fake_create_github_delivery_cicd_pipeline,
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/web/github-delivery/cicd-pipeline",
+            headers={"X-VeADK-Local-User": "developer"},
+            json={
+                "githubUrl": "https://github.com/acme/demo",
+                "githubToken": "ghp_secret",
+                "baseBranch": "main",
+                "runtimeName": "demo-agent",
+                "runtimeId": "rt-1",
+                "region": "cn-beijing",
+                "agentCategory": "mpa",
+                "mpaCompatibilityManifest": _mpa_p0_compat_manifest(
+                    workerProtocol="codex-v2"
+                ),
+                "cloudProvider": "volcengine",
+                "projectPath": ".",
+                "volcengineAccessKey": "ak_test",
+                "volcengineSecretKey": "sk_test",
+            },
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "mpa_compatibility_preflight_failed"
+    assert response.json()["detail"]["errorCode"] == "worker_protocol_incompatible"
+    assert cicd_calls == []
+
+
 def test_studio_endpoint_initializes_github_delivery_main(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1014,6 +1091,61 @@ def test_studio_endpoint_initializes_github_delivery_main(
     assert captured["volcengine_access_key"] == "ak_test"
     assert captured["volcengine_secret_key"] == "sk_test"
     assert captured["volcengine_session_token"] == "token_test"
+
+
+def test_mpa_github_delivery_init_rejects_incompatible_manifest_before_push(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    app = _create_studio_app(monkeypatch, tmp_path, developers="developer")
+    init_calls: list[dict[str, Any]] = []
+
+    def fake_initialize_github_delivery_main(**kwargs: Any) -> dict[str, Any]:
+        init_calls.append(kwargs)
+        return {
+            "pipelineId": "github-acme-demo-main",
+            "status": "cicd-bound",
+            "phase": "ready",
+            "runtimeId": "rt-1",
+            "github": {"branch": "main", "pullRequestUrl": ""},
+            "cicd": {
+                "enabled": True,
+                "workflowPath": ".github/workflows/publish-agentkit.yml",
+            },
+        }
+
+    monkeypatch.setattr(
+        "veadk.cli.github_cicd.initialize_github_delivery_main",
+        fake_initialize_github_delivery_main,
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/web/github-delivery/init-main",
+            headers={"X-VeADK-Local-User": "developer"},
+            json={
+                "project": PROJECT,
+                "githubUrl": "https://github.com/acme/demo",
+                "githubToken": "ghp_secret",
+                "baseBranch": "main",
+                "runtimeName": "demo-agent",
+                "runtimeId": "rt-1",
+                "region": "cn-beijing",
+                "agentCategory": "mpa",
+                "mpaCompatibilityManifest": _mpa_p0_compat_manifest(
+                    workerProtocol="codex-v2"
+                ),
+                "cloudProvider": "volcengine",
+                "projectPath": ".",
+                "volcengineAccessKey": "ak_test",
+                "volcengineSecretKey": "sk_test",
+            },
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "mpa_compatibility_preflight_failed"
+    assert response.json()["detail"]["errorCode"] == "worker_protocol_incompatible"
+    assert init_calls == []
 
 
 def test_studio_endpoint_lists_github_delivery_versions(
@@ -1081,6 +1213,86 @@ def test_studio_endpoint_creates_github_delivery_rollback_pr(
     assert captured["target_commit_sha"] == "abc123"
 
 
+def test_mpa_github_delivery_rollback_rejects_incompatible_manifest_before_pr(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    app = _create_studio_app(monkeypatch, tmp_path, developers="developer")
+    rollback_calls: list[dict[str, Any]] = []
+
+    def fake_create_github_delivery_rollback_pr(**kwargs: Any) -> dict[str, Any]:
+        rollback_calls.append(kwargs)
+        return {
+            "runtimeId": "rt-1",
+            "status": "rollback-pr-created",
+            "github": {"pullRequestUrl": "https://github.com/acme/demo/pull/9"},
+        }
+
+    monkeypatch.setattr(
+        "veadk.cli.github_cicd.create_github_delivery_rollback_pr",
+        fake_create_github_delivery_rollback_pr,
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/web/github-delivery/rollback-pr",
+            headers={"X-VeADK-Local-User": "developer"},
+            json={
+                "runtimeId": "rt-1",
+                "targetCommitSha": "abc123",
+                "region": "cn-beijing",
+                "agentCategory": "mpa",
+                "mpaCompatibilityManifest": _mpa_p0_compat_manifest(
+                    workerProtocol="codex-v2"
+                ),
+            },
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "mpa_compatibility_preflight_failed"
+    assert response.json()["detail"]["errorCode"] == "worker_protocol_incompatible"
+    assert rollback_calls == []
+
+
+def test_mpa_github_delivery_rollback_allows_compatible_manifest(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    app = _create_studio_app(monkeypatch, tmp_path, developers="developer")
+    captured: dict[str, Any] = {}
+
+    def fake_create_github_delivery_rollback_pr(**kwargs: Any) -> dict[str, Any]:
+        captured.update(kwargs)
+        return {
+            "runtimeId": "rt-1",
+            "status": "rollback-pr-created",
+            "github": {"pullRequestUrl": "https://github.com/acme/demo/pull/9"},
+        }
+
+    monkeypatch.setattr(
+        "veadk.cli.github_cicd.create_github_delivery_rollback_pr",
+        fake_create_github_delivery_rollback_pr,
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/web/github-delivery/rollback-pr",
+            headers={"X-VeADK-Local-User": "developer"},
+            json={
+                "runtimeId": "rt-1",
+                "targetCommitSha": "abc123",
+                "region": "cn-beijing",
+                "agentCategory": "mpa",
+                "mpaCompatibilityManifest": _mpa_p0_compat_manifest(),
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "rollback-pr-created"
+    assert captured["runtime_id"] == "rt-1"
+    assert captured["target_commit_sha"] == "abc123"
+
+
 def test_studio_endpoint_attaches_github_delivery_cicd_to_source_sync(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1133,6 +1345,61 @@ def test_studio_endpoint_attaches_github_delivery_cicd_to_source_sync(
     assert captured["project_path"] == "."
 
 
+def test_mpa_github_delivery_attach_rejects_incompatible_manifest_before_push(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    app = _create_studio_app(monkeypatch, tmp_path, developers="developer")
+    attach_calls: list[dict[str, Any]] = []
+
+    def fake_attach_github_delivery_cicd_pipeline(**kwargs: Any) -> dict[str, Any]:
+        attach_calls.append(kwargs)
+        return {
+            "pipelineId": "github-acme-demo-studio-demo-agent",
+            "status": "cicd-bound",
+            "phase": "ready",
+            "runtimeId": "rt-1",
+            "github": {
+                "branch": "studio/demo-agent",
+                "pullRequestUrl": "https://github.com/acme/demo/pull/1",
+            },
+            "cicd": {
+                "enabled": True,
+                "workflowPath": ".github/workflows/publish-agentkit.yml",
+            },
+        }
+
+    monkeypatch.setattr(
+        "veadk.cli.github_cicd.attach_github_delivery_cicd_pipeline",
+        fake_attach_github_delivery_cicd_pipeline,
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/web/github-delivery/source-sync/cicd",
+            headers={"X-VeADK-Local-User": "developer"},
+            json={
+                "pipelineId": "github-acme-demo-studio-demo-agent",
+                "runtimeName": "demo-agent",
+                "runtimeId": "rt-1",
+                "region": "cn-beijing",
+                "agentCategory": "mpa",
+                "mpaCompatibilityManifest": _mpa_p0_compat_manifest(
+                    workerProtocol="codex-v2"
+                ),
+                "cloudProvider": "volcengine",
+                "projectPath": ".",
+                "volcengineAccessKey": "ak_test",
+                "volcengineSecretKey": "sk_test",
+            },
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "mpa_compatibility_preflight_failed"
+    assert response.json()["detail"]["errorCode"] == "worker_protocol_incompatible"
+    assert attach_calls == []
+
+
 def test_studio_endpoint_syncs_bound_github_cicd_runtime(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1169,6 +1436,48 @@ def test_studio_endpoint_syncs_bound_github_cicd_runtime(
     assert response.json()["runtimeId"] == "rt-1"
     assert captured["runtime_id"] == "rt-1"
     assert captured["project"] == PROJECT
+
+
+def test_mpa_github_runtime_sync_rejects_incompatible_manifest_before_push(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    app = _create_studio_app(monkeypatch, tmp_path, developers="developer")
+    sync_calls: list[dict[str, Any]] = []
+
+    def fake_sync_github_cicd_runtime(**kwargs: Any) -> dict[str, Any]:
+        sync_calls.append(kwargs)
+        return {
+            "pipelineId": "github-acme-demo-studio-demo-agent",
+            "status": "succeeded",
+            "phase": "ready",
+            "runtimeId": "rt-1",
+            "github": {"branch": "studio/demo-agent"},
+        }
+
+    monkeypatch.setattr(
+        "veadk.cli.github_cicd.sync_github_cicd_runtime",
+        fake_sync_github_cicd_runtime,
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/web/github-cicd/runtime-sync",
+            headers={"X-VeADK-Local-User": "developer"},
+            json={
+                "runtimeId": "rt-1",
+                "project": PROJECT,
+                "agentCategory": "mpa",
+                "mpaCompatibilityManifest": _mpa_p0_compat_manifest(
+                    workerProtocol="codex-v2"
+                ),
+            },
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "mpa_compatibility_preflight_failed"
+    assert response.json()["detail"]["errorCode"] == "worker_protocol_incompatible"
+    assert sync_calls == []
 
 
 def test_studio_endpoint_returns_structured_github_cicd_errors(

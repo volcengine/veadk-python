@@ -115,6 +115,19 @@ async def test_codex_run_emits_call_llm_span_with_session_id(monkeypatch) -> Non
         )
         attributes = dict(call_llm_spans[0].attributes or {})
         assert attributes.get("gen_ai.session.id") == session_id, attributes
+        # Operational metadata for dashboards and incident triage: which path
+        # the turn took, which Codex turn it was, and how it ended.
+        codex = {
+            key: value
+            for key, value in attributes.items()
+            if key.startswith("veadk.codex.")
+        }
+        assert codex.get("veadk.codex.runtime") == "codex", codex
+        assert codex.get("veadk.codex.transport") == "shim", codex
+        assert codex.get("veadk.codex.turn_id"), codex
+        assert codex.get("veadk.codex.status") == "completed", codex
+        assert "veadk.codex.duration_ms" in codex, codex
+        assert "backend-key" not in str(attributes)
 
         # The property the exporter's session index -- and therefore every
         # trace dump and every evaluation built from one -- actually depends on.

@@ -739,6 +739,8 @@
   justify-content: space-between;
   gap: 8px;
   position: relative;
+  z-index: 2;
+  pointer-events: none;
 }
 
 .resource-card__actions {
@@ -749,7 +751,7 @@
   justify-content: flex-end;
   gap: 8px;
   position: relative;
-  z-index: 2;
+  z-index: 3;
   opacity: 0;
   pointer-events: none;
   transition: opacity 140ms ease;
@@ -777,6 +779,7 @@
   font-size: 12px;
   font-weight: 500;
   line-height: 18px;
+  pointer-events: auto;
   white-space: nowrap;
   transition: background-color 150ms ease, color 150ms ease, opacity 150ms ease;
 }

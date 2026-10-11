@@ -315,3 +315,134 @@ def test_version_routes_reuse_identity_and_archive_validation(setup):
             ).status_code
             == 415
         )
+
+
+def test_document_edit_preserves_binary_files_and_requires_version(setup, monkeypatch):
+    from frontend.server.skills.documents import replace_skill_document
+
+    content = io.BytesIO()
+    with zipfile.ZipFile(content, "w") as archive:
+        archive.writestr(
+            "daily-summary/SKILL.md",
+            "---\nname: daily-summary\ndescription: Original\n---\nOld",
+        )
+        info = zipfile.ZipInfo("daily-summary/run.bin")
+        info.external_attr = 0o100755 << 16
+        archive.writestr(info, b"\x00\xff\x10")
+    updated = replace_skill_document(
+        content.getvalue(), "---\nname: daily-summary\ndescription: Updated\n---\nNew"
+    )
+    with zipfile.ZipFile(io.BytesIO(updated)) as archive:
+        assert archive.read("daily-summary/run.bin") == b"\x00\xff\x10"
+        assert archive.getinfo("daily-summary/run.bin").external_attr == 0o100755 << 16
+        assert archive.read("daily-summary/SKILL.md").endswith(b"New")
+    cloud, _, versions = setup
+    cloud.items.append(version("v2"))
+    with pytest.raises(SkillRepositoryError) as error:
+        versions.upload(
+            SkillIdentity("alice"),
+            region="cn-beijing",
+            space_id="space",
+            skill_id="skill",
+            content=updated,
+            expected_version="v1",
+        )
+    assert error.value.status_code == 409
+    assert not cloud.updated
+
+
+def test_document_edit_rejects_name_change():
+    from frontend.server.skills.documents import replace_skill_document
+
+    with pytest.raises(SkillRepositoryError) as error:
+        replace_skill_document(
+            package(), "---\nname: other\ndescription: Changed\n---\nNew"
+        )
+    assert error.value.code == "SKILL_VERSION_NAME_MISMATCH"
+
+
+def test_document_routes_preserve_identity_permissions_and_source_version(
+    setup, monkeypatch
+):
+    cloud, repository, versions = setup
+    monkeypatch.setattr(
+        repository, "skill_archive", lambda **_: (package(), "skill.zip")
+    )
+    app = FastAPI()
+
+    def identity(request: Request):
+        author = request.headers.get("test-author")
+        if not author:
+            raise HTTPException(401)
+        return SkillIdentity(author)
+
+    mount_skill_routes(app, SkillService(repository), identity)
+    path = "/web/skill-management/spaces/space/skills/skill/document?region=cn-beijing"
+    with TestClient(app) as client:
+        assert client.get(path).status_code == 401
+        result = client.get(path, headers={"test-author": "alice"})
+        assert result.status_code == 200
+        assert result.json()["baseVersion"] == "v1"
+        assert result.json()["canUpdate"] is True
+        assert "Version content" in result.json()["content"]
+        assert client.get(path, headers={"test-author": "bob"}).status_code == 403
+        assert (
+            client.put(
+                path,
+                headers={"test-author": "alice"},
+                json={"baseVersion": "v0", "content": "Changed"},
+            ).status_code
+            == 409
+        )
+        saved = []
+
+        def upload(identity, **kwargs):
+            saved.append(kwargs)
+            return {"version": "v2"}
+
+        monkeypatch.setattr(
+            type(versions),
+            "upload",
+            lambda self, identity, **kwargs: upload(identity, **kwargs),
+        )
+        content = "---\nname: daily-summary\ndescription: Changed\n---\nUpdated"
+        assert client.put(
+            path,
+            headers={"test-author": "alice"},
+            json={"baseVersion": "v1", "content": content},
+        ).json() == {"version": "v2"}
+        assert saved[0]["expected_version"] == "v1"
+        cloud.space = SimpleNamespace(
+            name=SHARE_SPACE.name, description=SHARE_SPACE.managed_description
+        )
+        assert (
+            client.get(path, headers={"test-author": "alice"}).json()["canUpdate"]
+            is False
+        )
+        assert (
+            client.put(
+                path,
+                headers={"test-author": "alice"},
+                json={"baseVersion": "v1", "content": content},
+            ).status_code
+            == 403
+        )
+        assert len(saved) == 1
+
+
+@pytest.mark.parametrize("path", ["./SKILL.md", "wrapped/SKILL.md"])
+def test_document_edit_ignores_macos_metadata_and_normalizes_paths(path):
+    from frontend.server.skills.documents import replace_skill_document
+
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w") as archive:
+        archive.writestr("__MACOSX/SKILL.md", "Keep metadata")
+        archive.writestr(
+            path, "---\nname: daily-summary\ndescription: Original\n---\nOld"
+        )
+    updated = replace_skill_document(
+        output.getvalue(), "---\nname: daily-summary\ndescription: Updated\n---\nNew"
+    )
+    with zipfile.ZipFile(io.BytesIO(updated)) as archive:
+        assert archive.read(path).endswith(b"New")
+        assert archive.read("__MACOSX/SKILL.md") == b"Keep metadata"

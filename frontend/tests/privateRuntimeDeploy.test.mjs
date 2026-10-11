@@ -43,7 +43,7 @@ test("deployment identity keeps ADK agent and platform Runtime names distinct", 
   assert.match(clientSource, /runtimeName: deployedRuntimeName/);
   assert.match(
     projectPreviewSource,
-    /runtimeName: result\.runtimeName \|\| taskRuntimeName/,
+    /runtimeName: completeResult\.runtimeName \|\| taskRuntimeName/,
   );
   assert.match(projectPreviewSource, /<label>\{t\("projectPreview\.runtimeName"\)\}<\/label>/);
 });

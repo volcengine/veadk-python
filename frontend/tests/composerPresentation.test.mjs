@@ -168,7 +168,10 @@ test("welcome screen offers a broader set of prompts", () => {
 });
 
 test("shows full session titles on hover instead of internal ids", () => {
-  assert.match(sidebarSource, /title: sessionTitle\(session\.events, t\("history\.newConversation"\)\)/);
+  assert.match(
+    sidebarSource,
+    /title: session\.title \|\| sessionTitle\(session\.events, t\("history\.newConversation"\)\)/,
+  );
   assert.match(sidebarSource, /title=\{item\.title\}/);
   assert.doesNotMatch(sidebarSource, /title=\{item\.id\}/);
 });

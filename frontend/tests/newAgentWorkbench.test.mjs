@@ -18,6 +18,10 @@ const workbenchStyles = readFileSync(
   new URL("../src/create/NewAgentWorkbench.css", import.meta.url),
   "utf8",
 );
+const projectPreviewSource = readFileSync(
+  new URL("../src/ui/ProjectPreview.tsx", import.meta.url),
+  "utf8",
+);
 const catalogSource = readFileSync(
   new URL("../src/create/veadkCatalog.ts", import.meta.url),
   "utf8",
@@ -99,6 +103,52 @@ test("deployment tasks carry the workspace draft id into the library", () => {
     /const taskBase = \{[\s\S]*?\.\.\.\(workspaceDraftId \? \{ draftId: workspaceDraftId \} : \{\}\)/,
   );
   assert.match(appSource, /workspaceDraftId=\{editingDraftId \|\| undefined\}/);
+});
+
+test("MPA deployment recovery uses the persisted operation instead of redeploying", () => {
+  assert.match(
+    appSource,
+    /getMpaAgentOperation\([\s\S]*?listActiveMpaAgentOperations\(\)/,
+  );
+  assert.match(
+    appSource,
+    /operationToDeploymentTask[\s\S]*?status === "succeeded"[\s\S]*?status === "failed_retryable"/,
+  );
+  assert.match(
+    appSource,
+    /operationToDeploymentTask[\s\S]*?uiText\("agentWorkspace\.deployStatus\.success"\)/,
+  );
+  assert.match(customCreateSource, /retryMpaAgentOperation/);
+  assert.match(projectPreviewSource, /retryMpaAgentOperation/);
+  assert.match(
+    customCreateSource,
+    /failedMpaRetry[\s\S]*?retryMpaAgentOperation\([\s\S]*?operationId/,
+  );
+  assert.doesNotMatch(
+    customCreateSource.slice(
+      customCreateSource.indexOf("failedMpaRetry = async"),
+      customCreateSource.indexOf("throw new Error(latestMessage)"),
+    ),
+    /deployFromNewWorkbench/,
+  );
+  assert.match(
+    projectPreviewSource,
+    /failedMpaRetry[\s\S]*?retryMpaAgentOperation\([\s\S]*?operationId/,
+  );
+  assert.doesNotMatch(
+    projectPreviewSource.slice(
+      projectPreviewSource.indexOf("failedMpaRetry = async"),
+      projectPreviewSource.indexOf("throw new Error(\n            failedMessage"),
+    ),
+    /requestDeploymentConfirmation/,
+  );
+});
+
+test("AI creation prompt ignores Enter while an IME composition is active", () => {
+  assert.match(
+    customCreateSource,
+    /className="cw-ai-compose-form"[\s\S]*?onKeyDown=\{\(event\) => \{[\s\S]*?isImeCompositionEvent\(event\.nativeEvent\)[\s\S]*?event\.key === "Enter"/,
+  );
 });
 
 test("quick Runtime updates keep the existing target and use update semantics", () => {
@@ -331,11 +381,11 @@ test("workbench keeps the main-branch model fields and skill dialog on the first
   );
   const agentStep =
     workbenchSource.match(
-      /\{step === "agent" \? \(([\s\S]*?)\{step === "environment" \? \(/,
+      /\{step === "agent" \? \(([\s\S]*?)\{step === "environment" && !profileOnly \? \(/,
     )?.[1] ?? "";
   const environmentStep =
     workbenchSource.match(
-      /\{step === "environment" \? \(([\s\S]*?)\{step === "deployment" \? \(/,
+      /\{step === "environment" && !profileOnly \? \(([\s\S]*?)\{step === "deployment" && !profileOnly \? \(/,
     )?.[1] ?? "";
   assert.match(agentStep, /<NativeModelPicker/);
   assert.match(agentStep, /<SkillSourcePicker/);
@@ -354,6 +404,30 @@ test("workbench keeps the main-branch model fields and skill dialog on the first
     workbenchSource,
     />短期记忆|>长期记忆|>子智能体|>子 Agent/,
   );
+});
+
+test("MPA Profile-only edits apply the profile without the deployment steps", () => {
+  assert.match(workbenchSource, /profileOnly\?: boolean/);
+  assert.match(workbenchSource, /profileOnly = false/);
+  assert.match(
+    workbenchSource,
+    /if \(profileOnly\) \{[\s\S]*?onDeploy\(\{[\s\S]*?authentication: \{ type: "api_key" \}[\s\S]*?createEvaluationSets: false[\s\S]*?resources: deployResources/,
+  );
+  assert.match(workbenchSource, /step === "environment" && !profileOnly/);
+  assert.match(workbenchSource, /step === "deployment" && !profileOnly/);
+  assert.match(workbenchSource, /profileOnly[\s\S]*?t\("workbench\.actions\.applyProfileAgain"\)[\s\S]*?t\("workbench\.actions\.applyProfile"\)/);
+  assert.match(customCreateSource, /mpaProfileOnly\?: boolean/);
+  assert.match(customCreateSource, /profileOnly=\{deploymentTarget\?\.mpaProfileOnly\}/);
+  const profileOnlyStart = customCreateSource.indexOf("if (deploymentTarget?.mpaProfileOnly) {");
+  const normalDeployStart = customCreateSource.indexOf("const envMap = new Map", profileOnlyStart);
+  assert.ok(profileOnlyStart >= 0 && normalDeployStart > profileOnlyStart);
+  const profileOnlyBranch = customCreateSource.slice(profileOnlyStart, normalDeployStart);
+  assert.match(profileOnlyBranch, /const operationKind = deploymentTarget\.etag \? "update" : "create"/);
+  assert.match(profileOnlyBranch, /applyMpaProfileAfterDeployment\(\{/);
+  assert.match(profileOnlyBranch, /operationKind,/);
+  assert.match(profileOnlyBranch, /runtimeId: deploymentTarget\.runtimeId/);
+  assert.match(profileOnlyBranch, /runtimeRevision: deploymentTarget\.etag/);
+  assert.doesNotMatch(profileOnlyBranch, /handleDeploy\(/);
 });
 
 test("quick-mode next action stays disabled while model data is loading", () => {
@@ -383,7 +457,7 @@ test("quick-mode requires a model API key before continuing", () => {
   );
   assert.match(
     workbenchSource,
-    /const modelApiKeyMissing =[\s\S]*?modelSource === "ark"[\s\S]*?!draft\.deployment\?\.modelApiKeyId\?\.trim\(\)[\s\S]*?Boolean\(missingCustomModelCredential\)/,
+    /const modelApiKeyMissing =[\s\S]*?!profileOnly && modelSource === "ark"[\s\S]*?!draft\.deployment\?\.modelApiKeyId\?\.trim\(\)[\s\S]*?Boolean\(missingCustomModelCredential\)/,
   );
   assert.match(
     workbenchSource,

@@ -196,6 +196,11 @@ export function fromStudioTurns(turns: readonly Turn[], options: StudioConversat
     switch (block.kind) {
       case "turn-summary": return {id, type: "custom", content: <DevelopmentTurnSummary value={block.value} />};
       case "diff": return { id, type: "custom", content: <CodeBlock title="文件变更" language="diff" lines={[block.text]} scrollAreaProps={{ maxHeight: 320 }} /> };
+      case "activity-source": return {
+        id,
+        type: "custom",
+        content: <div className="tool-activity-source">{block.label}</div>,
+      };
       case "text": return { id, type: "markdown", text: block.text };
       case "thinking": return { id, type: "reasoning", title: "思考过程", status: block.done ? "complete" : "running", content: block.text };
       case "progress": return { id, type: "reasoning", title: block.text, status: turn.meta?.streaming ? "running" : "complete", content: block.text };

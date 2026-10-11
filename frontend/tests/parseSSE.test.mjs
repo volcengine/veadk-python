@@ -12,7 +12,7 @@ const result = await build({
   write: false,
 });
 const moduleUrl = `data:text/javascript;base64,${Buffer.from(result.outputFiles[0].contents).toString("base64")}`;
-const { parseSSE } = await import(moduleUrl);
+const { parseSSE, SSE_EVENT_NAME } = await import(moduleUrl);
 
 function sseResponse(chunks, { hold = false, onCancel } = {}) {
   const encoder = new TextEncoder();
@@ -45,6 +45,16 @@ test("parses CRLF frames", async () => {
   const events = [];
   for await (const event of parseSSE(response)) events.push(event);
   assert.deepEqual(events, [{ ok: true }]);
+});
+
+test("preserves named SSE event metadata without changing payload shape", async () => {
+  const response = sseResponse([
+    'event: done\ndata: {"sessionId":"s1","invocationId":"e1"}\n\n',
+  ]);
+  const events = [];
+  for await (const event of parseSSE(response)) events.push(event);
+  assert.deepEqual(events, [{ sessionId: "s1", invocationId: "e1" }]);
+  assert.equal(events[0][SSE_EVENT_NAME], "done");
 });
 
 test("parses a final data frame when EOF arrives without a blank separator", async () => {

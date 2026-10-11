@@ -29,6 +29,8 @@ paired positive for the compaction-isolation tests: whatever marks a request as
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import json
 import contextvars
 import shutil
 import sys
@@ -229,7 +231,7 @@ async def test_agent_turn_replays_across_two_codex_requests(monkeypatch) -> None
     This one forces Codex to issue a *second* request under the same turn token,
     by having the model ask for a tool the shim has no executor for: the shim
     hands that call back to Codex, which answers it and re-POSTs. Only
-    ``turn_context.state.replay_items`` can put the earlier ADK pair into that
+    ``turn_context.state.replay_into`` can put the earlier ADK pair into that
     second request, since Codex rebuilds ``input`` from its own thread and never
     saw it.
 
@@ -782,3 +784,1033 @@ def test_importing_the_runtime_creates_no_workspace_root(tmp_path) -> None:
         "importing the module created "
         f"{[p.name for p in private_tmp.iterdir()]} in $TMPDIR"
     )
+
+
+# ------------------------------------------------------------------ cancellation
+
+
+class _CancelProbe:
+    """What the runtime did to the in-flight turn when its task was cancelled."""
+
+    def __init__(self, *, interrupt_error: BaseException | None = None) -> None:
+        self.stream_started = asyncio.Event()
+        self.interrupts = 0
+        self.interrupt_error = interrupt_error
+        self.shims: list[Any] = []
+        self.runtime_exit: BaseException | None = None
+
+
+def _record_runtime_exit(monkeypatch, probe: _CancelProbe) -> None:
+    """Record how ``CodexRuntime.run_async`` itself ended.
+
+    The error ``_run_turn`` reports is not enough: once its task is cancelled,
+    ADK's Runner raises ``CancelledError`` again on its own, so a runtime that
+    swallowed the cancellation would still look correct from outside.
+    """
+    fake_codex_sdk.install_openai_codex_stub()
+    from veadk.runtime.codex.runtime import CodexRuntime
+
+    original = CodexRuntime.run_async
+
+    async def recording(self, agent, ctx):
+        try:
+            async for event in original(self, agent, ctx):
+                yield event
+        except BaseException as e:  # noqa: BLE001 - recorded, then re-raised
+            probe.runtime_exit = e
+            raise
+
+    monkeypatch.setattr(CodexRuntime, "run_async", recording)
+
+
+def _probing_codex(probe: _CancelProbe, *, hang_before_backend: bool) -> type:
+    """A ``ShimDrivingCodex`` whose turn records interrupts.
+
+    With ``hang_before_backend`` the stream never reaches the shim, modelling a
+    turn stuck waiting on the model; otherwise it drives the shim normally.
+    """
+
+    class _Codex(fake_codex_sdk.ShimDrivingCodex):
+        async def thread_start(self, **kwargs: Any) -> Any:
+            inner = await super().thread_start(**kwargs)
+            return _ProbeThread(inner, probe, hang_before_backend)
+
+    return _Codex
+
+
+class _ProbeThread:
+    def __init__(self, inner: Any, probe: _CancelProbe, hang: bool) -> None:
+        self._inner = inner
+        self._probe = probe
+        self._hang = hang
+
+    async def turn(self, input_items: Any, **kwargs: Any) -> Any:
+        inner = await self._inner.turn(input_items, **kwargs)
+        return _ProbeTurn(inner, self._probe, self._hang)
+
+
+class _ProbeTurn:
+    def __init__(self, inner: Any, probe: _CancelProbe, hang: bool) -> None:
+        self._inner = inner
+        self._probe = probe
+        self._hang = hang
+        self.id = inner.id
+
+    async def interrupt(self) -> None:
+        self._probe.interrupts += 1
+        if self._probe.interrupt_error is not None:
+            raise self._probe.interrupt_error
+
+    def stream(self) -> Any:
+        probe = self._probe
+        # `_run_turn` clears the registry on the way out; keep the shim so the
+        # test can check its turn table after the cancelled run.
+        probe.shims.extend(fake_codex_sdk.SHIM_REGISTRY.values())
+
+        async def _gen():
+            probe.stream_started.set()
+            if self._hang:
+                await asyncio.Event().wait()
+            async for note in self._inner.stream():
+                yield note
+
+        return _gen()
+
+
+async def _cancel_when(started: asyncio.Event, run: Any) -> Any:
+    """Run ``_run_turn`` as a task, cancel it once ``started`` fires."""
+    task = asyncio.create_task(run)
+    await asyncio.wait_for(started.wait(), timeout=10)
+    task.cancel()
+    return await asyncio.wait_for(task, timeout=10)
+
+
+def _assert_turn_released(probe: _CancelProbe) -> None:
+    assert isinstance(probe.runtime_exit, asyncio.CancelledError), (
+        "the runtime did not re-raise CancelledError; it ended with "
+        f"{probe.runtime_exit!r}"
+    )
+    assert probe.shims, "the turn never reached the shim registry"
+    for shim in probe.shims:
+        assert not shim._turns, (
+            "a cancelled turn stayed registered on the shim: its token and "
+            "executors would outlive the invocation"
+        )
+
+
+@pytest.mark.asyncio
+async def test_cancel_while_waiting_on_model_interrupts_codex_and_reraises(
+    monkeypatch,
+) -> None:
+    """A cancelled invocation must stop the Codex turn, not orphan it.
+
+    The runtime only learns about the cancellation at its own ``await``; the
+    Codex turn keeps running in the app-server unless the runtime interrupts it.
+    ``CancelledError`` must then reach the caller unchanged, or asyncio's
+    cancellation contract is broken and the Runner treats the run as finished.
+    """
+    probe = _CancelProbe()
+    _record_runtime_exit(monkeypatch, probe)
+    _events, _session, backend, error = await _cancel_when(
+        probe.stream_started,
+        _run_turn(
+            monkeypatch,
+            plan=(Round(text="never sent", usage=(1, 1)),),
+            codex_class=_probing_codex(probe, hang_before_backend=True),
+        ),
+    )
+
+    assert isinstance(error, asyncio.CancelledError), error
+    assert probe.interrupts == 1
+    assert not backend.calls
+    _assert_turn_released(probe)
+
+
+_SLOW_TOOL: dict[str, Any] = {}
+
+
+async def slow_lookup(query: str) -> dict:
+    """Look something up slowly."""
+    _SLOW_TOOL["started"].set()
+    _SLOW_TOOL["runs"] += 1
+    try:
+        await asyncio.Event().wait()
+    except asyncio.CancelledError:
+        _SLOW_TOOL["cancelled"] = True
+        raise
+    return {"result": query}
+
+
+@pytest.mark.asyncio
+async def test_cancel_during_tool_execution_cancels_tool_and_interrupts(
+    monkeypatch,
+) -> None:
+    """Cancelling mid-tool must cancel the tool itself, then interrupt Codex.
+
+    The tool runs on the shim's request path, not on the caller's task, so the
+    cancellation has to be carried there explicitly. A tool left running would
+    keep doing side effects for an invocation that no longer exists.
+    """
+    _SLOW_TOOL.update(started=asyncio.Event(), runs=0, cancelled=False)
+    probe = _CancelProbe()
+    _record_runtime_exit(monkeypatch, probe)
+    _events, _session, _backend, error = await _cancel_when(
+        _SLOW_TOOL["started"],
+        _run_turn(
+            monkeypatch,
+            plan=(
+                Round(tool_calls=(("slow_lookup", {"query": "q"}),), usage=(0, 0)),
+                Round(text="never reached", usage=(1, 1)),
+            ),
+            agent_kwargs={"tools": [slow_lookup]},
+            codex_class=_probing_codex(probe, hang_before_backend=False),
+        ),
+    )
+
+    assert isinstance(error, asyncio.CancelledError), error
+    assert _SLOW_TOOL["runs"] == 1
+    assert _SLOW_TOOL["cancelled"], "the tool kept running after cancellation"
+    assert probe.interrupts == 1
+    _assert_turn_released(probe)
+
+
+@pytest.mark.asyncio
+async def test_failed_interrupt_does_not_swallow_cancellation(monkeypatch) -> None:
+    """An interrupt that fails (e.g. the app-server is already gone) is logged.
+
+    It must not replace the ``CancelledError``: the caller asked to cancel, and
+    a transport error surfacing instead would read as a model failure.
+    """
+    probe = _CancelProbe(interrupt_error=RuntimeError("app-server gone"))
+    _record_runtime_exit(monkeypatch, probe)
+    _events, _session, _backend, error = await _cancel_when(
+        probe.stream_started,
+        _run_turn(
+            monkeypatch,
+            plan=(Round(text="never sent", usage=(1, 1)),),
+            codex_class=_probing_codex(probe, hang_before_backend=True),
+        ),
+    )
+
+    assert isinstance(error, asyncio.CancelledError), error
+    assert probe.interrupts == 1
+    _assert_turn_released(probe)
+
+
+# ------------------------------------------------------------- direct transport
+
+
+_DIRECT = {"codex_runtime_config": {"model_transport": "direct"}}
+
+
+async def _run_direct_turn(monkeypatch, **kwargs: Any):
+    """``_run_turn`` on the direct transport: no shim, ADK tools over MCP."""
+    from veadk.runtime.codex.mcp_bridge import shutdown_bridge
+
+    agent_kwargs = {**_DIRECT, **(kwargs.pop("agent_kwargs", None) or {})}
+    try:
+        return await _run_turn(
+            monkeypatch,
+            agent_kwargs=agent_kwargs,
+            codex_class=fake_codex_sdk.DirectDrivingCodex,
+            **kwargs,
+        )
+    finally:
+        await shutdown_bridge()
+
+
+@pytest.mark.asyncio
+async def test_direct_transport_enforces_max_llm_calls(monkeypatch) -> None:
+    """Without the shim nothing charges the budget per model call.
+
+    The shim charged ``max_llm_calls`` before every backend call. On the
+    direct transport Codex calls the model itself, so the runtime charges on
+    each usage update instead and interrupts the turn once the call that
+    crossed the limit has finished. Without that, ``max_llm_calls`` would stop
+    working for every direct-transport agent and a looping model would run
+    until the wall clock stopped it.
+    """
+    _events, _session, backend, error = await _run_direct_turn(
+        monkeypatch,
+        plan=(
+            Round(tool_calls=(("record_fact", {"fact": "one"}),), usage=(1, 1)),
+            Round(tool_calls=(("record_fact", {"fact": "two"}),), usage=(1, 1)),
+            Round(tool_calls=(("record_fact", {"fact": "three"}),), usage=(1, 1)),
+            Round(text="never reached", usage=(1, 1)),
+        ),
+        agent_kwargs={"tools": [record_fact]},
+        run_config=RunConfig(max_llm_calls=1),
+    )
+
+    assert isinstance(error, LlmCallsLimitExceededError), (
+        f"the budget did not stop the direct turn; the caller saw {error!r}"
+    )
+    # Charged after each call, because Codex announces nothing before it sends
+    # a model request: the call that crossed the limit completes, and at most
+    # one more request may already be in flight when the interrupt lands (it
+    # is aborted). Nothing after that -- the final round is never served.
+    assert 2 <= len(backend.calls) <= 3, [call.tool_names for call in backend.calls]
+
+
+_SENSITIVE_RUNS: list[str] = []
+
+
+def delete_records(table: str) -> dict:
+    """Delete every record in a table."""
+    _SENSITIVE_RUNS.append(table)
+    return {"deleted": table}
+
+
+@pytest.mark.asyncio
+async def test_direct_transport_stops_the_turn_when_a_tool_needs_confirmation(
+    monkeypatch,
+) -> None:
+    """A tool waiting on the user must end the turn, not let the model go on.
+
+    The bridge answers Codex with a placeholder ("waiting for confirmation"),
+    and Codex would happily keep the turn going on it. The runtime has to
+    interrupt the turn so the user sees the ADK confirmation request as the
+    turn's outcome, and the tool must not have run.
+    """
+    from google.adk.tools.function_tool import FunctionTool
+
+    _SENSITIVE_RUNS.clear()
+    events, _session, _backend, error = await _run_direct_turn(
+        monkeypatch,
+        plan=(
+            Round(tool_calls=(("delete_records", {"table": "users"}),), usage=(1, 1)),
+            Round(text="Deleted everything, done.", usage=(1, 1)),
+        ),
+        agent_kwargs={
+            "tools": [FunctionTool(delete_records, require_confirmation=True)]
+        },
+    )
+
+    assert error is None, error
+    assert _SENSITIVE_RUNS == [], "the tool ran before the user confirmed it"
+    calls = [
+        part.function_call.name
+        for event in events
+        for part in (event.content.parts if event.content else [])
+        if part.function_call
+    ]
+    assert "adk_request_confirmation" in calls, calls
+    answers = [
+        part.text
+        for event in events
+        if event.is_final_response() and event.content
+        for part in event.content.parts or []
+        if part.text
+    ]
+    assert "Deleted everything, done." not in answers, (
+        "the model carried on past a tool that was waiting for confirmation"
+    )
+
+
+# ------------------------------------------------------ direct transport: resume
+
+
+async def _direct_session(
+    monkeypatch, plan, *, codex_class=None, instruction="Answer.", tools=None
+):
+    """A Runner on one session, on the direct transport, for multi-turn tests.
+
+    Returns ``(send, backend, codex_class, set_instruction)``: ``send(text)``
+    runs one invocation and returns its error (or None).
+    """
+    from veadk import Agent
+    from veadk.runtime import get_runtime
+
+    fake_codex_sdk.install_openai_codex_stub()
+    get_runtime.cache_clear()
+    from veadk.runtime.codex import runtime as runtime_module
+
+    backend = ScriptedBackend(plan, arm="codex")
+    codex_class = codex_class or fake_codex_sdk.DirectDrivingCodex.configured()
+    monkeypatch.setattr(
+        "veadk.runtime.codex.proxy.litellm.aresponses", backend.as_aresponses()
+    )
+    monkeypatch.setattr(runtime_module, "AsyncCodex", codex_class)
+
+    agent = Agent(
+        name="resume_agent",
+        tools=tools or [],
+        description="A codex resume agent.",
+        instruction=instruction,
+        model_name="scripted-model",
+        model_api_base="https://backend.invalid/v1",
+        model_api_key="backend-key",
+        runtime="codex",
+        **_DIRECT,
+    )
+    session_service = InMemorySessionService()
+    session_id = f"session-{uuid.uuid4().hex[:8]}"
+    await session_service.create_session(
+        app_name="contract", user_id="user", session_id=session_id
+    )
+    runner = Runner(app_name="contract", agent=agent, session_service=session_service)
+
+    async def send(text: str) -> BaseException | None:
+        try:
+            async for _ in runner.run_async(
+                user_id="user",
+                session_id=session_id,
+                new_message=types.Content(role="user", parts=[types.Part(text=text)]),
+            ):
+                pass
+        except BaseException as e:  # noqa: BLE001 - the error is the observable
+            return e
+        return None
+
+    def set_instruction(text: str) -> None:
+        agent.instruction = text
+
+    return send, backend, codex_class, set_instruction
+
+
+def _starts_and_resumes(codex_class) -> list[tuple[int, int]]:
+    """``(thread_starts, thread_resumes)`` per Codex process, in order."""
+    return [
+        (len(client.thread_starts), len(client.thread_resumes))
+        for client in codex_class.instances
+    ]
+
+
+@pytest.mark.asyncio
+async def test_changed_instruction_starts_a_new_thread_with_the_transcript(
+    monkeypatch,
+) -> None:
+    """Codex keeps the developer instructions a thread started with.
+
+    Passed again on resume they never reach the model, so an agent whose
+    instruction changed between turns would keep obeying the old one. A new
+    thread is started instead, seeded from the session transcript so the
+    conversation is not lost.
+    """
+    from veadk.runtime.codex.mcp_bridge import shutdown_bridge
+
+    send, backend, codex_class, set_instruction = await _direct_session(
+        monkeypatch,
+        (Round(text="first answer", usage=(1, 1)), Round(text="second", usage=(1, 1))),
+        instruction="RULE-A: be brief.",
+    )
+    try:
+        assert await send("remember the word PAPAYA") is None
+        set_instruction("RULE-B: be verbose.")
+        assert await send("which word?") is None
+    finally:
+        await shutdown_bridge()
+
+    assert _starts_and_resumes(codex_class) == [(1, 0), (1, 0)]
+    second = json.dumps(backend.raw_requests[-1], default=str)
+    assert "RULE-B" in second and "RULE-A" not in second
+    assert "PAPAYA" in second, "the new thread lost the conversation so far"
+
+
+@pytest.mark.asyncio
+async def test_failed_resume_falls_back_to_a_new_thread_with_the_transcript(
+    monkeypatch,
+) -> None:
+    """A thread that cannot be resumed must not fail the user's turn."""
+    from veadk.runtime.codex.mcp_bridge import shutdown_bridge
+
+    class _UnresumableCodex(fake_codex_sdk.DirectDrivingCodex):
+        async def thread_resume(self, thread_id, **kwargs):
+            self.thread_resumes.append(dict(kwargs))
+            raise fake_codex_sdk.invalid_request_error_class()(
+                -32600, "thread not found"
+            )
+
+    codex_class = _UnresumableCodex.configured()
+    send, backend, _, _ = await _direct_session(
+        monkeypatch,
+        (Round(text="first answer", usage=(1, 1)), Round(text="second", usage=(1, 1))),
+        codex_class=codex_class,
+    )
+    try:
+        assert await send("remember the word PAPAYA") is None
+        assert await send("which word?") is None
+    finally:
+        await shutdown_bridge()
+
+    # The second process tried to resume, failed, and started a new thread.
+    assert _starts_and_resumes(codex_class) == [(1, 0), (1, 1)]
+    assert "PAPAYA" in json.dumps(backend.raw_requests[-1], default=str)
+
+
+@pytest.mark.asyncio
+async def test_concurrent_invocations_of_one_session_take_turns(monkeypatch) -> None:
+    """Two invocations of one session must not run one thread at once.
+
+    Both would resume the same rollout and each write back its own copy; the
+    later save would be rejected and that turn silently lost from the thread.
+    The session lock makes the second wait and then resume the first's work.
+    """
+    from veadk.runtime.codex.mcp_bridge import shutdown_bridge
+
+    send, backend, codex_class, _ = await _direct_session(
+        monkeypatch,
+        (
+            Round(text="one", usage=(1, 1)),
+            Round(text="two", usage=(1, 1)),
+            Round(text="three", usage=(1, 1)),
+        ),
+    )
+    # Hold the second invocation's model call until the test has checked that
+    # the third one did not get to the model alongside it.
+    scripted = backend.as_aresponses()
+    in_model = asyncio.Event()
+    release = asyncio.Event()
+    # Counted on entry: the scripted backend only logs a call once it is let
+    # through, so its own log cannot show a call waiting at the gate.
+    entered = 0
+
+    async def gated(**kwargs: Any) -> Any:
+        nonlocal entered
+        entered += 1
+        if entered == 2:  # the first call of "left"
+            in_model.set()
+            await asyncio.wait_for(release.wait(), timeout=10)
+        return await scripted(**kwargs)
+
+    monkeypatch.setattr("veadk.runtime.codex.proxy.litellm.aresponses", gated)
+    try:
+        assert await send("start") is None
+        left = asyncio.create_task(send("left"))
+        await asyncio.wait_for(in_model.wait(), timeout=10)
+        right = asyncio.create_task(send("right"))
+        await asyncio.sleep(0.5)
+        overlapped = entered > 2
+        release.set()
+        errors = await asyncio.gather(left, right)
+    finally:
+        release.set()
+        await shutdown_bridge()
+
+    assert not overlapped, "the second invocation reached the model mid-turn"
+    assert errors == [None, None]
+    assert _starts_and_resumes(codex_class) == [(1, 0), (0, 1), (0, 1)]
+    last = json.dumps(backend.raw_requests[-1], default=str)
+    # The later invocation resumed a thread that already held the earlier one.
+    assert "left" in last and "right" in last
+
+
+@pytest.mark.asyncio
+async def test_direct_transport_caps_tool_calls_per_turn(monkeypatch) -> None:
+    """``max_tool_iterations`` must bound Codex's tool loop on the direct path.
+
+    The shim enforced it by counting its own tool round-trips. With Codex
+    driving the loop the runtime counts the bridge's calls instead; without
+    that, Ark agents (auto -> direct) would silently lose the cap.
+    """
+    from veadk.runtime.codex.runtime import CodexToolIterationLimitError
+
+    _events, _session, backend, error = await _run_direct_turn(
+        monkeypatch,
+        plan=tuple(
+            Round(tool_calls=(("record_fact", {"fact": f"f{i}"}),), usage=(1, 1))
+            for i in range(4)
+        )
+        + (Round(text="never reached", usage=(1, 1)),),
+        agent_kwargs={
+            "tools": [record_fact],
+            "codex_runtime_config": {
+                "model_transport": "direct",
+                "max_tool_iterations": 1,
+            },
+        },
+    )
+
+    assert isinstance(error, CodexToolIterationLimitError), error
+    assert len(backend.calls) < 5, "the turn kept calling tools past the cap"
+
+
+@pytest.mark.asyncio
+async def test_auto_transport_keeps_the_shim_for_extra_body(
+    monkeypatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Direct Codex cannot forward a request body, so `extra_body` would be
+    dropped silently (e.g. a thinking switch). Under ``auto`` the runtime
+    stays on the shim for such agents."""
+    import logging
+
+    fake_codex_sdk.install_openai_codex_stub()
+    from veadk.runtime.codex import runtime as runtime_module
+
+    monkeypatch.setattr(runtime_module, "resolve_transport", lambda *_: "direct")
+    runtime_logger = logging.getLogger("veadk.runtime.codex.runtime")
+    runtime_logger.addHandler(caplog.handler)
+    runtime_logger.setLevel(logging.INFO)
+    try:
+        _events, _session, backend, error = await _run_turn(
+            monkeypatch,
+            plan=(Round(text="ok", usage=(1, 1)),),
+            agent_kwargs={
+                "model_extra_config": {"extra_body": {"thinking": {"type": "off"}}}
+            },
+        )
+    finally:
+        runtime_logger.removeHandler(caplog.handler)
+
+    assert error is None, error
+    messages = "\n".join(record.getMessage() for record in caplog.records)
+    assert "codex_transport_fallback" in messages
+    assert "transport=shim" in messages
+    # The shim forwarded the body to the backend.
+    assert backend.calls, "the turn never reached the backend"
+
+
+# ------------------------------------------ direct transport: cross-instance save
+
+
+@contextlib.contextmanager
+def _captured_runtime_logs():
+    """Records from the codex runtime's logger (it does not propagate)."""
+    import logging
+
+    records: list[logging.LogRecord] = []
+
+    class _Collect(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            records.append(record)
+
+    handler = _Collect(level=logging.DEBUG)
+    runtime_logger = logging.getLogger("veadk.runtime.codex.runtime")
+    previous = runtime_logger.level
+    runtime_logger.addHandler(handler)
+    runtime_logger.setLevel(logging.DEBUG)
+    try:
+        yield records
+    finally:
+        runtime_logger.removeHandler(handler)
+        runtime_logger.setLevel(previous)
+
+
+def _use_thread_store(monkeypatch, store) -> None:
+    from veadk.runtime.codex import runtime as runtime_module
+
+    monkeypatch.setattr(runtime_module, "select_thread_store", lambda _svc: store)
+
+
+@pytest.mark.asyncio
+async def test_losing_a_save_race_does_not_fail_the_invocation(monkeypatch) -> None:
+    """Another instance saving the session's thread first is not a user error.
+
+    With two instances serving one session, the later writer's save conflicts
+    by design (its turn is dropped from the thread rather than overwriting the
+    other's). The user already has this turn's answer, so the conflict must be
+    logged and swallowed -- raising it would turn a completed turn into a
+    failed invocation, and a retry would run the turn twice.
+    """
+    from veadk.runtime.codex.mcp_bridge import shutdown_bridge
+    from veadk.runtime.codex.thread_store import (
+        InMemoryThreadStore,
+        ThreadStoreConflict,
+    )
+
+    class _AlwaysBeatenStore(InMemoryThreadStore):
+        saves = 0
+
+        async def save(self, *args: Any, **kwargs: Any) -> int:
+            type(self).saves += 1
+            raise ThreadStoreConflict("another instance saved first")
+
+    send, backend, _, _ = await _direct_session(
+        monkeypatch,
+        (Round(text="first answer", usage=(1, 1)), Round(text="second", usage=(1, 1))),
+    )
+    _use_thread_store(monkeypatch, _AlwaysBeatenStore())
+    try:
+        with _captured_runtime_logs() as records:
+            assert await send("hello") is None
+            assert await send("again") is None
+    finally:
+        await shutdown_bridge()
+
+    assert _AlwaysBeatenStore.saves == 2, "the runtime never tried to save"
+    assert len(backend.calls) == 2
+    messages = [r.getMessage() for r in records]
+    conflicts = [m for m in messages if m.startswith("codex_thread_save_conflict")]
+    assert len(conflicts) == 2, messages
+    assert not [m for m in messages if m.startswith("codex_thread_save_failed")]
+
+
+@pytest.mark.asyncio
+async def test_next_turn_resumes_from_another_writers_record(monkeypatch) -> None:
+    """A turn resumes the thread as last saved, by whichever instance saved it.
+
+    Between two turns served here, another instance may have run a turn of the
+    same session and saved a newer version. The next turn must load that
+    record -- its history included -- and save on top of *its* version; using
+    a version remembered from this instance's previous turn would conflict and
+    drop the new turn, and resuming stale history would lose the other one.
+    """
+    from veadk.runtime.codex.mcp_bridge import shutdown_bridge
+    from veadk.runtime.codex.rollout_io import Rollout
+    from veadk.runtime.codex.thread_store import InMemoryThreadStore
+
+    store = InMemoryThreadStore()
+    send, backend, codex_class, _ = await _direct_session(
+        monkeypatch,
+        (Round(text="first answer", usage=(1, 1)), Round(text="second", usage=(1, 1))),
+    )
+    _use_thread_store(monkeypatch, store)
+    other_marker = f"MANGO-{uuid.uuid4().hex[:8]}"
+    try:
+        with _captured_runtime_logs() as records:
+            assert await send("remember the word PAPAYA") is None
+            [key] = list(store._records)
+            first = await store.load(key)
+            assert first is not None and first.version == 1
+
+            # The other instance's turn: the same thread, one more user message.
+            item = {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": other_marker}],
+            }
+            line = json.dumps({"type": "response_item", "payload": item}) + "\n"
+            theirs = Rollout(
+                thread_id=first.thread_id,
+                relpath=first.rollout.relpath,
+                data=first.rollout.data + line.encode("utf-8"),
+            )
+            assert (
+                await store.save(
+                    key,
+                    first.thread_id,
+                    theirs,
+                    first.instruction_hash,
+                    expected_version=1,
+                )
+                == 2
+            )
+
+            assert await send("which word?") is None
+    finally:
+        await shutdown_bridge()
+
+    assert _starts_and_resumes(codex_class) == [(1, 0), (0, 1)]
+    resumed = json.dumps(backend.raw_requests[-1], default=str)
+    assert other_marker in resumed, "the turn resumed without the other writer's turn"
+    assert "PAPAYA" in resumed
+    final = await store.load(key)
+    assert final is not None and final.version == 3, (
+        "this turn's save did not land on the newer version"
+    )
+    assert other_marker.encode() in final.rollout.data
+    assert not [
+        r for r in records if r.getMessage().startswith("codex_thread_save_conflict")
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_turn_whose_save_was_lost_is_handed_back_on_the_next_resume(
+    monkeypatch,
+) -> None:
+    """A lost rollout save must not silently drop a turn from the thread.
+
+    If turn 2's save fails (a cross-instance conflict, a store error), turn 3
+    resumes the rollout from turn 1. The runtime used to backfill only what
+    others said after this agent's last reply -- and turn 2's reply *is* the
+    last reply, so turn 2 vanished from the thread without a trace. The
+    record now names the last invocation its rollout covers, and everything
+    after it (turn 2's user message and reply) is handed over.
+    """
+    from veadk.runtime.codex import runtime as runtime_module
+    from veadk.runtime.codex.mcp_bridge import shutdown_bridge
+    from veadk.runtime.codex.thread_store import (
+        InMemoryThreadStore,
+        ThreadStoreConflict,
+    )
+
+    class _LosesSecondSave(InMemoryThreadStore):
+        saves = 0
+
+        async def save(self, *args, **kwargs):
+            type(self).saves += 1
+            if type(self).saves == 2:
+                raise ThreadStoreConflict("another instance saved first")
+            return await super().save(*args, **kwargs)
+
+    store = _LosesSecondSave()
+    monkeypatch.setattr(runtime_module, "select_thread_store", lambda *_: store)
+    send, backend, _, _ = await _direct_session(
+        monkeypatch,
+        (
+            Round(text="noted the apple", usage=(1, 1)),
+            Round(text="noted the BANANA-42", usage=(1, 1)),
+            Round(text="apple and banana", usage=(1, 1)),
+        ),
+    )
+    try:
+        assert await send("remember apple") is None
+        assert await send("remember BANANA-7") is None  # this save is lost
+        assert await send("what do you remember?") is None
+    finally:
+        await shutdown_bridge()
+
+    last = json.dumps(backend.raw_requests[-1], default=str)
+    assert "BANANA-7" in last, "turn 2's user message was lost from the thread"
+    assert "noted the BANANA-42" in last, "turn 2's reply was lost from the thread"
+
+
+@pytest.mark.asyncio
+async def test_a_transient_resume_error_is_retried_not_abandoned(monkeypatch) -> None:
+    """An overloaded app-server must not cost the session its native thread.
+
+    Resume used to fall back to a new thread on any error, so one transient
+    overload discarded the whole native context. Overload is now retried;
+    only deterministic errors (unknown thread, bad params) fall back.
+    """
+    from veadk.runtime.codex import runtime as runtime_module
+    from veadk.runtime.codex.mcp_bridge import shutdown_bridge
+
+    sdk = pytest.importorskip("openai_codex")
+    busy = getattr(sdk, "ServerBusyError", None)
+    if busy is None:
+        pytest.skip("the installed SDK has no ServerBusyError")
+    monkeypatch.setattr(runtime_module, "_RESUME_BACKOFF_SECONDS", (0.0, 0.0))
+
+    class _BusyOnce(fake_codex_sdk.DirectDrivingCodex):
+        busy_left = 1
+
+        async def thread_resume(self, thread_id, **kwargs):
+            if type(self).busy_left:
+                type(self).busy_left -= 1
+                self.thread_resumes.append(dict(kwargs))
+                raise busy(-32001, "server overloaded")
+            return await super().thread_resume(thread_id, **kwargs)
+
+    codex_class = _BusyOnce.configured()
+    send, backend, _, _ = await _direct_session(
+        monkeypatch,
+        (Round(text="noted PAPAYA", usage=(1, 1)), Round(text="PAPAYA", usage=(1, 1))),
+        codex_class=codex_class,
+    )
+    try:
+        assert await send("remember PAPAYA") is None
+        assert await send("which word?") is None
+    finally:
+        await shutdown_bridge()
+
+    # Second process: one failed resume, then a successful one; no new thread.
+    assert _starts_and_resumes(codex_class) == [(1, 0), (0, 2)]
+
+
+@pytest.mark.asyncio
+async def test_a_rollout_over_the_size_cap_drops_the_binding(monkeypatch) -> None:
+    """Past the cap every later save would fail while the stored copy fell
+    further behind; the binding is dropped and the next turn starts fresh."""
+    from veadk.runtime.codex.mcp_bridge import shutdown_bridge
+
+    send, _backend, codex_class, _ = await _direct_session(
+        monkeypatch,
+        (
+            Round(text="one", usage=(1, 1)),
+            Round(text="two", usage=(1, 1)),
+            Round(text="three", usage=(1, 1)),
+        ),
+    )
+    try:
+        assert await send("first") is None  # saved under the default cap
+        monkeypatch.setenv("VEADK_CODEX_MAX_ROLLOUT_BYTES", "10")
+        assert await send("second") is None  # resumed; its save is too large
+        monkeypatch.delenv("VEADK_CODEX_MAX_ROLLOUT_BYTES")
+        assert await send("third") is None
+    finally:
+        await shutdown_bridge()
+
+    # Turn 3 starts a new thread instead of resuming turn 1's stale rollout.
+    assert _starts_and_resumes(codex_class) == [(1, 0), (0, 1), (1, 0)]
+
+
+@pytest.mark.asyncio
+async def test_a_newer_schema_record_is_neither_resumed_nor_overwritten(
+    monkeypatch,
+) -> None:
+    """Mid rolling upgrade, an old instance meets a newer instance's record.
+
+    It answers on a new thread and leaves the record as it found it: deleting
+    it (the corrupt-record path) or saving over it would throw away the thread
+    the newer instances are resuming.
+    """
+    from veadk.runtime.codex.mcp_bridge import shutdown_bridge
+    from veadk.runtime.codex.thread_store import (
+        InMemoryThreadStore,
+        ThreadStoreIncompatible,
+    )
+
+    class _NewerSchemaStore(InMemoryThreadStore):
+        calls: list[str] = []
+
+        async def load(self, key: Any) -> Any:
+            type(self).calls.append("load")
+            raise ThreadStoreIncompatible("schema version 2")
+
+        async def save(self, *args: Any, **kwargs: Any) -> int:
+            type(self).calls.append("save")
+            return 1
+
+        async def delete(self, key: Any) -> None:
+            type(self).calls.append("delete")
+
+    send, backend, codex_class, _ = await _direct_session(
+        monkeypatch, (Round(text="answer", usage=(1, 1)),)
+    )
+    _use_thread_store(monkeypatch, _NewerSchemaStore())
+    try:
+        with _captured_runtime_logs() as records:
+            assert await send("hello") is None
+    finally:
+        await shutdown_bridge()
+
+    assert _NewerSchemaStore.calls == ["load"]
+    assert len(backend.calls) == 1
+    assert _starts_and_resumes(codex_class) == [(1, 0)]
+    messages = [r.getMessage() for r in records]
+    assert [m for m in messages if m.startswith("codex_thread_record_incompatible")]
+    assert not [m for m in messages if m.startswith("codex_thread_load_failed")]
+
+
+@pytest.mark.asyncio
+async def test_turn_outcomes_are_recorded_as_metrics(monkeypatch) -> None:
+    """Resume, save and turn outcomes reach the metrics, with no ids."""
+    from opentelemetry.sdk.metrics import MeterProvider
+    from opentelemetry.sdk.metrics.export import InMemoryMetricReader
+
+    from veadk.runtime.codex import metrics as codex_metrics
+    from veadk.runtime.codex.mcp_bridge import shutdown_bridge
+
+    reader = InMemoryMetricReader()
+    provider = MeterProvider(metric_readers=[reader])
+    codex_metrics.set_meter_for_testing(provider.get_meter("test"))
+    send, _backend, _, _ = await _direct_session(
+        monkeypatch,
+        (Round(text="one", usage=(3, 2)), Round(text="two", usage=(3, 2))),
+    )
+    try:
+        assert await send("first") is None
+        assert await send("second") is None
+    finally:
+        await shutdown_bridge()
+        codex_metrics.set_meter_for_testing(None)
+
+    points: dict[str, list] = {}
+    for resource in reader.get_metrics_data().resource_metrics:
+        for scope in resource.scope_metrics:
+            for metric in scope.metrics:
+                points[metric.name] = list(metric.data.data_points)
+
+    def counts(name: str, attr: str) -> dict:
+        return {p.attributes[attr]: p.value for p in points.get(name, [])}
+
+    assert counts("veadk.codex.thread.resume", "outcome") == {
+        "new_thread": 1,
+        "resumed": 1,
+    }
+    assert counts("veadk.codex.thread.save", "outcome") == {"saved": 2}
+    assert counts("veadk.codex.turn", "status") == {"completed": 2}
+    assert "veadk.codex.turn.startup" in points
+    for data_points in points.values():
+        for point in data_points:
+            assert not any("id" in key for key in point.attributes), point.attributes
+
+
+@pytest.mark.asyncio
+async def test_direct_tool_budget_prevents_parallel_side_effects(monkeypatch):
+    from veadk.runtime.codex.execution_control import CodexToolIterationLimitError
+
+    executed = []
+
+    async def write(value: str) -> dict:
+        """Record a simulated business operation."""
+        executed.append(value)
+        return {"written": value}
+
+    _, _, _, error = await _run_direct_turn(
+        monkeypatch,
+        plan=(
+            Round(tool_calls=tuple(("write", {"value": str(i)}) for i in range(5))),
+            Round(text="done"),
+        ),
+        agent_kwargs={
+            "tools": [write],
+            "codex_runtime_config": {
+                "model_transport": "direct",
+                "thread_mode": "ephemeral",
+                "max_tool_iterations": 1,
+            },
+        },
+    )
+    assert isinstance(error, CodexToolIterationLimitError)
+    assert len(executed) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("transport", ["shim", "direct"])
+async def test_callback_selected_model_reaches_backend(monkeypatch, transport):
+    def before(callback_context, llm_request):
+        llm_request.model = "callback-selected-model"
+
+    run = _run_direct_turn if transport == "direct" else _run_turn
+    _, _, backend, error = await run(
+        monkeypatch,
+        plan=(Round(text="done"),),
+        agent_kwargs={"before_model_callback": before},
+    )
+    assert error is None
+    assert (
+        backend.raw_requests[-1]["model"].removeprefix("openai/")
+        == "callback-selected-model"
+    )
+
+
+@pytest.mark.asyncio
+async def test_lost_rollout_save_backfills_completed_tool_transaction(monkeypatch):
+    from veadk.runtime.codex import runtime as runtime_module
+    from veadk.runtime.codex.mcp_bridge import shutdown_bridge
+    from veadk.runtime.codex.thread_store import (
+        InMemoryThreadStore,
+        ThreadStoreConflict,
+    )
+
+    class LosesSecondSave(InMemoryThreadStore):
+        saves = 0
+
+        async def save(self, *args, **kwargs):
+            self.saves += 1
+            if self.saves == 2:
+                raise ThreadStoreConflict("simulated race")
+            return await super().save(*args, **kwargs)
+
+    executions = []
+
+    async def purchase(item: str) -> dict:
+        """Record a purchase and its receipt."""
+        executions.append(item)
+        return {"status": "completed", "transaction_id": "TX123"}
+
+    store = LosesSecondSave()
+    monkeypatch.setattr(runtime_module, "select_thread_store", lambda *_: store)
+    send, backend, _, _ = await _direct_session(
+        monkeypatch,
+        (
+            Round(text="ready"),
+            Round(tool_calls=(("purchase", {"item": "book"}),)),
+            Round(text="finished"),
+            Round(text="already purchased"),
+        ),
+        tools=[purchase],
+    )
+    try:
+        assert await send("prepare") is None
+        assert await send("buy book") is None
+        assert await send("what happened?") is None
+    finally:
+        await shutdown_bridge()
+    restored = json.dumps(backend.raw_requests[-1], default=str)
+    assert "TX123" in restored
+    assert "function_call" in restored and "function_response" in restored
+    assert "completed" in restored
+    assert executions == ["book"]

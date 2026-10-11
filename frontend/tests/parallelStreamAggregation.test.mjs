@@ -179,6 +179,40 @@ test("replays multiple user turns without reusing assistant history ids", () => 
   assert.notEqual(turns[1].meta.localId, turns[3].meta.localId);
 });
 
+test("replays each persisted user round into a distinct assistant turn", () => {
+  const userEvent = (id, invocationId, text) => ({
+    id,
+    author: "user",
+    invocationId,
+    content: { role: "user", parts: [{ text }] },
+  });
+  const turns = eventsToTurns([
+    userEvent("user-1", "invocation-1", "first question"),
+    event("default", "first answer", {
+      invocationId: "invocation-1",
+      partial: false,
+      id: "answer-1",
+    }),
+    userEvent("user-2", "invocation-2", "second question"),
+    event("default", "second answer", {
+      invocationId: "invocation-2",
+      partial: false,
+      id: "answer-2",
+    }),
+  ]);
+  const assistantTurns = turns.filter((turn) => turn.role === "assistant");
+
+  assert.deepEqual(assistantTurns.map((turn) => blockText(turn, "text")), [
+    "first answer",
+    "second answer",
+  ]);
+  assert.deepEqual(assistantTurns.map((turn) => turn.meta.eventId), [
+    "answer-1",
+    "answer-2",
+  ]);
+  assert.equal(new Set(assistantTurns.map((turn) => turn.meta.localId)).size, 2);
+});
+
 test("keeps an OAuth-resumed response on its seeded turn when invocation changes", () => {
   const initialTurn = {
     role: "assistant",
@@ -271,4 +305,235 @@ test("ignores control-only events after a completed response", () => {
   });
   assert.equal(signal.ignored, true);
   assert.deepEqual(projector.finish(), []);
+});
+
+test("closes unfinished reasoning when the transport stream ends", () => {
+  const projector = createAssistantEventProjector("stream-end");
+  projector.project(event("default", "pwd returned /data/workspace.", {
+    partial: true,
+    thought: true,
+    id: "reasoning-delta",
+  }));
+
+  const [finished] = projector.finish();
+
+  assert.equal(finished.meta.streaming, false);
+  assert.deepEqual(finished.blocks, [{
+    kind: "thinking",
+    text: "pwd returned /data/workspace.",
+    done: true,
+    thoughtKind: "reasoning",
+  }]);
+});
+
+
+test("A2A progress is scoped to the pending turn and never completes an answer", () => {
+  const projector = createAssistantEventProjector("a2a");
+  let localId;
+  for (const status of ["connecting", "submitted", "working"]) {
+    const ev = { id: status, author: "agent", partial: true,
+      customMetadata: { a2aStatus: status }, content: { role: "model", parts: [] } };
+    const projection = projector.project(ev);
+    assert.equal(projection.ignored, undefined);
+    assert.equal(projection.completed, false);
+    assert.equal(projection.turn.meta.a2aStatus, status);
+    assert.deepEqual(projection.turn.blocks, []);
+    localId ??= projection.turn.meta.localId;
+    assert.equal(projection.turn.meta.localId, localId);
+    assert.equal(projector.project(ev).ignored, true);
+  }
+  const final = projector.project({author: "agent", partial: false,
+    content: {role: "model", parts: [{text: "done"}]}});
+  assert.equal(final.completed, true);
+  assert.equal(final.turn.meta.localId, localId);
+  assert.equal(final.turn.meta.a2aStatus, undefined);
+});
+
+test("A2A malformed metadata is ignored; snake case metadata is supported", () => {
+  const projector = createAssistantEventProjector("a2a");
+  assert.equal(projector.project({customMetadata: {a2aStatus: 123}}).ignored, true);
+  const projection = projector.project({author: "agent", partial: true,
+    custom_metadata: {a2aStatus: "working"}});
+  assert.equal(projection.turn.meta.a2aStatus, "working");
+  assert.equal(projector.finish()[0].meta.streaming, false);
+});
+
+test("ignores streamed user echoes without dropping agent tool responses", () => {
+  const projector = createAssistantEventProjector("echo", {
+    role: "assistant", blocks: [], meta: { localId: "pending", streaming: true },
+  });
+  assert.equal(projector.project({ ...event("user", "request"), id: "echo" }).ignored, true);
+  const call = projector.project({ ...event("default", ""), id: "call", content: {
+    role: "model", parts: [{ functionCall: { id: "t1", name: "list_esa_cron_tasks", args: {} } }],
+  } });
+  assert.equal(call.turn.meta.localId, "pending");
+  const response = projector.project({ ...event("default", ""), id: "response", content: {
+    role: "user", parts: [{ functionResponse: { id: "t1", name: "list_esa_cron_tasks", response: { items: [] } } }],
+  } });
+  assert.notEqual(response.ignored, true);
+  assert.equal(response.turn.meta.localId, call.turn.meta.localId);
+  assert.equal(projector.project({ ...event("user", "request"), id: "echo-replay" }).ignored, true);
+  const answer = projector.project(event("default", "done", { partial: false }));
+  assert.equal(blockText(answer.turn, "text"), "done");
+});
+
+for (const invocationIds of [true, false]) {
+  test(`history retains all replies across user turns (invocation IDs: ${invocationIds})`, () => {
+    const input = [
+      event("user", "question 1"),
+      event("alpha", "answer 1", {partial: false}),
+      event("beta", "answer 1b", {partial: false}),
+      event("user", "question 2"),
+      event("alpha", "answer 2", {partial: false}),
+      event("alpha", "answer 2b", {partial: false}),
+      event("user", "question 3"),
+      event("alpha", "answer 3", {partial: false}),
+    ].map((item, i) => ({...item, id: `history-${i}`, invocationId: invocationIds ? `inv-${i < 3 ? 1 : i < 6 ? 2 : 3}` : undefined}));
+    const result = eventsToTurns(input);
+    assert.deepEqual(result.map(t => blockText(t, "text")), input.map(e => e.content.parts[0].text));
+    assert.deepEqual(result.map(t => t.role), input.map(e => e.author === "user" ? "user" : "assistant"));
+    const ids = result.filter(t => t.role === "assistant").map(t => t.meta.localId);
+    assert.equal(new Set(ids).size, ids.length);
+  });
+}
+
+for (const withThought of [false, true]) {
+  for (const finalText of ["Fixture answer.", "Corrected final answer."]) {
+    test(`MPA wrapper preserves replaceable preview (thought=${withThought}, final=${finalText})`, () => {
+      const invocationId = "mpa-preview-invocation";
+      const sandbox = (type, text, partial = false, thought = false) => ({
+        ...event("Agent", text, { invocationId, id: type, partial, thought }),
+        customMetadata: { source: "sandbox", eventType: type },
+      });
+      const call = {
+        id: "mpa-call",
+        author: "default",
+        invocationId,
+        content: { parts: [{ functionCall: { id: "call", name: "sandbox_task", args: {} } }] },
+      };
+      const wrapper = {
+        id: "mpa-wrapper",
+        author: "default",
+        invocationId,
+        content: { parts: [{ functionResponse: {
+          id: "call",
+          name: "sandbox_task",
+          response: { finalAlreadyEmitted: true, status: "completed" },
+        } }] },
+      };
+      const final = sandbox("invocation.completed", finalText);
+      const events = [
+        call,
+        sandbox("message.delta", "Fixture answer.", true),
+        wrapper,
+        ...(withThought ? [sandbox("thought.completed", "Fixture reasoning.", false, true)] : []),
+        final,
+      ];
+      const projector = createAssistantEventProjector("mpa-preview");
+      let live = [];
+      for (const item of events) {
+        const projected = projector.project(item);
+        if (!projected.ignored) live = upsertProjectedAssistantTurn(live, projected.turn);
+        if (item === wrapper) {
+          assert.equal(blockText(live[0], "text"), "Fixture answer.");
+          assert.equal(live[0].meta.streaming, false);
+        }
+      }
+      for (const turn of projector.finish()) live = upsertProjectedAssistantTurn(live, turn);
+      const replay = eventsToTurns(events);
+      const durableHistory = eventsToTurns(events.filter((item) => !item.partial));
+      for (const turns of [live, replay, durableHistory]) {
+        assert.equal(turns.length, 1);
+        assert.equal(blockText(turns[0], "text"), finalText);
+        assert.equal(blockText(turns[0], "thinking"), withThought ? "Fixture reasoning." : "");
+        assert.equal(turns[0].blocks.find((block) => block.kind === "tool")?.status, "completed");
+        assert.equal(turns[0].meta.streaming, false);
+      }
+    });
+  }
+}
+
+test("closes the live sandbox task from its finalAlreadyEmitted wrapper response", () => {
+  const projector = createAssistantEventProjector("mpa-live");
+  let turns = [];
+  const invocationId = "mpa-invocation";
+  const callId = "sandbox-call";
+
+  for (const item of [
+    {
+      id: "sandbox-start",
+      author: "default",
+      invocationId,
+      partial: false,
+      content: {
+        role: "model",
+        parts: [{ functionCall: { id: callId, name: "sandbox_task", args: { task: "pwd" } } }],
+      },
+    },
+    {
+      id: "sandbox-command-result",
+      author: "Agent",
+      invocationId,
+      partial: false,
+      customMetadata: { source: "sandbox", eventType: "tool.result" },
+      content: {
+        role: "model",
+        parts: [{
+          functionResponse: {
+            id: "command-call",
+            name: "commandExecution",
+            response: { status: "completed", output: "/data/workspace" },
+          },
+        }],
+      },
+    },
+    {
+      ...event("Agent", "/data/workspace", {
+        invocationId,
+        id: "sandbox-answer-delta",
+        partial: true,
+      }),
+      customMetadata: { source: "sandbox", eventType: "message.delta" },
+    },
+  ]) {
+    const projection = projector.project(item);
+    assert.equal(projection.ignored, undefined);
+    turns = upsertProjectedAssistantTurn(turns, projection.turn);
+  }
+
+  const terminal = projector.project({
+    id: "sandbox-wrapper-response",
+    author: "default",
+    invocationId,
+    content: {
+      role: "user",
+      parts: [{
+        functionResponse: {
+          id: callId,
+          name: "sandbox_task",
+          response: {
+            status: "completed",
+            message: "Sandbox task result has been streamed to the session.",
+            finalAlreadyEmitted: true,
+          },
+        },
+      }],
+    },
+  });
+  assert.equal(terminal.ignored, undefined);
+  assert.equal(terminal.completed, true);
+  turns = upsertProjectedAssistantTurn(turns, terminal.turn);
+
+  assert.equal(turns.length, 1);
+  const sandboxTask = turns[0].blocks.find(
+    (block) => block.kind === "tool" && block.name === "sandbox_task",
+  );
+  assert.equal(sandboxTask?.done, true);
+  assert.equal(sandboxTask?.status, "completed");
+  assert.equal(blockText(turns[0], "text"), "/data/workspace");
+  assert.equal(turns[0].meta.streaming, false);
+  assert.equal(turns[0].meta.eventId, "sandbox-wrapper-response");
+  const [transportFinished] = projector.finish();
+  assert.equal(transportFinished.meta.localId, turns[0].meta.localId);
+  assert.equal(transportFinished.meta.streaming, false);
 });

@@ -1,3 +1,4 @@
+import { mpaChannelsAutomation } from "./mpaChannels";
 import { codingAgentsAutomation } from "./codingAgents";
 import { feishuBotAutomation } from "./feishuBot";
 import { gitLabMergeRequestReviewAutomation } from "./gitlabMergeRequestReview";
@@ -27,6 +28,7 @@ export const AUTOMATIONS: readonly AutomationDefinition[] = [
   pullRequestReviewAutomation,
   gitLabMergeRequestReviewAutomation,
   feishuBotAutomation,
+  mpaChannelsAutomation,
   websiteIntegrationAutomation,
 ];
 

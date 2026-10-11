@@ -56,7 +56,7 @@ dependencies = [
     "pillow>=10.0.0", # Encode rendered PDF pages as PNG
     "qrcode>=8,<9", # Render Feishu app-registration links for Studio setup
     "vikingdb-python-sdk>=0.1.32", # For Viking DB
-    "agentkit-sdk-python>=0.8.0",
+    "agentkit-sdk-python>=0.8.5",
     "websockets>=15,<16", # Stream temporary AgentKit Sandbox conversations
     "openviking-sdk>=0.1.9",
     "python-frontmatter==1.1.0",
@@ -77,8 +77,10 @@ github-cicd = [
     "PyNaCl>=1.5.0", # Encrypt GitHub Actions secrets for Runtime delivery
 ]
 codex = [
-    "openai-codex==0.1.0b3",
-    "openai-codex-cli-bin==0.137.0a4",
+    # The SDK pins its matching `openai-codex-cli-bin` (the Codex binary)
+    # exactly, so the binary is not listed here. Bump both together by bumping
+    # this pin.
+    "openai-codex==0.159.2",
     # The Responses->chat shim (veadk/runtime/codex/proxy.py) imports these at
     # module level. They resolve transitively through google-adk today, but adk
     # has already moved other web deps behind extras on 2.x, so declare them

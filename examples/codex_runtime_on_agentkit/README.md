@@ -40,9 +40,15 @@ codex_runtime_on_agentkit/
 - **`openai-codex` is not a veadk dependency**, so `requirements.txt` lists it
   explicitly. It pulls in `openai-codex-cli-bin`, which ships the Codex CLI
   binary as a **manylinux wheel** — no separate binary install in the Linux
-  build. These pins mirror veadk-python's `[codex]` extra; the extra is not
-  used directly because uv only accepts a pre-release when its exact version is
-  pinned at the top level, not transitively through an extra.
+  build. The SDK pins that binary to its own version, so only `openai-codex`
+  is listed. The pin mirrors veadk-python's `[codex]` extra and is kept
+  explicit so the image gets this SDK even with a veadk-python release whose
+  extra still pins an older one.
+- `veadk-python>=1.1.15` is required, not just any release with the codex
+  runtime: earlier releases do not set the Ark options Codex CLI 0.159 needs
+  (`model_reasoning_summary="none"`, `unbounded_connection_retries=false`), so
+  they install next to the pinned CLI and then fail every Ark call. The
+  `openai-codex` pin and the `veadk-python` lower bound move together.
 - `fastapi` and `uvicorn` are listed too: `app.py` imports `uvicorn` directly
   and the runtime's Responses→chat shim imports both at module level. They
   resolve through google-adk today, but adk has been moving web deps behind

@@ -50,6 +50,10 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from litellm import exceptions as litellm_exceptions
 
+from veadk.runtime.codex.execution_control import (
+    CodexToolIterationLimitError,
+    TurnRequests,
+)
 from veadk.utils.logger import get_logger
 
 try:  # OpenTelemetry is optional; the shim must import without it.
@@ -250,6 +254,7 @@ class TurnToolState:
     __slots__ = (
         "_lock",
         "_transcript",
+        "_anchors",
         "_iterations",
         "_dropped",
         "_error",
@@ -260,6 +265,10 @@ class TurnToolState:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._transcript: list[dict[str, Any]] = []
+        # Parallel to `_transcript`: the `call_id` of the Codex-visible
+        # function call each recorded item happened just before, or `None`
+        # while that is not known yet. See `anchor_unplaced`.
+        self._anchors: list[str | None] = []
         self._iterations = 0
         self._dropped = 0
         self._error: BaseException | None = None
@@ -270,7 +279,7 @@ class TurnToolState:
 
     @property
     def iterations(self) -> int:
-        """Tool round-trips consumed so far in this turn."""
+        """Individual ADK tool calls reserved so far in this turn."""
         with self._lock:
             return self._iterations
 
@@ -299,12 +308,12 @@ class TurnToolState:
         with self._lock:
             return [dict(item) for item in self._transcript]
 
-    def consume_iteration(self, budget: int) -> bool:
-        """Reserve one tool round-trip; ``False`` when the turn budget is gone."""
+    def consume_iteration(self, budget: int, count: int = 1) -> bool:
+        """Reserve calls before dispatch; reject a batch that exceeds the budget."""
         with self._lock:
-            if self._iterations >= budget:
+            if self._iterations + count > budget:
                 return False
-            self._iterations += 1
+            self._iterations += count
             return True
 
     def identify_request(
@@ -394,6 +403,7 @@ class TurnToolState:
             return
         with self._lock:
             self._transcript.extend(dict(item) for item in items)
+            self._anchors.extend(None for _ in items)
             overflow = len(self._transcript) - _TURN_TRANSCRIPT_MAX_ITEMS
             if overflow <= 0:
                 return
@@ -409,21 +419,62 @@ class TurnToolState:
             ):
                 overflow += 1
             del self._transcript[:overflow]
+            del self._anchors[:overflow]
             self._dropped += overflow
 
-    def replay_items(self, seen_call_ids: set[str]) -> list[dict[str, Any]]:
-        """Items to re-append to a fresh request's ``input``.
+    def anchor_unplaced(self, call_id: str | None) -> None:
+        """Pin items recorded during this request to where they happened.
 
-        Anything whose ``call_id`` is already present in the inbound request is
-        skipped, so the pairs can never be duplicated (both items of a pair
-        share a ``call_id``, so a pair is always kept or dropped whole).
+        The shim runs ADK tools *before* returning the model's reply to Codex,
+        so they belong just ahead of the first function call in that reply.
+        Codex will carry that call in every later request, which is what lets
+        :meth:`replay_into` put the ADK pairs back in order. A reply with no
+        function call ends the turn, so its items never need placing.
         """
+        if not call_id:
+            return
         with self._lock:
-            return [
-                dict(item)
-                for item in self._transcript
-                if item.get("call_id") not in seen_call_ids
+            self._anchors = [
+                call_id if anchor is None else anchor for anchor in self._anchors
             ]
+
+    def replay_into(self, conversation: list[Any]) -> int:
+        """Splice the turn's ADK tool pairs into ``conversation`` in order.
+
+        Appending them at the tail made every request end on the ADK results,
+        however much the model had done since: it kept concluding it had only
+        just fetched its data and started over, re-running the same commands
+        until the call budget ran out. Each pair is instead inserted before the
+        model reply it preceded -- the reply's function call plus any assistant
+        text or reasoning Codex recorded ahead of it. Pairs whose anchor is not
+        (or no longer, e.g. after compaction) in the request fall back to the
+        tail. Returns the number of items inserted.
+        """
+        seen = _call_ids(conversation)
+        with self._lock:
+            pending = [
+                (anchor, dict(item))
+                for anchor, item in zip(self._anchors, self._transcript)
+                if item.get("call_id") not in seen
+            ]
+        if not pending:
+            return 0
+
+        groups: dict[str, list[dict[str, Any]]] = {}
+        tail: list[dict[str, Any]] = []
+        for anchor, item in pending:
+            if anchor is None:
+                tail.append(item)
+            else:
+                groups.setdefault(anchor, []).append(item)
+        for anchor, items in groups.items():
+            position = _reply_start(conversation, anchor)
+            if position is None:
+                tail.extend(items)
+            else:
+                conversation[position:position] = items
+        conversation.extend(tail)
+        return len(pending)
 
 
 @dataclass(frozen=True)
@@ -472,6 +523,7 @@ class ShimTurnContext:
     # first attempt was rejected outright, so it never produced a response).
     on_model_call: Callable[[], None] | None = None
     state: TurnToolState = field(default_factory=TurnToolState)
+    requests: TurnRequests = field(default_factory=TurnRequests)
 
 
 @dataclass
@@ -653,7 +705,7 @@ class ResponsesShim:
         Args:
             specs: ADK tool specs advertised to the backend as ``function`` tools.
             executors: ``name -> async (args, call_id) -> str`` tool executors.
-            max_tool_iterations: Tool round-trip budget for the whole turn.
+            max_tool_iterations: Individual ADK tool call budget for the whole turn.
             invocation_id: ADK invocation id, for logs.
             model_extra_config: The agent's ``model_extra_config``
                 (``extra_headers``/``extra_body``), forwarded to the backend on
@@ -713,8 +765,8 @@ class ResponsesShim:
         )
         return token
 
-    def unregister_turn(self, token: str) -> None:
-        """Remove one invocation's routing state."""
+    def unregister_turn(self, token: str) -> tuple[asyncio.Task, ...]:
+        """Revoke the turn and cancel every request already using its tools."""
         with self._turns_lock:
             context = self._turns.pop(token, None)
         if context is not None:
@@ -723,6 +775,12 @@ class ResponsesShim:
                 context.invocation_id,
                 context.state.iterations,
             )
+            return context.requests.cancel()
+        return ()
+
+    async def close_turn(self, token: str) -> None:
+        """Stop requests before their invocation releases toolsets/workspace."""
+        await TurnRequests.drain(self.unregister_turn(token))
 
     def _turn(self, token: str) -> ShimTurnContext | None:
         with self._turns_lock:
@@ -767,6 +825,10 @@ class ResponsesShim:
                     error_type="authentication_error",
                     message="Unknown or expired Codex invocation token.",
                 )
+            with turn_context.requests.track():
+                return await _responses(request, turn_context)
+
+        async def _responses(request: Request, turn_context: ShimTurnContext) -> Any:
             try:
                 body = await request.json()
             except Exception:  # noqa: BLE001 - malformed client payload
@@ -889,19 +951,19 @@ class ResponsesShim:
             # streamed to it, precisely so Codex does not try to dispatch tools
             # it does not own), so without this the model would see a
             # conversation in which it never called the tool and would re-issue
-            # the call — re-running its side effects. Pairs are appended at the
-            # tail (never spliced mid-array) so the chat bridge always sees an
-            # assistant(tool_calls) message immediately followed by its tool
-            # result, and are skipped when their call_id is already present.
+            # the call — re-running its side effects. Each pair goes back where
+            # it happened (see `TurnToolState.replay_into`), kept whole so the
+            # chat bridge still sees an assistant(tool_calls) message
+            # immediately followed by its tool result, and is skipped when its
+            # call_id is already present.
             conversation = call_kwargs.get("input")
             if is_agent_turn and isinstance(conversation, list):
-                replay = turn_context.state.replay_items(_call_ids(conversation))
-                if replay:
-                    conversation.extend(replay)
+                replayed = turn_context.state.replay_into(conversation)
+                if replayed:
                     logger.debug(
                         "codex_shim_tool_history_replayed invocation_id=%s items=%d",
                         turn_context.invocation_id,
-                        len(replay),
+                        replayed,
                     )
 
             call_kwargs.update(
@@ -950,6 +1012,7 @@ class ResponsesShim:
             usage_acc: dict[str, int] = {}
             resp: dict[str, Any] = {}
             while True:
+                turn_context.requests.check_active()
                 # Charge ADK's per-invocation model-call budget here: this is
                 # where the calls actually happen — including on a Codex-internal
                 # pass, which is just as billable and just as capable of looping,
@@ -983,6 +1046,7 @@ class ResponsesShim:
                             ),
                         )
                 result = await _call_backend_tolerating_reasoning(call_kwargs)
+                turn_context.requests.check_active()
                 resp = _to_dict(result)
                 _accumulate_usage(usage_acc, resp.get("usage"))
                 if max_iters <= 0:
@@ -1002,7 +1066,12 @@ class ResponsesShim:
                 # Budget is per turn, not per request: Codex issues a fresh
                 # request after every native tool call, so a per-request counter
                 # allowed max_iters round-trips each time.
-                if not turn_context.state.consume_iteration(max_iters):
+                if not turn_context.state.consume_iteration(max_iters, len(calls)):
+                    turn_context.state.record_error(
+                        CodexToolIterationLimitError(
+                            f"ADK tool call budget exhausted (max_tool_iterations={max_iters})."
+                        )
+                    )
                     logger.warning(
                         "codex_tool_iteration_limit invocation_id=%s limit=%d",
                         turn_context.invocation_id,
@@ -1013,7 +1082,7 @@ class ResponsesShim:
                         error_type="tool_iteration_limit",
                         message=(
                             "Codex tool iteration budget exhausted "
-                            f"after {max_iters} round(s) this turn."
+                            f"with a limit of {max_iters} call(s) this turn."
                         ),
                         template=_with_total_usage(resp, usage_acc),
                     )
@@ -1051,6 +1120,7 @@ class ResponsesShim:
                     # whose contextvars were snapshotted when the shim first
                     # started, so ADK's `execute_tool` span would otherwise be
                     # an orphan root with a foreign trace_id.
+                    turn_context.requests.check_active()
                     with _otel_scope(turn_context.otel_context):
                         out = await agent_executors[fc["name"]](args, str(cid))
                     return fc, out, _is_transfer_output(out)
@@ -1120,6 +1190,8 @@ class ResponsesShim:
                 # Remember them for the *next* request of this same turn.
                 turn_context.state.record(pairs)
 
+            if is_agent_turn:
+                turn_context.state.anchor_unplaced(_first_call_id(resp))
             resp = _with_total_usage(resp, usage_acc)
             if stream:
                 return StreamingResponse(
@@ -1277,7 +1349,10 @@ class ResponsesShim:
         server, task = self._server, self._task
         self._reset()
         with self._turns_lock:
+            contexts = tuple(self._turns.values())
             self._turns.clear()
+        for context in contexts:
+            context.requests.cancel()
         if server is not None:
             server.should_exit = True
         if task is None:
@@ -1310,7 +1385,10 @@ class ResponsesShim:
         server, task = self._server, self._task
         self._reset()
         with self._turns_lock:
+            contexts = tuple(self._turns.values())
             self._turns.clear()
+        for context in contexts:
+            context.requests.cancel()
         if server is not None:
             server.should_exit = True
             for bound in getattr(server, "servers", None) or ():
@@ -1485,6 +1563,45 @@ def _user_message_texts(items: Any) -> list[str]:
             )
         )
     return texts
+
+
+def _reply_start(conversation: list[Any], call_id: str) -> int | None:
+    """Index where the model reply containing function call ``call_id`` begins.
+
+    Codex records one reply's items contiguously: optional reasoning and
+    assistant text, then its function calls. The reply therefore starts at the
+    call, walked back over those leading items.
+    """
+    for index, item in enumerate(conversation):
+        if (
+            isinstance(item, dict)
+            and item.get("type") == "function_call"
+            and item.get("call_id") == call_id
+        ):
+            break
+    else:
+        return None
+    while index > 0:
+        previous = conversation[index - 1]
+        if not isinstance(previous, dict):
+            break
+        if previous.get("type") == "reasoning" or (
+            previous.get("type") == "message" and previous.get("role") == "assistant"
+        ):
+            index -= 1
+            continue
+        break
+    return index
+
+
+def _first_call_id(response: dict[str, Any]) -> str | None:
+    """``call_id`` of the first function call in a Responses ``output``."""
+    for item in response.get("output") or []:
+        if isinstance(item, dict) and item.get("type") == "function_call":
+            call_id = item.get("call_id")
+            if isinstance(call_id, str) and call_id:
+                return call_id
+    return None
 
 
 def _call_ids(items: list[Any]) -> set[str]:

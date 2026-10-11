@@ -93,13 +93,13 @@ STUDIO_DEPENDENCY_WHEELS = (
         sha256="369cc9fc8cc10cb24143873a0d95438bb8ee257bb80c71989e3ee290e8d72c67",
     ),
     StudioDependencyWheel(
-        filename="openviking_sdk-0.1.4-py3-none-any.whl",
+        filename="openviking_sdk-0.1.9-py3-none-any.whl",
         url=(
-            "https://files.pythonhosted.org/packages/fe/af/"
-            "4ca139b05f39c8ed04339d7c8aa56550df80f97d39768d2df9bd72fdbbb9/"
-            "openviking_sdk-0.1.4-py3-none-any.whl"
+            "https://files.pythonhosted.org/packages/47/d6/"
+            "aa82551f9c5d06ce682b9194c784beeb16478ce103d650ed8e8b487b1aa7/"
+            "openviking_sdk-0.1.9-py3-none-any.whl"
         ),
-        sha256="1e9f23332b1b687dd7f272e660953992de60ad3e9d07d62f7460fd4aedb99616",
+        sha256="6057f3ab921cee4697a7b424948347669cb7b8e04439f305503d8ab7132af3ce",
     ),
 )
 

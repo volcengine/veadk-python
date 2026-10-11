@@ -8,7 +8,6 @@ const clientSource = source("../src/adk/client.ts");
 const appSource = source("../src/App.tsx");
 const composerSource = source("../src/ui/Composer.tsx");
 const railSource = source("../src/ui/AgentTopology.tsx");
-const dialogSource = source("../src/ui/StudioToolDialog.tsx");
 const blocksSource = source("../src/ui/Blocks.tsx");
 const stylesSource = source("../src/styles.css");
 
@@ -21,11 +20,22 @@ test("runSSE sends an explicit per-run platform tool selection", () => {
   );
 });
 
-test("Studio keeps BFF tool selection separate per session", () => {
-  assert.match(appSource, /studioToolIdsBySession/);
-  assert.match(appSource, /studioToolSelectionKey\(appName, userId, sessionId\)/);
+test("A2A model selection is request scoped and capability gated", () => {
+  assert.match(clientSource, /modelId\?: string/);
+  assert.match(clientSource, /model_id: modelId\.trim\(\)/);
+  assert.match(appSource, /selectableModels\.length > 1/);
+  assert.match(appSource, /modelId: requestedModel/);
+  assert.match(composerSource, /selectableModels\.length > 1/);
+  assert.match(composerSource, /disabled=\{busy\}/);
+});
+
+test("Studio sends BFF tools only as implementation support for environment mounts", () => {
+  assert.doesNotMatch(appSource, /veadk\.sessionStudioToolMounts\.v1/);
+  assert.doesNotMatch(appSource, /studioToolIdsBySession/);
+  assert.match(appSource, /const canMountSessionEnvironment = ENVIRONMENT_STUDIO_TOOL_IDS\.every/);
+  assert.match(appSource, /ENVIRONMENT_STUDIO_TOOL_IDS/);
   assert.match(appSource, /platformTools: studioToolRuntime \? platformTools : undefined/);
-  assert.match(railSource, /selectedStudioToolIds=\{selectedStudioToolIds\}/);
+  assert.doesNotMatch(railSource, /selectedStudioToolIds/);
 });
 
 test("BFF tool discovery keeps a stable hook order across login", () => {
@@ -39,16 +49,18 @@ test("BFF tool discovery keeps a stable hook order across login", () => {
   assert.ok(capabilityCall < authenticationReturn);
 });
 
-test("Agent information owns BFF tool selection and Composer stays unchanged", () => {
-  assert.match(railSource, /<StudioToolDialog/);
-  assert.match(railSource, /t\("agentTopology\.addStudioToolHere"\)/);
-  assert.match(dialogSource, /aria-label=\{t\("studioTools\.searchAria"\)\}/);
-  assert.match(dialogSource, /aria-pressed=\{active\}/);
+test("Agent information omits generic BFF tool selection and Composer stays unchanged", () => {
+  assert.doesNotMatch(railSource, /<StudioToolDialog/);
+  assert.doesNotMatch(railSource, /addStudioToolHere/);
   assert.doesNotMatch(composerSource, /StudioToolPicker|StudioToolChips|studioTools/);
 });
 
-test("dynamic Skill mounting is absent while static Agent skills remain", () => {
-  assert.match(railSource, /const skills = uniqueSkills\(info\.skills\)/);
+test("MPA excludes temporary skills while generic Agent skills remain compatible", () => {
+  assert.match(railSource, /const skills = isMpa \? boundSkills\?\.skills \?\? \[\] : uniqueSkills\(\[/);
+  assert.match(railSource, /selectedSessionSkills\.map/);
+  assert.match(railSource, /!isMpa && onSessionSkillsChange/);
+  assert.doesNotMatch(railSource, /topo-session-skills/);
+  assert.match(appSource, /agentInfo\?\.agentCategory === "mpa" \? \[\] : selectedSessionSkills/);
   assert.doesNotMatch(railSource, /SkillCapabilityDialog|onAddCapability/);
   assert.doesNotMatch(clientSource, /SessionCapabilities|addSessionCapability/);
   assert.doesNotMatch(appSource, /requiresSessionCapabilityRunner/);

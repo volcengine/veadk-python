@@ -17,7 +17,7 @@ from io import BytesIO
 
 import pytest
 
-from veadk.integrations.ve_faas import release_progress
+from veadk.integrations.ve_faas import release_progress, ve_faas as ve_faas_module
 from veadk.integrations.ve_faas.release_progress import ReleaseProgress
 from veadk.integrations.ve_faas.ve_faas import VeFaaS
 
@@ -125,6 +125,55 @@ def test_progress_redacts_credentials_and_signed_queries(progress) -> None:
         "signed-secret",
     ):
         assert secret not in output
+
+
+def test_release_failure_formatter_redacts_all_diagnostic_sources(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_url = "https://build.example/step.log?X-Tos-Signature=source-secret-value"
+    monkeypatch.setattr(
+        ve_faas_module,
+        "_download_release_log_url",
+        lambda _url: "api_key=downloaded-secret-value",
+    )
+
+    output = ve_faas_module._format_release_failure_text(
+        raw_logs=f"token=console-secret-value {source_url}",
+        full_response={"Result": {"ApiKey": "status-secret-value"}},
+        provider="byteplus",
+    )
+
+    for secret in (
+        "console-secret-value",
+        "source-secret-value",
+        "downloaded-secret-value",
+        "status-secret-value",
+    ):
+        assert secret not in output
+    assert "Control Plane Logs" in output
+    assert "FaaS Data Plane Logs" in output
+    assert "Final VeFaaS Status" in output
+
+
+def test_release_failure_formatter_redacts_download_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        ve_faas_module,
+        "_download_release_log_url",
+        lambda _url: (_ for _ in ()).throw(
+            RuntimeError("token=download-error-secret-value")
+        ),
+    )
+
+    output = ve_faas_module._format_release_failure_text(
+        raw_logs=("https://build.example/step.log?X-Tos-Signature=source-secret-value"),
+        full_response={"Result": {"Status": "deploy_fail"}},
+    )
+
+    assert "download-error-secret-value" not in output
+    assert "source-secret-value" not in output
+    assert "下载失败" in output
 
 
 @pytest.mark.parametrize("content_range", ["bytes 100-125/126", ""])

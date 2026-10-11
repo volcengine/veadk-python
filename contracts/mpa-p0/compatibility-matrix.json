@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "rules": [
+    {
+      "id": "p0-codex-rest-v1",
+      "mpaProfileSchemaVersion": 1,
+      "agentkitSdkVersion": "0.8.5",
+      "runtimeExecutionCapability": "urn:veadk:mpa:execution:v1",
+      "sessionExecutionConfigSchemaVersion": 1,
+      "workerProtocol": "codex",
+      "workerRequiredEndpoints": [
+        "/health",
+        "/ready",
+        "/v1/sessions",
+        "/v1/sessions/{session_id}/turns",
+        "/v1/sessions/{session_id}/events"
+      ]
+    }
+  ]
+}

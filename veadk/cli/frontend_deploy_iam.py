@@ -134,7 +134,11 @@ def _verify_custom_policy(svc: Any, policy_name: str) -> None:
     if not isinstance(document, dict):
         raise RuntimeError(f"IAM policy {policy_name} has no readable document")
 
-    expected_actions = set(FRONTEND_DEPLOY_POLICY["Statement"][0]["Action"])
+    expected_actions = {
+        action
+        for statement in FRONTEND_DEPLOY_POLICY["Statement"]
+        for action in statement.get("Action", [])
+    }
     actual_actions = {
         action
         for statement in document.get("Statement", [])

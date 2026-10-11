@@ -1391,3 +1391,301 @@ async def test_a_repaired_backend_call_is_charged_once(monkeypatch) -> None:
         "calls, not the attempts a single call may cost"
     )
     assert attempts[0]["num_retries"] == proxy_module._shim_num_retries()
+
+
+# ------------------------------------------- ADK pairs replay in chronological order
+
+
+def _fc(call_id: str, name: str = "exec_command") -> dict:
+    return {
+        "type": "function_call",
+        "call_id": call_id,
+        "name": name,
+        "arguments": "{}",
+        "status": "completed",
+    }
+
+
+def _fco(call_id: str, output: str = "ok") -> dict:
+    return {"type": "function_call_output", "call_id": call_id, "output": output}
+
+
+async def _drive_adk_then_native_rounds(
+    monkeypatch, codex_inputs: list[list[dict]], *, preamble: bool = False
+) -> list[list[dict]]:
+    """Serve one ADK round, then native rounds; return what the backend saw.
+
+    The first Codex request makes the model call the ADK tool ``fetch`` (run by
+    the shim), then the native ``shell-1``. Every later request is answered
+    with the next native call, and the last one with text.
+    """
+    shim = ResponsesShim("https://backend.invalid/v1", "backend-key")
+    seen: list[list[dict]] = []
+
+    async def executor(args, call_id):
+        return json.dumps({"fetched": True})
+
+    token = shim.register_turn(
+        [{"type": "function", "name": "fetch", "parameters": {}}],
+        {"fetch": executor},
+    )
+    replies = [_tool_response("fetch", "r-adk", "call-adk")]
+    shell_1 = _tool_response("exec_command", "r-shell-1", "shell-1")
+    if preamble:
+        shell_1["output"].insert(0, _text_response("Data is in.", "pre")["output"][0])
+    replies.append(shell_1)
+    for index in range(2, len(codex_inputs) + 1):
+        replies.append(
+            _tool_response("exec_command", f"r-shell-{index}", f"shell-{index}")
+        )
+    replies[-1] = _text_response("root cause found", "final")
+
+    async def backend(**kwargs):
+        seen.append(json.loads(json.dumps(kwargs["input"])))
+        return replies[len(seen) - 1]
+
+    monkeypatch.setattr(proxy_module.litellm, "aresponses", backend)
+    async with _client(shim) as client:
+        for codex_input in codex_inputs:
+            response = await client.post(
+                "/v1/responses",
+                headers={"Authorization": f"Bearer {token}"},
+                json={"model": "model", "stream": False, "input": codex_input},
+            )
+            assert response.status_code == 200, response.text
+    return seen
+
+
+def _call_order(items: list[dict]) -> list[str]:
+    order = []
+    for item in items:
+        kind = item.get("type")
+        if kind == "function_call":
+            order.append(f"call:{item['call_id']}")
+        elif kind == "function_call_output":
+            order.append(f"out:{item['call_id']}")
+        elif kind == "message":
+            order.append(f"msg:{item.get('role')}")
+    return order
+
+
+@pytest.mark.asyncio
+async def test_adk_pair_is_replayed_where_it_happened_not_at_the_tail(
+    monkeypatch,
+) -> None:
+    """ADK results must not look like the latest thing the model did.
+
+    Appended at the tail, the ADK pair ended every request, so after any number
+    of native commands the model still saw "data just fetched" as its most
+    recent step. On a real multi-step investigation it kept announcing it had
+    all the data and re-ran the same analysis until the call budget ran out.
+    """
+    user = _message("investigate")
+    seen = await _drive_adk_then_native_rounds(
+        monkeypatch,
+        [
+            [user],
+            [user, _fc("shell-1"), _fco("shell-1")],
+            [user, _fc("shell-1"), _fco("shell-1"), _fc("shell-2"), _fco("shell-2")],
+        ],
+    )
+
+    assert _call_order(seen[-1]) == [
+        "msg:user",
+        "call:call-adk",
+        "out:call-adk",
+        "call:shell-1",
+        "out:shell-1",
+        "call:shell-2",
+        "out:shell-2",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_adk_pair_goes_before_the_reply_text_that_followed_it(
+    monkeypatch,
+) -> None:
+    """The ADK round precedes the whole reply, including its preamble text."""
+    user = _message("investigate")
+    assistant = {
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "output_text", "text": "Data is in."}],
+    }
+    seen = await _drive_adk_then_native_rounds(
+        monkeypatch,
+        [[user], [user, assistant, _fc("shell-1"), _fco("shell-1")]],
+        preamble=True,
+    )
+
+    assert _call_order(seen[-1]) == [
+        "msg:user",
+        "call:call-adk",
+        "out:call-adk",
+        "msg:assistant",
+        "call:shell-1",
+        "out:shell-1",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_adk_pair_falls_back_to_the_tail_when_its_anchor_is_gone(
+    monkeypatch,
+) -> None:
+    """If Codex no longer carries the anchor call (e.g. after compaction), the
+    pair is still replayed -- at the tail -- rather than dropped, so the model
+    never re-issues a tool call with side effects."""
+    user = _message("investigate")
+    seen = await _drive_adk_then_native_rounds(
+        monkeypatch,
+        [[user], [user, _fc("shell-9"), _fco("shell-9")]],
+    )
+
+    assert _call_order(seen[-1]) == [
+        "msg:user",
+        "call:shell-9",
+        "out:shell-9",
+        "call:call-adk",
+        "out:call-adk",
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage", ["backend", "tool", "backend_ignores_cancel"])
+async def test_closing_turn_cancels_and_drains_inflight_requests(monkeypatch, stage):
+    shim = ResponsesShim("https://backend.invalid/v1", "backend-key")
+    entered = asyncio.Event()
+    cleaned = asyncio.Event()
+    executed = []
+    backend_calls = []
+
+    async def executor(args, call_id):
+        executed.append(call_id)
+        if stage == "tool":
+            entered.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                await asyncio.sleep(0)
+                cleaned.set()
+        return "{}"
+
+    async def backend(kwargs):
+        backend_calls.append(kwargs)
+        if stage.startswith("backend"):
+            entered.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cleaned.set()
+                if stage != "backend_ignores_cancel":
+                    raise
+        return _tool_response("write", "r1", "c1")
+
+    monkeypatch.setattr(proxy_module, "_call_backend_tolerating_reasoning", backend)
+    token = shim.register_turn(
+        [{"type": "function", "name": "write", "parameters": {}}],
+        {"write": executor},
+    )
+    other = shim.register_turn([], {})
+    async with _client(shim) as client:
+        request = asyncio.create_task(
+            client.post(
+                "/v1/responses",
+                headers={"Authorization": f"Bearer {token}"},
+                json={"model": "model", "input": [_message("write")], "stream": True},
+            )
+        )
+        try:
+            await asyncio.wait_for(entered.wait(), 2)
+            await asyncio.wait_for(shim.close_turn(token), 2)
+            assert request.done()
+            assert cleaned.is_set()
+            assert len(backend_calls) == 1
+            assert executed == (["c1"] if stage == "tool" else [])
+            assert shim._turn(token) is None
+            assert shim._turn(other) is not None
+        finally:
+            request.cancel()
+            await asyncio.gather(request, return_exceptions=True)
+            await shim.close_turn(other)
+
+
+@pytest.mark.asyncio
+async def test_shim_rejects_parallel_batch_before_exceeding_tool_budget(monkeypatch):
+    from veadk.runtime.codex.execution_control import CodexToolIterationLimitError
+
+    shim = ResponsesShim("https://backend.invalid/v1", "backend-key")
+    executed = []
+
+    async def executor(args, call_id):
+        executed.append(call_id)
+        return "{}"
+
+    async def backend(kwargs):
+        return {
+            "id": "r",
+            "model": "model",
+            "output": [
+                _tool_response("write", str(i), str(i))["output"][0] for i in range(5)
+            ],
+        }
+
+    monkeypatch.setattr(proxy_module, "_call_backend_tolerating_reasoning", backend)
+    token = shim.register_turn(
+        [{"type": "function", "name": "write", "parameters": {}}],
+        {"write": executor},
+        max_tool_iterations=1,
+    )
+    async with _client(shim) as client:
+        response = await client.post(
+            "/v1/responses",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"model": "model", "input": [_message("write")]},
+        )
+    assert response.status_code == 409
+    assert executed == []
+    assert isinstance(shim.turn_error(token), CodexToolIterationLimitError)
+    await shim.close_turn(token)
+
+
+@pytest.mark.asyncio
+async def test_close_turn_drains_requests_on_another_event_loop():
+    from concurrent.futures import Future
+
+    shim = ResponsesShim("https://backend.invalid/v1", "backend-key")
+    token = shim.register_turn([], {})
+    context = shim._turn(token)
+    ready = Future()
+    cleaned = threading.Event()
+
+    async def worker():
+        stop = asyncio.Event()
+
+        async def request():
+            with context.requests.track():
+                ready.set_result((asyncio.get_running_loop(), stop))
+                try:
+                    await asyncio.Event().wait()
+                finally:
+                    await asyncio.sleep(0)
+                    cleaned.set()
+
+        task = asyncio.create_task(request())
+        try:
+            await stop.wait()
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    thread = asyncio.create_task(asyncio.to_thread(asyncio.run, worker()))
+    loop = stop = None
+    try:
+        loop, stop = await asyncio.wait_for(asyncio.wrap_future(ready), 2)
+        await asyncio.wait_for(shim.close_turn(token), 2)
+        assert cleaned.is_set()
+        assert shim._turn(token) is None
+    finally:
+        if loop is not None:
+            loop.call_soon_threadsafe(stop.set)
+        await asyncio.wait_for(thread, 2)

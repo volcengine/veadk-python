@@ -68,6 +68,9 @@ class _FakeShim:
     def unregister_turn(self, token):
         self.unregistered.append(token)
 
+    async def close_turn(self, token):
+        self.unregister_turn(token)
+
     def turn_marker(self, token):
         # Mirrors the real shim: an opaque per-turn marker the runtime embeds
         # in the Codex prompt, and "" for a token the shim does not know.
@@ -331,3 +334,85 @@ def test_session_workspaces_are_stable_and_isolated(tmp_path) -> None:
     )
     shared = _prepare_workspace(shared_config, context("session-c"))
     assert shared == str(tmp_path / "shared")
+
+
+def test_codex_home_pins_settings_the_pinned_cli_would_break(tmp_path) -> None:
+    try:
+        import tomllib
+    except ModuleNotFoundError:  # Python 3.10: pytest depends on tomli there.
+        import tomli as tomllib
+
+    from veadk.runtime.codex.model_provider import shim_route
+    from veadk.runtime.codex.runtime import _prepare_codex_home
+
+    home = _prepare_codex_home(
+        shim_route("http://127.0.0.1:9", ""),
+        "model-x",
+        CodexRuntimeConfig(network_access=True),
+    )
+    try:
+        with open(f"{home}/config.toml", "rb") as f:
+            config = tomllib.load(f)
+    finally:
+        import shutil
+
+        shutil.rmtree(home, ignore_errors=True)
+
+    # Both default to on in the pinned CLI. Unbounded retries would turn an
+    # unreachable shim into a hung invocation (this runtime has no turn
+    # timeout), and goals advertise tools that need a persisted thread.
+    assert config["features"] == {
+        "unbounded_connection_retries": False,
+        "goals": False,
+    }
+    # The CLI otherwise sends `reasoning.summary = "auto"`, which Ark's
+    # Responses API rejects outright (`json: unknown field "summary"`).
+    assert config["model_reasoning_summary"] == "none"
+    # Without an explicit policy the sandboxed shell's `env` showed the model
+    # key and turn tokens; see the smoke test for the end-to-end check.
+    assert set(config["shell_environment_policy"]["exclude"]) >= {
+        "VEADK_CODEX_*",
+        "*API_KEY*",
+        "*TOKEN*",
+    }
+    assert config["model_providers"]["veadk"]["wire_api"] == "responses"
+    assert config["sandbox_workspace_write"]["network_access"] is True
+
+
+def test_direct_codex_home_names_the_key_env_var_but_never_holds_the_key() -> None:
+    """On the direct transport config.toml points at the backend itself.
+
+    The file lives on disk for the whole invocation, so it may name the env var
+    that carries the credential but must never contain the credential.
+    """
+    try:
+        import tomllib
+    except ModuleNotFoundError:  # Python 3.10: pytest depends on tomli there.
+        import tomli as tomllib
+    import shutil
+
+    from veadk.runtime.codex.model_provider import DIRECT_KEY_ENV
+    from veadk.runtime.codex.model_provider import direct_route
+    from veadk.runtime.codex.runtime import _prepare_codex_home
+
+    secret = "ark-secret-value-never-on-disk"
+    route = direct_route(
+        "https://ark.cn-beijing.volces.com/api/v3/",
+        secret,
+        extra_headers={"X-Client": "veadk"},
+    )
+    home = _prepare_codex_home(route, "model-x", CodexRuntimeConfig())
+    try:
+        with open(f"{home}/config.toml", "rb") as f:
+            raw = f.read()
+        config = tomllib.loads(raw.decode("utf-8"))
+    finally:
+        shutil.rmtree(home, ignore_errors=True)
+
+    assert secret.encode() not in raw
+    assert config["model_provider"] == route.provider_id
+    provider = config["model_providers"][route.provider_id]
+    assert provider["base_url"] == "https://ark.cn-beijing.volces.com/api/v3"
+    assert provider["env_key"] == DIRECT_KEY_ENV
+    assert provider["wire_api"] == "responses"
+    assert provider["http_headers"] == {"X-Client": "veadk"}

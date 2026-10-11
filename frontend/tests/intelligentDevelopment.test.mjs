@@ -791,7 +791,7 @@ test("successful intelligent deployment opens a fresh agent chat", () => {
   );
   assert.match(
     appSource,
-    /const refreshCurrentAgentAndStartNewChat = async \(id: string\) => \{[\s\S]*?setIntelligentDeployment\(null\);[\s\S]*?startNewChat\(\);[\s\S]*?\};/,
+    /const refreshCurrentAgentAndStartNewChat = async \(id: string\) => \{[\s\S]*?startNewChat\(\);[\s\S]*?setAppName\(id\);[\s\S]*?setIntelligentDeployment\(null\);[\s\S]*?\};/,
   );
   assert.match(
     appSource,
@@ -807,7 +807,7 @@ test("delivery card clears browser download handoff feedback", () => {
   assert.match(blocksUiSource, /const DOWNLOAD_STATUS_DURATION_MS = 3_000/);
   assert.match(
     blocksUiSource,
-    /busyAction === "download" \? t\("blocks\.preparing"\) : t\("blocks\.downloadSource"\)/,
+    /busyAction === "download"[\s\S]*?\? t\("blocks\.preparing"\)[\s\S]*?: t\("blocks\.downloadSource"\)/,
   );
   assert.match(
     blocksUiSource,

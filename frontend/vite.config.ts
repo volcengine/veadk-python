@@ -51,6 +51,7 @@ function chunkDirectory(moduleIds: readonly string[]): string {
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  optimizeDeps: { entries: ["index.html"] },
   server: {
     port: 5173,
     proxy: {

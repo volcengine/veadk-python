@@ -42,7 +42,8 @@
     "resourceCollectionExpiredHint": "Tip: This resource collection has expired. Send the task again so the system can collect the resources before creating the Agent.",
     "networkConfigurationHint": "Tip: Try again later, and review the Runtime, model, or gateway logs.",
     "modelQuotaHint": "Tip: The model has reached its TPM/RPM quota. Try again later or increase the model quota.",
-    "rawResponseLabel": "Raw response: "
+    "rawResponseLabel": "Raw response: ",
+    "copySecretFailed": "Failed to copy the secret value"
   },
   "runtimeLogs": {
     "httpStatus": "HTTP status: {{status}}",
@@ -480,11 +481,22 @@
       "publishing": "Publishing the service",
       "evaluating": "Creating evaluation sets",
       "updating": "Updating the Runtime configuration",
+      "applyingMpaProfile": "Applying the Agent profile to MPA Runtime",
+      "runningMpaSmoke": "Verifying the MPA Runtime execution path",
+      "mpaReady": "MPA Runtime is ready",
       "completing": "Finalizing deployment",
       "github": "Configuring GitHub delivery",
       "inProgress": "Deployment in progress"
     },
     "deploymentFailed": "Deployment failed",
+    "listSessionsFailed": "Failed to load sessions",
+    "mpaOperationFailed": "Failed to apply the MPA Runtime profile",
+    "mpaOperationLoadFailed": "Failed to load MPA Runtime operations",
+    "mpaRuntimeLegacyAuthUnsupported": "This MPA Runtime uses an older authentication adapter and cannot list Studio sessions. Update the Runtime image to the current MPA AgentKit build, then refresh this Agent.\n{{detail}}",
+    "mpaRuntimeSessionsLoadFailed": "Failed to load MPA Runtime sessions",
+    "mpaDeletePreviewFailed": "Failed to load MPA delete preview",
+    "loadMpaDiagnosticsFailed": "Failed to load MPA Runtime diagnostics",
+    "mpaExecutionConfigFailed": "Failed to update the MPA session configuration",
     "deploymentDisconnected": "Deployment failed: connection interrupted",
     "deploymentMissingAgentName": "Deployment failed: Agent name missing from response",
     "deploymentMissingConnection": "Deployment failed: AgentKit connection information missing from response",

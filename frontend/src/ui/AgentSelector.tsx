@@ -296,7 +296,10 @@ export function AgentSelector({
       connectSource: "navbar_picker",
     });
     setConnecting(rt.runtimeId);
-    connectRuntime(rt.runtimeId, rt.name, rt.region)
+    connectRuntime(rt.runtimeId, rt.name, rt.region, rt.currentVersion, {
+      agentCategory: rt.agentCategory,
+      mpaInstanceId: rt.mpaInstanceId,
+    })
       .then(async (agentId) => {
         await onSelect(agentId);
         operation.succeed({
@@ -914,7 +917,7 @@ function RuntimeDetailContent({ runtime }: { runtime: SelectedRuntime }) {
               {detail.envs.map((e) => (
                 <div key={e.key} className="agentsel-env">
                   <span className="agentsel-env-k">{e.key}</span>
-                  <span className="agentsel-env-v">{e.value}</span>
+                  <span className="agentsel-env-v">{e.sensitive ? "••••••••" : e.value}</span>
                 </div>
               ))}
             </div>

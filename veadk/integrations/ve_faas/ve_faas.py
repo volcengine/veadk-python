@@ -14,6 +14,7 @@
 
 import json
 import os
+import re
 import shutil
 import tempfile
 import time
@@ -38,6 +39,7 @@ from veadk.integrations.ve_apig.ve_apig import APIGateway
 from veadk.integrations.ve_faas.release_progress import (
     ReleaseProgress,
     extract_release_log_urls as _extract_release_log_urls,
+    redact_release_log as _redact_release_log,
 )
 from veadk.integrations.ve_faas.upload_progress import CodeUploadProgress
 from veadk.integrations.ve_faas.ve_faas_utils import (
@@ -106,6 +108,20 @@ def _is_transient_vefaas_error(error: BaseException) -> bool:
     return False
 
 
+def _redact_release_text(text: str) -> str:
+    text = _redact_release_log(text, ())
+    return re.sub(
+        r'([{"\']?(key|secret|token|pass|auth|credential|access|api|ak|sk|doubao|volces|coze)[^"\'\s]*["\']?\s*[:=]\s*)(["\']?)([^"\'\s]+)(["\']?)|([A-Za-z0-9+/=]{20,})',
+        lambda match: (
+            f"{match.group(1)}{match.group(3)}******{match.group(5)}"
+            if match.group(1)
+            else "******"
+        ),
+        text,
+        flags=re.IGNORECASE,
+    )
+
+
 def _download_release_log_url(url: str) -> str:
     with urllib.request.urlopen(url, timeout=30) as log_stream:
         return log_stream.read().decode("utf-8", "replace")
@@ -150,28 +166,33 @@ def _format_release_failure_text(
             linked_log = _download_release_log_url(url)
         except Exception as error:  # noqa: BLE001 - diagnostics must not mask failure
             linked_log_sections.append(
-                f"[{index}] {labels['tos_log']} {labels['download_failed']}: {error}"
+                f"[{index}] {labels['tos_log']} {labels['download_failed']}: "
+                f"{_redact_release_text(str(error))}"
             )
         else:
             linked_log_sections.append(
                 "\n".join(
                     (
                         f"[{index}] {labels['tos_log']}",
-                        f"{labels['source']}: {url}",
+                        f"{labels['source']}: {_redact_release_text(url)}",
                         f"{labels['content']}:",
-                        linked_log,
+                        _redact_release_text(linked_log),
                     )
                 )
             )
 
-    console_text = raw_logs.strip() or labels["empty_console_logs"]
+    console_text = (
+        _redact_release_text(raw_logs).strip() or labels["empty_console_logs"]
+    )
     tos_text = "\n\n".join(linked_log_sections) or labels["empty_tos_logs"]
 
-    status_text = json.dumps(
-        full_response.get("Result", full_response),
-        ensure_ascii=False,
-        sort_keys=True,
-        default=str,
+    status_text = _redact_release_text(
+        json.dumps(
+            full_response.get("Result", full_response),
+            ensure_ascii=False,
+            sort_keys=True,
+            default=str,
+        )
     )
     sections = [
         f"{labels['console_logs']}\n{'-' * 40}\n{console_text}",
@@ -1401,7 +1422,8 @@ class VeFaaS:
         gateway_name: str = "",
         gateway_service_name: str = "",
         gateway_upstream_name: str = "",
-    ) -> tuple[str, str, str]:
+        enable_key_auth: bool = False,
+    ) -> tuple[str, str, str] | tuple[str, str, str, str, str]:
         """Deploy application using container image.
 
         Args:
@@ -1410,9 +1432,14 @@ class VeFaaS:
             gateway_name (str, optional): Gateway name. Defaults to "".
             gateway_service_name (str, optional): Gateway service name. Defaults to "".
             gateway_upstream_name (str, optional): Gateway upstream name. Defaults to "".
+            enable_key_auth (bool, optional): Enable APIG key auth on the created
+                application and resolve the resulting gateway id and key-auth API
+                key. Defaults to False to preserve the original return shape.
 
         Returns:
-            tuple[str, str, str]: (url, app_id, function_id)
+            When ``enable_key_auth`` is False (default): ``(url, app_id, function_id)``.
+            When ``enable_key_auth`` is True: ``(url, app_id, function_id,
+            apig_instance_id, runtime_api_key)``.
         """
         # Validate application name format
         is_ready = self.query_user_cr_vpc_tunnel(registry_name)
@@ -1464,6 +1491,7 @@ class VeFaaS:
             gateway_name,
             gateway_upstream_name,
             gateway_service_name,
+            enable_key_auth=enable_key_auth,
         )
 
         # Release application and get deployment URL
@@ -1491,7 +1519,68 @@ class VeFaaS:
 
         logger.info(f"VeFaaS application {name} with ID {app_id} deployed on {url}.")
 
-        return url, app_id, function_id
+        if not enable_key_auth:
+            return url, app_id, function_id
+
+        # Resolve the APIG gateway id created/reused for this application and the
+        # key-auth API key so callers can wire runtime authentication.
+        route = self.get_application_route(app_id=app_id)
+        if not route:
+            raise ValueError(
+                f"Could not resolve APIG route for application {app_id}; "
+                "key-auth gateway id is unavailable."
+            )
+        apig_instance_id = route[0]
+        api_key = self._get_key_auth_api_key(apig_instance_id)
+        if not api_key:
+            raise ValueError(
+                "Key auth was requested but no key-auth API key was found for "
+                f"gateway {apig_instance_id}."
+            )
+        return url, app_id, function_id, apig_instance_id, api_key
+
+    def _get_key_auth_api_key(self, gateway_id: str) -> str:
+        """Return the first enabled key-auth API key for a gateway's consumers.
+
+        Reads APIG consumers scoped to ``gateway_id`` and returns the first
+        enabled ``KeyAuthCredential`` API key. Returns an empty string when no
+        enabled key-auth credential exists.
+        """
+        from volcenginesdkapig import (
+            FilterForListConsumersInput,
+            ListConsumerCredentialsRequest,
+            ListConsumersRequest,
+        )
+
+        apig = self.apig_client.apig_client
+        consumers = apig.list_consumers(
+            ListConsumersRequest(
+                filter=FilterForListConsumersInput(gateway_id=gateway_id),
+                page_number=1,
+                page_size=100,
+            )
+        )
+        for consumer in getattr(consumers, "items", []) or []:
+            consumer_id = getattr(consumer, "id", "")
+            if not consumer_id:
+                continue
+            creds = apig.list_consumer_credentials(
+                ListConsumerCredentialsRequest(
+                    consumer_id=consumer_id,
+                    credential_type="key-auth",
+                    page_number=1,
+                    page_size=100,
+                )
+            )
+            for item in getattr(creds, "items", []) or []:
+                key_auth = getattr(item, "key_auth_credential", None)
+                if key_auth is None:
+                    continue
+                if getattr(key_auth, "enable", True) and getattr(
+                    key_auth, "api_key", ""
+                ):
+                    return str(key_auth.api_key)
+        return ""
 
     def _get_application_logs(
         self,

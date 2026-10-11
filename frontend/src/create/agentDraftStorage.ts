@@ -26,12 +26,14 @@ export interface WorkspaceAgentDraft {
   creationMode?: WorkspaceAgentCreationMode;
   deploymentTarget?: {
     runtimeId: string;
+    mpaInstanceId?: string;
     name: string;
     region: string;
     appName?: string;
     currentVersion?: number | null;
     etag?: string;
     editMode?: "source-preserving" | "regenerate";
+    mpaProfileOnly?: boolean;
     configuredMcpEnvKeys?: string[];
     configuredRuntimeEnvKeys?: string[];
   };

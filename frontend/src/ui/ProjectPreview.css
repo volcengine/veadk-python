@@ -1196,6 +1196,17 @@
   color: hsl(var(--primary));
 }
 
+.pp-deployment-select-copy .pp-deployment-select-description,
+.pp-deployment-select-copy .pp-deployment-select-metadata {
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.pp-deployment-select-copy .pp-deployment-select-metadata {
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+
 .pp-deployment-select-badge {
   flex-shrink: 0;
   padding: 1px 5px;

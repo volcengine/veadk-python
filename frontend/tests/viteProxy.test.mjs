@@ -39,6 +39,13 @@ test("local API proxy strips browser origin headers before forwarding", () => {
   }
 });
 
+test("main development server scans only the product entry", () => {
+  assert.match(
+    source,
+    /optimizeDeps:\s*\{[\s\S]*?entries:\s*\["index\.html"\]/,
+  );
+});
+
 test("groups built assets by role and visualization runtime", () => {
   assert.match(source, /entryFileNames:\s*["']assets\/app\/\[name\]-\[hash\]\.js["']/);
   assert.match(source, /assets\/visualizations\/mermaid/);

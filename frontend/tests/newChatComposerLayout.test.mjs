@@ -156,6 +156,51 @@ test("expands only the new-chat composer into a multiline input", () => {
   );
 });
 
+test("uses the searchable compact selector for Turn models", () => {
+  assert.match(
+    composerSource,
+    /<NewChatCompactSelect[\s\S]*?options=\{turnModelOptions\}[\s\S]*?searchable[\s\S]*?disabled=\{busy\}/,
+  );
+  assert.doesNotMatch(
+    composerSource,
+    /className="composer-model-select"[\s\S]*?<select/,
+  );
+});
+
+test("renders whole-Turn lifecycle controls from authoritative allowed actions", () => {
+  assert.ok(composerSource.includes('turnControl?.allowedActions.includes("pause")'));
+  assert.ok(composerSource.includes('turnControl?.allowedActions.includes("resume")'));
+  assert.doesNotMatch(composerSource, /onTurnControl\("interrupt"\)/);
+  assert.doesNotMatch(composerSource, /onTurnControl\("cancel"\)/);
+  assert.match(composerSource, /canPauseTurn[\s\S]*?onTurnControl\("pause"\)[\s\S]*?canResumeTurn[\s\S]*?onTurnControl\("resume"\)/);
+  assert.ok(appSource.includes('getTurnControl(appName, sessionId)'));
+  assert.ok(appSource.includes('if (!busy && !turnControlBySessionRef.current[sessionId]) return;'));
+  assert.ok(appSource.includes('let controlUnavailable = false;'));
+  assert.ok(appSource.includes('if (controlUnavailable) return;'));
+  assert.ok(appSource.includes('if (!hadKnownControl) controlUnavailable = true;'));
+  assert.ok(appSource.includes('const currentRuntimeId = currentRuntime?.runtimeId ?? "";'));
+  assert.doesNotMatch(appSource, /\[agentInfo\?\.turnLifecycleControl, appName, busy, currentRuntime, sessionId\]/);
+  assert.ok(appSource.includes('activeTurnControl.generation'));
+  assert.ok(appSource.includes('activeTurnIsControllable'));
+  assert.ok(appSource.includes('turnControl={activeTurnIsControllable ? activeTurnControl : null}'));
+  assert.ok(appSource.includes('current[sessionId]?.state === state.state'));
+  assert.ok(appSource.includes('turnControlBySessionRef.current[sessionId]'));
+  assert.ok(appSource.includes('["completed", "failed", "rejected", "cancelled", "canceled", "interrupted", "orphaned"].includes(current.state)'));
+  assert.ok(stylesSource.includes('.composer-turn-status { display: inline-flex;'));
+  assert.ok(appSource.includes('cause instanceof TurnControlConflictError'));
+  assert.ok(appSource.includes('next.resumeDisposition === "new_turn_required"'));
+  assert.ok(appSource.includes('streamAbortsRef.current.get(sessionId)?.abort()'));
+  assert.ok(appSource.includes('continueTurnSSE({'));
+  assert.ok(appSource.includes('idempotencyKey: `mpa-continue:${control.taskId}:${control.generation}`'));
+  assert.ok(appSource.includes('async function streamTurnContinuation(sid: string, control: TurnControlState)'));
+  assert.ok(composerSource.includes('turnControl.resumeDisposition === "new_turn_required"'));
+  assert.ok(composerSource.includes('composer.turnState.newTurnRequired'));
+  assert.ok(composerSource.includes('interrupted: t("composer.turnState.interrupted")'));
+  assert.doesNotMatch(appSource, /Original task:/);
+  assert.doesNotMatch(appSource, /next\.continuationPrompt[\s\S]*?send\(/);
+  assert.ok(appSource.includes('delete nextTurnControls[sid]'));
+});
+
 test("keeps alternate chat modes hidden from the new-chat composer", () => {
   assert.match(appSource, /showModeSelector=\{false\}/);
   assert.match(
@@ -233,7 +278,7 @@ test("layers pill-shaped workspace tabs behind the new-chat input", () => {
   );
   assert.match(
     composerSource,
-    /<NewChatWorkspaceTabs[\s\S]*?<div[\s\S]*?className="composer-box"/,
+    /<NewChatWorkspaceTabs[\s\S]*?<div[\s\S]*?className=\{`composer-box/,
   );
   assert.match(
     workspaceTabsSource,
@@ -789,17 +834,17 @@ test("opens skill and video dropdowns on deliberate mouse hover", () => {
     workspaceStylesSource,
     /\.new-chat-compact-select__menu\s*\{[^}]*left:\s*0;/,
   );
-  assert.match(compactSelectSource, /measureMenu/);
-  assert.match(compactSelectSource, /is-dropup/);
-  assert.match(compactSelectSource, /new-chat-compact-select-list-height/);
+  assert.match(compactSelectSource, /updateMenuPlacement/);
+  assert.match(compactSelectSource, /data-side=\{menuSide\}/);
+  assert.match(compactSelectSource, /new-chat-compact-select-list-max-height/);
   assert.match(
     workspaceStylesSource,
-    /\.new-chat-compact-select__menu\.is-dropup\s*\{[^}]*bottom:\s*calc\(100% \+ 7px\);/,
+    /\.new-chat-compact-select__menu\[data-side="top"\]\s*\{[^}]*bottom:\s*calc\(100% \+ 7px\);/,
     "a list without room below opens upwards",
   );
   assert.match(
     workspaceStylesSource,
-    /\.new-chat-compact-select__list\s*\{[^}]*max-height:\s*var\(--new-chat-compact-select-list-height/,
+    /\.new-chat-compact-select__list\s*\{[\s\S]*?max-height:\s*min\([\s\S]*?var\(--new-chat-compact-select-list-max-height/,
     "the list shrinks to the room the trigger has",
   );
   assert.doesNotMatch(
@@ -905,6 +950,67 @@ test("keeps the Agent picker aligned without extra highlighting or guidance", ()
   assert.doesNotMatch(
     newChatAgentPickerStylesSource,
     /new-chat-agent-picker-bounce/,
+  );
+});
+
+test("keeps the Turn model controls separate from the new-chat Agent picker", () => {
+  assert.match(composerSource, /composer-box--has-model/);
+  assert.match(stylesSource, /\.composer--new-chat \.composer-box--has-model\s*\{[^}]*padding-bottom:\s*56px/);
+  assert.match(
+    stylesSource,
+    /\.composer--new-chat \.composer-submit-actions\s*\{[\s\S]*?position:\s*absolute;[\s\S]*?right:\s*10px;[\s\S]*?bottom:\s*10px;[\s\S]*?display:\s*flex;/,
+  );
+  assert.match(
+    stylesSource,
+    /\.composer--new-chat \.comp-send\s*\{[\s\S]*?position:\s*static;/,
+  );
+  assert.match(
+    stylesSource,
+    /@media \(max-width:\s*640px\)[\s\S]*?\.composer--new-chat \.new-chat-agent-picker\s*\{[\s\S]*?bottom:\s*54px;/,
+  );
+  assert.doesNotMatch(
+    stylesSource,
+    /\.composer--new-chat \.composer-submit-actions\s*\{[^}]*display:\s*contents;/,
+  );
+  assert.match(
+    stylesSource,
+    /\.composer--new-chat \.composer-submit-actions\s*\{[\s\S]*?left:\s*auto;[\s\S]*?right:\s*10px;/,
+  );
+  assert.match(stylesSource, /\.composer--new-chat \.composer-model-select\s*\{[\s\S]*?margin-left:\s*auto/);
+  assert.match(
+    stylesSource,
+    /\.composer-model-select \.new-chat-compact-select__trigger\s*\{[\s\S]*?min-height:\s*36px;[\s\S]*?border:\s*0;[\s\S]*?background:\s*transparent;/,
+  );
+  assert.match(
+    stylesSource,
+    /\.composer-model-select \.new-chat-compact-select\s*\{[\s\S]*?width:\s*min\(260px, 30vw\);[\s\S]*?max-width:\s*260px;/,
+  );
+  assert.match(
+    stylesSource,
+    /\.composer-model-select \.new-chat-compact-select__menu\s*\{[\s\S]*?right:\s*0;[\s\S]*?left:\s*auto;[\s\S]*?width:\s*min\(360px, calc\(100vw - 32px\)\);/,
+  );
+  const composerModelMenuRule =
+    stylesSource.match(
+      /\.composer-model-select \.new-chat-compact-select__menu\s*\{([\s\S]*?)\}/,
+    )?.[1] ?? "";
+  assert.doesNotMatch(composerModelMenuRule, /top:\s*auto|bottom:\s*calc/);
+  assert.match(compactSelectSource, /data-side=\{menuSide\}/);
+  assert.match(compactSelectSource, /getBoundingClientRect\(\)/);
+  assert.match(compactSelectSource, /spaceBelow[\s\S]*?spaceAbove[\s\S]*?setMenuSide/);
+  assert.match(compactSelectSource, /minimumUsableMenuHeight/);
+  assert.doesNotMatch(compactSelectSource, /preferredMenuHeight/);
+  assert.match(compactSelectSource, /--new-chat-compact-select-list-max-height/);
+  assert.match(
+    workspaceStylesSource,
+    /\.new-chat-compact-select__menu\[data-side="top"\]\s*\{[\s\S]*?top:\s*auto;[\s\S]*?bottom:\s*calc\(100% \+ 7px\);/,
+  );
+  assert.match(
+    workspaceStylesSource,
+    /\.new-chat-compact-select__menu\[data-side="bottom"\]\s*\{[\s\S]*?top:\s*calc\(100% \+ 7px\);[\s\S]*?bottom:\s*auto;/,
+  );
+  assert.match(
+    workspaceStylesSource,
+    /\.new-chat-compact-select__list\s*\{[\s\S]*?var\(--new-chat-compact-select-list-max-height, 240px\)/,
   );
 });
 

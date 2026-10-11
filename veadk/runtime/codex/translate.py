@@ -25,6 +25,7 @@ import base64
 import json
 import mimetypes
 import os
+import shlex
 from collections.abc import Callable
 from enum import Enum
 from pathlib import Path
@@ -86,7 +87,7 @@ def build_prompt(ctx: "InvocationContext") -> str:
     ).strip()
 
     if not history:
-        return current_text or "The user supplied attachments without text."
+        return current_text or NO_TEXT_PROMPT
 
     history_json = json.dumps(history, ensure_ascii=False, separators=(",", ":"))
     current_json = json.dumps(current_record, ensure_ascii=False, separators=(",", ":"))
@@ -99,13 +100,24 @@ def build_prompt(ctx: "InvocationContext") -> str:
     )
 
 
-def build_prompt_from_llm_request(llm_request: "LlmRequest") -> str:
-    """Render callback-mutated LlmRequest contents into Codex turn input."""
+#: Turn input used when the user's message has no text (attachments only, or a
+#: bare confirmation/credential response).
+NO_TEXT_PROMPT = "The user supplied attachments without text."
+
+
+def build_prompt_from_llm_request(
+    llm_request: "LlmRequest", *, include_history: bool = True
+) -> str:
+    """Render callback-mutated LlmRequest contents into Codex turn input.
+
+    ``include_history=False`` renders the current message only, for a resumed
+    Codex thread that already holds the earlier turns itself.
+    """
 
     records = [_content_event_record(content) for content in llm_request.contents]
     records = [record for record in records if record["parts"]]
     if not records:
-        return "The user supplied attachments without text."
+        return NO_TEXT_PROMPT
 
     current_record = records[-1]["parts"]
     current_text = "\n".join(
@@ -113,9 +125,9 @@ def build_prompt_from_llm_request(llm_request: "LlmRequest") -> str:
         for part in current_record
         if part.get("type") == "text" and part.get("text")
     ).strip()
-    history = records[:-1]
+    history = records[:-1] if include_history else []
     if not history:
-        return current_text or "The user supplied attachments without text."
+        return current_text or NO_TEXT_PROMPT
 
     history_json = json.dumps(history, ensure_ascii=False, separators=(",", ":"))
     current_json = json.dumps(current_record, ensure_ascii=False, separators=(",", ":"))
@@ -364,6 +376,39 @@ def _content_record(content: Any) -> list[dict[str, Any]]:
     return records
 
 
+def backfill_event_text(event: Any, *, limit: int) -> str:
+    """Render missed events, retaining tool identities and bounded result data.
+
+    Keep the JSON envelope intact when a large payload needs truncation, so a
+    transaction's identity and execution status remain distinguishable from
+    ordinary assistant text. Text-only records preserve the existing format.
+    """
+    records = _content_record(getattr(event, "content", None))
+    lines = []
+    for record in records:
+        if record["type"] == "text":
+            text = record["text"]
+            lines.append(
+                text
+                if len(text) <= limit
+                else f"{text[:limit]}... [truncated {len(text) - limit} chars]"
+            )
+            continue
+        for field in ("args", "response"):
+            if field not in record:
+                continue
+            serialized = json.dumps(record[field], ensure_ascii=False, default=str)
+            if len(serialized) > limit:
+                value = record[field]
+                record[field] = {
+                    "truncated": True,
+                    "status": value.get("status") if isinstance(value, dict) else None,
+                    "preview": serialized[:limit],
+                }
+        lines.append(json.dumps(record, ensure_ascii=False, default=str))
+    return "\n".join(lines).strip()
+
+
 def _safe_filename(value: str) -> str:
     name = os.path.basename(value.replace("\\", "/")).strip()
     return name or "attachment"
@@ -409,6 +454,31 @@ def _parse_args(raw: Any) -> dict[str, Any]:
     return {}
 
 
+_WRAPPER_SHELLS = frozenset({"sh", "bash", "zsh"})
+
+
+def _unwrap_shell_command(command: str) -> str:
+    """Return the command the model asked for, without Codex's shell wrapper.
+
+    Codex runs every command through the user's login shell and reports the
+    wrapped form (``/bin/zsh -lc '<cmd>'``). Recorded verbatim, that form is
+    what the next invocation's model sees in its replayed history, and it
+    imitates it: it sends ``/bin/zsh -lc '...'`` as its own command, Codex
+    wraps it again, and the history fills up with doubly nested shells.
+    """
+    try:
+        argv = shlex.split(command)
+    except ValueError:
+        return command
+    if (
+        len(argv) == 3
+        and os.path.basename(argv[0]) in _WRAPPER_SHELLS
+        and argv[1] in ("-c", "-lc")
+    ):
+        return argv[2]
+    return command
+
+
 def _tool_call(
     data: dict[str, Any],
 ) -> tuple[str, dict[str, Any], dict[str, Any]] | None:
@@ -422,7 +492,10 @@ def _tool_call(
     if itype == "commandExecution":
         return (
             "exec_command",
-            {"command": data.get("command", ""), "cwd": data.get("cwd")},
+            {
+                "command": _unwrap_shell_command(data.get("command") or ""),
+                "cwd": data.get("cwd"),
+            },
             {
                 "output": data.get("aggregated_output", ""),
                 "exit_code": data.get("exit_code"),
@@ -961,6 +1034,24 @@ _EXPLICITLY_IGNORED: frozenset[str] = frozenset(
         # Account-level attestation notice (e.g. "trustedAccessForCyber") with
         # no per-turn meaning.
         "ModelVerificationNotification",
+        # Model-provider credential refresh in progress/finished. One class
+        # serves both authRecoveryStarted and authRecoveryCompleted, so the
+        # phase is not even recoverable here; a failed recovery still surfaces
+        # as ErrorNotification or a failed TurnCompletedNotification.
+        "AuthRecoveryNotification",
+        # UI hint that the model's output is held back for safety checks
+        # (`showBufferingUi`). Deltas resume, or the turn ends, on their own;
+        # this runtime has no buffering indicator to drive.
+        "ModelSafetyBufferingUpdatedNotification",
+        # One-way marker (only `startedAtMs`) that auto-review escalated to a
+        # strict review. Nothing to answer: approval decisions arrive as server
+        # requests handled by the SDK, and per-item review progress already
+        # reaches ADK via ItemGuardianApprovalReview{Started,Completed}.
+        "StrictReviewRequiredNotification",
+        # Opaque moderation metadata (`metadata: Any`) with no user-facing
+        # content. An actual policy block arrives as ErrorNotification
+        # (e.g. cyberPolicy) or ModelReroutedNotification.
+        "TurnModerationMetadataNotification",
     }
 )
 
@@ -989,6 +1080,29 @@ _DISPATCH: dict[str, _NotificationHandler] = {
     "TurnPlanUpdatedNotification": _on_turn_plan_updated,
     "TurnStartedNotification": _on_turn_started,
 }
+
+
+def is_mcp_item_for_server(payload: Any, server: str, seen_item_ids: set[str]) -> bool:
+    """Whether a notification belongs to an MCP tool call on ``server``.
+
+    Item start/completion carry the item, server name included; progress
+    notifications carry only the item id, so the ids seen at start are kept in
+    ``seen_item_ids`` (and dropped again at completion).
+    """
+    data = _item_dict(payload)
+    item = data.get("item")
+    if isinstance(item, dict):
+        if _scalar(item.get("type")) != "mcpToolCall" or item.get("server") != server:
+            return False
+        item_id = str(item.get("id") or "")
+        if item_id:
+            if type(payload).__name__ == "ItemCompletedNotification":
+                seen_item_ids.discard(item_id)
+            else:
+                seen_item_ids.add(item_id)
+        return True
+    item_id = data.get("item_id")
+    return bool(item_id) and str(item_id) in seen_item_ids
 
 
 def notification_to_events(

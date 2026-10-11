@@ -284,7 +284,8 @@ def test_frontend_policy_allows_release_download() -> None:
     assert "vefaas:GetCodeUploadAddress" in actions
     assert "vefaas:GetApplication" in actions
     assert "vefaas:GetApplicationRevisionLog" in actions
-    assert "iam:CreatePolicy" not in actions
+    # Studio now prepares a versioned custom MPA runtime policy.
+    assert "iam:CreatePolicy" in actions
     assert "iam:UpdatePolicy" not in actions
     assert "vefaas:CodeUploadCallback" in actions
     assert "vefaas:UpdateFunction" in actions
@@ -292,6 +293,94 @@ def test_frontend_policy_allows_release_download() -> None:
     assert "vefaas:ReleaseApplication" in actions
     assert "tag:TagResources" in actions
     assert "tag:UntagResources" in actions
+    assert {
+        "apig:ListGateways",
+        "apig:CreateGateway",
+        "apig:GetGateway",
+        "apig:GetGatewayAvailableZones",
+        "apig:CreateIMChannelGateway",
+        "apig:GetIMChannelGatewayStatus",
+    }.issubset(actions)
+    assert {
+        "ecs:DescribeZones",
+        "vpc:CreateSubnet",
+        "vpc:CreateVpc",
+        "vpc:DescribeSubnetAttributes",
+        "vpc:DescribeSubnets",
+        "vpc:DescribeVpcAttributes",
+        "vpc:DescribeVpcs",
+    }.issubset(actions)
+    assert {
+        "aidap:CreateWorkspace",
+        "aidap:DescribeWorkspaces",
+        "aidap:DescribeWorkspaceDetail",
+        "aidap:DescribeBranches",
+        "aidap:DescribeComputes",
+        "aidap:DescribeWorkspaceEndpoint",
+        "aidap:DescribeDBAccounts",
+        "aidap:DescribeDatabases",
+        "aidap:DescribeDBAccountConnection",
+    }.issubset(actions)
+
+
+def test_frontend_policy_allows_complete_managed_pg_workflow() -> None:
+    actions = set(FRONTEND_DEPLOY_POLICY["Statement"][0]["Action"])
+
+    assert {action for action in actions if action.startswith("aidap:")} == {
+        "aidap:DescribeWorkspaces",
+        "aidap:CreateWorkspace",
+        "aidap:DescribeWorkspaceDetail",
+        "aidap:DescribeBranches",
+        "aidap:DescribeComputes",
+        "aidap:DescribeWorkspaceEndpoint",
+        "aidap:DescribeDBAccounts",
+        "aidap:DescribeDatabases",
+        "aidap:DescribeDBAccountConnection",
+    }
+
+
+def test_frontend_policy_allows_complete_managed_mpa_cloud_workflow() -> None:
+    actions = {
+        action
+        for statement in FRONTEND_DEPLOY_POLICY["Statement"]
+        for action in statement["Action"]
+    }
+    required = {
+        "sts:GetCallerIdentity",
+        "ecs:DescribeZones",
+        "vpc:DescribeVpcs",
+        "vpc:DescribeVpcAttributes",
+        "vpc:DescribeSubnets",
+        "vpc:DescribeSubnetAttributes",
+        "vpc:CreateVpc",
+        "vpc:CreateSubnet",
+        "apig:ListGateways",
+        "apig:CreateGateway",
+        "apig:GetGateway",
+        "apig:GetGatewayAvailableZones",
+        "apig:CreateIMChannelGateway",
+        "apig:GetIMChannelGatewayStatus",
+        "iam:PassRole",
+        "id:GetWorkloadPool",
+        "id:CreateWorkloadPool",
+        "id:GetWorkloadIdentity",
+        "id:CreateWorkloadIdentity",
+        "agentkit:*",
+    }
+
+    assert required <= actions
+    assert {
+        "sts:*",
+        "ecs:*",
+        "vpc:*",
+        "apig:*",
+        "aidap:*",
+    }.isdisjoint(actions)
+    assert {
+        "Effect": "Allow",
+        "Action": ["iam:PassRole"],
+        "Resource": ["trn:iam::*:role/*"],
+    } in FRONTEND_DEPLOY_POLICY["Statement"]
 
 
 @pytest.mark.parametrize(
@@ -308,14 +397,16 @@ def test_default_frontend_role_policy_is_refreshed_for_future_updates(
     calls: list[dict[str, str]] = []
     monkeypatch.setattr(
         "veadk.cli.frontend_deploy_iam.ensure_frontend_role",
-        lambda access_key, secret_key, **kwargs: calls.append(
-            {
-                "access_key": access_key,
-                "secret_key": secret_key,
-                **kwargs,
-            }
-        )
-        or role,
+        lambda access_key, secret_key, **kwargs: (
+            calls.append(
+                {
+                    "access_key": access_key,
+                    "secret_key": secret_key,
+                    **kwargs,
+                }
+            )
+            or role
+        ),
     )
 
     refreshed = ensure_default_frontend_role_policy(

@@ -92,7 +92,7 @@ def test_wheel_owns_sidecar_runtime_without_sdk_namespace_overlap(
     assert not any(name.startswith("agentkit/") for name in names)
 
 
-def test_wheel_metadata_keeps_sidecar_optional_and_sdk_081_compatible(
+def test_wheel_metadata_keeps_sidecar_optional_and_sdk_constraints_aligned(
     sidecar_wheel: Path,
 ) -> None:
     with ZipFile(sidecar_wheel) as archive:
@@ -110,7 +110,7 @@ def test_wheel_metadata_keeps_sidecar_optional_and_sdk_081_compatible(
         if canonicalize_name(item.name) == "agentkit-sdk-python"
     ]
     assert any(
-        item.marker is None and ">=0.8.0" in str(item.specifier)
+        item.marker is None and ">=0.8.5" in str(item.specifier)
         for item in sdk_requirements
     )
     sidecar_extra = [

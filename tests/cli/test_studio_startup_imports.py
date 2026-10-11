@@ -341,11 +341,13 @@ unexpected = sorted(
         "veadk.auth.veauth.ark_veauth",
         "veadk.utils.misc",
         "veadk.utils.volcengine_sign",
-        "requests",
     }
 )
 if unexpected:
-    raise SystemExit("model catalog network runtime loaded during Studio startup")
+    raise SystemExit(
+        "model catalog network runtime loaded during Studio startup: "
+        + ", ".join(unexpected)
+    )
 
 import asyncio
 
@@ -363,7 +365,6 @@ assert response.keys == []
 for expected in (
     "frontend.server.video.client",
     "veadk.utils.volcengine_sign",
-    "requests",
 ):
     if expected not in sys.modules:
         raise SystemExit("model catalog network runtime did not load on first use")

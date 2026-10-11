@@ -1,7 +1,12 @@
 // Minimal Server-Sent-Events parser for `fetch` response bodies.
 //
 // The ADK `/run_sse` endpoint emits `data: <json>\n\n` frames. This async
-// generator yields each parsed JSON payload as it arrives.
+// generator yields each parsed JSON payload as it arrives. When an upstream
+// names the SSE event, the parsed payload includes a non-enumerable
+// `__sseEvent` property so callers that care about transport control frames
+// can react without changing normal event shape assertions.
+
+export const SSE_EVENT_NAME = "__sseEvent";
 
 export async function* parseSSE(
   response: Response,
@@ -19,14 +24,26 @@ export async function* parseSSE(
   };
 
   const parseFrame = (frame: string, final = false): unknown | undefined => {
-    const data = frame
-      .split(/\r?\n/)
+    const lines = frame.split(/\r?\n/);
+    const eventName = lines
+      .find((line) => line.startsWith("event:"))
+      ?.slice(6)
+      .trim();
+    const data = lines
       .filter((line) => line.startsWith("data:"))
       .map((line) => line.slice(5).trimStart())
       .join("\n");
     if (!data || data === "[DONE]" || data === "ping") return undefined;
     try {
-      return JSON.parse(data);
+      const parsed = JSON.parse(data);
+      if (eventName && parsed && typeof parsed === "object") {
+        Object.defineProperty(parsed, SSE_EVENT_NAME, {
+          value: eventName,
+          enumerable: false,
+          configurable: true,
+        });
+      }
+      return parsed;
     } catch {
       const rawData = rawDataExcerpt(data);
       if (final) {

@@ -55,6 +55,7 @@
     "types": {
       "agent": "智能体",
       "general": "通用智能体",
+      "mpa": "MPA 智能体",
       "codex": "Codex 智能体",
       "deepseekHarness": "DeepSeek Harness",
       "openclaw": "OpenClaw 智能体",

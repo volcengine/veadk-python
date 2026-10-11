@@ -31,7 +31,7 @@ import pytest
 from google.adk.events.event import Event
 from google.genai import types
 
-import conftest as harness  # noqa: F401  (documented below)
+import fake_codex_sdk
 from scripted_backend import RecordedCall, Round, ScriptedBackend
 
 # The tool round declares zero tokens on purpose. The Codex arm reports only
@@ -339,7 +339,7 @@ def test_fake_codex_prompt_text_accepts_sdk_and_stub_shapes() -> None:
     sdk = SdkTextInput()
     sdk.text = "from sdk"
 
-    assert harness.fake_codex_sdk._prompt_text([stub, sdk]) == "from stub\nfrom sdk"
+    assert fake_codex_sdk._prompt_text([stub, sdk]) == "from stub\nfrom sdk"
 
 
 @pytest.mark.asyncio

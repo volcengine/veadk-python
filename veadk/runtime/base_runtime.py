@@ -172,3 +172,29 @@ class BaseRuntime(ABC):
             google.adk.events.event.Event: Events produced during the run.
         """
         raise NotImplementedError
+
+    async def steer(
+        self,
+        agent: "Agent",
+        *,
+        app_name: str,
+        user_id: str,
+        session_id: str,
+        text: str,
+    ) -> bool:
+        """Add ``text`` to the turn ``agent`` is running for the session.
+
+        Steering never starts a turn: it returns ``False`` when the runtime
+        cannot steer or the session has no turn in flight in this process.
+
+        Args:
+            agent (veadk.agent.Agent): The agent whose turn to steer.
+            app_name (str): Application name of the session.
+            user_id (str): User id of the session.
+            session_id (str): Session id.
+            text (str): The additional instruction.
+
+        Returns:
+            bool: Whether the text was delivered to a running turn.
+        """
+        return False

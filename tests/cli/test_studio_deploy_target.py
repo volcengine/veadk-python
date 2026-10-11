@@ -70,7 +70,7 @@ def _stage_test_studio_dependencies(
         "trustedmcp-0.0.5-py3-none-any.whl",
         "volcengine_python_sdk-5.0.36-py2.py3-none-any.whl",
         ("tokenizers-0.22.2-cp39-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"),
-        "openviking_sdk-0.1.4-py3-none-any.whl",
+        "openviking_sdk-0.1.9-py3-none-any.whl",
     ]
     if provider == "byteplus":
         names.append("pydantic-2.12.5-py3-none-any.whl")
@@ -1024,6 +1024,7 @@ def test_studio_deploy_passes_region_and_project_to_cloud_engine(
     provider: str,
 ) -> None:
     captured: dict[str, object] = {}
+    callbacks: list[dict[str, object]] = []
     credential_tool_ids: list[str] = []
     monkeypatch.setitem(
         veadk_environments,
@@ -1054,6 +1055,7 @@ def test_studio_deploy_passes_region_and_project_to_cloud_engine(
 
         def register_callback_for_user_pool_client(self, **kwargs: object) -> None:
             captured["callback"] = kwargs
+            callbacks.append(kwargs)
 
         def configure_user_pool_for_idp_only(self, user_pool_uid: str) -> None:
             captured["configured_user_pool"] = user_pool_uid
@@ -1183,6 +1185,10 @@ def test_studio_deploy_passes_region_and_project_to_cloud_engine(
     assert isinstance(callback, dict)
     assert callback["dismiss_login_page_enabled"] is False
     assert callback["skip_consent_enabled"] is True
+    assert {item["callback_url"] for item in callbacks} == {
+        "https://studio.example.com/oauth2/callback",
+        "https://studio.example.com/oauth/callback",
+    }
     assert "configured_user_pool" not in captured
     assert "Preserved the existing Identity user pool login settings." in result.output
 
@@ -1307,48 +1313,53 @@ def test_studio_deploy_persists_studio_context_environment(
     )
     monkeypatch.setattr(
         "veadk.cli.cli_frontend._resolve_studio_identity_region",
-        lambda **_: "cn-beijing",
+        lambda **_: "cn-shanghai",
     )
     monkeypatch.setattr(
         "veadk.integrations.ve_identity.identity_client.IdentityClient.register_callback_for_user_pool_client",
         lambda *_args, **_kwargs: None,
     )
     monkeypatch.setattr(
+        "veadk.integrations.ve_identity.identity_client.IdentityClient.get_user_pool_resource_names",
+        lambda _self, pool_uid, client_uid: (
+            "studio-userpool" if pool_uid == "pool-id" else "wrong-pool",
+            "studio-client" if client_uid == "client-id" else "wrong-client",
+        ),
+    )
+    monkeypatch.setattr(
         "veadk.integrations.ve_identity.identity_client.IdentityClient.configure_user_pool_for_idp_only",
         lambda *_args, **_kwargs: None,
     )
-    result = CliRunner().invoke(
-        studio,
-        [
-            "deploy",
-            "--provider",
-            "volcengine",
-            "--user-pool-id",
-            "pool-id",
-            "--allowed-client-id",
-            "client-id",
-            "--vefaas-app-name",
-            "studio-app",
-            "--sandbox-chat-codex-tool-id",
-            "chat-code-env-id",
-            "--sandbox-chat-openclaw-tool-id",
-            "openclaw-tool-id",
-            "--sandbox-chat-hermes-tool-id",
-            "hermes-tool-id",
-            "--iam-role",
-            "trn:iam::role/test",
-            "--environment-cp-workspace",
-            "cp-workspace-id",
-            "--environment-cr-repository",
-            "registry/namespace/environment-images",
-            "--gateway-name",
-            "gateway",
-            "--volcengine-access-key",
-            "ak-for-deployer",
-            "--volcengine-secret-key",
-            "sk-for-deployer",
-        ],
-    )
+    deploy_args = [
+        "deploy",
+        "--provider",
+        "volcengine",
+        "--user-pool-id",
+        "pool-id",
+        "--allowed-client-id",
+        "client-id",
+        "--vefaas-app-name",
+        "studio-app",
+        "--sandbox-chat-codex-tool-id",
+        "chat-code-env-id",
+        "--sandbox-chat-openclaw-tool-id",
+        "openclaw-tool-id",
+        "--sandbox-chat-hermes-tool-id",
+        "hermes-tool-id",
+        "--iam-role",
+        "trn:iam::role/test",
+        "--environment-cp-workspace",
+        "cp-workspace-id",
+        "--environment-cr-repository",
+        "registry/namespace/environment-images",
+        "--gateway-name",
+        "gateway",
+        "--volcengine-access-key",
+        "ak-for-deployer",
+        "--volcengine-secret-key",
+        "sk-for-deployer",
+    ]
+    result = CliRunner().invoke(studio, deploy_args)
 
     assert result.exit_code == 0, result.output
     deploy_id = veadk_environments["VEADK_STUDIO_DEPLOY_ID"]
@@ -1367,11 +1378,31 @@ def test_studio_deploy_persists_studio_context_environment(
     assert release_environment["OAUTH2_REDIRECT_URI"] == (
         "https://studio.example.com/oauth2/callback"
     )
+    assert release_environment["VEADK_STUDIO_MPA_USER_POOL_NAME"] == "studio-userpool"
+    assert (
+        release_environment["VEADK_STUDIO_MPA_USER_POOL_CLIENT_NAME"] == "studio-client"
+    )
+    assert release_environment["VEADK_STUDIO_MPA_IDENTITY_REGION"] == "cn-shanghai"
+    assert release_environment["VEADK_STUDIO_MPA_IDENTITY_CALLBACK_URL"] == (
+        "https://studio.example.com/oauth/callback"
+    )
     assert release_environment["VEADK_STUDIO_DEPLOY_ID"] == deploy_id
     assert release_environment["VEADK_STUDIO_USER_POOL_ID"] == "pool-id"
     assert release_environment["VEADK_STUDIO_ACCOUNT_ID"] == "2100123456"
     assert release_environment["VEADK_STUDIO_APPLICATION_ID"] == "app-id"
     assert release_environment["VEADK_STUDIO_FUNCTION_ID"] == "function-id"
+
+    def unavailable_names(*_args: object) -> tuple[str, str]:
+        raise RuntimeError("private-sdk-error-with-secret")
+
+    monkeypatch.setattr(
+        "veadk.integrations.ve_identity.identity_client.IdentityClient.get_user_pool_resource_names",
+        unavailable_names,
+    )
+    failed = CliRunner().invoke(studio, deploy_args)
+    assert failed.exit_code != 0
+    assert "Unable to resolve Studio UserPool/client names" in failed.output
+    assert "private-sdk-error-with-secret" not in failed.output
 
 
 def test_studio_deploy_byteplus_wires_provider_to_cloud_engine_and_package(
@@ -2392,6 +2423,120 @@ def test_register_callback_only_sends_requested_login_switches(
     assert {
         key: serialized_request[key] for key in expected_switches
     } == expected_switches
+
+
+def test_list_identity_providers_returns_normalized_enabled_entries() -> None:
+    identity_client = IdentityClient(
+        access_key="test_access_key",
+        secret_key="test_secret_key",
+    )
+    identity_client._api_client = Mock()
+    identity_client._api_client.list_identity_providers.side_effect = [
+        SimpleNamespace(
+            data=[
+                SimpleNamespace(
+                    uid="provider-1",
+                    name="feishu",
+                    provider="feishu",
+                    connection_type="OAuth",
+                    enabled=True,
+                )
+            ],
+            total_count=2,
+        ),
+        SimpleNamespace(
+            data=[
+                SimpleNamespace(
+                    uid="provider-2",
+                    name="disabled",
+                    provider="oidc",
+                    connection_type="OIDC",
+                    enabled=False,
+                )
+            ],
+            total_count=2,
+        ),
+    ]
+
+    assert identity_client.list_identity_providers("pool-id") == [
+        {
+            "uid": "provider-1",
+            "connection_type": "OAuth",
+            "enabled": True,
+        },
+        {
+            "uid": "provider-2",
+            "connection_type": "OIDC",
+            "enabled": False,
+        },
+    ]
+    requests = [
+        call.args[0]
+        for call in identity_client._api_client.list_identity_providers.call_args_list
+    ]
+    assert [(item.page_number, item.page_size) for item in requests] == [
+        (1, 100),
+        (2, 100),
+    ]
+
+
+def test_get_user_pool_resource_names_resolves_both_configured_uids() -> None:
+    identity_client = IdentityClient(
+        access_key="test_access_key",
+        secret_key="test_secret_key",
+    )
+    identity_client._api_client = Mock()
+    identity_client._api_client.get_user_pool.return_value = SimpleNamespace(
+        name="studio-userpool"
+    )
+    identity_client._api_client.get_user_pool_client.return_value = SimpleNamespace(
+        name="studio-client"
+    )
+
+    assert identity_client.get_user_pool_resource_names("pool-id", "client-id") == (
+        "studio-userpool",
+        "studio-client",
+    )
+    pool_request = identity_client._api_client.get_user_pool.call_args.args[0]
+    client_request = identity_client._api_client.get_user_pool_client.call_args.args[0]
+    assert pool_request.user_pool_uid == "pool-id"
+    assert client_request.user_pool_uid == "pool-id"
+    assert client_request.client_uid == "client-id"
+
+    identity_client._api_client.get_user_pool.return_value = SimpleNamespace(name="")
+    with pytest.raises(ValueError, match="name is unavailable"):
+        identity_client.get_user_pool_resource_names("pool-id", "client-id")
+
+
+def test_register_callback_does_not_duplicate_existing_values() -> None:
+    identity_client = IdentityClient(
+        access_key="test_access_key",
+        secret_key="test_secret_key",
+    )
+    identity_client._api_client = Mock()
+    identity_client._api_client.get_user_pool_client.return_value = SimpleNamespace(
+        allowed_callback_urls=["https://studio.example.com/oauth/callback"],
+        allowed_web_origins=["https://studio.example.com"],
+        name="studio-client",
+        description=None,
+        allowed_logout_urls=None,
+        allowed_cors=None,
+        id_token=None,
+        refresh_token=None,
+    )
+
+    identity_client.register_callback_for_user_pool_client(
+        user_pool_uid="pool-id",
+        client_uid="client-id",
+        callback_url="https://studio.example.com/oauth/callback",
+        web_origin="https://studio.example.com",
+    )
+
+    request = identity_client._api_client.update_user_pool_client.call_args.args[0]
+    assert request.allowed_callback_urls == [
+        "https://studio.example.com/oauth/callback"
+    ]
+    assert request.allowed_web_origins == ["https://studio.example.com"]
 
 
 def test_configure_user_pool_for_idp_only_disables_local_account_flows() -> None:
