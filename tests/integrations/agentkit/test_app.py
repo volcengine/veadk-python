@@ -58,8 +58,9 @@ class _FakeAgentServer:
 
 
 class _FakeShortTermMemory:
-    def __init__(self, backend: str) -> None:
+    def __init__(self, backend: str, local_database_path: str | None = None) -> None:
         self.backend = backend
+        self.local_database_path = local_database_path
 
 
 @pytest.fixture(autouse=True)
@@ -95,7 +96,8 @@ def test_create_agentkit_app_preserves_platform_route_contract() -> None:
 
     server = _FakeAgentServer.instances[-1]
     assert isinstance(server.short_term_memory, _FakeShortTermMemory)
-    assert server.short_term_memory.backend == "local"
+    assert server.short_term_memory.backend == "sqlite"
+    assert server.short_term_memory.local_database_path == ".adk/session.db"
 
     client = TestClient(app)
     assert client.get("/ping").json() == {"status": "ok"}

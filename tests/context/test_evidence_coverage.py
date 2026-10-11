@@ -1,0 +1,269 @@
+# Copyright (c) 2025 Beijing Volcano Engine Technology Co., Ltd. and/or its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""A parent shortlist must not eliminate the full-source lexical route.
+
+Synthetic embeddings intentionally favor several incomplete semantic matches.
+The uncommon exact fact is outside that shortlist. These test actual ranked
+source spans and the SDK preview budget, not a mocked final answer.
+"""
+
+import asyncio
+from dataclasses import replace
+from types import SimpleNamespace
+
+import pytest
+
+from veadk.context._hybrid_index import Scope, digest
+from veadk.context.hierarchical_retriever import HierarchicalContextRetriever
+from veadk.context.retrieval import _matches, _preview
+
+
+IDENTITY = ("app", "user", "session", "agent", "branch")
+QUESTION = "Where is the car parked and what is its renewal code?"
+LOCATION = "The automobile stays at North Garage."
+RENEWAL = "Its renewal code is R-4812."
+
+
+def document(unit="z"):
+    sections = []
+    for number in range(8):
+        sections.append(
+            f"Car parked guidance section {number}. "
+            + (LOCATION if number == 0 else "General parking discussion.")
+            + "\n"
+            + unit * 1300
+            + ".\n\n"
+        )
+    return "".join(sections) + unit * 1800 + ".\n\n" + RENEWAL + "\n" + unit * 1000
+
+
+class CoarsePreference:
+    model = "offline-evidence-coverage-v1"
+    dimension = 2
+
+    def __init__(self):
+        self.documents = 0
+        self.queries = 0
+
+    async def embed(self, texts):
+        self.documents += sum(text != QUESTION for text in texts)
+        self.queries += sum(text == QUESTION for text in texts)
+        return [
+            [1.0, 0.0]
+            if text == QUESTION or "Car parked guidance" in text or LOCATION in text
+            else [0.0, 1.0]
+            for text in texts
+        ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("unit,budget", [("z", 1800), ("补", 5000), ("🙂", 6500)])
+async def test_outside_parent_fact_reaches_budgeted_preview_without_losing_semantic_fact(
+    tmp_path, unit, budget
+):
+    text = document(unit)
+    embedder = CoarsePreference()
+    retriever = HierarchicalContextRetriever(tmp_path / "index.sqlite3", embedder)
+    try:
+        spans = await retriever.rank(IDENTITY, "record", text, QUESTION)
+        assert retriever.last_status == "hybrid"
+        matches = _matches(text, spans, budget, preview=True)
+        preview = _preview(matches)
+        assert LOCATION in preview
+        assert RENEWAL in preview
+        assert len(preview.encode()) <= budget
+        assert all(m["text"] == text[m["offset"] : m["end"]] for m in matches)
+        assert embedder.queries == 1
+        assert embedder.documents <= 512
+        assert (
+            retriever._store.read(
+                Scope(*IDENTITY), "record", digest(text), 0, len(text)
+            )
+            == text
+        )
+    finally:
+        await retriever.close()
+
+
+class WaitForChildren(CoarsePreference):
+    def __init__(self):
+        super().__init__()
+        self.entered = asyncio.Event()
+        self.cancelled = False
+
+    async def embed(self, texts):
+        if self.queries and texts != [QUESTION]:
+            self.entered.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                self.cancelled = True
+        return await super().embed(texts)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("parent_elapsed", [0.1, 0.2])
+async def test_child_timeout_keeps_whole_source_lexical_route_and_joins_work(
+    tmp_path, monkeypatch, parent_elapsed
+):
+    from veadk.context import hierarchical_retriever
+
+    text = document()
+    embedder = WaitForChildren()
+    retriever = HierarchicalContextRetriever(tmp_path / "index.sqlite3", embedder)
+    clock = [100.0]
+    timeouts = []
+    original_search = hierarchical_retriever.search
+    parent_candidates = []
+
+    async def omit_tail_from_parent_candidates(store, *args, **kwargs):
+        found, status = await original_search(store, *args, **kwargs)
+        if store is retriever._parents:
+            # Exercise a real parent miss, independently of later rank tuning.
+            # Keep the real embeddings/search and exact stored source spans.
+            found = [chunk for chunk in found if chunk.end <= text.index(RENEWAL)]
+            parent_candidates.extend(found)
+        return found, status
+
+    async def stage_wait(awaitable, timeout):
+        timeouts.append(timeout)
+        if len(timeouts) == 1:
+            return await asyncio.wait_for(awaitable, timeout=5)
+        if len(timeouts) == 2:
+            result = await asyncio.wait_for(awaitable, timeout=5)
+            clock[0] += parent_elapsed
+            return result
+        task = asyncio.create_task(awaitable)
+        try:
+            await asyncio.wait_for(embedder.entered.wait(), timeout=5)
+            clock[0] += timeout
+            return await asyncio.wait_for(task, timeout=0)
+        finally:
+            if not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+
+    # Expire the child stage after it starts, independently of host scheduling
+    # during parent ingestion. Record production budgets and perform real task
+    # cancellation; the five-second watchdog only prevents a hung test.
+    monkeypatch.setattr(
+        hierarchical_retriever, "time", SimpleNamespace(monotonic=lambda: clock[0])
+    )
+    monkeypatch.setattr(
+        hierarchical_retriever,
+        "asyncio",
+        SimpleNamespace(**{**vars(asyncio), "wait_for": stage_wait}),
+    )
+    monkeypatch.setattr(
+        hierarchical_retriever, "search", omit_tail_from_parent_candidates
+    )
+    try:
+        spans = await retriever.rank_with_deadline(
+            IDENTITY, "record", text, QUESTION, deadline=100.5
+        )
+        assert timeouts == [
+            pytest.approx(0.5),
+            pytest.approx(0.375),
+            pytest.approx((0.5 - parent_elapsed) * 0.9),
+        ]
+        assert clock[0] < 100.5
+        assert parent_candidates and all(
+            RENEWAL not in chunk.text for chunk in parent_candidates
+        )
+        assert embedder.entered.is_set() and embedder.cancelled
+        assert retriever.last_status == "parent_semantic_child_lexical"
+        preview = _preview(_matches(text, spans, 1800, preview=True))
+        assert LOCATION in preview and RENEWAL in preview
+        assert len(preview.encode()) <= 1800
+        children = retriever._store.chunks(Scope(*IDENTITY))
+        assert children and all(
+            retriever._store.vector(Scope(*IDENTITY), chunk, embedder.model, 2) is None
+            for chunk in children
+        )
+        assert (
+            retriever._parents.read(
+                Scope(*IDENTITY), "record", digest(text), 0, len(text)
+            )
+            == text
+        )
+    finally:
+        await retriever.close()
+
+
+@pytest.mark.asyncio
+async def test_supplement_does_not_cross_scope_or_replace_original(tmp_path):
+    text = document()
+    retriever = HierarchicalContextRetriever(
+        tmp_path / "index.sqlite3", CoarsePreference()
+    )
+    scope = Scope(*IDENTITY)
+    try:
+        await retriever.rank(IDENTITY, "record", text, QUESTION)
+        for field in ("app", "user", "session", "agent", "branch"):
+            with pytest.raises(ValueError):
+                retriever._store.read(
+                    replace(scope, **{field: "other"}),
+                    "record",
+                    digest(text),
+                    0,
+                    len(text),
+                )
+        with pytest.raises(ValueError, match="immutable_source_conflict"):
+            await retriever.rank(IDENTITY, "record", text + " changed", QUESTION)
+        assert (
+            retriever._store.read(scope, "record", digest(text), 0, len(text)) == text
+        )
+    finally:
+        await retriever.close()
+
+
+@pytest.mark.asyncio
+async def test_external_cancel_propagates_instead_of_starting_supplement(tmp_path):
+    embedder = WaitForChildren()
+    retriever = HierarchicalContextRetriever(tmp_path / "index.sqlite3", embedder)
+    task = asyncio.create_task(retriever.rank(IDENTITY, "record", document(), QUESTION))
+    try:
+        await asyncio.wait_for(embedder.entered.wait(), 2.0)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert embedder.cancelled
+    finally:
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        await retriever.close()
+
+
+@pytest.mark.asyncio
+async def test_reopen_reuses_vectors_and_tiny_budget_remains_empty(tmp_path):
+    text = document()
+    embedder = CoarsePreference()
+    path = tmp_path / "index.sqlite3"
+    first = HierarchicalContextRetriever(path, embedder)
+    try:
+        expected = await first.rank(IDENTITY, "record", text, QUESTION)
+        documents = embedder.documents
+    finally:
+        await first.close()
+    second = HierarchicalContextRetriever(path, embedder)
+    try:
+        actual = await second.rank(IDENTITY, "record", text, QUESTION)
+        assert actual == expected
+        assert embedder.documents == documents and embedder.queries == 2
+        assert _matches(text, actual, 1, preview=True) == []
+        assert path.stat().st_mode & 0o777 == 0o600
+    finally:
+        await second.close()

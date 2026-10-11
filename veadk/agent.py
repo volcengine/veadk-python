@@ -17,9 +17,10 @@ from __future__ import annotations
 import os
 import warnings
 from contextlib import aclosing
-from typing import TYPE_CHECKING, AsyncGenerator, Dict, Literal, Optional, Union
+from typing import TYPE_CHECKING, AsyncGenerator, Dict, Literal, Optional, Union, cast
 
 from google.adk.flows.llm_flows.base_llm_flow import BaseLlmFlow
+from google.adk.models.base_llm import BaseLlm
 
 # If user didn't set LITELLM_LOCAL_MODEL_COST_MAP, set it to True
 # to enable local model cost map.
@@ -41,6 +42,7 @@ from typing_extensions import Any
 
 from veadk.config import settings
 from veadk.consts import DEFAULT_AGENT_NAME, DEFAULT_MODEL_EXTRA_CONFIG
+from veadk.context.config import ContextCompressionConfig, resolve_config
 from veadk.knowledgebase import KnowledgeBase
 from veadk.memory.long_term_memory import (
     LongTermMemory,
@@ -226,7 +228,9 @@ class Agent(LlmAgent):
             `previous_response_id` and caching for multi-turn continuation.
     """
 
-    model_config = ConfigDict(arbitrary_types_allowed=True, extra="allow")
+    model_config = ConfigDict(
+        arbitrary_types_allowed=True, extra="allow", hide_input_in_errors=True
+    )
 
     id: str = Field(default_factory=lambda: str(uuid.uuid4()).split("-")[0])
     name: str = DEFAULT_AGENT_NAME
@@ -253,6 +257,12 @@ class Agent(LlmAgent):
     provider, API base, API key, or LiteLLM parameters.
     """
     model_extra_config: dict = Field(default_factory=dict)
+    context_compression: ContextCompressionConfig | bool | None = None
+    """Automatic input budgeting and history compression. False disables transformations.
+
+    Unknown/custom model capacities need an explicit context_window. The policy
+    is immutable; invocation and session state are never shared across Agents.
+    """
     tool_thread_pool_config: Optional[ToolThreadPoolConfig] = None
 
     tools: list[ToolUnion] = []
@@ -359,6 +369,9 @@ class Agent(LlmAgent):
         # adds every assignment to ``model_fields_set``, so this is the only
         # point at which "the caller set this" is still knowable.
         self._veadk_explicit_fields = frozenset(self.model_fields_set)
+        if self.context_compression is None:
+            self._veadk_explicit_fields -= {"context_compression"}
+        self.context_compression = resolve_config(self.context_compression)
 
         super().model_post_init(None)  # for sub_agents init
 
@@ -460,6 +473,7 @@ class Agent(LlmAgent):
                     api_base=self.model_api_base,
                     fallbacks=litellm_fallbacks,
                     enable_responses_cache=self.enable_responses_cache,
+                    context_compression=self.context_compression,
                     **self.model_extra_config,
                 )
             else:
@@ -468,12 +482,14 @@ class Agent(LlmAgent):
                     api_key=self.model_api_key,
                     api_base=self.model_api_base,
                     fallbacks=litellm_fallbacks,
+                    context_compression=self.context_compression,
                     **self.model_extra_config,
                 )
             logger.debug(
                 f"LiteLLM client created with config: {self.model_extra_config}"
             )
         else:
+            self._configure_context_policy()
             if self.model_fallbacks:
                 logger.warning(
                     "Agent(model_fallbacks=...) is ignored when Agent(model=...) "
@@ -638,6 +654,63 @@ class Agent(LlmAgent):
 
             check_agent_runtime_support(self, self.runtime)
 
+    @property
+    def context_compression_status(self) -> dict:
+        """Expose capacity gaps without including prompts or credentials."""
+        from veadk.context.status import describe_context
+
+        return describe_context(
+            self.model,
+            getattr(self.model, "_context_config", None),
+            runtime=self.runtime,
+        )
+
+    def _configure_context_policy(self):
+        configure = getattr(self.model, "with_context_compression", None)
+        if "context_compression" in (self._veadk_explicit_fields or ()):
+            if callable(configure):
+                configured = configure(self.context_compression)
+                if not isinstance(configured, BaseLlm):
+                    raise TypeError("Context policy must produce an ADK model")
+                self.model = configured
+            elif resolve_config(self.context_compression).mode == "auto":
+                from veadk.context.budget import ContextBudgetError
+
+                raise ContextBudgetError("unsupported_model_adapter")
+        self.context_compression = resolve_config(
+            getattr(self.model, "_context_config", self.context_compression)
+        )
+
+    def clone(self, update=None):
+        """Keep ADK clone semantics while synchronizing SDK policy and transport."""
+        cloned = super().clone(update=update)
+        updates = update or {}
+        explicit: set[str] = set(self._veadk_explicit_fields or ())
+        if "context_compression" in updates:
+            if updates["context_compression"] is None:
+                explicit.discard("context_compression")
+            else:
+                explicit.add("context_compression")
+            cloned.context_compression = resolve_config(updates["context_compression"])
+        elif "model" in updates and isinstance(
+            self.context_compression, ContextCompressionConfig
+        ):
+            # Preserve behavioral choices, but the replacement model owns its
+            # capacity. Never carry a larger deployment window into a clone.
+            cloned.context_compression = resolve_config(
+                self.context_compression.model_dump(
+                    exclude={"context_window", "input_limit", "output_reserve"}
+                )
+            )
+        cloned._veadk_explicit_fields = frozenset(explicit)
+        cloned._configure_context_policy()
+        # The policy is immutable; mutable provider arguments must not be shared
+        # between simultaneous invocations of independently cloned agents.
+        configure = getattr(cloned.model, "with_context_compression", None)
+        if callable(configure):
+            cloned.model = cast(BaseLlm, configure(cloned.context_compression))
+        return cloned
+
     def update_model(self, model_name: str):
         """Point the agent at a different model.
 
@@ -652,10 +725,20 @@ class Agent(LlmAgent):
             model_name (str): The new model name, without a provider prefix.
         """
         logger.info(f"Updating model to {model_name}")
+        qualified_name = f"{self.model_provider}/{model_name}"
+        current_model = cast(BaseLlm, self.model)
+        same_model = current_model.model == qualified_name
         self.model_name = model_name
-        self.model = self.model.model_copy(
-            update={"model": f"{self.model_provider}/{model_name}"}
-        )
+        self.model = current_model.model_copy(update={"model": qualified_name})
+        configure = getattr(self.model, "with_context_compression", None)
+        if callable(configure) and not same_model:
+            # Deployment capacity is tied to a model, including unknown models.
+            # Resolve the new model from its own catalogue entry or require an
+            # explicit policy on the newly selected model.
+            self.model = cast(
+                BaseLlm, configure({"context_window": None, "input_limit": None})
+            )
+            self.context_compression = getattr(self.model, "_context_config")
 
     def load_skills(self):
         from veadk.skills.check_skills_callback import check_skills, initialize_skills
@@ -877,9 +960,47 @@ class Agent(LlmAgent):
             # A transfer can close this wrapper before the LLM stream ends.
             # Close it in the same task so tracing contexts do not leak into
             # async-generator finalization or the receiving sub-agent.
-            async with aclosing(super()._run_async_impl(ctx)) as events:
-                async for event in events:
-                    yield event
+            from veadk.context.runtime import ContextScope, current_scope
+
+            scope = ContextScope(
+                session=ctx.session,
+                agent_name=self.name,
+                branch=ctx.branch or "",
+                compression_owner=(
+                    "builtin"
+                    if "context_compression" in (self._veadk_explicit_fields or ())
+                    and isinstance(self.context_compression, ContextCompressionConfig)
+                    and self.context_compression.mode == "auto"
+                    else None
+                ),
+            )
+            from veadk.context.defaults import invocation_retriever
+
+            async with invocation_retriever(
+                self, self.context_compression
+            ) as retriever:
+                scope.evidence_retriever = retriever
+                token = current_scope.set(scope)
+                try:
+                    async with aclosing(super()._run_async_impl(ctx)) as events:
+                        async for event in events:
+                            # ADK persists only complete events. Keep projection
+                            # metadata pending across streaming fragments so the
+                            # next turn (and a restarted Session) can reuse it.
+                            if scope.pending_state and not event.partial:
+                                # ADK may buffer chunks sharing EventActions. Attach
+                                # metadata to an isolated final event so completing
+                                # it cannot retroactively alter earlier fragments.
+                                event = event.model_copy(
+                                    update={
+                                        "actions": event.actions.model_copy(deep=True)
+                                    }
+                                )
+                                event.actions.state_delta.update(scope.pending_state)
+                                scope.pending_state.clear()
+                            yield event
+                finally:
+                    current_scope.reset(token)
             return
 
         from veadk.runtime import get_runtime

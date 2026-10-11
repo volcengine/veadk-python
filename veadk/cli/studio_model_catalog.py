@@ -26,7 +26,8 @@ SUPPORTED_CLOUD_PROVIDERS = frozenset({"volcengine", "byteplus"})
 VOLCENGINE_STUDIO_AGENT_MODEL_NAME = "doubao-seed-2-1-pro-260915"
 BYTEPLUS_STUDIO_AGENT_MODEL_NAME = "dola-seed-2-1-turbo-260628"
 
-VOLCENGINE_GENERATED_AGENT_MODEL_NAME = "doubao-seed-1-6-250615"
+# Official migration target for the retired Seed 1.6 template default.
+VOLCENGINE_GENERATED_AGENT_MODEL_NAME = "doubao-seed-2-0-lite-260428"
 BYTEPLUS_GENERATED_AGENT_MODEL_NAME = BYTEPLUS_STUDIO_AGENT_MODEL_NAME
 
 VOLCENGINE_EMBEDDING_MODEL_NAME = "doubao-embedding-vision-250615"

@@ -166,6 +166,8 @@ export interface AgentDraft {
   modelFallbacks?: ModelFallbackDraft[];
   modelProvider?: string;
   modelApiBase?: string;
+  /** SDK context policy; absent fields default to auto. */
+  contextCompression?: ContextCompressionDraft;
   /** Free-text tool names (legacy; intelligent/template modes still use these). */
   tools: string[];
   skills: string[];
@@ -219,6 +221,16 @@ export interface AgentDraft {
 // DEFAULT_MODEL_AGENT_NAME (veadk/consts.py).
 export const DEFAULT_MODEL_NAME = VOLCENGINE_DEFAULT_MODEL_NAME;
 
+export interface ContextCompressionDraft {
+  trigger_ratio?: number;
+  summary_trigger_ratio?: number;
+  target_ratio?: number;
+  mode: "auto" | "off";
+  context_window?: number;
+  input_limit?: number;
+  output_reserve?: number;
+}
+
 export function emptyDraft(cloudProvider: CloudProvider = "volcengine"): AgentDraft {
   return {
     name: "",
@@ -246,6 +258,7 @@ export function emptyDraft(cloudProvider: CloudProvider = "volcengine"): AgentDr
       registryEndpoint: "",
     },
     modelName: defaultModelName(cloudProvider),
+    contextCompression: { mode: "auto" },
     modelFallbacks: [],
     modelSource: "ark",
     modelProvider: "",

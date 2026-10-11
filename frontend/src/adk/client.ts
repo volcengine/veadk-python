@@ -1634,6 +1634,15 @@ export async function submitIssueFeedback(
 /** The agent-type vocabulary shared with the create wizard. */
 export type AgentNodeType = "llm" | "sequential" | "parallel" | "loop" | "a2a";
 
+export interface ContextCompressionStatus {
+  state: "configured" | "compression_disabled" | "needs_configuration" | "invalid_configuration" | "unsupported_model_adapter" | "unsupported_runtime";
+  mode: "auto" | "off";
+  context_window?: number;
+  input_budget?: number;
+  output_reserve?: number;
+  estimator?: string;
+}
+
 /** One node of the recursive agent topology returned by `/web/agent-info`. */
 export interface AgentNode {
   /** Stable ADK agent identifier used by event.author and transfer actions. */
@@ -1643,6 +1652,7 @@ export interface AgentNode {
   instruction?: string;
   type: AgentNodeType;
   model: string;
+  contextCompression?: ContextCompressionStatus;
   tools: string[];
   skills: AgentSkill[];
   path: string[];
@@ -1701,6 +1711,7 @@ export interface AgentInfo {
   description: string;
   type?: AgentNodeType;
   model: string;
+  contextCompression?: ContextCompressionStatus;
   selectableModels?: string[];
   turnLifecycleControl?: TurnLifecycleCapability;
   resourceTopology?: ResourceTopology;
@@ -1747,6 +1758,7 @@ async function fetchAgentInfo(
     description: info.description ?? "",
     type: info.type,
     model: info.model ?? "",
+    contextCompression: info.contextCompression,
     selectableModels: info.selectableModels ?? [],
     turnLifecycleControl: info.turnLifecycleControl,
     resourceTopology: info.resourceTopology,

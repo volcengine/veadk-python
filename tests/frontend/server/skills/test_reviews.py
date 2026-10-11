@@ -55,6 +55,28 @@ def package(name: str, text: str) -> bytes:
     return data.getvalue()
 
 
+def test_review_archive_fixture_is_independent_of_zip_clock(monkeypatch):
+    def at_second(second: int) -> bytes:
+        monkeypatch.setattr(
+            zipfile,
+            "time",
+            SimpleNamespace(
+                time=lambda: 0,
+                localtime=lambda *_: (2026, 9, 28, 10, 0, second, 0, 271, 0),
+            ),
+        )
+        return package("same-name", "alice")
+
+    original = at_second(0)
+    assert original == at_second(2)
+    with zipfile.ZipFile(io.BytesIO(original)) as archive:
+        assert set(archive.namelist()) == {
+            "same-name/SKILL.md",
+            "same-name/references/data.txt",
+        }
+        assert archive.read("same-name/references/data.txt") == b"alice"
+
+
 class ReviewClient:
     def __init__(self) -> None:
         self.spaces: dict[str, Any] = {}

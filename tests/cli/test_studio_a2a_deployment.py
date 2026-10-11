@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import copy
 import json
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -118,6 +119,11 @@ def test_a2a_registry_deployment_without_sidecar(
     monkeypatch.setattr(
         "veadk.cli.cli_frontend._sync_volcengine_runtime_tags", lambda **_: None
     )
+    # Always exercise asynchronous preparation, independent of CI scheduling.
+    monkeypatch.setattr(
+        "veadk.cli.cli_frontend._RUNTIME_UPDATE_CAPABILITY_INITIAL_WAIT_SECONDS",
+        0.0,
+    )
     runtime = _runtime_with_public_endpoint(_runtime("offline-runtime", "developer"))
     runtime.current_version_number = 3
     runtime.status = "Ready"
@@ -198,15 +204,27 @@ def test_a2a_registry_deployment_without_sidecar(
     }
     with TestClient(app) as client:
         if operation != "create":
+            params = {
+                "runtimeId": runtime.runtime_id,
+                "region": region,
+                "appName": "root_agent",
+            }
             capability = client.get(
                 "/web/runtime-update-capability",
                 headers=headers,
-                params={
-                    "runtimeId": runtime.runtime_id,
-                    "region": region,
-                    "appName": "root_agent",
-                },
+                params=params,
             )
+            assert capability.status_code == 202
+            deadline = time.monotonic() + 10
+            while capability.status_code == 202 and time.monotonic() < deadline:
+                assert capability.json()["recoveryStatus"] == "preparing"
+                assert capability.json()["canUpdate"] is False
+                time.sleep(0.02)
+                capability = client.get(
+                    "/web/runtime-update-capability",
+                    headers=headers,
+                    params=params,
+                )
             assert capability.status_code == 200
             assert capability.json()["canUpdate"] is True
             payload.update(

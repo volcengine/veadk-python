@@ -78,7 +78,10 @@ async def test_retries_one_pre_output_429_from_pristine_request(
 
     monkeypatch.setattr(LiteLlm, "generate_content_async", generate)
     monkeypatch.setattr("veadk.models.retrying_lite_llm.asyncio.sleep", sleep)
-    model = RetryingLiteLlm(model="openai/test-model")
+    model = RetryingLiteLlm(
+        model="openai/test-model",
+        context_compression={"context_window": 64000, "output_reserve": 4096},
+    )
 
     responses = [
         response async for response in model.generate_content_async(_request())
@@ -115,7 +118,10 @@ async def test_retries_without_deepcopying_runtime_tools(
 
     monkeypatch.setattr(LiteLlm, "generate_content_async", generate)
     monkeypatch.setattr("veadk.models.retrying_lite_llm.asyncio.sleep", sleep)
-    model = RetryingLiteLlm(model="openai/test-model")
+    model = RetryingLiteLlm(
+        model="openai/test-model",
+        context_compression={"context_window": 64000, "output_reserve": 4096},
+    )
 
     responses = [response async for response in model.generate_content_async(request)]
 
@@ -142,7 +148,10 @@ async def test_does_not_replay_after_any_llm_response(
         raise _RateLimitError()
 
     monkeypatch.setattr(LiteLlm, "generate_content_async", generate)
-    model = RetryingLiteLlm(model="openai/test-model")
+    model = RetryingLiteLlm(
+        model="openai/test-model",
+        context_compression={"context_window": 64000, "output_reserve": 4096},
+    )
 
     with pytest.raises(_RateLimitError):
         _ = [response async for response in model.generate_content_async(_request())]
@@ -166,7 +175,10 @@ async def test_does_not_retry_non_429(monkeypatch: pytest.MonkeyPatch) -> None:
         yield  # pragma: no cover
 
     monkeypatch.setattr(LiteLlm, "generate_content_async", generate)
-    model = RetryingLiteLlm(model="openai/test-model")
+    model = RetryingLiteLlm(
+        model="openai/test-model",
+        context_compression={"context_window": 64000, "output_reserve": 4096},
+    )
 
     with pytest.raises(RuntimeError, match="not a rate limit"):
         _ = [response async for response in model.generate_content_async(_request())]

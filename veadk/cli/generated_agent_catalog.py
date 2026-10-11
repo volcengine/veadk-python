@@ -22,14 +22,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from veadk.cli.studio_model_catalog import provider_env_placeholders
+from veadk.cli.studio_model_catalog import (
+    generated_agent_model_name,
+    provider_env_placeholders,
+)
 
 
 @dataclass(frozen=True)
 class EnvVar:
     key: str
     required: bool
-    placeholder: str = ""
+    placeholder: str | None = ""
     comment: str = ""
     hidden: bool = False
 
@@ -61,7 +64,7 @@ class ExporterOption:
 
 VOLCENGINE_MODELARK_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3/"
 BYTEPLUS_MODELARK_BASE_URL = "https://ark.ap-southeast.bytepluses.com/api/v3"
-VOLCENGINE_DEFAULT_MODEL_NAME = "doubao-seed-1-6-250615"
+VOLCENGINE_DEFAULT_MODEL_NAME = generated_agent_model_name("volcengine")
 BYTEPLUS_DEFAULT_MODEL_NAME = "seed-2-0-lite-260228"
 VOLCENGINE_DEFAULT_EMBEDDING_NAME = "doubao-embedding-vision-250615"
 BYTEPLUS_DEFAULT_EMBEDDING_NAME = "skylark-embedding-vision-250615"

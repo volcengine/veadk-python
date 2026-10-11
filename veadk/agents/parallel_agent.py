@@ -14,8 +14,12 @@
 
 from __future__ import annotations
 
+import asyncio
+import sys
+from contextlib import aclosing
+
 from google.adk.agents import ParallelAgent as GoogleADKParallelAgent
-from google.adk.agents.base_agent import BaseAgent
+from google.adk.agents.base_agent import BaseAgent, BaseAgentState
 from pydantic import ConfigDict, Field
 from typing_extensions import Any
 
@@ -26,6 +30,43 @@ from veadk.utils.patches import patch_asyncio
 
 patch_asyncio()
 logger = get_logger(__name__)
+
+
+async def _merge_agent_runs(agent_runs):
+    """Keep each generator and its cleanup in the task that consumes it.
+
+    Python 3.10 has no TaskGroup. Cancelling a child does not mean it has
+    stopped: await every child before returning or propagating an error.
+    Acknowledgements preserve ADK's event-to-Session backpressure contract.
+    """
+    queue = asyncio.Queue()
+
+    async def consume(events):
+        try:
+            async with aclosing(events):
+                async for event in events:
+                    acknowledged = asyncio.Event()
+                    queue.put_nowait((event, acknowledged))
+                    await acknowledged.wait()
+        finally:
+            queue.put_nowait((None, asyncio.current_task()))
+
+    tasks = [asyncio.create_task(consume(events)) for events in agent_runs]
+    try:
+        remaining = len(tasks)
+        while remaining:
+            event, signal = await queue.get()
+            if event is None:
+                signal.result()  # Propagate child failure and cancel siblings.
+                remaining -= 1
+            else:
+                yield event
+                signal.set()
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 class ParallelAgent(GoogleADKParallelAgent):
@@ -60,6 +101,42 @@ class ParallelAgent(GoogleADKParallelAgent):
     sub_agents: list[BaseAgent] = Field(default_factory=list, exclude=True)
 
     tracers: list[BaseTracer] = []
+
+    async def _run_async_impl(self, ctx):
+        if sys.version_info >= (3, 11):
+            async with aclosing(super()._run_async_impl(ctx)) as events:
+                async for event in events:
+                    yield event
+            return
+        if not self.sub_agents:
+            return
+
+        # Preserve ADK's resumable workflow lifecycle. The only different
+        # behavior is ownership/awaiting of the Python 3.10 child tasks.
+        if ctx.is_resumable and self._load_agent_state(ctx, BaseAgentState) is None:
+            ctx.set_agent_state(self.name, agent_state=BaseAgentState())
+            yield self._create_agent_state_event(ctx)
+        runs = []
+        for child in self.sub_agents:
+            child_ctx = ctx.model_copy()
+            suffix = f"{self.name}.{child.name}"
+            child_ctx.branch = f"{ctx.branch}.{suffix}" if ctx.branch else suffix
+            if not child_ctx.end_of_agents.get(child.name):
+                runs.append(child.run_async(child_ctx))
+
+        paused = False
+        async with aclosing(_merge_agent_runs(runs)) as events:
+            async for event in events:
+                yield event
+                if ctx.should_pause_invocation(event):
+                    paused = True
+        if paused:
+            return
+        if ctx.is_resumable and all(
+            ctx.end_of_agents.get(child.name) for child in self.sub_agents
+        ):
+            ctx.set_agent_state(self.name, end_of_agent=True)
+            yield self._create_agent_state_event(ctx)
 
     def model_post_init(self, __context: Any) -> None:
         super().model_post_init(None)  # for sub_agents init

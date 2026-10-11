@@ -21,6 +21,8 @@ from typing import TYPE_CHECKING
 from google.adk.models import LlmRequest, LlmResponse
 from google.adk.plugins import BasePlugin
 
+from veadk.context.budget import ContextBudgetError
+from veadk.context.runtime import current_scope
 from veadk.extensions.harness.modules.tool_result_compactor import ToolResultCompactor
 from veadk.extensions.harness.plugins._shared.callback_utils import (
     run_context_from_callback,
@@ -63,9 +65,10 @@ class HarnessCompressPlugin(BasePlugin):
     async def before_model_callback(
         self,
         *,
-        callback_context: "CallbackContext",
+        callback_context: CallbackContext,
         llm_request: LlmRequest,
     ) -> LlmResponse | None:
+        self._claim_context_owner()
         tool_reports = self._compact_function_responses(llm_request)
         messages = contents_to_messages(llm_request.contents)
         self.compaction_reports.extend(tool_reports)
@@ -100,11 +103,12 @@ class HarnessCompressPlugin(BasePlugin):
     async def after_tool_callback(
         self,
         *,
-        tool: "BaseTool",
+        tool: BaseTool,
         tool_args: dict[str, object],
-        tool_context: "ToolContext",
+        tool_context: ToolContext,
         result: dict[str, object],
     ) -> dict[str, object] | None:
+        self._claim_context_owner()
         compressed, report = self.compactor.compress_tool_result(result)
         if not report.changed:
             return None
@@ -121,6 +125,17 @@ class HarnessCompressPlugin(BasePlugin):
             )
         )
         return compressed if isinstance(compressed, dict) else {"result": compressed}
+
+    @staticmethod
+    def _claim_context_owner() -> None:
+        scope = current_scope.get()
+        if scope is None:
+            return
+        if scope.compression_owner == "builtin":
+            raise ContextBudgetError("multiple_context_compression_owners")
+        # An explicitly installed legacy plugin keeps its behavior when the
+        # SDK policy was inherited. The SDK still performs final admission.
+        scope.compression_owner = "legacy_harness"
 
     def reset_diagnostics(self) -> None:
         self.compaction_reports.clear()

@@ -58,7 +58,9 @@ def wrap_get_session_with_callbacks(obj, callback_fn: Callable):
 class ShortTermMemory(BaseModel):
     """Short term memory for agent execution.
 
-    The short term memory represents the context of the agent model. All content in the short term memory will be sent to agent model directly, including the system prompt, historical user prompt, and historical model responses.
+    Short term memory stores complete session records. With automatic context
+    compression, the model receives a budgeted projection of these records;
+    original user messages, model responses and tool results remain available.
 
     Attributes:
         backend (Literal["local", "mysql", "sqlite", "postgresql", "database"]):
