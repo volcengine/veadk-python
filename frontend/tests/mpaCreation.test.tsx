@@ -4,6 +4,9 @@ import { createRoot } from "react-dom/client";
 import { beforeEach, afterEach, expect, it, vi } from "vitest";
 import { MpaCreateDialog } from "../src/ui/mpa-create/MpaCreateDialog";
 import * as api from "../src/adk/mpaCreation";
+import { listDeploymentResources } from "../src/adk/client";
+
+vi.mock("../src/adk/client", () => ({ listDeploymentResources: vi.fn() }));
 
 vi.mock("../src/adk/mpaCreation", () => ({
   MpaCreationRequestError: class extends Error {
@@ -32,6 +35,13 @@ beforeEach(() => {
   ).IS_REACT_ACT_ENVIRONMENT = true;
   sessionStorage.clear();
   vi.clearAllMocks();
+  vi.mocked(listDeploymentResources).mockResolvedValue({
+    serviceRegion: "cn-beijing", pageNumber: 1, pageSize: 100,
+    totalCount: 2, hasMore: false,
+    items: ["agentkit-platform-output", "agentkit-platform-fresh"].map((name) => ({
+      id: name, name, region: "cn-beijing", status: "",
+    })),
+  });
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -58,6 +68,17 @@ async function mount(fillName = true) {
   ) {
     await edit("name", "test-agent");
   }
+}
+
+function bucketButton() {
+  return document.querySelector<HTMLButtonElement>('button[aria-label="myAgents.mpaCreate.tosBucket"]')!;
+}
+
+async function selectBucket(name: string) {
+  await act(async () => bucketButton().click());
+  const option = Array.from(document.querySelectorAll<HTMLButtonElement>('[role="option"]'))
+    .find((item) => item.textContent?.includes(name))!;
+  await act(async () => option.click());
 }
 it("explains the separate management workspace only for configured split layouts", async () => {
   vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
@@ -419,7 +440,7 @@ it.each(["uncertain", "running", "cancelling", "unavailable"] as const)(
       });
     }
     await mount();
-    expect(field("tosBucket").disabled).toBe(true);
+    expect(bucketButton().disabled).toBe(true);
     expect(document.body.textContent).toContain(
       "myAgents.mpaCreate.newAgentDescription",
     );
@@ -436,11 +457,11 @@ it.each(["uncertain", "running", "cancelling", "unavailable"] as const)(
     await edit("name", "new-agent");
     await goToFinal();
     expect(field("openvikingUrl").disabled).toBe(false);
-    expect(field("tosAccessKey").disabled).toBe(false);
-    expect(field("tosSecretKey").disabled).toBe(false);
-    expect(field("tosBucket").disabled).toBe(false);
-    await edit("tosBucket", "fresh-bucket");
-    expect(field("tosBucket").value).toBe("fresh-bucket");
+    expect(document.querySelector('[name="tosAccessKey"]')).toBeNull();
+    expect(document.querySelector('[name="tosSecretKey"]')).toBeNull();
+    expect(bucketButton().disabled).toBe(false);
+    await selectBucket("agentkit-platform-fresh");
+    expect(bucketButton().textContent).toContain("agentkit-platform-fresh");
     expect(api.startMpaCreation).not.toHaveBeenCalled();
     expect(api.cancelMpaCreation).not.toHaveBeenCalled();
   },
@@ -627,7 +648,7 @@ it("blocks malformed OpenViking settings before submission", async () => {
   await edit("openvikingApiKey", "test-ov-key");
   expect(submitButton().disabled).toBe(false);
 });
-it("passes complete TOS settings without saving credentials in session storage", async () => {
+it("selects a bucket without collecting or submitting credentials", async () => {
   vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
     configured: true,
     region: "cn-beijing",
@@ -635,25 +656,115 @@ it("passes complete TOS settings without saving credentials in session storage",
   vi.mocked(api.startMpaCreation).mockReturnValue(new Promise(() => {}));
   await mount();
   await goToFinal();
-  await edit("tosAccessKey", "sensitive-ak");
-  expect(submitButton().disabled).toBe(true);
-  await edit("tosSecretKey", "sensitive-sk");
-  await edit("tosBucket", "session-output");
+  expect(document.querySelector('[name="tosAccessKey"]')).toBeNull();
+  expect(document.querySelector('[name="tosSecretKey"]')).toBeNull();
+  await selectBucket("agentkit-platform-output");
   expect(submitButton().disabled).toBe(false);
   await act(async () => submitButton().click());
   expect(vi.mocked(api.startMpaCreation).mock.calls[0][0]).toMatchObject({
-    tosAccessKey: "sensitive-ak",
-    tosSecretKey: "sensitive-sk",
-    tosBucket: "session-output",
+    tosBucket: "agentkit-platform-output",
   });
+  expect(vi.mocked(api.startMpaCreation).mock.calls[0][0]).not.toHaveProperty("tosAccessKey");
+  expect(vi.mocked(api.startMpaCreation).mock.calls[0][0]).not.toHaveProperty("tosSecretKey");
   const saved = sessionStorage.getItem("mpa-create:cn-beijing")!;
   expect(saved).not.toContain("sensitive-ak");
   expect(saved).not.toContain("sensitive-sk");
-  expect(saved).toContain("session-output");
+  expect(saved).toContain("agentkit-platform-output");
+});
+
+it("strips legacy draft keys and can clear an optional bucket", async () => {
+  sessionStorage.setItem("mpa-create:cn-beijing", JSON.stringify({
+    input: { region: "cn-beijing", requestId: crypto.randomUUID(), name: "test-agent", description: "",
+      tosAccessKey: "sensitive-ak", tosSecretKey: "sensitive-sk", tosBucket: "agentkit-platform-output" },
+  }));
+  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({ configured: true, region: "cn-beijing" });
+  vi.mocked(api.startMpaCreation).mockReturnValue(new Promise(() => {}));
+  await mount();
+  await goToFinal();
+  expect(sessionStorage.getItem("mpa-create:cn-beijing")).not.toContain("sensitive-");
+  await act(async () => button("tosDisable").click());
+  expect(bucketButton().textContent).not.toContain("agentkit-platform-output");
+  await act(async () => submitButton().click());
+  const submitted = vi.mocked(api.startMpaCreation).mock.calls[0][0];
+  expect(submitted.tosBucket).toBe("");
+  expect(submitted).not.toHaveProperty("tosAccessKey");
 });
 function submitButton() {
   return button("submit");
 }
+it("rejects an invalid bucket restored from a draft before submission", async () => {
+  sessionStorage.setItem("mpa-create:cn-beijing", JSON.stringify({
+    input: { region: "cn-beijing", requestId: crypto.randomUUID(), name: "test-agent",
+      description: "", tosBucket: "invalid/bucket" },
+  }));
+  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({ configured: true, region: "cn-beijing" });
+  await mount();
+  await goToFinal();
+  expect(document.body.textContent).toContain("myAgents.mpaCreate.tosInvalid");
+  expect(submitButton().disabled).toBe(true);
+  expect(api.startMpaCreation).not.toHaveBeenCalled();
+});
+it.each(["agentkit-demo", "x-agentkit-platform-output"])("rejects out-of-scope bucket drafts: %s", async (bucket) => {
+  sessionStorage.setItem("mpa-create:cn-beijing", JSON.stringify({
+    input: { region: "cn-beijing", requestId: crypto.randomUUID(), name: "test-agent",
+      description: "", tosBucket: bucket },
+  }));
+  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({ configured: true, region: "cn-beijing" });
+  await mount();
+  await goToFinal();
+  expect(document.body.textContent).toContain("myAgents.mpaCreate.tosInvalid");
+  expect(submitButton().disabled).toBe(true);
+  expect(api.startMpaCreation).not.toHaveBeenCalled();
+});
+it("serializes optional bucket prefixes without changing general queries", async () => {
+  const real = await vi.importActual<typeof import("../src/adk/client")>("../src/adk/client");
+  const fetcher = vi.fn(async (..._args: Parameters<typeof fetch>) => Response.json({ serviceRegion: "cn-beijing", items: [],
+    pageNumber: 1, pageSize: 100, totalCount: 0, hasMore: false }));
+  vi.stubGlobal("fetch", fetcher);
+  try {
+    await real.listDeploymentResources({ kind: "tos-bucket", region: "cn-beijing", namePrefix: "agentkit-platform-" });
+    expect(String(fetcher.mock.calls[0][0])).toContain("namePrefix=agentkit-platform-");
+    await real.listDeploymentResources({ kind: "tos-bucket", region: "cn-beijing" });
+    expect(String(fetcher.mock.calls[1][0])).not.toContain("namePrefix");
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
+it("loads bucket resources only on the final step and shows loading", async () => {
+  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({ configured: true, region: "cn-beijing" });
+  vi.mocked(listDeploymentResources).mockReturnValue(new Promise(() => {}));
+  await mount();
+  expect(listDeploymentResources).not.toHaveBeenCalled();
+  await goToFinal();
+  expect(listDeploymentResources).toHaveBeenCalledWith(
+    { kind: "tos-bucket", region: "cn-beijing", namePrefix: "agentkit-platform-", search: "", pageNumber: 1, pageSize: 100 },
+    expect.any(AbortSignal),
+  );
+  expect(document.body.textContent).toContain("deploymentResources.loading");
+});
+it("shows bucket list errors and reloads on retry", async () => {
+  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({ configured: true, region: "cn-beijing" });
+  vi.mocked(listDeploymentResources).mockRejectedValueOnce(new Error("Bucket list unavailable"));
+  await mount();
+  await goToFinal();
+  expect(document.body.textContent).toContain("Bucket list unavailable");
+  expect(bucketButton().disabled).toBe(true);
+  const retry = Array.from(document.querySelectorAll<HTMLButtonElement>("button"))
+    .find((item) => item.textContent === "common.retry")!;
+  await act(async () => retry.click());
+  expect(bucketButton().disabled).toBe(false);
+  await selectBucket("agentkit-platform-fresh");
+  expect(bucketButton().textContent).toContain("agentkit-platform-fresh");
+});
+it("allows creation without a mount when the bucket list is empty", async () => {
+  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({ configured: true, region: "cn-beijing" });
+  vi.mocked(listDeploymentResources).mockResolvedValue({ serviceRegion: "cn-beijing", pageNumber: 1,
+    pageSize: 100, totalCount: 0, hasMore: false, items: [] });
+  await mount();
+  await goToFinal();
+  expect(document.body.textContent).toContain("deploymentResources.noAvailableSentence");
+  expect(submitButton().disabled).toBe(false);
+});
 async function goToFinal() {
   if (field("name") && !field("name").value) await edit("name", "test-agent");
   await act(async () => button("next").click());

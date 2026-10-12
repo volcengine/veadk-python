@@ -4,6 +4,40 @@
 
 VeADK prepares MPA prerequisites and deploys an agent without an `agentkit-mpa-agent` source checkout. Studio and `veadk mpa provision` use the same implementation. The deployed MPA image must support account-shared APIG registration and metadata bootstrap.
 
+## TOS output storage with IAM Role
+
+In Studio, optionally select an owned bucket beginning with `agentkit-platform-`
+in the deployment region; no TOS
+access keys are requested. Creation adds a bucket-specific custom policy to the
+actual Worker Tool role (normally `IDRoleForArkClawShareAgent`) before preparing
+workload identity, databases or network resources. It preserves existing policies
+and refuses conflicting trust, account ownership or same-name policy content.
+Empty selection keeps server defaults; the built-in profile has no mount.
+
+The added policy allows HeadBucket/ListBucket on that bucket and
+GetObject/PutObject/AbortMultipartUpload/DeleteObject only on its
+`sandbox-session/*` objects. The read-write mount remains `/data/output`, with
+canonical per-session TOS paths. All consumers of the shared role receive these
+permissions; directory separation is not tenant authorization. Public bucket
+policies are unchanged and SSE-KMS needs separately approved key permissions.
+
+Deployment credentials must allow `tos:ListBuckets` and IAM GetRole, GetPolicy,
+CreatePolicy, ListAttachedRolePolicies and AttachRolePolicy, in addition to normal
+provisioning permissions. Managed CLI YAML can opt in without keys:
+
+```yaml
+managed:
+  worker:
+    tos-credential-type: iam_role
+    tos-bucket: example-output-bucket
+    # Keep the existing image, role and remaining managed options.
+```
+
+Historical CLI/YAML AK/SK mode remains compatible. Existing Tools/Sessions are
+not changed automatically. Old Studio pages sending credential fields must be
+refreshed. See [the maintained contract](../../../../specs/studio-mpa-creation/README.md#con-17--bucket-only-iam-tos-mounts)
+and [implementation/verification evidence](../../../../prd-spec/features/studio-mpa-tos-iam/2026-10-12-bucket-only.md).
+
 ## Automatic PG setup (recommended for new installations)
 
 Studio's built-in Beijing profile uses automatic PostgreSQL preparation; CLI users set `managed.postgres.mode: auto` in their private YAML. No PG host/user/password or PG URL environment variables are needed. Use the deployment account's rotating STS credentials with `GetCallerIdentity`, AIDAP `CreateWorkspace`, `DescribeWorkspaces`, `DescribeWorkspaceDetail`, `DescribeBranches`, `DescribeComputes`, `DescribeWorkspaceEndpoint`, `DescribeDBAccounts`, `DescribeDatabases`, and `DescribeDBAccountConnection` permissions, in addition to the existing AgentKit/VPC/APIG permissions and model/role setup. Enable AIDAP for that account and ensure the returned PostgreSQL endpoint is reachable from Studio and Runtime. This flow uses the provider's public endpoint and does not modify database network/allowlist settings.

@@ -4,7 +4,7 @@
 
 - Component ID: `studio-mpa-creation`
 - Status: active
-- Revised: 2026-10-09
+- Revised: 2026-10-12
 - Design and evidence: [Studio MPA creation](../../prd-spec/features/mpa-agent-oneclick-provision/2026-09-20-studio-mpa-creation.md)
 - Owned code: `veadk/integrations/mpa/managed/`, `frontend/server/mpa_creation.py`, `frontend/src/adk/mpaCreation.ts`, `frontend/src/ui/mpa-create/`; CLI and directory integration.
 - Tests: `tests/integrations/mpa_managed/`, `frontend/tests/mpaCreation.test.tsx`.
@@ -12,6 +12,31 @@
 - Operator guide: [Managed MPA creation](../../veadk/integrations/mpa/managed/README.md).
 
 ## Responsibility and boundaries
+
+### CON-17 — bucket-only IAM TOS mounts
+
+The approved [bucket-only design](../../prd-spec/features/studio-mpa-tos-iam/2026-10-12-bucket-only.md)
+supersedes Studio access-key input. Studio accepts an
+optional `tosBucket` beginning with `agentkit-platform-`, selects IAM Role using the actual Worker role, strips old
+draft credentials, and uses the existing bucket resource selector. Before other
+provisioning writes, verify account/region bucket ownership and add a stable,
+exact bucket-specific Global IAM policy binding. Bucket actions are HeadBucket
+and ListBucket; object actions are GetObject, PutObject, AbortMultipartUpload,
+and DeleteObject, restricted to `sandbox-session/*`. Preserve existing role,
+trust, policies, and bindings; reject conflicts and bound retries/cancellation.
+Tool payloads omit Credentials and reuse checks include mode/role. CLI access-key
+mode remains compatible. No implicit existing-Tool/Session or public-bucket-policy
+change, no KMS grants, and no strict tenant isolation from the shared role.
+Implementation, automated/browser verification, and cloud E2E are separate.
+An empty selection preserves the server profile; the built-in profile has no TOS
+mount by default. Deployment credentials require TOS ListBuckets and IAM GetRole,
+GetPolicy, CreatePolicy, ListAttachedRolePolicies and AttachRolePolicy. Granting
+bucket access does not imply KMS access or override existing IAM denies.
+The existing `/web/deployment-resources` API accepts optional `namePrefix` for
+TOS lists, applied before search/counts/pagination. Only MPA creation supplies the
+platform prefix; general queries remain unchanged. Creation validates the prefix
+before cloud calls, including recovered drafts; explicit CLI profiles are not
+restricted by this Studio-only selection rule.
 
 VeADK owns managed YAML parsing, cloud/database orchestration, authorized durable creation tasks and the MPA directory dialog. No external source checkout is required. Shared registry/bootstrap contracts remain interoperable with the MPA image. Legacy `veadk mpa create` remains separate and unchanged. Model execution and channel routing remain Runtime responsibilities. Managed runtime IAM preparation follows the contract below.
 

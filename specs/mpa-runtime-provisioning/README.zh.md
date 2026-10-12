@@ -90,12 +90,16 @@ Studio/CLI 通过共享编排遵循相同保证。平台 operation 清单与 boo
 
 当私有 MPA YAML 同时提供 `tos-access-key`、`tos-secret-key` 和
 `tos-bucket` 时，新建 worker Tool 必须携带 access-key 类型的 TOS 挂载：基础路径
-为 `/sandbox-session/default/default`，本地读写路径为 `/data/output`。凭证必须只
+为历史模式的 `/`，本地读写路径为 `/data/output`。凭证必须只
 保留在 Tool 请求中；Runtime 只收到
 `MPA_CODEX_WORKER_TOS_MOUNT_ENABLED=true` 和非敏感 bucket 名，不接收 AK/SK。
-Studio 创建页可以为单次创建传入完整三元组并覆盖 YAML 默认值；AK/SK 只经子进程
-stdin 在内存中传递，不得进入 sessionStorage、任务 SQLite 或任务查询响应。部分输入
-必须拒绝；使用已有 Worker 时必须先通过本次创建的 Worker 镜像覆盖为新建 Worker。
+Studio 仅提交可选 `tosBucket`，覆盖为不带密钥的 IAM Role 模式，其基础路径为
+`/sandbox-session/default/default`。显式 managed profile 可用
+`tos-credential-type: iam_role` 和桶名，不提供密钥；历史 CLI/YAML AK/SK 模式兼容。
+Studio 空选择保留服务端默认配置，桶授权遵循
+[CON-17](../studio-mpa-creation/README.zh.md#con-17--仅选桶-iam-tos-挂载)。
+凭据不得进入 sessionStorage、任务 SQLite 或任务查询响应。使用已有 Worker 时必须
+先通过本次创建的 Worker 镜像覆盖为新建 Worker；不隐式修改既有 Tool/Session。
 
 对于新建托管 Runtime，首次 `CreateRuntime` 请求必须携带已经准备完成的 Worker Tool
 的 `ToolId`。最终收敛更新在发布权威 endpoint/key 环境时继续保留相同 `ToolId`。

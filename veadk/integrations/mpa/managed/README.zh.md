@@ -4,6 +4,34 @@
 
 VeADK 可准备 MPA 前置资源并部署智能体，无需检出 `agentkit-mpa-agent` 源码。Studio 和 `veadk mpa provision` 共用同一实现。部署的 MPA 镜像须支持账号共享 APIG 注册和元数据初始化。
 
+## 使用 IAM Role 的 TOS 输出存储
+
+Studio 可选部署账号、部署地域下以 `agentkit-platform-` 开头的已有桶，不再要求 TOS AK/SK。创建流程会在
+准备工作负载身份、数据库或网络之前，为实际 Worker Tool 角色（通常为
+`IDRoleForArkClawShareAgent`）增量绑定桶专属自定义策略。保留已有策略，角色信任、
+账号归属或同名策略内容冲突则拒绝。空选择保留服务端默认配置；内置 profile 默认
+不挂载。
+
+新增策略仅允许该桶的 HeadBucket/ListBucket，以及其 `sandbox-session/*` 对象的
+GetObject/PutObject/AbortMultipartUpload/DeleteObject。本地读写挂载保持
+`/data/output`，TOS 使用规范的逐会话目录。共享角色所有使用者都会获得这些权限，
+目录区分不是租户授权。桶公开策略保持不变；SSE-KMS 需要另行批准密钥权限。
+
+部署凭据除正常创建权限外，还须具备 `tos:ListBuckets` 和 IAM GetRole、GetPolicy、
+CreatePolicy、ListAttachedRolePolicies、AttachRolePolicy。managed CLI YAML 可配置：
+
+```yaml
+managed:
+  worker:
+    tos-credential-type: iam_role
+    tos-bucket: example-output-bucket
+    # 保留已有镜像、角色及其他 managed 配置。
+```
+
+历史 CLI/YAML AK/SK 模式保持兼容，不自动修改已有 Tool/Session。仍发送凭据字段的
+旧 Studio 页面需刷新。参见[维护契约](../../../../specs/studio-mpa-creation/README.zh.md#con-17--仅选桶-iam-tos-挂载)
+及[实现与验证记录](../../../../prd-spec/features/studio-mpa-tos-iam/2026-10-12-bucket-only.zh.md)。
+
 ## 自动准备 PG（新部署推荐）
 
 Studio 内置的北京地域配置采用 PostgreSQL 自动准备；CLI 用户在私有 YAML 中设置 `managed.postgres.mode: auto`。不需要 PG 地址/用户名/密码或 PG URL 环境变量。部署账号的轮转 STS 凭据除已有 AgentKit/VPC/APIG 权限及模型/角色配置外，还需 `GetCallerIdentity`、AIDAP `CreateWorkspace`、`DescribeWorkspaces`、`DescribeWorkspaceDetail`、`DescribeBranches`、`DescribeComputes`、`DescribeWorkspaceEndpoint`、`DescribeDBAccounts`、`DescribeDatabases` 和 `DescribeDBAccountConnection` 权限。账号须已开通 AIDAP，且 Studio、Runtime 能连接返回的 PostgreSQL 端点。该流程使用服务商公网端点，不修改数据库网络/白名单设置。

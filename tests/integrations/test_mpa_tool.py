@@ -27,6 +27,17 @@ from veadk.integrations.mpa.mpa_tool import (
 )
 
 
+def test_iam_tos_payload_uses_role_without_access_keys():
+    from veadk.integrations.mpa.mpa_tool import build_tos_mount_config
+
+    payload = build_tos_mount_config(
+        tos_bucket="session-output", region="cn-beijing", tos_credential_type="iam_role"
+    ).model_dump(by_alias=True, exclude_none=True, mode="json")
+    assert payload["CredentialType"] == "TOS_CREDENTIAL_TYPE_IAM_ROLE"
+    assert "Credentials" not in payload
+    assert payload["MountPoints"][0]["LocalMountPath"] == "/data/output"
+
+
 class _FakeToolsClient:
     """Minimal stub of AgentkitToolsClient recording calls."""
 
