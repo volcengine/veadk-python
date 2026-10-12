@@ -45,6 +45,8 @@ from .consts import (
     REVIEWER_OWNER_TAG,
     SHARED_REVIEW_TAG,
     SHARED_SOURCE_VERSION_TAG,
+    SKILL_VISIBILITY_SHARED,
+    SKILL_VISIBILITY_TAG,
     SCORE_STATUS_TAG,
     SCORE_TOTAL_TAG,
     SCORE_TIME_TAG,
@@ -371,6 +373,7 @@ class SkillReviewRepository:
                         "author": application["author"],
                         SHARED_REVIEW_TAG: application_id,
                         SHARED_SOURCE_VERSION_TAG: application["version"],
+                        SKILL_VISIBILITY_TAG: SKILL_VISIBILITY_SHARED,
                     }
                     shared_id, shared_version = self._copy_archive(
                         client,
@@ -417,6 +420,11 @@ class SkillReviewRepository:
                         "共享副本信息不完整，请重试",
                         status_code=502,
                     )
+                update_skill_tags(
+                    client,
+                    shared_id,
+                    {SKILL_VISIBILITY_TAG: SKILL_VISIBILITY_SHARED},
+                )
                 update_skill_tags(
                     client,
                     application_id,
