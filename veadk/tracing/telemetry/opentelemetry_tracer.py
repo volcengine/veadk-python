@@ -162,14 +162,8 @@ class OpentelemetryTracer(BaseModel, BaseTracer):
         for exporter in self.exporters:
             self._activate_exporter(exporter)
 
-        self._inmemory_exporter = InMemoryExporter()
+        self._inmemory_exporter = InMemoryExporter.for_provider(global_tracer_provider)
         if self._inmemory_exporter.processor:
-            # make sure the in memory exporter processor is added at index 0
-            # because we use this to record all spans
-            global_tracer_provider._active_span_processor._span_processors = (
-                self._inmemory_exporter.processor,
-            ) + global_tracer_provider._active_span_processor._span_processors
-
             self._processors.append(self._inmemory_exporter.processor)
             self.exporters.append(self._inmemory_exporter)
         else:
