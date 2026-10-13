@@ -1057,7 +1057,12 @@ with tempfile.TemporaryDirectory() as agents_dir:
         tracing._instrumented_with_opentelemetry_instrumentation_google_genai(),
         bool,
     )
-    transformed = _experimental_semconv.transformers.t_contents("hello")
+    transformers = getattr(_experimental_semconv, "transformers", None)
+    if transformers is None:
+        from google.genai import models as genai_models_module
+
+        transformers = genai_models_module.t
+    transformed = transformers.t_contents("hello")
     assert transformed[0].parts[0].text == "hello"
     if not real_models_module_loaded():
         raise SystemExit("Google GenAI client not loaded for real telemetry use")

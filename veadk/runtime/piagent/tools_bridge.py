@@ -103,9 +103,9 @@ async def build_executable_tools(
 
     bundle = PiToolBundle()
     seen: set[str] = set()
-    readonly_context = ReadonlyContext(ctx)
 
     _ensure_invocation_context_defaults(ctx, agent)
+    readonly_context = ReadonlyContext(ctx)
 
     def _skip(name: str, reason: str) -> None:
         logger.warning(f"piagent: skipping tool {name!r}: {reason}")
@@ -456,6 +456,10 @@ def _ensure_invocation_context_defaults(ctx: InvocationContext, agent: Agent) ->
             _set_default_attr(agent, callback_name, [])
     if getattr(ctx, "agent", None) is None:
         _set_default_attr(ctx, "agent", agent)
+    if getattr(ctx, "run_config", None) is None:
+        from google.adk.agents import RunConfig
+
+        _set_default_attr(ctx, "run_config", RunConfig())
     if getattr(ctx, "plugin_manager", None) is None:
         _set_default_attr(ctx, "plugin_manager", _NoopPluginManager())
 

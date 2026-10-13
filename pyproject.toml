@@ -20,11 +20,11 @@ dependencies = [
     "pydantic-settings==2.10.1", # Config management
     "a2a-sdk>=0.3.7,<1.0.0", # For Google Agent2Agent protocol
     "deprecated==1.2.18",
-    "google-adk>=1.34.0", # For basic agent architecture
+    "google-adk>=2.7.0,<2.8.0", # For basic agent architecture
     # litellm and sqlalchemy are required by code paths veadk always uses
     # (LiteLlm models, sessions). google-adk ships them in base on 1.x but moved
     # them behind extras ([extensions]/[db]) on 2.x, so declare them directly to
-    # stay compatible across google-adk >= 1.34.0 (including 2.x).
+    # stay compatible across google-adk >= 2.7.0,<2.8.0.
     "litellm>=1.83.7,<=1.83.14", # google-adk LiteLlm model ([extensions] on 2.x)
     # The `asyncio` extra is what pulls greenlet, which SQLAlchemy's async
     # engine requires and which ADK's DatabaseSessionService therefore needs.
@@ -33,7 +33,7 @@ dependencies = [
     # required" on the first session write to sqlite/mysql/postgres. CI never
     # saw it: ubuntu-latest is x86_64, where the marker matches.
     "sqlalchemy[asyncio]>=2,<3", # google-adk sessions ([db] on 2.x)
-    "opentelemetry-exporter-otlp==1.37.0",
+    "opentelemetry-exporter-otlp>=1.37.0",
     "opentelemetry-instrumentation-logging>=0.56b0",
     "wrapt==1.17.2", # For patching built-in functions
     "volcengine-python-sdk>=5.0.36", # For Volcengine API and Ark Responses context management
@@ -41,7 +41,7 @@ dependencies = [
     "agent-pilot-sdk==0.1.2", # Prompt optimization by Volcengine AgentPilot/PromptPilot toolkits
     "fastmcp>=2.12.3", # For running MCP
     "trustedmcp==0.0.5", # For running TrustedMCP
-    "mcp==1.26.0", # Bumped to satisfy google-adk 1.34.0 requirement
+    "mcp==1.26.0", # Bumped to satisfy google-adk requirement
     "cookiecutter==2.6.0", # For cloud deploy
     "omegaconf==2.3.0", # For agent builder
     "psycopg2-binary>=2.9.10", # For PostgreSQL database (short term memory)
@@ -113,13 +113,13 @@ pdf = [] # Backward-compatible alias; PDF support is now installed by default
 eval = [
     "prometheus-client>=0.22.1",    # For exporting data to Prometheus pushgateway
     "deepeval>=3.2.6",              # For DeepEval-based evaluation
-    "google-adk[eval]>=1.34.0",     # For Google ADK-based evaluation
+    "google-adk[eval]>=2.7.0,<2.8.0", # For Google ADK-based evaluation
 ]
 harness = [
     "headroom",
 ]
 harness-sidecar = [
-    "agentkit-sdk-python>=0.8.1,<0.9.0",
+    "agentkit-sdk-python>=0.8.5",
 ]
 cli = []
 sandbox = [

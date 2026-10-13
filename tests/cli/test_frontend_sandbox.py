@@ -4523,7 +4523,17 @@ async def test_cancelled_create_is_deleted_after_sdk_call_finishes(
 
 
 @pytest.mark.asyncio
-async def test_snapshot_metadata_survives_older_sdk_and_scopes_cards() -> None:
+async def test_snapshot_metadata_survives_older_sdk_and_scopes_cards(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from veadk.cli import agentkit_session_metadata
+
+    monkeypatch.setattr(
+        agentkit_session_metadata,
+        "_model_supports_alias",
+        lambda _model, _alias: False,
+    )
+
     class Client:
         def _invoke_api(self, *, api_action, request, response_type):
             assert api_action == "ListSessionSnapshots"

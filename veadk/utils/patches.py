@@ -363,7 +363,17 @@ def patch_adk_build_graph_serialization() -> None:
 
         @functools.wraps(original_serialize_agent)
         def veadk_serialize_agent(*args, **kwargs):
-            return _sanitize_adk_graph_value(original_serialize_agent(*args, **kwargs))
+            agent = args[0] if args else kwargs.get("agent")
+            serialized = _sanitize_adk_graph_value(
+                original_serialize_agent(*args, **kwargs)
+            )
+            if isinstance(serialized, dict) and "sub_agents" not in serialized:
+                sub_agents = getattr(agent, "sub_agents", None)
+                if sub_agents:
+                    serialized["sub_agents"] = [
+                        veadk_serialize_agent(sub_agent) for sub_agent in sub_agents
+                    ]
+            return serialized
 
         graph_serialization.serialize_agent = veadk_serialize_agent
         graph_serialization._veadk_build_graph_serialization_patched = True

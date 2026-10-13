@@ -5,6 +5,11 @@ import defaultSdk, {
 // The package creates a singleton listener on import; attempts own their instances.
 defaultSdk.destroy();
 
+type WecomBotInfo = {
+  botid?: unknown;
+  secret?: unknown;
+};
+
 export class WecomAuthorizationError extends Error {
   constructor(public readonly code: string) {
     super("WeCom authorization failed");
@@ -45,7 +50,7 @@ export function authorizeWecom(
           debug: false,
         })
         .then(
-          (bot) => {
+          (bot: WecomBotInfo | null | undefined) => {
             if (settled) return;
             if (
               typeof bot?.botid !== "string" ||
