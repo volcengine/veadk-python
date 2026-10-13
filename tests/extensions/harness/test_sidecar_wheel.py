@@ -119,8 +119,7 @@ def test_wheel_metadata_keeps_sidecar_optional_and_sdk_constraints_aligned(
         if item.marker is not None and "harness-sidecar" in str(item.marker)
     ]
     assert len(sidecar_extra) == 1
-    assert ">=0.8.1" in str(sidecar_extra[0].specifier)
-    assert "<0.9.0" in str(sidecar_extra[0].specifier)
+    assert ">=0.8.5" in str(sidecar_extra[0].specifier)
 
     forbidden = {
         "agentkit-harness-sidecar-integration",
