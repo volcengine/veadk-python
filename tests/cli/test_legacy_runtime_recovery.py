@@ -64,6 +64,41 @@ def _canonical_snapshot(
     )
 
 
+@pytest.mark.parametrize(
+    "pythonpath",
+    [None, "/app/extensions:/opt/vendor", "/opt/veadk-studio-python:/app"],
+)
+def test_source_preserving_runtime_environment_activates_packaged_overlay(
+    pythonpath: str | None,
+) -> None:
+    from veadk.cli.legacy_runtime_recovery import (
+        source_preserving_runtime_environment,
+    )
+
+    original = {"MODEL_SETTING": "preserved", "HARNESS_SIDECAR_ENABLED": "false"}
+    if pythonpath is not None:
+        original["PYTHONPATH"] = pythonpath
+    before = dict(original)
+    result = source_preserving_runtime_environment(original)
+    assert original == before
+    assert result["MODEL_SETTING"] == "preserved"
+    assert result["HARNESS_SIDECAR_ENABLED"] == "false"
+    assert result["VEADK_STUDIO_SKILL_OVERLAY"] == "/opt/veadk-studio-overlay"
+    assert result["VEADK_STUDIO_OVERLAY_READY_FILE"] == (
+        "/tmp/veadk-studio-overlay-ready"
+    )
+    paths = result["PYTHONPATH"].split(":")
+    assert paths[0] == "/opt/veadk-studio-python"
+    assert paths.count("/opt/veadk-studio-python") == 1
+    assert paths[1:] == [
+        path
+        for path in (pythonpath.split(":") if pythonpath else [])
+        if path != "/opt/veadk-studio-python"
+    ]
+    assert source_preserving_runtime_environment(result) == result
+    assert "MCP_SERVERS_JSON" not in result
+
+
 def _layer(entries: dict[str, bytes | tuple[str, str]]) -> bytes:
     output = io.BytesIO()
     with tarfile.open(fileobj=output, mode="w:gz") as archive:
@@ -79,6 +114,143 @@ def _layer(entries: dict[str, bytes | tuple[str, str]]) -> bytes:
             info.size = len(value)
             archive.addfile(info, io.BytesIO(value))
     return output.getvalue()
+
+
+def test_source_preserving_nonroot_build_uses_readable_immutable_assets():
+    from veadk.cli.legacy_runtime_recovery import source_preserving_runtime_environment
+
+    def build(text):
+        return build_source_preserving_overlay(
+            source_image="example-cn-shanghai.cr.volces.com/agentkit/demo@sha256:"
+            + "a" * 64,
+            published_draft={"name": "demo"},
+            edited_draft={
+                "name": "demo",
+                "selectedSkills": [
+                    {"source": "local", "name": "runbook", "folder": "runbook"}
+                ],
+            },
+            canonical_skills=(
+                _canonical_snapshot("runbook", [("skills/runbook/SKILL.md", text)]),
+            ),
+            application_mcp=True,
+        )
+
+    first, second = build("# First"), build("# Second")
+    env = {"PYTHONPATH": "/opt/vendor", "MODEL": "preserved"}
+    first_env = source_preserving_runtime_environment(env, overlay_files=first)
+    second_env = source_preserving_runtime_environment(first_env, overlay_files=second)
+    assert (
+        first_env["VEADK_STUDIO_SKILL_OVERLAY"]
+        != second_env["VEADK_STUDIO_SKILL_OVERLAY"]
+    )
+    assert second_env["MODEL"] == "preserved"
+    assert second_env["PYTHONPATH"].endswith(":/opt/vendor")
+    assert first_env["PYTHONPATH"].split(":")[0] not in second_env["PYTHONPATH"]
+    for files, runtime_env in ((first, first_env), (second, second_env)):
+        entries = {item["path"]: item["content"] for item in files}
+        dockerfile = entries["Dockerfile"]
+        assert "USER " not in dockerfile
+        assert "ENTRYPOINT " not in dockerfile and "CMD " not in dockerfile
+        assert "RUN rm" not in dockerfile
+        assert all(
+            "--chmod=" in line
+            for line in dockerfile.splitlines()
+            if line.startswith("COPY ")
+        )
+        import shlex
+
+        for line in dockerfile.splitlines():
+            if not line.startswith("COPY "):
+                continue
+            words = shlex.split(line)
+            mode = int(
+                next(
+                    word.removeprefix("--chmod=")
+                    for word in words
+                    if word.startswith("--chmod=")
+                ),
+                8,
+            )
+            assert mode & 0o044 == 0o044  # A different runtime UID/GID can read.
+            if words[-2] in {".veadk-studio-overlay", ".veadk-studio-python"}:
+                assert mode & 0o011 == 0o011  # Every directory is traversable.
+        assert (
+            "ENV VEADK_STUDIO_SKILL_OVERLAY="
+            + runtime_env["VEADK_STUDIO_SKILL_OVERLAY"]
+            in dockerfile
+        )
+        assert (
+            "ENV PYTHONPATH="
+            + runtime_env["PYTHONPATH"].split(":")[0]
+            + ":${PYTHONPATH}"
+            in dockerfile
+        )
+    assert build("# First") == first
+
+
+@pytest.mark.parametrize(
+    "unsafe",
+    ["../escape", "/tmp/other", "opt/veadk-studio-updates/" + "a" * 64 + "/../overlay"],
+)
+def test_source_preserving_oci_rejects_unsafe_layout(unsafe):
+    image = ImageReference.parse("example-cn-shanghai.cr.volces.com/agentkit/demo:v1")
+    layer = _layer(
+        {
+            "opt/veadk-studio-layout.json": json.dumps(
+                {"schemaVersion": 1, "root": unsafe}
+            ).encode(),
+            "app/skills/runbook/SKILL.md": b"# Must not fall back",
+        }
+    )
+    digest = "sha256:" + hashlib.sha256(layer).hexdigest()
+    inspector = _inspector(
+        {
+            "schemaVersion": 2,
+            "layers": [
+                {
+                    "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+                    "digest": digest,
+                    "size": len(layer),
+                }
+            ],
+        },
+        {digest: layer},
+    )
+    with pytest.raises(LegacyRecoveryError, match="overlay_layout_invalid"):
+        inspector.extract_skills(image, [("runbook", "")])
+
+
+def test_source_preserving_oci_current_revision_excludes_old_resources():
+    image = ImageReference.parse("example-cn-shanghai.cr.volces.com/agentkit/demo:v2")
+    layers = {}
+    descriptors = []
+    for index, revision in enumerate(("a" * 64, "b" * 64)):
+        root = "opt/veadk-studio-updates/" + revision + "/overlay"
+        entries: dict[str, bytes | tuple[str, str]] = {
+            "opt/veadk-studio-layout.json": json.dumps(
+                {"schemaVersion": 1, "root": root}
+            ).encode(),
+            root + "/managed.json": b'["runbook"]',
+            root + "/selected.json": b'["runbook"]',
+            root + "/final.json": b'["runbook"]',
+            root + "/skills/runbook/SKILL.md": str(index).encode(),
+        }
+        if index == 0:
+            entries[root + "/skills/runbook/deleted.md"] = b"obsolete"
+        layer = _layer(entries)
+        digest = "sha256:" + hashlib.sha256(layer).hexdigest()
+        layers[digest] = layer
+        descriptors.append(
+            {
+                "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+                "digest": digest,
+                "size": len(layer),
+            }
+        )
+    inspector = _inspector({"schemaVersion": 2, "layers": descriptors}, layers)
+    _, recovered = inspector.extract_skills(image, [("runbook", "")])
+    assert recovered[0].files == ({"path": "skills/runbook/SKILL.md", "content": "1"},)
 
 
 def _inspector(
@@ -1769,6 +1941,7 @@ def test_source_preserving_overlay_uses_exact_image_and_only_resource_delta() ->
     assert "COPY agents" not in files["Dockerfile"]
     assert json.loads(files[".veadk-studio-overlay/managed.json"]) == ["old-skill"]
     assert json.loads(files[".veadk-studio-overlay/selected.json"]) == ["new-skill"]
+    assert json.loads(files[".veadk-studio-overlay/final.json"]) == ["new-skill"]
     assert json.loads(files[".veadk-studio-overlay/mcp.json"]) == {
         "legacy-agent": [
             {
@@ -1938,3 +2111,45 @@ def test_source_preserving_mcp_owner_rejects_platform_sidecar_ambiguity() -> Non
             effective_components=["mcp_gateway"],
             mcp_toolset_id="toolset-1",
         )
+
+
+@pytest.mark.parametrize("whiteout", [None, ".wh.skills", "skills/.wh..wh..opq"])
+def test_source_overlay_oci_recovery_uses_final_image_selection(whiteout):
+    base_content = b"---\nname: demo\ndescription: Original.\n---\n\n# Old\n"
+    new_content = b"---\nname: demo\ndescription: Updated.\n---\n\n# Current\n"
+    layers = [_layer({"app/skills/demo/SKILL.md": base_content})]
+    entries: dict[str, bytes | tuple[str, str]] = {
+        "opt/veadk-studio-overlay/managed.json": b'["demo"]',
+        "opt/veadk-studio-overlay/selected.json": b'["demo"]',
+        "opt/veadk-studio-overlay/final.json": b'["demo"]',
+        "opt/veadk-studio-overlay/skills/demo/SKILL.md": new_content,
+    }
+    if whiteout is not None:
+        entries["app/" + whiteout] = b""
+    layers.append(_layer(entries))
+    blobs = {"sha256:" + hashlib.sha256(layer).hexdigest(): layer for layer in layers}
+    inspector = _inspector(
+        {
+            "mediaType": "application/vnd.oci.image.manifest.v1+json",
+            "layers": [
+                {
+                    "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+                    "digest": digest,
+                    "size": len(blob),
+                }
+                for digest, blob in blobs.items()
+            ],
+        },
+        blobs,
+    )
+    _, skills = inspector.extract_skills(
+        ImageReference.parse(
+            "example-registry-cn-shanghai.cr.volces.com/agentkit/demo:v3"
+        ),
+        [("demo", "Updated.")],
+    )
+    assert len(skills) == 1
+    selected = skills[0].as_selected_skill()
+    assert selected["localFiles"] == [
+        {"path": "skills/demo/SKILL.md", "content": new_content.decode()}
+    ]

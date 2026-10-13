@@ -2556,6 +2556,7 @@ function treeProblems(
   root: AgentDraft,
   duplicateNames: ReadonlySet<string>,
   path: NodePath = [],
+  editMode?: "source-preserving" | "regenerate",
 ): TreeProblem[] {
   const out: TreeProblem[] = [];
   if (path.length === 0) {
@@ -2574,7 +2575,8 @@ function treeProblems(
   }
   const remote = isA2aType(root.agentType);
   const p = nodeProblem(root, duplicateNames, path.length === 0);
-  if (p) {
+  // Source-preserving updates retain runtime-owned, possibly dynamic prompts.
+  if (p && !(p === "missingPrompt" && editMode === "source-preserving")) {
     out.push({
       path,
       name: remote ? "" : root.name.trim(),
@@ -2584,7 +2586,7 @@ function treeProblems(
   }
   if (nodeAcceptsChildren(root)) {
     root.subAgents.forEach((c, i) =>
-      out.push(...treeProblems(c, duplicateNames, [...path, i])),
+      out.push(...treeProblems(c, duplicateNames, [...path, i], editMode)),
     );
   }
   return out;
@@ -4427,7 +4429,9 @@ export function CustomCreate({
   const showNameError =
     showErrors || touchedAgentNamePaths.has(selectedNamePathKey);
   const descriptionMissing = !a2a && node.description.trim().length === 0;
-  const instructionMissing = node.instruction.trim().length === 0;
+  const instructionMissing =
+    deploymentTarget?.editMode !== "source-preserving" &&
+    node.instruction.trim().length === 0;
   const a2aRegistrySpaceMissing =
     a2a && !node.a2aRegistry?.registrySpaceId.trim();
   const invalidClass = (missing: boolean, visible = showErrors) =>
@@ -4437,8 +4441,8 @@ export function CustomCreate({
 
   // Whole-tree validation: every node must satisfy its type's requirements.
   const problems = useMemo(
-    () => treeProblems(draft, duplicateNames),
-    [draft, duplicateNames],
+    () => treeProblems(draft, duplicateNames, [], deploymentTarget?.editMode),
+    [draft, duplicateNames, deploymentTarget?.editMode],
   );
   const canFinish = problems.length === 0;
   const providerDraft = useMemo(
@@ -6900,6 +6904,7 @@ export function CustomCreate({
                 }
                 deploymentActionTargetId="cw-publish-primary-action"
                 deploymentRuntimeId={deploymentTarget?.runtimeId}
+                deploymentEditMode={deploymentTarget?.editMode}
                 deploymentMpaInstanceId={deploymentTarget?.mpaInstanceId}
                 deploymentRuntimeName={deploymentRuntimeName}
                 deploymentRuntimeRevision={deploymentTarget?.etag}

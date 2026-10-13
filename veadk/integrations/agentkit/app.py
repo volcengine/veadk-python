@@ -48,6 +48,7 @@ from veadk.agent_metadata import (
 )
 from veadk.agent_search import search_agent_component
 from veadk.cli.frontend_invocation import FrontendInvocationPlugin
+from veadk.integrations.agentkit.source_overlay import read_source_overlay
 from veadk.memory.short_term_memory import ShortTermMemory
 from veadk.utils.logger import get_logger
 
@@ -436,6 +437,7 @@ def _add_introspection_routes(
     app_name: str | None = None,
 ) -> None:
     expected_name = app_name or str(getattr(root_agent, "name", "") or "")
+    source_overlay = read_source_overlay(os.environ)
 
     @app.get("/ping")
     def ping() -> dict[str, str]:
@@ -461,6 +463,7 @@ def _add_introspection_routes(
                 for child in getattr(root_agent, "sub_agents", []) or []
             ],
             "graph": node,
+            **({"sourceOverlay": source_overlay} if source_overlay is not None else {}),
             "draft": dict(agent_draft) if agent_draft is not None else None,
         }
 
@@ -512,6 +515,7 @@ def _add_introspection_routes(
             "skills": node["skills"],
             "components": node["components"],
             "graph": node,
+            **({"sourceOverlay": source_overlay} if source_overlay is not None else {}),
         }
 
 
