@@ -63,3 +63,11 @@ Design reviewed directly: ownership, errors, concurrency, compatibility, configu
 - Production/cloud validation: not_run, no production access or changes requested
 - UI validation: not_applicable, no frontend behavior changes
 - Commit and PR: authorized; package publication and production deployment: not_run, outside this scope
+
+## CI follow-up
+
+The initial Python 3.12 CI run had 7023 passing tests and two failures caused by runtime tests slicing the private `_spans` list. Update those two consumers to read session snapshots through `get_finished_spans(session_id)`, avoiding assumptions about the queue type or offsets that change after eviction. Preserve the existing span and session assertions. This follow-up changes no production code or approved contract
+
+- Failed cases: reproduced both failures locally before the update; both pass afterward
+- Extended check: `uv run --no-sync --extra dev pytest tests/runtime/differential tests/runtime/piagent/test_piagent_turn_contract.py -q` finishes with 84 passed, 2 xfailed, and 1 failed after the update
+- Remaining failure: `test_model_fallbacks_warn_for_external_runtime` sees empty captured logs; it also fails on the original PR commit `9671acd7`, where the same check finishes with 82 passed, 2 xfailed, and 3 failed. It is outside the cache fix and remains unchanged

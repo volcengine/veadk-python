@@ -63,3 +63,11 @@ provider 拥有共享 exporter，通过注册锁初始化。即使关闭保存�
 - 生产及云端验证：not_run，未要求访问或修改生产环境
 - UI 验证：not_applicable，无前端行为变更
 - 提交及 PR：已获授权；软件包发布及生产部署：not_run，不在本次范围内
+
+## CI 后续修正
+
+Python 3.12 的首次 CI 有 7023 项通过、2 项失败；失败来自两个运行时测试对私有 `_spans` 列表的切片假设。将这两个使用方改为通过 `get_finished_spans(session_id)` 读取会话快照，避免依赖队列类型或会因淘汰而变化的列表偏移，保留原有 span 及会话断言。本次修正不修改生产代码或已批准契约
+
+- 失败用例：修正前本地复现 2 项失败，修正后 2 项通过
+- 扩展检查：`uv run --no-sync --extra dev pytest tests/runtime/differential tests/runtime/piagent/test_piagent_turn_contract.py -q` 在修正后为 84 passed、2 xfailed、1 failed
+- 剩余失败：`test_model_fallbacks_warn_for_external_runtime` 的日志捕获断言为空；原始 PR 提交 `9671acd7` 下同样复现，该基线为 82 passed、2 xfailed、3 failed。此项不在本次缓存修复范围，未修改
