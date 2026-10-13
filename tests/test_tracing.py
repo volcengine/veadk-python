@@ -13,9 +13,13 @@
 # limitations under the License.
 
 
+import json
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from opentelemetry import context as context_api
 from opentelemetry import trace as trace_api
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
     OTLPSpanExporter,
@@ -28,6 +32,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
 from opentelemetry.util._once import Once
 
 from veadk.agent import Agent
+from veadk.config import settings
 from veadk.tracing.telemetry import (
     opentelemetry_tracer as opentelemetry_tracer_module,
 )
@@ -42,6 +47,7 @@ from veadk.tracing.telemetry.exporters.cozeloop_exporter import (
     CozeloopExporter,
     CozeloopExporterConfig,
 )
+from veadk.tracing.telemetry.exporters.inmemory_exporter import InMemoryExporter
 from veadk.tracing.telemetry.exporters.tls_exporter import (
     TLSExporter,
     TLSExporterConfig,
@@ -51,6 +57,113 @@ from veadk.tracing.telemetry.opentelemetry_tracer import OpentelemetryTracer
 APP_NAME = "app"
 USER_ID = "testuser"
 SESSION_ID = "testsession"
+
+
+def test_tracers_share_one_bounded_provider_cache(
+    fresh_global_tracer_provider, monkeypatch
+):
+    monkeypatch.setattr(settings.opentelemetry_config, "inmemory_enabled", True)
+    monkeypatch.setattr(settings.opentelemetry_config, "inmemory_max_spans", 2)
+    first = OpentelemetryTracer()
+    provider = trace_api.get_tracer_provider()
+    tracers = [first] + [OpentelemetryTracer() for _ in range(20)]
+    assert len(provider._active_span_processor._span_processors) == 1
+    assert all(t._inmemory_exporter is first._inmemory_exporter for t in tracers)
+    otel_tracer = provider.get_tracer(__name__)
+    for number in range(3):
+        with otel_tracer.start_as_current_span("call_llm") as span:
+            span.set_attribute("gen_ai.session.id", SESSION_ID)
+            span.set_attribute("number", number)
+    spans = first._inmemory_exporter._exporter.get_finished_spans(SESSION_ID)
+    assert [span.attributes["number"] for span in spans] == [1, 2]
+    assert all(t.trace_id == first.trace_id for t in tracers)
+
+
+@pytest.mark.parametrize("enabled", [False, True], ids=["disabled", "bounded"])
+def test_local_cache_limits_preserve_cloud_spans_annotations_and_dumps(
+    fresh_global_tracer_provider, monkeypatch, tmp_path, enabled
+):
+    monkeypatch.setattr(settings.opentelemetry_config, "inmemory_enabled", enabled)
+    monkeypatch.setattr(settings.opentelemetry_config, "inmemory_max_spans", 2)
+    monkeypatch.setattr(settings.opentelemetry_config, "inmemory_max_bytes", 16 * 1024)
+    monkeypatch.setattr(
+        opentelemetry_tracer_module,
+        "portal_metric_recorder",
+        SimpleNamespace(force_flush=lambda: True),
+    )
+    provider = trace_sdk.TracerProvider()
+    cloud = OTelInMemorySpanExporter()
+    provider.add_span_processor(SimpleSpanProcessor(cloud))
+    trace_api.set_tracer_provider(provider)
+    tracer = OpentelemetryTracer()
+    otel_tracer = provider.get_tracer(__name__)
+    payload = "large response" * 10000
+    token = context_api.attach(context_api.Context())
+    try:
+        with otel_tracer.start_as_current_span("invocation") as invocation:
+            assert (
+                context_api.get_value("suppress_language_model_instrumentation") is True
+            )
+            with otel_tracer.start_as_current_span("invoke_agent test"):
+                for number in range(3):
+                    with otel_tracer.start_as_current_span("call_llm") as span:
+                        span.set_attribute("gen_ai.session.id", SESSION_ID)
+                        span.set_attribute("number", number)
+                        if number == 2:
+                            span.set_attribute("gen_ai.output", payload)
+    finally:
+        context_api.detach(token)
+
+    spans = cloud.get_finished_spans()
+    assert len(spans) == 5
+    assert spans[2].attributes["gen_ai.output"] == payload
+    assert spans[3].attributes["gen_ai.span.kind"] == "agent"
+    assert spans[4].attributes["gen_ai.span.kind"] == "workflow"
+    assert spans[4].attributes["gen_ai.usage.total_tokens"] == 0
+    assert tracer.trace_id == format(invocation.context.trace_id, "032x")
+    cache = tracer._inmemory_exporter._exporter
+    assert len(cache._spans) == (2 if enabled else 0)
+    # The call_llm anchors have been evicted, so this session dump is empty
+    assert (
+        json.loads(
+            Path(tracer.dump(session_id=SESSION_ID, path=str(tmp_path))).read_text()
+        )
+        == []
+    )
+    if enabled:
+        with otel_tracer.start_as_current_span("call_llm") as span:
+            span.set_attribute("gen_ai.session.id", SESSION_ID)
+        data = json.loads(
+            Path(tracer.dump(session_id=SESSION_ID, path=str(tmp_path))).read_text()
+        )
+        assert len(data) == 1
+        assert data[0]["name"] == "call_llm"
+    provider.shutdown()
+    assert cache.get_finished_spans(SESSION_ID) == []
+    assert cache.trace_id == ""
+
+
+def test_provider_registration_is_atomic_and_provider_scoped(monkeypatch):
+    monkeypatch.setattr(settings.opentelemetry_config, "inmemory_enabled", True)
+    first = trace_sdk.TracerProvider()
+    second = trace_sdk.TracerProvider()
+    try:
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            collectors = list(pool.map(InMemoryExporter.for_provider, [first] * 32))
+        assert all(collector is collectors[0] for collector in collectors)
+        assert len(first._active_span_processor._span_processors) == 1
+        other = InMemoryExporter.for_provider(second)
+        assert other is not collectors[0]
+        with first.get_tracer(__name__).start_as_current_span("call_llm") as span:
+            span.set_attribute("gen_ai.session.id", SESSION_ID)
+        assert len(collectors[0]._exporter.get_finished_spans(SESSION_ID)) == 1
+        assert other._exporter.get_finished_spans(SESSION_ID) == []
+        monkeypatch.setattr(settings.opentelemetry_config, "inmemory_enabled", False)
+        assert InMemoryExporter.for_provider(first) is collectors[0]
+        assert len(collectors[0]._exporter.get_finished_spans(SESSION_ID)) == 1
+    finally:
+        first.shutdown()
+        second.shutdown()
 
 
 def init_exporters():

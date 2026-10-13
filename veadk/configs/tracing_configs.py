@@ -45,6 +45,20 @@ class OpenTelemetryConfig(BaseSettings):
         default=True,
         alias="OBSERVABILITY_OPENTELEMETRY_TRACE_CONTENT",
     )
+    inmemory_enabled: bool = Field(
+        default=True,
+        alias="OBSERVABILITY_OPENTELEMETRY_INMEMORY_ENABLED",
+    )
+    inmemory_max_spans: int = Field(
+        default=1024,
+        ge=0,
+        alias="OBSERVABILITY_OPENTELEMETRY_INMEMORY_MAX_SPANS",
+    )
+    inmemory_max_bytes: int = Field(
+        default=16 * 1024 * 1024,
+        ge=0,
+        alias="OBSERVABILITY_OPENTELEMETRY_INMEMORY_MAX_BYTES",
+    )
 
 
 class APMPlusConfig(BaseSettings):

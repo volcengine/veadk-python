@@ -350,7 +350,6 @@ async def test_turn_emits_an_indexable_call_llm_span(tmp_path, monkeypatch) -> N
     # provider they resolve, so replacing it makes later spans vanish).
     tracer = OpentelemetryTracer(exporters=[])
     exporter = tracer._inmemory_exporter._exporter
-    before = len(exporter._spans)
 
     agent = _agent(tracers=[tracer])
     session_id = f"session-{uuid.uuid4().hex[:8]}"
@@ -370,7 +369,7 @@ async def test_turn_emits_an_indexable_call_llm_span(tmp_path, monkeypatch) -> N
     ]
     assert events, "the pi run produced no events at all"
 
-    spans = exporter._spans[before:]
+    spans = exporter.get_finished_spans(session_id)
     call_llm = [s for s in spans if s.name == "call_llm"]
     assert call_llm, (
         f"no call_llm span for a Pi turn: {sorted({s.name for s in spans})}"

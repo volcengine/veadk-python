@@ -54,6 +54,30 @@ Tracing（链路追踪）对智能体执行过程进行**全链路记录**，是
 
 针对不同平台的完整接入方式，参见[在火山引擎观测](/cn/docs/framework/ve-tracing)。
 
+## 限制本地缓存
+
+以下配置随本次修复提供，已发布的 1.1.14 及更早版本不支持这些配置
+
+`OpentelemetryTracer` 默认保留最近的 1024 个 Span，估算数据总量最多为 16 MiB。达到任一上限时会淘汰最早的 Span；单个 Span 超过字节上限时不写入本地缓存，仍按原有配置交给云端 Exporter
+
+在启动应用前，可通过以下环境变量调整本地缓存：
+
+| 环境变量 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `OBSERVABILITY_OPENTELEMETRY_INMEMORY_ENABLED` | 布尔值 | `true` | 是否保留本地 Span 历史 |
+| `OBSERVABILITY_OPENTELEMETRY_INMEMORY_MAX_SPANS` | 非负整数 | `1024` | 最多保留的 Span 数量，`0` 表示不保留 |
+| `OBSERVABILITY_OPENTELEMETRY_INMEMORY_MAX_BYTES` | 非负整数 | `16777216` | 估算数据量上限，单位为字节，`0` 表示不保留 |
+
+仅需云端观测时，在启动应用的终端设置：
+
+```bash
+export OBSERVABILITY_OPENTELEMETRY_INMEMORY_ENABLED=false
+```
+
+关闭本地缓存后，Span 标注、日志中的 Trace ID 和已配置的云端上报保持可用，`tracer.dump()` 写入空数组。启用缓存时，`dump()` 只包含仍保留的会话历史；用于关联会话的 Span 被淘汰后，对应链路也可能不再出现在本地导出中，完整历史应在云端观测平台查询
+
+同一个 TracerProvider 下的 tracer 共享上述额度。配置在首次创建缓存时生效，修改后需重启应用或创建新的 Provider；字节数是缓存数据的估算值，不代表整个进程的内存上限
+
 ## Tracing 的价值
 
 引入 Tracing 后，你可以：

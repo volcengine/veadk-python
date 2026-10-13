@@ -12,7 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from veadk.configs.tracing_configs import APMPlusConfig
+import pytest
+from pydantic import ValidationError
+
+from veadk.configs.tracing_configs import APMPlusConfig, OpenTelemetryConfig
 
 
 def test_apmplus_endpoint_defaults_to_volcengine_region(monkeypatch):
@@ -50,3 +53,34 @@ def test_apmplus_endpoint_environment_override_takes_precedence(monkeypatch):
         APMPlusConfig().otel_exporter_endpoint
         == "http://custom-apmplus.example.com:4317"
     )
+
+
+def test_inmemory_defaults_and_environment_overrides(monkeypatch):
+    for key in ("ENABLED", "MAX_SPANS", "MAX_BYTES"):
+        monkeypatch.delenv(f"OBSERVABILITY_OPENTELEMETRY_INMEMORY_{key}", raising=False)
+    defaults = OpenTelemetryConfig()
+    assert defaults.inmemory_enabled is True
+    assert defaults.inmemory_max_spans == 1024
+    assert defaults.inmemory_max_bytes == 16 * 1024 * 1024
+    monkeypatch.setenv("OBSERVABILITY_OPENTELEMETRY_INMEMORY_ENABLED", "false")
+    monkeypatch.setenv("OBSERVABILITY_OPENTELEMETRY_INMEMORY_MAX_SPANS", "12")
+    monkeypatch.setenv("OBSERVABILITY_OPENTELEMETRY_INMEMORY_MAX_BYTES", "8192")
+    config = OpenTelemetryConfig()
+    assert config.inmemory_enabled is False
+    assert config.inmemory_max_spans == 12
+    assert config.inmemory_max_bytes == 8192
+
+
+@pytest.mark.parametrize("key", ["MAX_SPANS", "MAX_BYTES"])
+@pytest.mark.parametrize("value", ["-1", "invalid", "1.5"])
+def test_inmemory_invalid_limits_fail_configuration(monkeypatch, key, value):
+    monkeypatch.setenv(f"OBSERVABILITY_OPENTELEMETRY_INMEMORY_{key}", value)
+    with pytest.raises(ValidationError):
+        OpenTelemetryConfig()
+
+
+def test_inmemory_zero_limits_are_valid(monkeypatch):
+    monkeypatch.setenv("OBSERVABILITY_OPENTELEMETRY_INMEMORY_MAX_SPANS", "0")
+    monkeypatch.setenv("OBSERVABILITY_OPENTELEMETRY_INMEMORY_MAX_BYTES", "0")
+    config = OpenTelemetryConfig()
+    assert config.inmemory_max_spans == config.inmemory_max_bytes == 0

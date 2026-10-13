@@ -307,14 +307,12 @@ class ParityRunner:
         session_id = session_id or f"session-{uuid.uuid4().hex[:8]}"
 
         tracer = None
-        spans_before = 0
         if capture_spans:
             from veadk.tracing.telemetry.opentelemetry_tracer import OpentelemetryTracer
 
             # Attaches to the active provider (creating one only if none
             # exists), so the memoized proxy tracers keep resolving correctly.
             tracer = OpentelemetryTracer(exporters=[])
-            spans_before = len(tracer._inmemory_exporter._exporter._spans)
             kwargs.setdefault("tracers", [tracer])
 
         if arm == "codex":
@@ -373,7 +371,7 @@ class ParityRunner:
         outcome.session_state = dict(getattr(session, "state", None) or {})
         outcome.declared_usage = backend.declared_usage_total
         if tracer is not None:
-            spans = tracer._inmemory_exporter._exporter._spans[spans_before:]
+            spans = tracer._inmemory_exporter._exporter.get_finished_spans(session_id)
             outcome.span_names = frozenset(span.name for span in spans)
 
         if arm == "codex" and codex_fault is not None:
@@ -439,9 +437,8 @@ def event_classifier() -> Any:
 # ``ProxyTracer`` objects that memoize the first real provider they resolve, so
 # installing a second provider mid-session silently sends every later span into
 # a detached (often already shut down) pipeline -- which looks exactly like "the
-# runtime emits no spans". Each ``capture_spans`` row instead attaches its own
-# ``InMemoryExporter`` to whichever provider is already active and reads back
-# only the spans produced during its own run.
+# runtime emits no spans". Each ``capture_spans`` row instead uses the active
+# provider's shared cache and reads a snapshot for its unique session ID
 
 
 __all__ = [
