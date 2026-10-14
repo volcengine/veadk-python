@@ -157,16 +157,22 @@ def validate_creation_resources(values: dict[str, str]) -> dict[str, str]:
 
 
 def validate_creation_tos(values: dict[str, str]) -> dict[str, str]:
-    """Validate optional per-creation TOS mount credentials."""
-    selected = {
-        key: str(values.get(key, "")).strip()
-        for key in ("tosAccessKey", "tosSecretKey", "tosBucket")
-    }
-    if any(selected.values()) and not all(selected.values()):
-        raise ConfigurationError(
-            "TOS access key, secret key, and bucket are all required"
-        )
-    return selected
+    """Validate the Studio bucket-only IAM mount request."""
+    if any(
+        str(values.get(key, "")).strip() for key in ("tosAccessKey", "tosSecretKey")
+    ):
+        raise ConfigurationError("Studio TOS mounts use IAM Role, not access keys")
+    bucket = validate_tos_bucket_name(str(values.get("tosBucket", "")))
+    if bucket and not bucket.startswith("agentkit-platform-"):
+        raise ConfigurationError("Select a bucket starting with agentkit-platform-")
+    return {"tosBucket": bucket}
+
+
+def validate_tos_bucket_name(value: str) -> str:
+    bucket = value.strip()
+    if bucket and not re.fullmatch(r"[a-z0-9][a-z0-9-]{1,61}[a-z0-9]", bucket):
+        raise ConfigurationError("Select a valid TOS bucket")
+    return bucket
 
 
 def validate_runtime_name(value: str) -> str:
@@ -217,9 +223,12 @@ class Worker(Options):
     tos_access_key: str = Field(default="", repr=False)
     tos_secret_key: str = Field(default="", repr=False)
     tos_bucket: str = ""
+    tos_credential_type: Literal["access_key", "iam_role"] = "access_key"
 
     @property
     def tos_mount_enabled(self) -> bool:
+        if self.tos_credential_type == "iam_role":
+            return bool(self.tos_bucket)
         return bool(self.tos_access_key and self.tos_secret_key and self.tos_bucket)
 
     @field_validator("tos_access_key", "tos_secret_key", "tos_bucket")
@@ -243,9 +252,13 @@ class Worker(Options):
         if bool(self.existing_id) == bool(self.image):
             raise ValueError("Select an existing worker or a worker image")
         tos_values = (self.tos_access_key, self.tos_secret_key, self.tos_bucket)
-        if any(tos_values) and not all(tos_values):
+        if self.tos_credential_type == "iam_role":
+            validate_tos_bucket_name(self.tos_bucket)
+            if self.tos_access_key or self.tos_secret_key:
+                raise ValueError("IAM Role TOS mounts must not contain access keys")
+        elif any(tos_values) and not all(tos_values):
             raise ValueError("TOS access key, secret key, and bucket are all required")
-        if self.existing_id and all(tos_values):
+        if self.existing_id and self.tos_mount_enabled:
             raise ValueError("TOS mount settings require a newly created worker")
         if self.existing_id and self.env:
             raise ValueError("Environment settings require a newly created worker")
@@ -533,9 +546,10 @@ def with_creation_tos(profile: Profile, values: dict[str, str]) -> Profile:
     managed = profile.managed.model_copy(deep=True)
     worker = managed.worker.model_dump()
     worker.update(
-        tos_access_key=selected["tosAccessKey"],
-        tos_secret_key=selected["tosSecretKey"],
+        tos_access_key="",
+        tos_secret_key="",
         tos_bucket=selected["tosBucket"],
+        tos_credential_type="iam_role",
     )
     try:
         managed.worker = Worker.model_validate(worker)

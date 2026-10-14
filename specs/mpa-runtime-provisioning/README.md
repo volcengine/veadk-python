@@ -93,15 +93,19 @@ Managed provisioning supports `managed.postgres.mode: auto`. It verifies deploym
 
 When the private MPA YAML supplies the complete `tos-access-key`,
 `tos-secret-key`, and `tos-bucket` tuple, a newly created worker Tool MUST carry
-an access-key TOS mount with `/sandbox-session/default/default` as its base and
+an access-key TOS mount with `/` as its legacy base and
 `/data/output` as its read-write local path. Credentials MUST remain in the
 Tool request. The Runtime receives `MPA_CODEX_WORKER_TOS_MOUNT_ENABLED=true`
 and the non-secret bucket name, but never AK/SK.
-The Studio creation page may submit a complete tuple for one creation and
-override the YAML defaults. AK/SK pass only in memory through child-process
-stdin and MUST NOT enter sessionStorage, task SQLite, or task responses. Partial
-input MUST be rejected. A profile using an existing Worker must first select a
-new Worker image for the creation.
+Studio submits only the optional `tosBucket` and overrides Worker credentials
+with IAM Role mode, using `/sandbox-session/default/default` as the IAM base.
+Explicit managed profiles may use `tos-credential-type: iam_role` and a bucket
+without keys; historical CLI/YAML AK/SK mode remains compatible. Empty Studio
+selection preserves server defaults. Bucket IAM authorization follows
+[CON-17](../studio-mpa-creation/README.md#con-17--bucket-only-iam-tos-mounts).
+Credentials MUST NOT enter sessionStorage, task SQLite, or task responses.
+A profile using an existing Worker must first select a new Worker image for the
+creation; existing Tools and Sessions are not implicitly modified.
 
 For a newly managed Runtime, the initial `CreateRuntime` request MUST include
 the `ToolId` of the already prepared worker Tool. The final convergent update

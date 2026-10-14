@@ -16,9 +16,11 @@ import {
 } from "../../adk/mpaCreation";
 import "../../components/composites/ModalButton/ModalButton.css";
 import "./MpaCreateDialog.css";
+import "../ProjectPreview.css";
 import { runtimeNameProblem } from "../../create/runtimeName";
 import type { CloudProvider } from "../../adk/cloudProvider";
 import { validOpenViking, validPgTarget } from "../../adk/mpaCreationResources";
+import { ResourcePicker, useDeploymentResourceList } from "../DeploymentResources";
 
 const PG_CONSOLE_URL =
   "https://console.volcengine.com/aidap/region:aidap+cn-beijing/";
@@ -35,7 +37,10 @@ function freshInput(region: string): MpaCreationInput {
 }
 
 function withoutTosCredentials(input: MpaCreationInput): MpaCreationInput {
-  return { ...input, tosAccessKey: undefined, tosSecretKey: undefined };
+  const clean = { ...input };
+  Reflect.deleteProperty(clean, "tosAccessKey");
+  Reflect.deleteProperty(clean, "tosSecretKey");
+  return clean;
 }
 
 function initial(region: string): {
@@ -126,15 +131,13 @@ export function MpaCreateDialog({
     input.openvikingResourceId,
     openvikingApiKey,
   );
-  const tosValues = [
-    input.tosAccessKey,
-    input.tosSecretKey,
-    input.tosBucket,
-  ].map((value) => value?.trim() ?? "");
-  const tosValid =
-    tosValues.every(Boolean) || tosValues.every((value) => !value);
+  const tosBucket = input.tosBucket?.trim() ?? "";
+  const tosValid = !tosBucket || (tosBucket.startsWith("agentkit-platform-") && /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/.test(tosBucket));
   const tosLocked =
     busy || (submitted && (!task || running || task.state === "succeeded"));
+  const tosList = useDeploymentResourceList(
+    step === 2 && !tosLocked ? { kind: "tos-bucket", region, namePrefix: "agentkit-platform-" } : null,
+  );
   useEffect(() => {
     if (submitted || taskId) return;
     try {
@@ -595,31 +598,26 @@ export function MpaCreateDialog({
                     <fieldset className="mpa-create-tos">
                       <legend>{t(key("tosTitle"))}</legend>
                       <p>{t(key("tosDescription"))}</p>
-                      {(
-                        ["tosAccessKey", "tosSecretKey", "tosBucket"] as const
-                      ).map((field) => (
-                        <label key={field}>
-                          {t(key(field))}
-                          <input
-                            name={field}
-                            type={field === "tosBucket" ? "text" : "password"}
-                            value={input[field] ?? ""}
-                            maxLength={256}
-                            disabled={tosLocked}
-                            autoComplete={
-                              field === "tosBucket" ? "off" : "new-password"
-                            }
-                            spellCheck={false}
-                            aria-invalid={!tosValid}
-                            onChange={(event) =>
-                              setInput((previous) => ({
-                                ...previous,
-                                [field]: event.target.value,
-                              }))
-                            }
-                          />
-                        </label>
-                      ))}
+                      <div>
+                        <span>{t(key("tosBucket"))}</span>
+                        <ResourcePicker
+                          ariaLabel={t(key("tosBucket"))}
+                          value={tosBucket}
+                          valueLabel={tosBucket}
+                          valueField="name"
+                          state={tosList}
+                          disabled={tosLocked}
+                          onChange={(resource) => setInput((previous) => ({
+                            ...previous, tosBucket: resource.name,
+                          }))}
+                        />
+                      </div>
+                      {tosBucket && (
+                        <Button variant="outline" disabled={tosLocked}
+                          onClick={() => setInput((previous) => ({ ...previous, tosBucket: "" }))}>
+                          {t(key("tosDisable"))}
+                        </Button>
+                      )}
                       {!tosValid && <p role="alert">{t(key("tosInvalid"))}</p>}
                       <p>{t(key("tosCredentials"))}</p>
                     </fieldset>

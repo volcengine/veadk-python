@@ -377,6 +377,83 @@ def test_worker_model_rejects_partial_tos_and_external_tool_mount() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    "bucket", ["agentkit-platform-output", "", "  agentkit-platform-output  "]
+)
+def test_studio_bucket_only_uses_worker_role_without_credentials(monkeypatch, bucket):
+    from veadk.integrations.mpa.managed.config import (
+        load_studio_profile,
+        validate_creation_tos,
+        with_creation_tos,
+    )
+
+    monkeypatch.setenv("VEADK_MPA_CONFIG_MODEL_AGENT_API_KEY", "test-key")
+    profile = load_studio_profile(region="cn-beijing")
+    selected = validate_creation_tos({"tosBucket": bucket})
+    assert selected == {"tosBucket": bucket.strip()}
+    updated = with_creation_tos(profile, selected)
+    if bucket.strip():
+        worker = updated.managed.worker
+        assert worker.tos_mount_enabled
+        assert worker.tos_credential_type == "iam_role"
+        assert worker.tos_bucket == "agentkit-platform-output"
+        assert not worker.tos_access_key and not worker.tos_secret_key
+        assert not profile.managed.worker.tos_bucket
+    else:
+        assert updated is profile
+
+
+@pytest.mark.parametrize("bucket", ["*", "bad/name", "ab", "Uppercase", "a" * 64])
+def test_studio_rejects_invalid_bucket_names(bucket):
+    from veadk.integrations.mpa.managed.config import validate_creation_tos
+
+    with pytest.raises(ConfigurationError, match="bucket"):
+        validate_creation_tos({"tosBucket": bucket})
+
+
+@pytest.mark.parametrize("field", ["tosAccessKey", "tosSecretKey"])
+def test_studio_rejects_legacy_credential_input(field):
+    from veadk.integrations.mpa.managed.config import validate_creation_tos
+
+    with pytest.raises(ConfigurationError) as caught:
+        validate_creation_tos({"tosBucket": "session-output", field: "private-value"})
+    assert "private-value" not in str(caught.value)
+
+
+@pytest.mark.parametrize(
+    "bucket",
+    [
+        "agentkit-demo",
+        "agentkit-platform",
+        "x-agentkit-platform-output",
+        "Agentkit-platform-output",
+    ],
+)
+def test_studio_rejects_buckets_outside_platform_prefix(bucket):
+    from veadk.integrations.mpa.managed.config import validate_creation_tos
+
+    with pytest.raises(ConfigurationError, match="bucket"):
+        validate_creation_tos({"tosBucket": bucket})
+
+
+def test_worker_iam_mode_requires_no_keys_and_cannot_mutate_existing_tool():
+    from veadk.integrations.mpa.managed.config import Worker
+
+    worker = Worker(
+        image="worker:v1", tos_bucket="session-output", tos_credential_type="iam_role"
+    )
+    assert worker.tos_mount_enabled
+    assert not Worker(
+        image="worker:v1", tos_credential_type="iam_role"
+    ).tos_mount_enabled
+    for overrides in (
+        {"tos_access_key": "private-value"},
+        {"existing_id": "t-existing", "image": ""},
+    ):
+        with pytest.raises(ValueError):
+            Worker.model_validate({**worker.model_dump(), **overrides})
+
+
 def test_invalid_profile_and_missing_secret_are_safe(tmp_path, monkeypatch):
     path = profile_file(tmp_path, monkeypatch, **{"provider-root": "/not-supported"})
     with pytest.raises(ConfigurationError):

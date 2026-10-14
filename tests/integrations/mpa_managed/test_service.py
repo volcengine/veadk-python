@@ -668,6 +668,53 @@ async def test_explicit_profile_account_mismatch_stops_before_role(monkeypatch):
     identity.assert_not_awaited()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("grant_failed", [False, True])
+async def test_studio_tos_grant_precedes_identity_and_propagates_failure(
+    monkeypatch, grant_failed
+):
+    from veadk.integrations.mpa.managed.config import (
+        load_studio_profile,
+        with_creation_tos,
+    )
+    from veadk.integrations.mpa.managed.iam import IamError, ROLE_NAME
+
+    monkeypatch.setenv("VEADK_MPA_CONFIG_MODEL_AGENT_API_KEY", "test-model-key")
+    profile = with_creation_tos(
+        load_studio_profile(), {"tosBucket": "agentkit-platform-output"}
+    )
+    resolve_key = AsyncMock(spec=service.resolve_model_key, return_value=profile)
+    monkeypatch.setattr(service, "resolve_model_key", resolve_key)
+    cloud = AsyncMock()
+    cloud.account_id.return_value = "123"
+    monkeypatch.setattr(service, "RuntimeCloud", lambda **kw: cloud)
+    role = AsyncMock()
+    grant = AsyncMock(side_effect=IamError("AccessDenied") if grant_failed else None)
+    identity = AsyncMock(side_effect=DeploymentError("stop after grant"))
+    monkeypatch.setattr(service, "ensure_runtime_role", role)
+    monkeypatch.setattr(service, "ensure_tos_mount_permissions", grant)
+    monkeypatch.setattr(service, "ensure_workload_identity", identity)
+    stages = []
+    with pytest.raises(
+        DeploymentError,
+        match="iamPermissionDenied" if grant_failed else "stop after grant",
+    ):
+        await service.provision(
+            profile, agent_id="mi-test", owner="user", progress=stages.append
+        )
+    resolve_key.assert_awaited_once_with(profile, cloud)
+    role.assert_awaited_once()
+    args, kwargs = grant.await_args
+    assert args[0].runtime is cloud
+    assert args[1:] == ("123", "agentkit-platform-output")
+    assert kwargs == {"role_name": ROLE_NAME}
+    assert stages == ["checking", "iam_role", "iam_role"]
+    if grant_failed:
+        identity.assert_not_awaited()
+    else:
+        identity.assert_awaited_once()
+
+
 @pytest.mark.parametrize("role", [None, "custom-role"])
 def test_fresh_template_role_trn_uses_verified_account_and_selected_role(
     monkeypatch, role

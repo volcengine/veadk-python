@@ -40,7 +40,13 @@ from .config import ConfigurationError, Profile, Runtime, validate_postgres_layo
 from .database import AgentDatabaseProvisioner, AgentDeploymentRegistry, DeploymentError
 from .gateway import SharedAPIGService
 from .gateway_cloud import GatewayCloud
-from .iam import ROLE_NAME, IamCloud, IamError, ensure_runtime_role
+from .iam import (
+    ROLE_NAME,
+    IamCloud,
+    IamError,
+    ensure_runtime_role,
+    ensure_tos_mount_permissions,
+)
 from .model_key import resolve_model_key
 from .network import AccountNetworkProvisioner, NetworkOptions
 from .runtime import AgentRuntimeDeployer, RuntimeCloud, env_map, template_from_runtime
@@ -246,6 +252,12 @@ async def provision(
             raise IamError(key="iamConfigurationConflict")
         progress("iam_role")
         await ensure_runtime_role(IamCloud(cloud), account)
+    worker = profile.managed.worker
+    if worker.tos_mount_enabled and worker.tos_credential_type == "iam_role":
+        progress("iam_role")
+        await ensure_tos_mount_permissions(
+            IamCloud(cloud), account, worker.tos_bucket, role_name=worker.role_name
+        )
     identity = await ensure_workload_identity(profile, cloud, agent_id)
     if profile.managed.postgres and profile.managed.postgres.mode == "auto":
         from .pg_bootstrap import prepare_postgres

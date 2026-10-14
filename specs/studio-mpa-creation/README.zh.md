@@ -2,9 +2,28 @@
 
 [English](README.md)
 
+### CON-17 — 仅选桶 IAM TOS 挂载
+
+已批准的[仅选桶设计](../../prd-spec/features/studio-mpa-tos-iam/2026-10-12-bucket-only.zh.md)
+替代 Studio 的 AK/SK 输入。Studio 接受以 `agentkit-platform-` 开头的可选 `tosBucket`，使用实际
+Worker 角色的 IAM Role，清除旧草稿凭据，复用已有桶资源选择器。在其他准备
+写操作前核验桶账号/地域归属，增量绑定稳定、精确的桶专属 Global IAM 策略。
+桶动作仅 HeadBucket、ListBucket；对象动作仅 GetObject、PutObject、
+AbortMultipartUpload、DeleteObject，限定 `sandbox-session/*`。保留既有角色、
+信任、策略和绑定，冲突失败，重试/取消有界。Tool 不带 Credentials，复用核验
+包含模式/角色；CLI AK/SK 兼容。不得隐式修改已有 Tool/Session 或桶公开策略，
+不增加 KMS 授权，共享角色不提供严格租户隔离。实现、自动化/浏览器验证和云端
+E2E 是独立状态。
+空选择保留服务端 profile；内置 profile 默认不挂载 TOS。部署凭据须具备 TOS
+ListBuckets 和 IAM GetRole、GetPolicy、CreatePolicy、ListAttachedRolePolicies、
+AttachRolePolicy。桶授权不包含 KMS 授权，也不能覆盖现有 IAM Deny。
+现有 `/web/deployment-resources` 接口接受 TOS 列表可选 `namePrefix`，在搜索、计数
+和分页前过滤。只有 MPA 创建传入平台前缀，通用查询保持原行为。创建在云调用前
+验证前缀，也适用于恢复草稿；显式 CLI profile 不受这项 Studio 选择规则限制。
+
 - 组件 ID：`studio-mpa-creation`
 - 状态：active
-- 修订日期： 2026-10-09
+- 修订日期： 2026-10-12
 - 设计及证据：[Studio MPA 创建](../../prd-spec/features/mpa-agent-oneclick-provision/2026-09-20-studio-mpa-creation.zh.md)
 - 所属代码：`veadk/integrations/mpa/managed/`、`frontend/server/mpa_creation.py`、`frontend/src/adk/mpaCreation.ts`、`frontend/src/ui/mpa-create/`；CLI 和目录接入。
 - 测试：`tests/integrations/mpa_managed/`、`frontend/tests/mpaCreation.test.tsx`。
