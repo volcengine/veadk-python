@@ -32,6 +32,16 @@ Pure documentation, translation, or formatting changes that preserve runtime beh
 - Keep real credentials, signed URLs, personal data, and unredacted production logs out of source, design documents, reports, test fixtures, and generated artifacts.
 - Isolate tests from real user state and external services by default. Real cloud/provider operations need explicit authorization and an isolated smoke/E2E procedure; report simulated and live verification separately.
 
+## Dependency metadata guidelines
+
+- Do not treat `uv.lock` success as proof that published package metadata is installable. PyPI users resolve from `pyproject.toml` metadata, not this repository's lock file.
+- When changing runtime dependencies in `pyproject.toml`, consider both direct use and shared transitive constraints from key upstream packages such as `google-adk`, `agentkit-sdk-python`, OpenTelemetry, `mcp`, `fastmcp`, `litellm`, and storage/cloud SDKs.
+- High-risk upstream dependencies must declare an explicit tested upper bound. Do not leave them open-ended when an unadapted future version could break installation or runtime behavior.
+- Avoid exact pins for shared base dependencies unless there is a concrete compatibility reason. If an exact pin is necessary, document the reason in the dependency comment or the change PRD.
+- Before widening a high-risk dependency range, check whether the highest allowed version still resolves with the current runtime pins. Use `scripts/check_dependency_e2e.py declared-range` or the release workflow's manual dispatch when the check is too heavy for ordinary PR iteration.
+- If a dependency upgrade only works by relying on another package's current transitive dependency, declare the required direct dependency explicitly in `pyproject.toml` rather than depending on accidental resolver behavior.
+- If a heavy dependency E2E check is intentionally not run before merge, record the risk and the expected tag/manual workflow coverage in the PRD or PR description.
+
 ## Verification gates
 
 Use the repository-local Python environment and current `pyproject.toml`, `pytest.ini`, package scripts, and CI workflows as command references. Do not invent `make` targets, copy another repository's coverage thresholds, or treat an unavailable check as passing.

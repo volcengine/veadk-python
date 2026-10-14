@@ -25,7 +25,10 @@ ROOT = Path(__file__).resolve().parents[1]
 GOOGLE_ADK_BASELINE = "google-adk>=2.7.0,<2.8.0"
 GOOGLE_ADK_EVAL_BASELINE = "google-adk[eval]>=2.7.0,<2.8.0"
 AGENTKIT_BASELINE = "agentkit-sdk-python>=0.8.5"
-OPENTELEMETRY_EXPORTER_BASELINE = "opentelemetry-exporter-otlp>=1.37.0"
+OPENTELEMETRY_EXPORTER_BASELINE = "opentelemetry-exporter-otlp>=1.37.0,<1.43"
+OPENTELEMETRY_EXPORTER_LOCK_BASELINE = (
+    '{ name = "opentelemetry-exporter-otlp", specifier = ">=1.37.0,<1.43" }'
+)
 
 
 def _pyproject() -> dict[str, object]:
@@ -57,4 +60,4 @@ def test_lock_metadata_matches_project_dependency_baseline() -> None:
         '{ name = "google-adk", extras = ["eval"], marker = "extra == '
         '\'eval\'", specifier = ">=2.7.0,<2.8.0" }'
     ) in lock
-    assert '{ name = "opentelemetry-exporter-otlp", specifier = ">=1.37.0" }' in lock
+    assert OPENTELEMETRY_EXPORTER_LOCK_BASELINE in lock
