@@ -22,15 +22,28 @@ The parameters split into two groups:
   the overridable params with additional creation-time settings.
 
 ``tools`` and ``skills`` are comma-separated strings (e.g. ``"web_search,web_fetch"``).
-Skills may be SkillHub names/slugs or skills-center refs prefixed with ``space:``.
+Skills may be SkillHub names/slugs, skills-center refs prefixed with ``space:``,
+or structured TOS selections.
 """
 
 from typing import Any, Literal
+from urllib.parse import parse_qsl, urlparse
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
 from veadk.consts import DEFAULT_MODEL_AGENT_NAME
 from veadk.prompts.agent_default_prompt import DEFAULT_DESCRIPTION, DEFAULT_INSTRUCTION
+
+_TOS_PUBLIC_HOST_SUFFIXES = (".volces.com", ".bytepluses.com")
+_TOS_PUBLIC_CREDENTIAL_QUERY_KEYS = {
+    "x-tos-algorithm",
+    "x-tos-credential",
+    "x-tos-date",
+    "x-tos-expires",
+    "x-tos-security-token",
+    "x-tos-signature",
+    "x-tos-signedheaders",
+}
 
 
 class HarnessBuiltinTool(BaseModel):
@@ -78,7 +91,7 @@ class HarnessSelectedSkill(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
-    source: Literal["skillhub", "skillspace"] = Field(
+    source: Literal["skillhub", "skillspace", "tos"] = Field(
         default="skillhub",
         description="Skill source.",
     )
@@ -98,13 +111,21 @@ class HarnessSelectedSkill(BaseModel):
     skill_id: str | None = Field(default=None, description="Skill id.")
     version: str | None = Field(default=None, description="Skill version.")
     region: str | None = Field(default=None, description="Skill region.")
+    tos_url: str | None = Field(
+        default=None,
+        description="TOS URL pointing to one Skill directory.",
+    )
+    tos_public_url: str | None = Field(
+        default=None,
+        description="Public readable TOS zip URL.",
+    )
     skill_space_policy: HarnessSkillSpacePolicy | None = Field(
         default=None,
         description="Allow/deny filter applied to this skill_space_id.",
     )
 
     @model_validator(mode="after")
-    def _validate_skill_space_policy(self) -> "HarnessSelectedSkill":
+    def _validate_selected_skill(self) -> "HarnessSelectedSkill":
         if self.skill_space_policy is not None and self.source != "skillspace":
             raise ValueError("skill_space_policy is only supported for skillspace")
         if (
@@ -112,7 +133,69 @@ class HarnessSelectedSkill(BaseModel):
             and not (self.skill_space_id or "").strip()
         ):
             raise ValueError("skill_space_policy requires skill_space_id")
+        if self.source == "tos":
+            uri = (self.tos_url or "").strip()
+            public_url = (self.tos_public_url or "").strip()
+            if bool(uri) == bool(public_url):
+                raise ValueError(
+                    "tos selected skill requires tos_url or tos_public_url"
+                )
+            if uri:
+                _validate_tos_skill_uri(uri)
+            if public_url:
+                _validate_tos_public_url(public_url)
         return self
+
+
+def _validate_tos_skill_uri(uri: str) -> None:
+    if not uri.startswith("tos://"):
+        raise ValueError("tos selected skill tos_url must start with tos://")
+    remainder = uri.removeprefix("tos://")
+    if "/" not in remainder:
+        raise ValueError("tos selected skill tos_url must point to a Skill directory")
+    prefix = remainder.split("/", 1)[1]
+    if not prefix.strip("/"):
+        raise ValueError("tos selected skill tos_url must point to a Skill directory")
+    parts = [part for part in prefix.split("/") if part]
+    if any(part in {".", ".."} for part in parts) or len(parts) != len(
+        prefix.strip("/").split("/")
+    ):
+        raise ValueError(
+            "tos selected skill tos_url must point to a safe Skill directory"
+        )
+
+
+def _validate_tos_public_url(public_url: str) -> None:
+    parsed = urlparse(public_url.strip())
+    host = (parsed.hostname or "").lower()
+    if parsed.scheme != "https" or not host:
+        raise ValueError("tos selected skill tos_public_url must be an HTTPS URL")
+    if parsed.username or parsed.password:
+        raise ValueError(
+            "tos selected skill tos_public_url must not include credentials"
+        )
+    if not _is_tos_public_host(host):
+        raise ValueError(
+            "tos selected skill tos_public_url host must be a TOS endpoint"
+        )
+    query_keys = {key.lower() for key, _value in parse_qsl(parsed.query)}
+    if query_keys & _TOS_PUBLIC_CREDENTIAL_QUERY_KEYS:
+        raise ValueError(
+            "tos selected skill tos_public_url must not include credentials"
+        )
+    if not parsed.path.endswith(".zip"):
+        raise ValueError(
+            "tos selected skill tos_public_url must point to a zip archive"
+        )
+
+
+def _is_tos_public_host(host: str) -> bool:
+    labels = host.split(".")
+    if len(labels) < 4:
+        return False
+    if not any(host.endswith(suffix) for suffix in _TOS_PUBLIC_HOST_SUFFIXES):
+        return False
+    return labels[-3].startswith("tos-")
 
 
 class HarnessResourceOverride(BaseModel):

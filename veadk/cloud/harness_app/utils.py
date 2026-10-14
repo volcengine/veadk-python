@@ -66,7 +66,10 @@ from veadk.skills.policy import (
     SkillSpacePolicySet,
     parse_skill_space_policy,
 )
-from veadk.skills.materializer import materialize_remote_skill
+from veadk.skills.materializer import (
+    materialize_remote_skill,
+    materialize_tos_skill_source,
+)
 from veadk.skills.utils import (
     _filter_skills_by_policy,
     _filter_skills_by_policy_env,
@@ -101,6 +104,7 @@ _SAMPLING_OVERRIDE_FIELDS = {
 _KNOWLEDGEBASE_TOOL_NAMES = {"load_knowledgebase", "load_kb_queries"}
 _LONGTERM_MEMORY_TOOL_NAMES = {"load_memory"}
 _SKILL_CENTER_SPACE_PREFIX = "space:"
+_TOS_SKILL_PREFIX = "tos:"
 
 __all__ = [
     "HarnessConfig",
@@ -325,7 +329,40 @@ def _skill_from_legacy_ref(skill: str) -> HarnessSelectedSkill:
 def _selected_skill_ref(skill: HarnessSelectedSkill) -> str:
     if skill.source == "skillspace":
         return f"{_SKILL_CENTER_SPACE_PREFIX}{skill.skill_space_id or ''}".strip()
+    if skill.source == "tos":
+        payload = skill.model_dump(
+            mode="json",
+            include={"tos_url", "tos_public_url", "region", "version"},
+            exclude_none=True,
+        )
+        return _TOS_SKILL_PREFIX + json.dumps(
+            payload,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
     return (skill.slug or "").strip()
+
+
+def _is_tos_skill_ref(skill: str) -> bool:
+    return skill.strip().startswith(_TOS_SKILL_PREFIX)
+
+
+def _tos_skill_ref_payload(skill: str) -> dict[str, Any]:
+    raw = skill.strip().removeprefix(_TOS_SKILL_PREFIX)
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Invalid TOS skill ref JSON: {e}") from e
+    if not isinstance(payload, dict):
+        raise TypeError("TOS skill ref must be a JSON object.")
+    return payload
+
+
+def _safe_skill_ref_for_error(skill: str) -> str:
+    if _is_tos_skill_ref(skill):
+        return f"{_TOS_SKILL_PREFIX}<redacted>"
+    return skill
 
 
 def _dedupe_builtin_tools(
@@ -746,6 +783,16 @@ def build_skill_toolset(
                         cache_dir=download_dir,
                     )
                     loaded_skills.append(load_skill_from_dir(skill_dir))
+            elif _is_tos_skill_ref(skill):
+                payload = _tos_skill_ref_payload(skill)
+                skill_dir = materialize_tos_skill_source(
+                    uri=payload.get("tos_url"),
+                    public_url=payload.get("tos_public_url"),
+                    cache_dir=download_dir,
+                    region=payload.get("region"),
+                    version=payload.get("version"),
+                )
+                loaded_skills.append(load_skill_from_dir(skill_dir))
             else:
                 loaded_skills.append(
                     load_skill_from_dir(
@@ -753,7 +800,8 @@ def build_skill_toolset(
                     )
                 )
         except Exception as e:
-            raise SkillLoadError(f"Skill '{skill}' failed to load: {e}") from e
+            safe_skill = _safe_skill_ref_for_error(skill)
+            raise SkillLoadError(f"Skill '{safe_skill}' failed to load: {e}") from e
     if not loaded_skills:
         return None
     return SkillToolset(

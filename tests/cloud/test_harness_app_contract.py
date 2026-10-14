@@ -191,6 +191,11 @@ class TestHarnessOverrides:
                         "space_id": "ss-1",
                         "skill_id": "skill-1",
                     },
+                    {
+                        "source": "tos",
+                        "tos_url": "tos://customer-bucket/skills/reporting/",
+                        "region": "cn-beijing",
+                    },
                 ],
                 "mcp": [{"name": "db", "url": "http://db.test/mcp"}],
             }
@@ -206,7 +211,96 @@ class TestHarnessOverrides:
             skill_space_id="ss-1",
             skill_id="skill-1",
         )
+        assert h.selected_skills[2] == HarnessSelectedSkill(
+            source="tos",
+            tos_url="tos://customer-bucket/skills/reporting/",
+            region="cn-beijing",
+        )
         assert h.mcp == [HarnessMcpServer(name="db", server_url="http://db.test/mcp")]
+
+    def test_tos_selected_skill_rejects_legacy_locator_names(self):
+        with pytest.raises(ValidationError, match="requires tos_url or tos_public_url"):
+            HarnessOverrides.model_validate(
+                {
+                    "selected_skills": [
+                        {
+                            "source": "tos",
+                            "uri": "tos://customer-bucket/skills/reporting/",
+                        }
+                    ]
+                }
+            )
+
+        with pytest.raises(ValidationError, match="requires tos_url or tos_public_url"):
+            HarnessOverrides.model_validate(
+                {
+                    "selected_skills": [
+                        {
+                            "source": "tos",
+                            "public_url": (
+                                "https://bucket.tos-cn-beijing.volces.com/"
+                                "skills/reporting.zip"
+                            ),
+                        }
+                    ]
+                }
+            )
+
+    def test_tos_selected_skill_requires_tos_url_or_tos_public_url(self):
+        with pytest.raises(ValidationError, match="requires tos_url or tos_public_url"):
+            HarnessOverrides.model_validate({"selected_skills": [{"source": "tos"}]})
+
+    def test_tos_selected_skill_rejects_bucket_root_uri(self):
+        with pytest.raises(ValidationError, match="must point to a Skill directory"):
+            HarnessOverrides.model_validate(
+                {"selected_skills": [{"source": "tos", "tos_url": "tos://bucket"}]}
+            )
+
+    def test_tos_selected_skill_rejects_unsafe_uri(self):
+        with pytest.raises(ValidationError, match="safe Skill directory"):
+            HarnessOverrides.model_validate(
+                {
+                    "selected_skills": [
+                        {
+                            "source": "tos",
+                            "tos_url": "tos://bucket/skills/../secret/",
+                        }
+                    ]
+                }
+            )
+
+    def test_tos_selected_skill_rejects_public_url_userinfo(self):
+        credential = "user" + ":" + "secret"
+        with pytest.raises(ValidationError, match="must not include credentials"):
+            HarnessOverrides.model_validate(
+                {
+                    "selected_skills": [
+                        {
+                            "source": "tos",
+                            "tos_public_url": (
+                                f"https://{credential}@bucket.tos-cn-beijing."
+                                "volces.com/skills/reporting.zip"
+                            ),
+                        }
+                    ]
+                }
+            )
+
+    def test_tos_selected_skill_rejects_public_url_signature_query(self):
+        with pytest.raises(ValidationError, match="must not include credentials"):
+            HarnessOverrides.model_validate(
+                {
+                    "selected_skills": [
+                        {
+                            "source": "tos",
+                            "tos_public_url": (
+                                "https://bucket.tos-cn-beijing.volces.com/"
+                                "skills/reporting.zip?X-Tos-Signature=TOPSECRET"
+                            ),
+                        }
+                    ]
+                }
+            )
 
     def test_selected_skill_accepts_skill_space_policy(self):
         h = HarnessOverrides.model_validate(

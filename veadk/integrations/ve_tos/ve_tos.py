@@ -718,6 +718,7 @@ class VeTOS:
         save_path: str,
         *,
         raise_on_error: bool = False,
+        max_bytes: int | None = None,
     ) -> bool:
         """download object from TOS"""
         bucket_name = self._check_bucket_name(bucket_name)
@@ -733,7 +734,13 @@ class VeTOS:
                 os.makedirs(save_dir, exist_ok=True)
 
             with open(save_path, "wb") as f:
+                downloaded_bytes = 0
                 for chunk in object_stream:
+                    downloaded_bytes += len(chunk)
+                    if max_bytes is not None and downloaded_bytes > max_bytes:
+                        raise ValueError(
+                            f"TOS object exceeds download byte limit: {object_key}"
+                        )
                     f.write(chunk)
 
             logger.debug(f"Image download success, saved to: {save_path}")
@@ -746,7 +753,14 @@ class VeTOS:
             return False
 
     def download_directory(
-        self, bucket_name: str, prefix: str, local_dir: str = "/tmp"
+        self,
+        bucket_name: str,
+        prefix: str,
+        local_dir: str = "/tmp",
+        *,
+        raise_on_error: bool = False,
+        max_files: int | None = None,
+        max_bytes: int | None = None,
     ) -> bool:
         """Download entire directory from TOS bucket to local directory
 
@@ -754,6 +768,9 @@ class VeTOS:
             bucket_name: TOS bucket name
             prefix: Directory prefix in TOS (e.g., "skills/pdf/")
             local_dir: Local directory path to save files
+            raise_on_error: Whether to propagate TOS/list/download errors.
+            max_files: Optional maximum number of files to download.
+            max_bytes: Optional maximum total bytes to download.
 
         Returns:
             bool: True if download succeeds, False otherwise
@@ -771,11 +788,15 @@ class VeTOS:
 
             # Create local directory if not exists
             os.makedirs(local_dir, exist_ok=True)
+            local_root = os.path.realpath(local_dir)
 
             # List all objects with the prefix
             is_truncated = True
             next_continuation_token = ""
             downloaded_count = 0
+            planned_count = 0
+            planned_bytes = 0
+            downloaded_bytes = 0
 
             while is_truncated:
                 out = self._client.list_objects_type2(
@@ -794,9 +815,35 @@ class VeTOS:
                     if object_key.endswith("/"):
                         continue
 
+                    planned_count += 1
+                    if max_files is not None and planned_count > max_files:
+                        raise ValueError(
+                            f"TOS directory exceeds file count limit: {prefix}"
+                        )
+                    object_size = getattr(content, "size", None)
+                    object_size_int = int(object_size) if object_size is not None else 0
+                    if max_bytes is not None and object_size is not None:
+                        planned_bytes += object_size_int
+                        if planned_bytes > max_bytes:
+                            raise ValueError(
+                                f"TOS directory exceeds byte limit: {prefix}"
+                            )
+
                     # Calculate relative path and local file path
                     relative_path = object_key[len(prefix) :]
                     local_file_path = os.path.join(local_dir, relative_path)
+                    real_file_path = os.path.realpath(local_file_path)
+                    if not (
+                        real_file_path == local_root
+                        or real_file_path.startswith(local_root + os.sep)
+                    ):
+                        message = (
+                            f"Unsafe object key escapes target directory: {object_key}"
+                        )
+                        logger.error(message)
+                        if raise_on_error:
+                            raise ValueError(message)
+                        return False
 
                     # Create subdirectories if needed
                     local_file_dir = os.path.dirname(local_file_path)
@@ -804,7 +851,16 @@ class VeTOS:
                         os.makedirs(local_file_dir, exist_ok=True)
 
                     # Download the file
-                    if self.download(bucket_name, object_key, local_file_path):
+                    if self.download(
+                        bucket_name,
+                        object_key,
+                        local_file_path,
+                        raise_on_error=raise_on_error,
+                        max_bytes=(
+                            None if max_bytes is None else max_bytes - downloaded_bytes
+                        ),
+                    ):
+                        downloaded_bytes += os.path.getsize(local_file_path)
                         downloaded_count += 1
                         logger.debug(f"Downloaded: {object_key} -> {local_file_path}")
                     else:
@@ -817,6 +873,8 @@ class VeTOS:
 
         except Exception as e:
             logger.error(f"Failed to download directory: {str(e)}")
+            if raise_on_error:
+                raise
             return False
 
     def close(self):
