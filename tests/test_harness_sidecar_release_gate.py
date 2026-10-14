@@ -42,7 +42,7 @@ def test_sidecar_release_gate_runs_backend_and_frontend_in_parallel() -> None:
     aggregate = jobs["gate"]
     assert "needs" not in backend
     assert "needs" not in frontend
-    assert backend["timeout-minutes"] == 3
+    assert backend["timeout-minutes"] == 10
     assert frontend["timeout-minutes"] == 3
     assert set(aggregate["needs"]) == {"backend-gate", "frontend-gate"}
     assert aggregate["if"] == "${{ always() }}"
@@ -133,3 +133,5 @@ def test_sidecar_release_gate_runs_backend_and_frontend_in_parallel() -> None:
     assert "npm test" in frontend_run
     assert "BACKEND_RESULT" in aggregate_run
     assert "FRONTEND_RESULT" in aggregate_run
+    assert "Backend gate result: $BACKEND_RESULT" in aggregate_run
+    assert 'test "$BACKEND_RESULT" = success' in aggregate_run
