@@ -328,6 +328,39 @@ Ark 模式要求 `model-provider: openai` 和所选地域方舟 `/api/v3/` 地�
 
 目前没有海外默认镜像，仍使用现有公开 MPA/Worker 镜像，可通过服务端 `VEADK_MPA_BYTEPLUS_RUNTIME_IMAGE` / `VEADK_MPA_BYTEPLUS_WORKER_IMAGE` 覆盖；海外拉取及镜像兼容性需实际创建验证。`VEADK_MPA_BYTEPLUS_AIDAP_HOST` 可选指定部署对应的 AIDAP 主机名。服务开通、IAM 策略/API 可用性、配额及模型访问是账号前置条件；表单配置就绪不能证明这些资源可用。海外服务缺失时显式失败，不回退火山引擎。火山引擎默认配置及通用智能体聊天保持不变。
 
+BytePlus Studio 创建使用部署凭据，向 `apmplus-server.ap-southeast-1.byteplusapi.com` 调用 `GetAppKey` 取得 APM AppKey，再注入 Runtime Envs 的 `OBSERVABILITY_OPENTELEMETRY_APMPLUS_API_KEY`，让内置 VeADK 跳过自动获取。部署凭据需要 `apmplus_server:GetAppKey`。恢复启用的应用和平台 APM 默认值，国内与 CLI 路径不变。复用可信配置中的有效显式 Runtime AppKey。获取采用有限临时重试和安全诊断，Key 不进入浏览器/任务/启动/部署记录。重启 Studio 并使用新的创建请求；已有 Runtime 不自动更新，保留未完成输入哈希检查。这不证明 OTLP 上报正常，也不修复 BytePlus 沙箱凭据发现。
+
 ### 显式 CLI 配置自动 OpenViking
 
-仅火山 `cn-beijing` 可通过 `managed.openviking.mode: auto` 显式启用，其他显式配置默认 `manual`。部署凭据需要 `vikingdb:CreateOpenVikingCollection`、`vikingdb:GetOpenVikingCollection`、`vikingdb:AccessOpenVikingApiKey` 权限。auto 不得与手动 OV 连接字段混用。自动创建使用 VLM `doubao-seed-2.0-lite` / `260428`、Embedding `doubao-embedding-vision` / `251215`，显式提供 Credentials Source=volcengine 及作为 EndpointID 的带版本模型标识。已解析的方舟模型 Key（CLI 可使用显式配置/模板 MODEL_AGENT_API_KEY）仅加到复制的创建请求，不保存在注册库。仅在明确拒绝、没有登记库及待完成 Runtime 操作时，才可修正完全匹配的旧无 Credentials 意图。未知/已登记意图不能自动替换。注册库仅保存意图和 ResourceID，重试重新读取 Key。部署 Runtime 前注入 `OPENVIKING_USER=default` 及其他三个 OV 变量。MPA 失败、取消或删除后保留 OV；创建结果不确定时，先核实再重试。
+火山 `cn-beijing` 可通过 `managed.openviking.mode: auto` 显式启用，显式配置默认 `manual`。BytePlus 柔佛在后文单独说明。部署凭据需要 `vikingdb:CreateOpenVikingCollection`、`vikingdb:GetOpenVikingCollection`、`vikingdb:AccessOpenVikingApiKey` 权限。auto 不得与手动 OV 连接字段混用。自动创建使用 VLM `doubao-seed-2.0-lite` / `260428`、Embedding `doubao-embedding-vision` / `251215`，显式提供 Credentials Source=volcengine 及作为 EndpointID 的带版本模型标识。已解析的方舟模型 Key（CLI 可使用显式配置/模板 MODEL_AGENT_API_KEY）仅加到复制的创建请求，不保存在注册库。仅在明确拒绝、没有登记库及待完成 Runtime 操作时，才可修正完全匹配的旧无 Credentials 意图。未知/已登记意图不能自动替换。注册库仅保存意图和 ResourceID，重试重新读取 Key。部署 Runtime 前注入 `OPENVIKING_USER=default` 及其他三个 OV 变量。MPA 失败、取消或删除后保留 OV；创建结果不确定时，先核实再重试。
+
+
+### BytePlus 柔佛自动 OpenViking
+
+新的 BytePlus Studio 请求在 `ap-southeast-1` 自动准备个人版库，复用 MPA 创建流程解析的普通 ModelArk API Key。不再要求或读取额外的 `OV_MODEL_API_KEY` 或 Coding Plan 凭据。显式 CLI 配置通过 `managed.openviking.mode: auto` 启用；已提交手动任务保持原有行为。建库返回的 OV 库 Key 仍与模型推理 Key 区分。
+
+适配器使用 `vikingdb.ap-southeast-1.byteplusapi.com`、POST `/api/openviking/{Action}`、签名地域 `ap-southeast-1`、API 版本 `2025-06-09`，及部署账号的 BytePlus AK/SK/STS。创建 `Version=developer`、`Source=volcengine`，VLM 为 `seed-2-0-lite`，Embedding 为 `skylark-embedding-vision`，不带 ModelVersion。每个模型凭据包含普通 ApiKey 和对应 EndpointID。READY 后不传 UserID 获取 default Key，注入已有四个变量，地址使用 `https://api.vikingdb.ap-southeast-1.bytepluses.com/openviking`。重试复用绑定的 ResourceID，创建结果未知时阻止盲目重复创建，取消/删除后保留库。密钥不持久化到资源注册库。
+
+个人库仅支持 default 用户。用户提供的海外契约要求数据请求使用 Bearer 鉴权和 `x-tt-env: pre`。本仓库负责准备资源；`agentkit-mpa-agent` 需单独实现上述语义，之后才能使用 OV 记忆。这些修改不证明云端实测可用，也不改变北京企业版创建流程。参见[设计](../../../../prd-spec/features/mpa-byteplus-openviking/2026-10-14-automatic-creation.zh.md)。
+
+BytePlus 推理 EndpointID 默认值（用户指定试用，海外尚未验证）：
+
+| 模型 | 默认 EndpointID | 可选服务端覆盖变量 |
+| --- | --- | --- |
+| VLM | `doubao-seed-2-0-lite-260428` | `OV_VLM_ENDPOINT_ID` |
+| Embedding | `doubao-embedding-vision-251215` | `OV_EMBEDDING_ENDPOINT_ID` |
+
+Key 必须有权调用两个接入点。覆盖值允许 1–128 位 ASCII 字母/数字/连字符/下划线/点，并以字母或数字开头。显式空值或非法覆盖值会在资源变更前失败。修改服务端配置后重启 Studio。国内参数不使用这些覆盖变量。流程不负责创建或发现推理接入点。服务端拒绝会明确报错，不回退 Coding Plan 或 AgentPlan。记录 OV 意图后重试必须使用相同接入点和来源；旧 Coding Plan 意图不能静默迁移或重新建库。见[推理凭据设计](../../../../prd-spec/features/mpa-byteplus-openviking/2026-10-14-inference-endpoints.zh.md)。
+
+
+### IAM 临时失败
+
+运行角色准备对超时、连接失败、限流和服务不可用最多尝试四次，等待 1/2/4 秒，受已有 120 秒角色期限限制。每次重试先读取固定角色/策略名称，不会因响应丢失而盲目重新创建资源。权限、非法输入、未知错误及归属/信任/策略冲突立即失败。临时请求耗尽返回 `iamTemporaryFailure`；`iamPermissionDenied` 仍表示部署授权不足。取消会停止后续调用；已发送的 SDK 请求可能仍会完成。
+
+经校验的 IAM 接口/类别/次数/结果及可选平台 Request ID 保存到 `task_diagnostics.request_id` 和服务端日志；旧记录通过增量迁移获得空值。原始消息、请求体和凭据不记录。Request ID 只允许 16–128 位十六进制字符/连字符，其他值忽略。旧四字段诊断协议继续有效。排查时可从受影响任务的诊断中查询 `operation, category, attempt, outcome, request_id`。重启 Studio 加载修改。见[IAM 恢复设计](../../../../prd-spec/bugfixes/mpa-iam-retry/2026-10-14-transient-errors.zh.md)。
+
+OpenViking 失败时，若云端提供结构化元信息，Studio 后台日志及有数量上限的 task_diagnostics 记录会保留安全的 operation/category/errorCode/requestId。errorCode/requestId 为可选字段，传输异常可能没有这两个值。原始云端文案、请求/响应体和 API Key 均不记录。复现前须加载更新后的后端；已有不确定建库任务仍受保护，不会自动再次提交。历史错误元信息无法补回。
+
+BytePlus Studio 在 ap-southeast-1 的新请求重新自动准备个人版 OV。已提交无 OV 请求重试保留原模式，要测试 OV 须“新建另一个智能体”。国内自动 OV 及已有绑定／不确定建库保护保持不变。
+
+Runtime 创建/更新失败从结构化 SDK/HTTP 元信息及有界 JSON／SDK 字节串异常参数提取已验证的 errorCode/requestId（65,536 字节／字符，八个防循环 cause）。排除原始云端文案、响应体和凭证。复现前重启 Studio；重试保留原输入和 ClientToken，历史错误无法恢复。

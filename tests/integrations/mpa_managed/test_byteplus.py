@@ -50,8 +50,61 @@ def test_byteplus_profile_is_separate_from_domestic_defaults(monkeypatch):
     domestic_pg = load_studio_profile().managed.postgres
     assert profile.managed.postgres is not None and domestic_pg is not None
     assert profile.managed.postgres.bootstrap_path != domestic_pg.bootstrap_path
-    assert profile.image_defaults() == load_studio_profile().image_defaults()
+    assert profile.image_defaults() == {
+        "runtimeImage": (
+            "agentkit-platform-3001037806-ap-southeast-1.cr.bytepluses.com/"
+            "mpa/mpa_agent:latest"
+        ),
+        "workerImage": (
+            "agentkit-platform-3001037806-ap-southeast-1.cr.bytepluses.com/"
+            "mpa/mpa_codex_worker:latest"
+        ),
+    }
+    assert load_studio_profile().image_defaults() == {
+        "runtimeImage": (
+            "agentkit-platform-2112682748-cn-beijing.cr.volces.com/mpa/mpa_agent:latest"
+        ),
+        "workerImage": (
+            "agentkit-platform-2112682748-cn-beijing.cr.volces.com/"
+            "mpa/mpa_codex_worker:latest"
+        ),
+    }
     assert profile.summary()["configured"] is True
+
+
+@pytest.mark.parametrize(
+    ("provider", "region", "expected", "expected_control"),
+    [
+        ("volcengine", "cn-beijing", "true", True),
+        ("byteplus", "ap-southeast-1", "true", True),
+    ],
+)
+def test_provider_application_apm_defaults_are_isolated(
+    provider, region, expected, expected_control
+):
+    from veadk.integrations.mpa.managed import service
+
+    values = studio_profile_values(provider)
+    raw_env = values["managed"]["runtime"]["env"]
+    assert raw_env["ENABLE_APMPLUS"] == expected
+    assert raw_env["FORCE_APMPLUS_EXPORTER_REGISTRATION"] == expected
+
+    profile = load_studio_profile(provider=provider, region=region)
+    assert profile.managed.runtime.apmplus_enable is expected_control
+    assert profile.managed.runtime.env["ENABLE_APMPLUS"] == expected
+    assert (
+        profile.managed.runtime.env["FORCE_APMPLUS_EXPORTER_REGISTRATION"] == expected
+    )
+
+    template = {"ApmplusEnable": False, "Envs": []}
+    service.apply_runtime_settings(template, profile.managed.runtime)
+    env = {item["Key"]: item["Value"] for item in template["Envs"]}
+    assert template["ApmplusEnable"] is expected_control
+    assert env["ENABLE_APMPLUS"] == expected
+    assert env["FORCE_APMPLUS_EXPORTER_REGISTRATION"] == expected
+
+    domestic = studio_profile_values("volcengine")
+    assert domestic["managed"]["runtime"]["env"]["ENABLE_APMPLUS"] == "true"
 
 
 @pytest.mark.parametrize(

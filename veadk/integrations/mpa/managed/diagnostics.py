@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -52,11 +53,21 @@ CATEGORIES = {
     "protocol_error",
 }
 OPERATIONS = {
+    "create_runtime",
+    "update_runtime",
+    "iam_verify",
+    "iam_get_role",
+    "iam_create_role",
+    "iam_get_policy",
+    "iam_create_policy",
+    "iam_attach_role_policy",
+    "iam_list_attached_role_policies",
     "create_openviking",
     "get_openviking",
     "get_openviking_key",
     "list_model_keys",
     "get_model_key",
+    "get_apm_key",
     "get_reference_worker",
     "find_worker",
     "create_worker",
@@ -102,6 +113,7 @@ DEPLOYMENT_CATEGORIES = {
     "iamPolicyConflict": "ownership",
     "iamOwnershipConflict": "ownership",
     "iamVerificationFailed": "resource_failed",
+    "iamTemporaryFailure": "unavailable",
     "iamConfigurationConflict": "configuration_changed",
     "Worker ownership metadata is incomplete": "metadata_missing",
     "Worker ownership does not match this agent": "ownership",
@@ -164,13 +176,36 @@ def classify_error(error: BaseException) -> str:
     return "unknown"
 
 
+def safe_request_id(value: object) -> str:
+    """Only provider hex/UUID identifiers may cross the diagnostic boundary."""
+    return (
+        value
+        if isinstance(value, str) and re.fullmatch(r"[0-9A-Fa-f-]{16,128}", value)
+        else ""
+    )
+
+
+def safe_error_code(value: object) -> str:
+    """Retain bounded provider identifiers, never free text or token-shaped values."""
+    if (
+        not isinstance(value, str)
+        or len(value) > 128
+        or not re.fullmatch(r"[A-Z][A-Za-z0-9]*(?:[._][A-Za-z0-9]+)*", value)
+        or value.upper().startswith(
+            ("SK_", "AK_", "ARK_", "TOKEN_", "BEARER_", "SECRET_", "PASSWORD_")
+        )
+    ):
+        return ""
+    return value
+
+
 def validate_diagnostic(value: object) -> Diagnostic | None:
-    if not isinstance(value, dict) or set(value) != {
-        "operation",
-        "category",
-        "attempt",
-        "outcome",
-    }:
+    required = {"operation", "category", "attempt", "outcome"}
+    if (
+        not isinstance(value, dict)
+        or not required <= set(value)
+        or set(value) - required - {"requestId", "errorCode"}
+    ):
         return None
     if (
         not isinstance(value["operation"], str)
@@ -183,7 +218,14 @@ def validate_diagnostic(value: object) -> Diagnostic | None:
         or value["outcome"] not in {"retrying", "failed", "cancelled"}
     ):
         return None
-    return dict(value)
+    result = {key: value[key] for key in required}
+    request_id = safe_request_id(value.get("requestId"))
+    if request_id:
+        result["requestId"] = request_id
+    error_code = safe_error_code(value.get("errorCode"))
+    if error_code:
+        result["errorCode"] = error_code
+    return result
 
 
 @contextmanager
@@ -196,10 +238,23 @@ def diagnostic_scope(sink: Callable[[Diagnostic], None]) -> Iterator[None]:
 
 
 def report(
-    operation: str, category: str, *, attempt: int = 1, outcome: str = "failed"
+    operation: str,
+    category: str,
+    *,
+    attempt: int = 1,
+    outcome: str = "failed",
+    request_id: str = "",
+    error_code: str = "",
 ) -> None:
     diagnostic = validate_diagnostic(
-        dict(operation=operation, category=category, attempt=attempt, outcome=outcome)
+        dict(
+            operation=operation,
+            category=category,
+            attempt=attempt,
+            outcome=outcome,
+            **({"requestId": request_id} if request_id else {}),
+            **({"errorCode": error_code} if error_code else {}),
+        )
     )
     if diagnostic is None:
         raise ValueError("Invalid internal diagnostic")

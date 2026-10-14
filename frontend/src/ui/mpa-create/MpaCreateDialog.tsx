@@ -107,6 +107,8 @@ export function MpaCreateDialog({
   const [submitted, setSubmitted] = useState(
     Boolean(saved.submitted || saved.taskId),
   );
+  const submittedIntent = useRef(submitted);
+  submittedIntent.current = submitted;
   const [task, setTask] = useState<MpaCreationTask | null>(null);
   const [config, setConfig] = useState<MpaCreationConfig | null>(null);
   const [loading, setLoading] = useState(true),
@@ -146,8 +148,7 @@ export function MpaCreateDialog({
   const pgValid = autoPg
     ? !input.pgHost && !input.pgPort
     : validPgTarget(input.pgHost, input.pgPort);
-  const autoOpenviking =
-    cloudProvider === "volcengine" && input.openvikingMode === "auto";
+  const autoOpenviking = input.openvikingMode === "auto";
   const openvikingValid =
     autoOpenviking ||
     validOpenViking(
@@ -204,6 +205,7 @@ export function MpaCreateDialog({
           setConfig(value);
           if (
             value.configured &&
+            !submittedIntent.current &&
             !saved.submitted &&
             !saved.taskId &&
             !lock.current
@@ -216,8 +218,7 @@ export function MpaCreateDialog({
               ...(value.businessWorkspaceMode === "per-agent"
                 ? { businessWorkspaceMode: "per-agent" as const }
                 : {}),
-              ...(value.openvikingMode === "auto" &&
-              cloudProvider === "volcengine"
+              ...(value.openvikingMode === "auto"
                 ? {
                     openvikingMode: "auto" as const,
                     openvikingUrl: undefined,
@@ -243,7 +244,7 @@ export function MpaCreateDialog({
         if (!controller.signal.aborted) setLoading(false);
       });
     return () => controller.abort();
-  }, [region, revision, t]);
+  }, [region, revision, cloudProvider, t]);
   useEffect(() => {
     if (!taskId) return;
     const controller = new AbortController();
@@ -404,7 +405,7 @@ export function MpaCreateDialog({
       ...(config?.businessWorkspaceMode === "per-agent"
         ? { businessWorkspaceMode: "per-agent" as const }
         : {}),
-      ...(config?.openvikingMode === "auto" && cloudProvider === "volcengine"
+      ...(config?.openvikingMode === "auto"
         ? { openvikingMode: "auto" as const }
         : {}),
       pgHost: autoPg ? "" : (config?.pgHost ?? ""),
@@ -664,7 +665,9 @@ export function MpaCreateDialog({
                       {t(
                         key(
                           autoOpenviking
-                            ? "openvikingAutoDescription"
+                            ? cloudProvider === "byteplus"
+                              ? "openvikingAutoByteplusDescription"
+                              : "openvikingAutoDescription"
                             : "openvikingDescription",
                         ),
                       )}
@@ -689,7 +692,15 @@ export function MpaCreateDialog({
                       )}
                     </a>
                     {autoOpenviking ? (
-                      <p>{t(key("openvikingAutoBilling"))}</p>
+                      <p>
+                        {t(
+                          key(
+                            cloudProvider === "byteplus"
+                              ? "openvikingAutoByteplusRequirements"
+                              : "openvikingAutoBilling",
+                          ),
+                        )}
+                      </p>
                     ) : (
                       <>
                         <label>

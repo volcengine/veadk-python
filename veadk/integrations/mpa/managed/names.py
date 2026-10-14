@@ -45,7 +45,9 @@ def tags(values):
     }
 
 
-async def check_creation_name(profile, cloud, *, agent_id, name, owner=""):
+async def check_creation_name(
+    profile, cloud, *, agent_id, name, owner="", verified_creation_account=""
+):
     """Return only verified account identity; never return matching resource details."""
     name = validate_runtime_name(name)
 
@@ -53,6 +55,8 @@ async def check_creation_name(profile, cloud, *, agent_id, name, owner=""):
         account = await cloud.account_id()
         expected = profile.values.get("account_id", "")
         if expected and expected != account:
+            raise NameCheckError()
+        if verified_creation_account and verified_creation_account != account:
             raise NameCheckError()
         worker = WorkerCloud(cloud)
         runtimes, workers = await asyncio.gather(
@@ -62,24 +66,36 @@ async def check_creation_name(profile, cloud, *, agent_id, name, owner=""):
             raise NameCheckError("runtimeNameTaken")
         for item in runtimes:
             current = await cloud.get(item["RuntimeId"])
-            provenance = tags(current.get("Tags"))
+            listed = tags(item.get("Tags"))
+            detailed = tags(current.get("Tags"))
+            if any(
+                key in listed and key in detailed and listed[key] != detailed[key]
+                for key in ("veadk:owner", "veadk:mpa-instance-id")
+            ):
+                raise NameCheckError("runtimeNameTaken")
+            # GetRuntime's SDK shape omits Tags; matching list metadata owns them.
+            provenance = {**listed, **detailed}
             if (
                 env_map(current).get("MPA_AGENT_ID") != agent_id
                 or provenance.get("veadk:mpa-instance-id", agent_id) != agent_id
                 or owner
                 and provenance.get("veadk:owner") != owner
+                and not (
+                    bool(verified_creation_account)
+                    and verified_creation_account == account
+                    and not provenance.get("veadk:owner")
+                )
             ):
                 raise NameCheckError("runtimeNameTaken")
+        worker_owned = {
+            "managed_by": "mpa-deployment",
+            "mpa_agent_key": agent_suffix(account, profile.region, agent_id),
+        }
         for item in workers:
             current = await worker.get(item["ToolId"])
-            current_tags = tags(current.get("Tags"))
-            if env_map(current).get("MPA_AGENT_ID") != agent_id:
-                raise NameCheckError("runtimeNameTaken")
-            if current_tags.get("managed_by") not in (None, "mpa-deployment"):
-                raise NameCheckError("runtimeNameTaken")
-            if current_tags.get("mpa_agent_key") not in (
-                None,
-                agent_suffix(account, profile.region, agent_id),
+            provenance = tags(current.get("Tags"))
+            if env_map(current).get("MPA_AGENT_ID") != agent_id or any(
+                provenance.get(key) != value for key, value in worker_owned.items()
             ):
                 raise NameCheckError("runtimeNameTaken")
         settings = profile.managed.postgres

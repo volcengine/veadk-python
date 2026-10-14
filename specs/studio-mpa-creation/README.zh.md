@@ -110,7 +110,7 @@ CON-1 显式基础设施：`managed.runtime` 可选字段包括 `role-name`、�
 CON-9 创建镜像：新表单没有镜像输入框，使用内置 latest 默认值。仅旧请求和已提交草稿保留显式镜像；提交后锁定输入。POST 接受可选镜像引用（去除首尾空白，最多 1024 字符），拒绝 URL/凭据/查询片段/非法 SHA256 digest，绝不作为 shell 命令执行。配置接口仅返回本地可确定的默认镜像，纯参考配置可为空。CON-6/CON-8 任务存储新增 `images` JSON 列，旧记录为 `{}`。首次提交保存本地可确定的实际镜像，重试沿用该列并拒绝修改显式输入。任务响应包含该非秘密快照，固定 runner 将其应用于配置副本。显式 worker 镜像会在本次新任务中取消配置的已有 worker 选择。权限和其他资源设置仍由服务端管理。
 
 
-CON-10 — Worker 恢复/诊断：暂时性 Worker 操作最多尝试 4 次，间隔 1/2/4 秒，受默认 600 秒阶段预算和总任务期限限制。创建重试保持同一载荷/ClientToken；仅已登记的托管 Worker 可恢复已识别的不存在错误。永久/未知错误和归属冲突立即失败。只含安全枚举的诊断记录到日志和 `task_diagnostics`（每任务最新 100 条，跨重试保留），绝不持久化原始异常数据。任务 HTTP 字段和错误码不变。见[已批准设计](../../prd-spec/bugfixes/mpa-worker-retry/2026-09-20-worker-retry.zh.md)。
+CON-10 — Worker 恢复/诊断：暂时性 Worker 操作最多尝试 4 次，间隔 1/2/4 秒，受默认 600 秒阶段预算和总任务期限限制。创建重试保持同一载荷/ClientToken；仅已登记的托管 Worker 可恢复已识别的不存在错误。永久/未知错误和归属冲突立即失败。已安全验证的诊断字段记录到日志和 `task_diagnostics`（每任务最新 100 条，跨重试保留），绝不持久化原始异常数据。任务 HTTP 字段和错误码不变。见[已批准设计](../../prd-spec/bugfixes/mpa-worker-retry/2026-09-20-worker-retry.zh.md)。
 
 CON-10 元数据可见性：区分初始化元数据缺失和显式冲突。具有持久化 ID/令牌/哈希的托管 Worker 仅在 Creating/Pending/Starting/Initializing/Provisioning 或无状态时可等待缺失 ID/项目/归属标签，每 5 秒检查，受现有 Worker/任务期限限制，不设置独立观察次数上限。Ready 缺失字段、已有值冲突、终态/未知状态以及无托管创建意图的 Worker 立即失败。固定字段诊断不包含值；元数据 attempt 最大保持 4，兼容已有诊断协议。Worker API 错误重试限制不变。见[期限修复及验证限制](../../prd-spec/bugfixes/mpa-worker-retry/2026-09-30-worker-metadata-deadline.zh.md)。
 
@@ -200,11 +200,13 @@ SubnetIds 按非空、唯一成员判断相同，不受平台返回顺序影响�
 
 Studio 服务端选择的云平台允许 BytePlus `ap-southeast-1` 托管创建 MPA，并保留现有火山引擎流程。浏览器不能指定云平台、账号或云接口地址；平台与地域不匹配时，在资源变更前失败。国内配置值保持不变。BytePlus 使用自己的 AK/SK/会话令牌，或显式指定的轮转 IAM 凭据文件，每次刷新凭据通过 `open.byteplusapi.com` STS 核验账号；不读取火山引擎环境凭据。Runtime、Skills、Tools SDK 客户端在线程内按平台上下文构造。Identity 及签名 VPC/ECS/APIG/AIDAP/Ark/IAM 请求选择对应平台接口。不支持的 API 或必要 IAM 策略显式失败，不回退国内服务，也不省略权限。
 
-BytePlus 默认使用现有海外 Studio 模型及地址，将平台/地域传入 Runtime 和 Worker，并使用 Runtime 的 `APIG_TOP_ENDPOINT` 覆盖项。可选 TOS 挂载使用海外地址。默认仍使用现有公开镜像；可信服务端覆盖项为 `VEADK_MPA_BYTEPLUS_RUNTIME_IMAGE` / `VEADK_MPA_BYTEPLUS_WORKER_IMAGE`。服务端可通过 `VEADK_MPA_BYTEPLUS_AIDAP_HOST` 覆盖 AIDAP 主机名；URL、路径及用户信息等无效输入在本地检查时失败。`VEADK_MPA_BYTEPLUS_CREDENTIAL_FILE` 显式指定轮转 IAM 文件；没有 BytePlus 环境凭据时，不会隐式读取国内挂载文件。可用区校验接受 `ap-southeast-1a` 和 `ap-southeast-1-a`，不改写资源 ID，并保留国内校验。浏览器及任务响应不包含凭据。BytePlus 任务在持久化指纹和子进程 stdin 中增加可信平台标记；默认任务及 PG 引导文件增加 `-byteplus` 后缀，保留国内恢复状态。共享 Workspace/数据库布局、锁/重试/取消/就绪检查及可选 OpenViking 语义不变。控制台链接跟随平台。镜像拉取、海外 API/策略可用性及真实就绪/聊天行为须单独实测；本地配置就绪不能证明云资源可用。参见[设计及验证](../../prd-spec/features/mpa-byteplus/2026-10-10-byteplus-creation.zh.md)。
+BytePlus 默认使用现有海外 Studio 模型及地址，将平台/地域传入 Runtime 和 Worker，并使用 Runtime 的 `APIG_TOP_ENDPOINT` 覆盖项。可选 TOS 挂载使用海外地址。新的 BytePlus 任务默认使用 `agentkit-platform-3001037806-ap-southeast-1.cr.bytepluses.com/mpa/mpa_agent:latest` 和 `agentkit-platform-3001037806-ap-southeast-1.cr.bytepluses.com/mpa/mpa_codex_worker:latest`；可信服务端覆盖项仍为 `VEADK_MPA_BYTEPLUS_RUNTIME_IMAGE` / `VEADK_MPA_BYTEPLUS_WORKER_IMAGE`。国内默认值和已有任务快照保持不变。参见 [BytePlus 镜像修复](../../prd-spec/bugfixes/mpa-byteplus-images/2026-10-14-byteplus-default-images.zh.md)。服务端可通过 `VEADK_MPA_BYTEPLUS_AIDAP_HOST` 覆盖 AIDAP 主机名；URL、路径及用户信息等无效输入在本地检查时失败。`VEADK_MPA_BYTEPLUS_CREDENTIAL_FILE` 显式指定轮转 IAM 文件；没有 BytePlus 环境凭据时，不会隐式读取国内挂载文件。可用区校验接受 `ap-southeast-1a` 和 `ap-southeast-1-a`，不改写资源 ID，并保留国内校验。浏览器及任务响应不包含凭据。BytePlus 任务在持久化指纹和子进程 stdin 中增加可信平台标记；默认任务及 PG 引导文件增加 `-byteplus` 后缀，保留国内恢复状态。共享 Workspace/数据库布局、锁/重试/取消/就绪检查及可选 OpenViking 语义不变。控制台链接跟随平台。镜像拉取、海外 API/策略可用性及真实就绪/聊天行为须单独实测；本地配置就绪不能证明云资源可用。参见[设计及验证](../../prd-spec/features/mpa-byteplus/2026-10-10-byteplus-creation.zh.md)。
 
 BytePlus 托管 IAM 默认通过 `open.byteplusapi.com` 调用，保留可信服务端 `IAM_OPENAPI_HOST` 覆盖；共享 IAM 工具与国内创建行为不变。
 
 BytePlus 托管 AIDAP 默认使用 `open.byteplusapi.com`，仍支持已校验的 `VEADK_MPA_BYTEPLUS_AIDAP_HOST` 覆盖。API 可访问不代表 Workspace 创建成功；继续保留失败状态及属主校验，不自动删除或接管失败的同名资源。
+
+BytePlus 托管 Runtime 继承启用的应用及控制面 APM 默认值：`ENABLE_APMPLUS=true`、`FORCE_APMPLUS_EXPORTER_REGISTRATION=true` 和 `ApmplusEnable=true`，与火山引擎一致。已有 Runtime 和已提交任务快照不变。参见 [BytePlus APM 恢复](../../prd-spec/bugfixes/mpa-byteplus-apm/2026-10-14-restore-application-apm.zh.md)。
 
 ## CON-18：自动 OpenViking
 
@@ -229,3 +231,20 @@ CON-18 来源修正：仅在没有 OV ID、没有待完成 Runtime 操作、明�
 新的可编辑 MPA 表单在基本信息中提交严格正整数 `maxInstance`，默认 20。数值随请求身份保存、传入 runner 并应用为 Runtime `MaxInstance`。小于配置最小值在受理前拒绝。提交后重试数值不可更改；省略/null 的旧字段保留原指纹/配置默认，不自动升级。重名错误复用既有 danger/soft Alert，本地化文案不变。不影响通用创建及已部署 Runtime 设置。见[设计](../../prd-spec/features/mpa-create-scaling/2026-10-13-max-instance-input.zh.md)。
 
 OV 路由注册及配置检查须保留 Studio 延迟加载启动：签名/网络函数只在首次实际 OV API 调用时加载，不在导入适配器时加载。见[官方 PR 检查修正](../../prd-spec/bugfixes/mpa-upstream-readiness/2026-10-13-startup-and-lockfile.zh.md)。
+
+CON-18 BytePlus 扩展：BytePlus `ap-southeast-1` 新自动请求创建个人版库，顶层及凭据 Source=volcengine，复用已解析的 MPA 推理 API Key。模型名保留 seed-2-0-lite/skylark-embedding-vision；EndpointID 默认值为 seed-2-0-lite-260428/skylark-embedding-vision-251215，BytePlus Ark 已接受其对应基础模型版本。服务端 OV_VLM_ENDPOINT_ID/OV_EMBEDDING_ENDPOINT_ID 可覆盖；非法值在云资源变更前失败。不使用 OV_MODEL_API_KEY 或 Coding Plan。Source/EndpointID 作为非密钥意图保存；改变接入点或旧 Coding Plan 绑定产生冲突，不重新建库。海外签名、取 default Key 不传 UserID、四个 Runtime 变量、资源保留、创建结果未知及密钥不落盘保证不变。国内及已提交手动流程不变。个人版 default 用户与海外数据面仍需单独适配 Runtime。见[已批准后续设计](../../prd-spec/features/mpa-byteplus-openviking/2026-10-14-inference-endpoints.zh.md)和[模型标识修正](../../prd-spec/bugfixes/mpa-byteplus-model-identities/2026-10-14-byteplus-model-identities.zh.md)。
+
+
+CON-10/CON-11 IAM 恢复：在增量任务诊断中保留白名单接口/类别及经校验的可选 Request ID。在已有期限内最多四次重试临时 IAM 协调，等待 1/2/4 秒，不确定写入后从固定名称回读开始。永久/未知失败立即结束，临时失败耗尽使用 iamTemporaryFailure。取消后不再发送 SDK 调用。兼容旧诊断字段及已有权限错误 key。见[已批准修复](../../prd-spec/bugfixes/mpa-iam-retry/2026-10-14-transient-errors.zh.md)。
+
+CON-10/CON-18 OV 诊断：结构化云端拒绝及 HTTP/SDK 异常响应体保留可选且已验证的 errorCode（大写字母开头的 ASCII 错误码，最多 128 字符；排除凭证形式的值）及现有可选十六进制/UUID requestId。标识通过子进程诊断事件进入后台日志和追加的 task_diagnostics.error_code/request_id 列；兼容旧事件/记录，每任务仍最多 100 条诊断。排除原始 Message、响应体、凭证和异常文本。公开任务字段、国内/BytePlus 载荷、错误分类和不确定建库重试保护均不变。缺失或无效元信息时仍可能无法取得原始原因。见[诊断修复](../../prd-spec/bugfixes/mpa-openviking-diagnostics/2026-10-14-provider-errors.zh.md)。
+
+CON-17/CON-18 BytePlus 默认已恢复：支持的 ap-southeast-1 新请求／可编辑草稿重新启用个人版自动 OV。已提交的自动／手动／无 OV 身份保持不变；无 OV 请求提交后要测试 OV，须“新建另一个智能体”。国内自动、手动路径和不确定建库保护不变。见[恢复修复](../../prd-spec/bugfixes/mpa-runtime-diagnostics/2026-10-14-sdk-json-and-restore-ov.zh.md)。
+
+CON-10 Runtime 诊断：create_runtime/update_runtime 失败从 SDK 属性、结构化 HTTP/SDK 响应体及有界 JSON／字节串异常参数保留已验证的 category/errorCode 和可选 requestId。解析上限 65,536 字节／字符，最多八个防循环 cause。原始文案／参数／响应体、凭证和 ClientToken 不进入诊断。同一异常、调用次数、取消、分类、载荷和重试语义保持不变，缺失元信息仍省略。见[补齐修复](../../prd-spec/bugfixes/mpa-runtime-diagnostics/2026-10-14-sdk-json-and-restore-ov.zh.md)。
+
+CON-20 实现纠正：组合对应 Runtime 列表／详情归属证据，Worker 使用真实 managed_by/mpa_agent_key 标签及 MPA_AGENT_ID 环境变量。契约不变，见[重试修复](../../prd-spec/bugfixes/mpa-name-retry/2026-10-14-owned-resource-metadata.zh.md)。
+
+CON-20 重试证明：仅认证过的已接受请求，且标准化参数与存储值完全一致、服务端派生 agent 身份及私有 provider/account/region 快照通过 STS 核对时，才能补足空的云端创建者标签。明确外部标签仍拒绝。POST 在服务端取得证明，已有 expectedAccount 快照将同一检查带入子进程创建。不信任浏览器重试标志、不增加公开字段、不直接跳过云端预检。
+
+CON-17 APM Key 传递：Studio BytePlus 创建在写资源前使用已核验部署凭据，向 `apmplus-server.ap-southeast-1.byteplusapi.com` 调用 `GetAppKey`，取得 `data.app_key`，注入 Runtime Envs 的 `OBSERVABILITY_OPENTELEMETRY_APMPLUS_API_KEY`。保留可信配置中的有效显式 Runtime Key。获取失败时停止创建，采用有限重试和安全的 `get_apm_key` 诊断；Key 不保存在任务/启动/部署记录或浏览器结果中。国内和非 Studio 路径不变。保留未完成输入哈希检查，不静默升级旧任务。见[服务端 APM Key 设计](../../prd-spec/bugfixes/mpa-byteplus-apm/2026-10-14-server-app-key.zh.md)。

@@ -14,6 +14,7 @@
 
 """Offline name preflight, account scope and retry ownership contracts."""
 
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -206,3 +207,189 @@ async def test_creation_account_snapshot_is_checked_before_prerequisites(
             expected_account="original-account",
         )
     identity.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ["volcengine", "byteplus"])
+async def test_sdk_runtime_list_tags_allow_retry_when_detail_omits_tags(
+    tmp_path, monkeypatch, provider
+):
+    from agentkit.sdk.runtime.types import GetRuntimeResponse
+
+    names, profile, runtime, _, _ = setup(tmp_path, monkeypatch)
+    profile = replace(profile, values={**profile.values, "cloud_provider": provider})
+    runtime.find_runtimes.return_value = [
+        {
+            "RuntimeId": "r-own",
+            "Name": "test-name",
+            "Tags": [
+                {"Key": "veadk:owner", "Value": "local"},
+                {"Key": "veadk:mpa-instance-id", "Value": "mi-test"},
+            ],
+        }
+    ]
+    runtime.get.return_value = GetRuntimeResponse.model_validate(
+        {"RuntimeId": "r-own", "Envs": [{"Key": "MPA_AGENT_ID", "Value": "mi-test"}]}
+    ).model_dump(by_alias=True, exclude_none=True)
+    assert "Tags" not in runtime.get.return_value
+    assert (
+        await names.check_creation_name(
+            profile, runtime, agent_id="mi-test", name="test-name", owner="local"
+        )
+        == "account"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tag_key,wrong",
+    [("veadk:owner", "foreign"), ("veadk:mpa-instance-id", "mi-foreign")],
+)
+@pytest.mark.parametrize("source", ["list", "detail"])
+async def test_runtime_ownership_contradiction_never_hides_in_other_response(
+    tmp_path, monkeypatch, tag_key, wrong, source
+):
+    names, profile, runtime, _, _ = setup(tmp_path, monkeypatch)
+    own = {"veadk:owner": "local", "veadk:mpa-instance-id": "mi-test"}
+    other = {**own, tag_key: wrong}
+    listing, detail = (other, own) if source == "list" else (own, other)
+    runtime.find_runtimes.return_value = [
+        {
+            "RuntimeId": "r-own",
+            "Tags": [{"Key": k, "Value": v} for k, v in listing.items()],
+        }
+    ]
+    runtime.get.return_value = {
+        "Envs": [{"Key": "MPA_AGENT_ID", "Value": "mi-test"}],
+        "Tags": [{"Key": k, "Value": v} for k, v in detail.items()],
+    }
+    with pytest.raises(names.NameCheckError, match="runtimeNameTaken"):
+        await names.check_creation_name(
+            profile, runtime, agent_id="mi-test", name="test-name", owner="local"
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "managed,agent_tag",
+    [
+        (None, None),
+        ("other", "own"),
+        ("mpa-deployment", "foreign"),
+        ("mpa-deployment", None),
+    ],
+)
+async def test_worker_requires_creation_tags_not_a_legacy_agent_id_tag(
+    tmp_path, monkeypatch, managed, agent_tag
+):
+    names, profile, runtime, worker, _ = setup(tmp_path, monkeypatch)
+    worker.find.return_value = [{"ToolId": "t-existing"}]
+    labels = {"MPA_AGENT_ID": "mi-test"}
+    if managed is not None:
+        labels["managed_by"] = managed
+    if agent_tag is not None:
+        labels["mpa_agent_key"] = agent_suffix(
+            "account", profile.region, "mi-test" if agent_tag == "own" else "mi-foreign"
+        )
+    worker.get.return_value = {
+        "Envs": [{"Key": "MPA_AGENT_ID", "Value": "mi-test"}],
+        "Tags": [{"Key": k, "Value": v} for k, v in labels.items()],
+    }
+    with pytest.raises(names.NameCheckError, match="runtimeNameTaken"):
+        await names.check_creation_name(
+            profile, runtime, agent_id="mi-test", name="test-name", owner="local"
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "scope_account,expected", [("account", True), ("foreign", False), ("", False)]
+)
+async def test_missing_runtime_owner_needs_verified_original_creation_account(
+    tmp_path, monkeypatch, scope_account, expected
+):
+    names, profile, runtime, _, _ = setup(tmp_path, monkeypatch)
+    runtime.find_runtimes.return_value = [{"RuntimeId": "r-own", "Name": "test-name"}]
+    runtime.get.return_value = {"Envs": [{"Key": "MPA_AGENT_ID", "Value": "mi-test"}]}
+    if expected:
+        assert (
+            await names.check_creation_name(
+                profile,
+                runtime,
+                agent_id="mi-test",
+                name="test-name",
+                owner="local",
+                verified_creation_account=scope_account,
+            )
+            == "account"
+        )
+    else:
+        with pytest.raises(names.NameCheckError):
+            await names.check_creation_name(
+                profile,
+                runtime,
+                agent_id="mi-test",
+                name="test-name",
+                owner="local",
+                verified_creation_account=scope_account,
+            )
+
+
+@pytest.mark.asyncio
+async def test_verified_creation_account_never_overrides_foreign_runtime_owner(
+    tmp_path, monkeypatch
+):
+    names, profile, runtime, _, _ = setup(tmp_path, monkeypatch)
+    runtime.find_runtimes.return_value = [
+        {"RuntimeId": "r-other", "Tags": [{"Key": "veadk:owner", "Value": "foreign"}]}
+    ]
+    runtime.get.return_value = {"Envs": [{"Key": "MPA_AGENT_ID", "Value": "mi-test"}]}
+    with pytest.raises(names.NameCheckError, match="runtimeNameTaken"):
+        await names.check_creation_name(
+            profile,
+            runtime,
+            agent_id="mi-test",
+            name="test-name",
+            owner="local",
+            verified_creation_account="account",
+        )
+
+
+def test_saved_name_scope_requires_owner_and_identical_secret_free_inputs(tmp_path):
+    import json
+    import time
+    from veadk.integrations.mpa.managed.tasks import CreationTasks, TaskError
+
+    tasks = CreationTasks(tmp_path / "tasks.db")
+    payload = {
+        "requestId": "original-request",
+        "name": "test-name",
+        "agentId": "mi-test",
+        "region": "ap-southeast-1",
+        "provider": "byteplus",
+        "description": "",
+    }
+    scope = {"provider": "byteplus", "account": "account", "region": "ap-southeast-1"}
+    with tasks.db() as db:
+        db.execute(
+            "INSERT INTO tasks (id,owner,request,payload,state,stage,supervisor,updated,name_scope) VALUES (?,?,?,?,?,?,?,?,?)",
+            (
+                "original-task",
+                "owner",
+                payload["requestId"],
+                json.dumps(payload, sort_keys=True),
+                "failed",
+                "verifying",
+                0,
+                time.time(),
+                json.dumps(scope),
+            ),
+        )
+    assert tasks.name_scope_for_request("owner", payload) == scope
+    assert tasks.name_scope_for_request("other-owner", payload) is None
+    assert (
+        tasks.name_scope_for_request("owner", {**payload, "requestId": "new-request"})
+        is None
+    )
+    with pytest.raises(TaskError, match="different inputs"):
+        tasks.name_scope_for_request("owner", {**payload, "description": "changed"})

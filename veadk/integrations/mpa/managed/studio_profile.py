@@ -122,13 +122,17 @@ def studio_profile_values(provider: str = "volcengine") -> dict:
     managed["postgres"]["bootstrap-path"] = (
         "/tmp/veadk-studio/mpa-pg-bootstrap-byteplus.sqlite3"
     )
+    byteplus_registry = (
+        "agentkit-platform-3001037806-ap-southeast-1.cr.bytepluses.com/mpa"
+    )
     runtime = managed["runtime"]
     runtime["image"] = (
-        os.getenv("VEADK_MPA_BYTEPLUS_RUNTIME_IMAGE", "").strip() or runtime["image"]
+        os.getenv("VEADK_MPA_BYTEPLUS_RUNTIME_IMAGE", "").strip()
+        or f"{byteplus_registry}/mpa_agent:latest"
     )
     managed["worker"]["image"] = (
         os.getenv("VEADK_MPA_BYTEPLUS_WORKER_IMAGE", "").strip()
-        or managed["worker"]["image"]
+        or f"{byteplus_registry}/mpa_codex_worker:latest"
     )
     runtime["env"].update(
         {

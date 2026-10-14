@@ -380,3 +380,69 @@ def test_new_layout_cannot_claim_another_requests_internal_identity(
         )
     check.assert_not_awaited()
     service.start.assert_not_awaited()
+
+
+def test_retry_uses_private_scope_after_exact_payload_normalization(
+    tmp_path, monkeypatch
+):
+    import json
+    import time
+    from types import SimpleNamespace
+    from frontend.server import mpa_creation
+    from veadk.integrations.mpa.managed.names import NameCheckError
+
+    monkeypatch.setattr(mpa_creation, "load_volcengine_credentials", lambda *_: None)
+    monkeypatch.setattr(mpa_creation, "RuntimeCloud", lambda **kw: SimpleNamespace())
+    check = AsyncMock(return_value="test-account")
+    monkeypatch.setattr(mpa_creation, "check_creation_name", check)
+    service = CreationTasks(tmp_path / "tasks.db")
+    service.start = AsyncMock(return_value={"taskId": "original-task"})
+    app = FastAPI()
+    mount_mpa_creation_routes(app, owner=lambda request: "local", service=service)
+    payload = {
+        "requestId": "11111111-1111-4111-8111-111111111111",
+        "region": "cn-beijing",
+        "name": "test-name",
+        "businessWorkspaceMode": "per-agent",
+        "businessDatabaseName": "aidb",
+    }
+    with TestClient(app) as client:
+        assert client.post("/web/mpa-creation/tasks", json=payload).status_code == 202
+        assert check.await_args is not None
+        assert check.await_args.kwargs["verified_creation_account"] == ""
+        assert service.start.await_args is not None
+        owner, normalized = service.start.await_args.args
+        assert service.start.await_args is not None
+        scope = service.start.await_args.kwargs["name_scope"]
+        with service.db() as db:
+            db.execute(
+                "INSERT INTO tasks (id,owner,request,payload,state,stage,supervisor,updated,name_scope) VALUES (?,?,?,?,?,?,?,?,?)",
+                (
+                    "original-task",
+                    owner,
+                    normalized["requestId"],
+                    json.dumps(normalized, sort_keys=True),
+                    "failed",
+                    "verifying",
+                    0,
+                    time.time(),
+                    json.dumps(scope),
+                ),
+            )
+        assert client.post("/web/mpa-creation/tasks", json=payload).status_code == 202
+        assert check.await_args is not None
+        assert check.await_args.kwargs["verified_creation_account"] == "test-account"
+        count = check.await_count
+        changed = client.post(
+            "/web/mpa-creation/tasks", json={**payload, "description": "changed"}
+        )
+        assert changed.status_code == 409
+        assert check.await_count == count
+        check.side_effect = NameCheckError("runtimeNameTaken")
+        fresh = client.post(
+            "/web/mpa-creation/tasks",
+            json={**payload, "requestId": "22222222-2222-4222-8222-222222222222"},
+        )
+        assert fresh.status_code == 409
+        assert check.await_args is not None
+        assert check.await_args.kwargs["verified_creation_account"] == ""

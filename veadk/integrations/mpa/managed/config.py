@@ -36,6 +36,11 @@ from pydantic import (
 from sqlalchemy.engine import make_url
 
 from .network import NetworkOptions
+from .openviking import (
+    OpenVikingError,
+    byteplus_model_endpoints,
+    supports_auto_openviking,
+)
 from .studio_profile import studio_profile_values
 
 ADMIN_DATABASE_NAME = "mpa_admin_db"
@@ -587,12 +592,19 @@ def with_creation_resources(profile: Profile, resources: dict[str, str]) -> Prof
             raise ConfigurationError("aidb requires automatic dedicated PostgreSQL")
         managed.postgres.business_database_name = "aidb" if database else ""
     mode = resources.get("openvikingMode", "manual")
-    if mode == "auto" and (
-        profile.provider != "volcengine" or profile.region != "cn-beijing"
+    if mode == "auto" and not supports_auto_openviking(
+        profile.provider, profile.region
     ):
         raise ConfigurationError(
-            "Automatic OpenViking is available only in Volcengine Beijing"
+            "Automatic OpenViking is unavailable for this provider and region"
         )
+    if mode == "auto" and profile.provider == "byteplus":
+        try:
+            byteplus_model_endpoints()
+        except OpenVikingError:
+            raise ConfigurationError(
+                "Set valid OV_VLM_ENDPOINT_ID and OV_EMBEDDING_ENDPOINT_ID on the Studio server"
+            ) from None
     managed.openviking.mode = "auto" if mode == "auto" else "manual"
     host, port = selected["pgHost"], selected["pgPort"]
     if (
@@ -755,8 +767,9 @@ def load_studio_profile(*, region: str = "", provider: str = "volcengine") -> Pr
     return replace(
         profile,
         per_agent_postgres_available=True,
-        openviking_auto_available=profile.provider == "volcengine"
-        and profile.region == "cn-beijing",
+        openviking_auto_available=supports_auto_openviking(
+            profile.provider, profile.region
+        ),
     )
 
 

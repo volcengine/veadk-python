@@ -285,7 +285,7 @@ def test_adapter_uses_current_sts_and_safe_errors(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "provider,region", [("byteplus", "ap-southeast-1"), ("volcengine", "cn-shanghai")]
+    "provider,region", [("byteplus", "cn-beijing"), ("volcengine", "cn-shanghai")]
 )
 def test_adapter_rejects_unsupported_scope(provider, region):
     with pytest.raises(OpenVikingError):

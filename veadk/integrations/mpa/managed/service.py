@@ -36,6 +36,7 @@ from veadk.integrations.mpa.tags import (
 )
 from veadk.integrations.ve_identity.identity_client import IdentityClient
 
+from .apm_key import RUNTIME_APM_KEY, get_runtime_apm_key
 from .config import ConfigurationError, Profile, Runtime, validate_postgres_layout
 from .database import AgentDatabaseProvisioner, AgentDeploymentRegistry, DeploymentError
 from .gateway import SharedAPIGService
@@ -50,7 +51,13 @@ from .iam import (
 from .model_key import resolve_model_key
 from .names import check_creation_name
 from .network import AccountNetworkProvisioner, NetworkOptions
-from .openviking import OpenVikingCloud, OpenVikingError, ensure_openviking
+from .openviking import (
+    OpenVikingCloud,
+    OpenVikingError,
+    byteplus_model_endpoints,
+    ensure_openviking,
+    supports_auto_openviking,
+)
 from .runtime import AgentRuntimeDeployer, RuntimeCloud, env_map, template_from_runtime
 from .worker import WorkerCloud, ensure_worker
 
@@ -251,10 +258,12 @@ async def provision(
         else None
     )
     validate_postgres_layout(profile)
-    if profile.managed.openviking.mode == "auto" and (
-        profile.provider != "volcengine" or profile.region != "cn-beijing"
-    ):
-        raise OpenVikingError("openvikingConfigurationConflict")
+    ov_model_endpoints = None
+    if profile.managed.openviking.mode == "auto":
+        if not supports_auto_openviking(profile.provider, profile.region):
+            raise OpenVikingError("openvikingConfigurationConflict")
+        if profile.provider == "byteplus":
+            ov_model_endpoints = byteplus_model_endpoints()
     cloud = RuntimeCloud(
         region=profile.region,
         credential_file=profile.managed.credential_file,
@@ -279,8 +288,14 @@ async def provision(
             agent_id=agent_id,
             name=runtime_name or agent_id,
             owner=studio_runtime_owner or "",
+            verified_creation_account=expected_account,
         )
     profile = await resolve_model_key(profile, cloud)
+    apm_key = (
+        await get_runtime_apm_key(profile, cloud)
+        if studio_runtime_owner is not None and profile.provider == "byteplus"
+        else ""
+    )
     if profile.managed.iam.mode == "auto":
         if (
             profile.managed.runtime.role_name
@@ -329,6 +344,8 @@ async def provision(
             studio_runtime_tags,
         )
     env = env_map(template)
+    if apm_key:
+        env[RUNTIME_APM_KEY] = apm_key
     if profile.openviking_enabled is not None:
         selected_openviking = (
             {
@@ -470,6 +487,8 @@ async def provision(
                         account=account,
                         region=profile.region,
                         agent_id=agent_id,
+                        provider=profile.provider,
+                        model_endpoints=ov_model_endpoints,
                         model_api_key=profile.values.get("model_api_key")
                         or env.get("MODEL_AGENT_API_KEY", ""),
                         project=template.get("ProjectName") or "default",

@@ -2,7 +2,7 @@
 
 - Component ID: `studio-mpa-control-plane`
 - Status: `draft` for remaining P0 amendments; baseline Phase 1, part of Phase 2, and P0 Studio slices through S5-12 browser validation are implemented
-- Revision: 2026-10-13
+- Revision: 2026-10-14
 - Chinese: [README.zh.md](README.zh.md)
 - PRD: [MPA Studio Turn Control and Resource Workspace](../../prd-spec/features/mpa-studio-control-plane/2026-09-13-mpa-studio-control-plane-design.md)
 
@@ -151,3 +151,7 @@ Delete preview has a 25-second deadline and returns HTTP 504 / `mpa_delete_previ
 Explicit MPA browser deletion waits up to 180 seconds; general deletion retains 30 seconds. A TimeoutError triggers one authorized, no-store, 30-second read-only confirmation for the same Runtime ID/region. Success requires structured cloud Runtime NotFound plus complete list absence; authorization 404, still-listed runtimes, incomplete pagination and query errors cannot mean success. Unconfirmed results retain a localized error and existing retry UI. No automatic delete replay or change to cleanup order is permitted. See [approved timeout fix](../../prd-spec/bugfixes/mpa-delete-timeout/2026-10-13-confirm-delete-outcome.md).
 
 Confirmation is restricted to server-authorized MPA delete attempts with the same Studio owner, Runtime, region and private deployment-credential fingerprint. Contexts are bounded to 1024 entries and expire after one hour; restart/rotation/missing context fails closed.
+
+## Compatibility resource relocation (2026-10-14)
+
+The MPA matrix and benchmark schema reside in `frontend/server/mpa/contracts/mpa-p0/`. The shared `veadk.cli.mpa_p0_contract` evaluator and required custom `--matrix` CLI option remain stable; only the default resource path and documented examples change. Missing default resources retain the embedded fallback; malformed present resources still fail. Python wheels and Studio staging include both JSON files without importing frontend composition during default lookup. No manifest fields, rules, pre-mutation guards or general-agent behavior change. See [approved relocation design](../../prd-spec/refactors/mpa-contract-location/2026-10-14-studio-owned-resources.md).

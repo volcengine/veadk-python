@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import copy
 import hashlib
@@ -29,6 +30,12 @@ import httpx
 from sqlalchemy.engine import make_url
 
 from veadk.integrations.mpa.managed.database import DeploymentError, agent_suffix
+from veadk.integrations.mpa.managed.diagnostics import (
+    classify_error,
+    report,
+    safe_error_code,
+    safe_request_id,
+)
 from veadk.integrations.mpa.managed.network import (
     AccountNetworkProvisioner,
     NetworkOptions,
@@ -49,6 +56,57 @@ def asyncpg_registry_url(url: str) -> str:
         return url
     query["ssl"] = query.pop("sslmode")
     return parsed.set(query=query).render_as_string(hide_password=False)
+
+
+def _sdk_argument_identifiers(value: object) -> tuple[str, str]:
+    """Decode bounded JSON or SDK bytes literals; never evaluate provider text."""
+    from .openviking import response_metadata
+
+    if not isinstance(value, (str, bytes)) or len(value) > 65536:
+        return "", ""
+    try:
+        if isinstance(value, str) and value.startswith(("b'", 'b"')):
+            value = ast.literal_eval(value)
+            if not isinstance(value, bytes) or len(value) > 65536:
+                return "", ""
+        return response_metadata(json.loads(value))
+    except (ValueError, TypeError, SyntaxError, RecursionError):
+        return "", ""
+
+
+def _failure_identifiers(error: Exception) -> tuple[str, str]:
+    """Read bounded SDK metadata through a cycle-safe exception chain."""
+    from .openviking import exception_metadata
+
+    code, request_id = "", ""
+    cause: BaseException | None = error
+    seen: set[int] = set()
+    for _ in range(8):
+        if cause is None or id(cause) in seen:
+            break
+        seen.add(id(cause))
+        code = code or safe_error_code(getattr(cause, "error_code", None))
+        request_id = request_id or safe_request_id(getattr(cause, "request_id", None))
+        if isinstance(cause, Exception):
+            try:
+                response_body = getattr(
+                    getattr(cause, "response", None), "content", None
+                )
+                if (
+                    isinstance(response_body, (str, bytes))
+                    and len(response_body) > 65536
+                ):
+                    body_code, body_request_id = "", ""
+                else:
+                    body_code, body_request_id = exception_metadata(cause)
+            except RecursionError:
+                body_code, body_request_id = "", ""
+            code, request_id = code or body_code, request_id or body_request_id
+        if len(cause.args) == 1:
+            arg_code, arg_request_id = _sdk_argument_identifiers(cause.args[0])
+            code, request_id = code or arg_code, request_id or arg_request_id
+        cause = cause.__cause__
+    return code, request_id
 
 
 class RuntimeCloud:
@@ -141,7 +199,18 @@ class RuntimeCloud:
                 by_alias=True, exclude_none=True
             )
 
-        return await asyncio.to_thread(run)
+        try:
+            return await asyncio.to_thread(run)
+        except Exception as error:
+            if method in {"create_runtime", "update_runtime"}:
+                code, request_id = _failure_identifiers(error)
+                report(
+                    method,
+                    classify_error(error),
+                    error_code=code,
+                    request_id=request_id,
+                )
+            raise
 
     async def get_skill_space(self, space_id):
         from agentkit.sdk.skills.types import GetSkillSpaceRequest

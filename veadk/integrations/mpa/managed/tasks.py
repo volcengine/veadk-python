@@ -85,6 +85,18 @@ class CreationTasks:
             db.execute(
                 "CREATE TABLE IF NOT EXISTS task_diagnostics (id INTEGER PRIMARY KEY, task_id TEXT NOT NULL, stage TEXT NOT NULL, operation TEXT NOT NULL, category TEXT NOT NULL, attempt INTEGER NOT NULL, outcome TEXT NOT NULL, created REAL NOT NULL)"
             )
+            if "request_id" not in {
+                row[1] for row in db.execute("PRAGMA table_info(task_diagnostics)")
+            }:
+                db.execute(
+                    "ALTER TABLE task_diagnostics ADD COLUMN request_id TEXT NOT NULL DEFAULT ''"
+                )
+            if "error_code" not in {
+                row[1] for row in db.execute("PRAGMA table_info(task_diagnostics)")
+            }:
+                db.execute(
+                    "ALTER TABLE task_diagnostics ADD COLUMN error_code TEXT NOT NULL DEFAULT ''"
+                )
             db.execute(
                 "CREATE INDEX IF NOT EXISTS task_diagnostics_task ON task_diagnostics(task_id,id)"
             )
@@ -128,7 +140,7 @@ class CreationTasks:
             stage = row["stage"] if row["stage"] in STAGES else "queued"
             created = time.time()
             db.execute(
-                "INSERT INTO task_diagnostics (task_id,stage,operation,category,attempt,outcome,created) VALUES (?,?,?,?,?,?,?)",
+                "INSERT INTO task_diagnostics (task_id,stage,operation,category,attempt,outcome,created,request_id,error_code) VALUES (?,?,?,?,?,?,?,?,?)",
                 (
                     task_id,
                     stage,
@@ -137,6 +149,8 @@ class CreationTasks:
                     diagnostic["attempt"],
                     diagnostic["outcome"],
                     created,
+                    diagnostic.get("requestId", ""),
+                    diagnostic.get("errorCode", ""),
                 ),
             )
             db.execute(
@@ -306,6 +320,33 @@ class CreationTasks:
             if other.get("name", other.get("agentId")) == payload["name"]:
                 return True
         return False
+
+    def name_scope_for_request(self, owner, payload):
+        """Prove an original accepted intent without exposing private task data."""
+        with self.db() as db:
+            row = db.execute(
+                "SELECT payload,name_scope FROM tasks WHERE owner=? AND request=?",
+                (owner, payload["requestId"]),
+            ).fetchone()
+        if row is None:
+            return None
+        if row["payload"] != json.dumps(payload, sort_keys=True):
+            raise TaskError("Request identity already has different inputs")
+        scope = json.loads(row["name_scope"])
+        if not scope:
+            return None
+        if (
+            not isinstance(scope, dict)
+            or set(scope) != {"provider", "account", "region"}
+            or not all(
+                isinstance(value, str) and value and len(value) <= 128
+                for value in scope.values()
+            )
+            or scope["provider"] != payload.get("provider", "volcengine")
+            or scope["region"] != payload["region"]
+        ):
+            raise TaskError("Invalid creation account snapshot")
+        return scope
 
     def check_name(self, owner, payload, scope):
         with self.db() as db:

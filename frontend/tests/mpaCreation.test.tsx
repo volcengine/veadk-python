@@ -1036,40 +1036,44 @@ it("keeps disabled and loading appearance consistent across shared Button varian
   }
 });
 
-it("preserves the runtime role stage and actionable IAM error for retry", async () => {
-  const input = {
-    region: "cn-beijing",
-    requestId: "12345678-90ab-4cde-8f01-23456789abcd",
-    agentId: "mi-1234567890ab4cde8f012345",
-    description: "",
-  };
-  sessionStorage.setItem(
-    "mpa-create:cn-beijing",
-    JSON.stringify({ input, submitted: true, step: 2, taskId: "iam-task" }),
-  );
-  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
-    configured: true,
-    region: "cn-beijing",
-  });
-  vi.mocked(api.getMpaCreation).mockResolvedValue({
-    ...input,
-    taskId: "iam-task",
-    state: "failed",
-    stage: "iam_role",
-    error: "iamPermissionDenied",
-  });
-  await mount();
-  expect(document.body.textContent).toContain(
-    "myAgents.mpaCreate.stages.iam_role",
-  );
-  expect(document.body.textContent).toContain(
-    "myAgents.mpaCreate.iamPermissionDenied",
-  );
-  expect(button("retry").disabled).toBe(false);
-  expect(
-    JSON.parse(sessionStorage.getItem("mpa-create:cn-beijing")!).input.agentId,
-  ).toBe(input.agentId);
-});
+it.each(["iamPermissionDenied", "iamTemporaryFailure"])(
+  "preserves the runtime role stage and actionable IAM error %s for retry",
+  async (errorKey) => {
+    const input = {
+      region: "cn-beijing",
+      requestId: "12345678-90ab-4cde-8f01-23456789abcd",
+      agentId: "mi-1234567890ab4cde8f012345",
+      description: "",
+    };
+    sessionStorage.setItem(
+      "mpa-create:cn-beijing",
+      JSON.stringify({ input, submitted: true, step: 2, taskId: "iam-task" }),
+    );
+    vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
+      configured: true,
+      region: "cn-beijing",
+    });
+    vi.mocked(api.getMpaCreation).mockResolvedValue({
+      ...input,
+      taskId: "iam-task",
+      state: "failed",
+      stage: "iam_role",
+      error: errorKey,
+    });
+    await mount();
+    expect(document.body.textContent).toContain(
+      "myAgents.mpaCreate.stages.iam_role",
+    );
+    expect(document.body.textContent).toContain(
+      `myAgents.mpaCreate.${errorKey}`,
+    );
+    expect(button("retry").disabled).toBe(false);
+    expect(
+      JSON.parse(sessionStorage.getItem("mpa-create:cn-beijing")!).input
+        .agentId,
+    ).toBe(input.agentId);
+  },
+);
 
 it("uses overseas console links and submits the BytePlus region without browser provider overrides", async () => {
   vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
@@ -1521,4 +1525,225 @@ it("highlights a late task-level duplicate name error", async () => {
       '[role="alert"][data-color="danger"][data-variant="soft"]',
     )?.textContent,
   ).toContain("myAgents.mpaCreate.runtimeNameTaken");
+});
+
+it("automatically prepares BytePlus personal OV and explains Runtime integration", async () => {
+  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
+    configured: true,
+    region: "ap-southeast-1",
+    postgresMode: "auto",
+    openvikingMode: "auto",
+  });
+  vi.mocked(api.startMpaCreation).mockRejectedValue(new Error("Response lost"));
+  await act(async () =>
+    root.render(
+      <MpaCreateDialog
+        region="ap-southeast-1"
+        cloudProvider="byteplus"
+        onClose={() => {}}
+        onCreated={() => {}}
+      />,
+    ),
+  );
+  await edit("name", "overseas-auto-agent");
+  await goToFinal();
+  expect(field("openvikingUrl")).toBeFalsy();
+  expect(field("openvikingApiKey")).toBeFalsy();
+  expect(document.body.textContent).toContain(
+    "myAgents.mpaCreate.openvikingAutoByteplusDescription",
+  );
+  expect(document.body.textContent).toContain(
+    "myAgents.mpaCreate.openvikingAutoByteplusRequirements",
+  );
+  await act(async () => button("submit").click());
+  expect(api.startMpaCreation).toHaveBeenCalledWith(
+    expect.objectContaining({ openvikingMode: "auto" }),
+    expect.any(AbortSignal),
+  );
+  expect(
+    JSON.parse(sessionStorage.getItem("mpa-create:ap-southeast-1")!).input
+      .openvikingMode,
+  ).toBe("auto");
+});
+
+it("restores automatic OV in editable BytePlus drafts without manual values", async () => {
+  sessionStorage.setItem(
+    "mpa-create:ap-southeast-1",
+    JSON.stringify({
+      step: 2,
+      input: {
+        requestId: "bb000000-0000-4000-8000-000000000001",
+        region: "ap-southeast-1",
+        name: "byteplus-no-memory",
+        description: "",
+        openvikingMode: "auto",
+        openvikingUrl: "https://old.example.test",
+        openvikingResourceId: "ov-old",
+      },
+    }),
+  );
+  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
+    configured: true,
+    region: "ap-southeast-1",
+    postgresMode: "auto",
+    openvikingMode: "auto",
+  });
+  vi.mocked(api.startMpaCreation).mockReturnValue(new Promise(() => {}));
+  await act(async () =>
+    root.render(
+      <MpaCreateDialog
+        region="ap-southeast-1"
+        cloudProvider="byteplus"
+        onClose={() => {}}
+        onCreated={() => {}}
+      />,
+    ),
+  );
+  expect(document.body.textContent).toContain(
+    "myAgents.mpaCreate.openvikingAutoByteplusDescription",
+  );
+  expect(field("openvikingUrl")).toBeFalsy();
+  expect(field("openvikingApiKey")).toBeFalsy();
+  await act(async () => button("submit").click());
+  const input = vi.mocked(api.startMpaCreation).mock.calls[0][0];
+  expect(input.openvikingMode).toBe("auto");
+  expect(input.openvikingUrl).toBeUndefined();
+  expect(input.openvikingResourceId).toBeUndefined();
+  expect(input.openvikingApiKey).toBe("");
+  expect(input.requestId).toBe("bb000000-0000-4000-8000-000000000001");
+});
+
+it("preserves submitted BytePlus automatic requests on retry", async () => {
+  const input = {
+    requestId: "bb000000-0000-4000-8000-000000000002",
+    region: "ap-southeast-1",
+    name: "byteplus-old-auto",
+    description: "",
+    openvikingMode: "auto" as const,
+  };
+  sessionStorage.setItem(
+    "mpa-create:ap-southeast-1",
+    JSON.stringify({
+      submitted: true,
+      taskId: "old-byteplus-task",
+      step: 2,
+      input,
+    }),
+  );
+  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
+    configured: true,
+    region: "ap-southeast-1",
+    postgresMode: "auto",
+  });
+  vi.mocked(api.getMpaCreation).mockResolvedValue({
+    ...input,
+    taskId: "old-byteplus-task",
+    state: "failed",
+    stage: "openviking",
+    error: "openvikingCreateUnknown",
+  });
+  vi.mocked(api.startMpaCreation).mockReturnValue(new Promise(() => {}));
+  await act(async () =>
+    root.render(
+      <MpaCreateDialog
+        region="ap-southeast-1"
+        cloudProvider="byteplus"
+        onClose={() => {}}
+        onCreated={() => {}}
+      />,
+    ),
+  );
+  expect(document.body.textContent).toContain(
+    "myAgents.mpaCreate.openvikingAutoByteplusDescription",
+  );
+  await act(async () => button("retry").click());
+  expect(api.startMpaCreation).toHaveBeenCalledWith(
+    expect.objectContaining(input),
+    expect.any(AbortSignal),
+  );
+});
+
+it("keeps a submitted BytePlus OV intent during configuration refresh", async () => {
+  vi.mocked(api.getMpaCreationConfig)
+    .mockResolvedValueOnce({
+      configured: true,
+      region: "ap-southeast-1",
+      postgresMode: "auto",
+      openvikingMode: "auto",
+    })
+    .mockResolvedValue({
+      configured: true,
+      region: "ap-southeast-1",
+      postgresMode: "auto",
+    });
+  vi.mocked(api.startMpaCreation).mockImplementation(async (input) => ({
+    ...input,
+    taskId: "refresh-auto",
+    state: "failed",
+    stage: "openviking",
+    error: "openvikingCreateUnknown",
+  }));
+  vi.mocked(api.getMpaCreation).mockImplementation(async () => ({
+    ...vi.mocked(api.startMpaCreation).mock.calls[0][0],
+    taskId: "refresh-auto",
+    state: "failed",
+    stage: "openviking",
+    error: "openvikingCreateUnknown",
+  }));
+  await act(async () =>
+    root.render(
+      <MpaCreateDialog
+        region="ap-southeast-1"
+        cloudProvider="byteplus"
+        onClose={() => {}}
+        onCreated={() => {}}
+      />,
+    ),
+  );
+  await edit("name", "submitted-auto");
+  await goToFinal();
+  await act(async () => button("submit").click());
+  await act(async () => button("retry").click());
+  expect(vi.mocked(api.startMpaCreation).mock.calls[1][0].openvikingMode).toBe(
+    "auto",
+  );
+});
+
+it("preserves submitted BytePlus no-OV requests after automatic OV is restored", async () => {
+  const input = {
+    requestId: "bb000000-0000-4000-8000-000000000003",
+    region: "ap-southeast-1",
+    name: "byteplus-existing-no-ov",
+    description: "",
+  };
+  sessionStorage.setItem(
+    "mpa-create:ap-southeast-1",
+    JSON.stringify({ submitted: true, taskId: "no-ov-task", step: 2, input }),
+  );
+  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
+    configured: true,
+    region: "ap-southeast-1",
+    openvikingMode: "auto",
+  });
+  vi.mocked(api.getMpaCreation).mockResolvedValue({
+    ...input,
+    taskId: "no-ov-task",
+    state: "failed",
+    stage: "deploying",
+  });
+  vi.mocked(api.startMpaCreation).mockReturnValue(new Promise(() => {}));
+  await act(async () =>
+    root.render(
+      <MpaCreateDialog
+        region="ap-southeast-1"
+        cloudProvider="byteplus"
+        onClose={() => {}}
+        onCreated={() => {}}
+      />,
+    ),
+  );
+  await act(async () => button("retry").click());
+  const retry = vi.mocked(api.startMpaCreation).mock.calls[0][0];
+  expect(retry.requestId).toBe(input.requestId);
+  expect(retry.openvikingMode).toBeUndefined();
 });

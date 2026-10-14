@@ -6,7 +6,7 @@ MPA 智能体详情目前只开放基本信息。其他详情 Tab 及底部 Prof
 
 - Component ID：`studio-mpa-control-plane`
 - 状态：剩余 P0 修订为 `draft`；基线第一期、第二期部分能力以及 P0 Studio 切片至 S5-12 浏览器验证已实现
-- 修订日期：2026-10-12
+- 修订日期：2026-10-14
 - English：[README.md](README.md)
 - PRD：[MPA Studio Turn 控制与资源工作台](../../prd-spec/features/mpa-studio-control-plane/2026-09-13-mpa-studio-control-plane-design.zh.md)
 
@@ -151,3 +151,7 @@ CON-11b 回归验证：完整前端测试返回 1237 passed；TypeScript、i18n�
 明确选择的 MPA 浏览器删除最多等待 180 秒；通用删除保持 30 秒。TimeoutError 后，对同一 Runtime ID/地域执行一次已授权、no-store、限时 30 秒的只读确认。仅结构化云端 Runtime NotFound 且完整列表不存在时成功；授权 404、仍在列表、分页不完整和查询失败不能视作成功。无法确认时保留本地化错误及既有重试 UI。不自动重复删除，不改变清理顺序。见[已批准超时修复](../../prd-spec/bugfixes/mpa-delete-timeout/2026-10-13-confirm-delete-outcome.zh.md)。
 
 结果确认仅限服务端已授权的 MPA 删除尝试，须匹配 Studio 用户、Runtime、地域及私有部署凭据指纹。上下文最多 1024 条、一小时到期；重启/轮换/上下文缺失均失败关闭。
+
+## 兼容性资源位置迁移（2026-10-14）
+
+MPA 矩阵及性能报告 schema 移至 `frontend/server/mpa/contracts/mpa-p0/`。共享 `veadk.cli.mpa_p0_contract` 评估器和必填自定义 `--matrix` CLI 参数保持不变，仅默认资源路径和文档示例调整。缺默认文件继续使用内置备用规则，存在但格式错误时仍失败。Python wheel 和 Studio 暂存须包含两个 JSON，默认查找不导入 frontend 组合模块。不改变 manifest 字段、规则、写入前检查或通用智能体行为。见[已批准迁移设计](../../prd-spec/refactors/mpa-contract-location/2026-10-14-studio-owned-resources.zh.md)。

@@ -49,18 +49,24 @@ def test_network_gateway_worker_precede_runtime(
     openviking,
     studio_runtime_owner,
     runtime_name,
+    provider="volcengine",
 ):
     async def run():
         entry = Registry()
         cloud = Cloud(entry)
+        if provider == "byteplus":
+            cloud.network.zone_ids = ["ap-southeast-1a", "ap-southeast-1b"]
+            cloud.network.subnet_rows["subnet-one"]["zone_id"] = "ap-southeast-1a"
+            monkeypatch.setattr(cloud.network, "provider", provider, raising=False)
         events = []
         identity_values = {
+            "cloud_provider": provider,
             "user_pool_name": "studio-pool",
             "user_pool_client_name": "studio-client",
             "identity_callback_url": "https://studio.example.com/oauth/callback",
         }
         profile = Profile(
-            region="cn-beijing",
+            region="ap-southeast-1" if provider == "byteplus" else "cn-beijing",
             values=identity_values,
             template=template(),
             admin_url="fake",
@@ -143,6 +149,14 @@ def test_network_gateway_worker_precede_runtime(
             else {},
         )
         monkeypatch.setattr(service, "RuntimeCloud", lambda **kw: cloud)
+        if provider == "byteplus":
+            from veadk.integrations.mpa.managed import apm_key
+
+            monkeypatch.setattr(
+                apm_key,
+                "volcengine_signed_request",
+                lambda **kw: {"data": {"app_key": "test-apm-app-value"}},
+            )
         monkeypatch.setattr(service, "AgentDeploymentRegistry", lambda url: entry)
         databases = Databases()
         monkeypatch.setattr(service, "AgentDatabaseProvisioner", lambda **kw: databases)
@@ -196,7 +210,7 @@ def test_network_gateway_worker_precede_runtime(
             service,
             "GatewayCloud",
             lambda _: SimpleNamespace(
-                available_zones=AsyncMock(return_value=["cn-beijing-a", "cn-beijing-c"])
+                available_zones=AsyncMock(return_value=cloud.network.zone_ids)
             ),
         )
         monkeypatch.setattr(service, "SharedAPIGService", Gateway)
@@ -208,6 +222,17 @@ def test_network_gateway_worker_precede_runtime(
                 assert events == ["identity", "gateway", "worker"]
                 assert request["VLM"]["Credentials"][0]["Source"] == "volcengine"
                 assert model_api_key == "fake"
+                if provider == "byteplus":
+                    assert request["Source"] == "volcengine"
+                    assert request["Version"] == "developer"
+                    assert (
+                        request["VLM"]["Credentials"][0]["EndpointID"]
+                        == "ep-vlm-selected"
+                    )
+                    assert (
+                        request["Embedding"]["Credentials"][0]["EndpointID"]
+                        == "ep-embedding-selected"
+                    )
                 assert "fake" not in str(entry.row["openviking_request"])
                 events.append("openviking")
                 return "ov-auto"
@@ -239,6 +264,13 @@ def test_network_gateway_worker_precede_runtime(
                 "Skills for MPA agent " + (runtime_name or "mi-123456789abc")
             )
             assert request["ToolId"] == "t-one"
+            if provider == "byteplus" and studio_runtime_owner is not None:
+                assert (
+                    service.env_map(request)[
+                        "OBSERVABILITY_OPENTELEMETRY_APMPLUS_API_KEY"
+                    ]
+                    == "test-apm-app-value"
+                )
             runtime_tags = {
                 item["Key"]: item["Value"] for item in request.get("Tags", [])
             }
@@ -274,7 +306,11 @@ def test_network_gateway_worker_precede_runtime(
             }
             assert openviking_env == (
                 {
-                    "OPENVIKING_URL": "https://api.vikingdb.cn-beijing.volces.com/openviking",
+                    "OPENVIKING_URL": (
+                        "https://api.vikingdb.ap-southeast-1.bytepluses.com/openviking"
+                        if provider == "byteplus"
+                        else "https://api.vikingdb.cn-beijing.volces.com/openviking"
+                    ),
                     "OPENVIKING_RESOURCE_ID": "ov-auto",
                     "OPENVIKING_API_KEY": "auto-ov-key",
                     "OPENVIKING_USER": "default",
@@ -325,6 +361,7 @@ def test_network_gateway_worker_precede_runtime(
         )
         assert cloud.creates[0]["Name"] == (runtime_name or "mi-123456789abc")
         assert result["runtime_id"] == "r-agent"
+        assert "test-apm-app-value" not in str(entry.row) + str(result)
         assert result["gateway_id"] == "gw-one"
         assert cloud.runtimes[result["runtime_id"]]["ToolId"] == "t-one"
         if split_workspaces:
@@ -745,6 +782,7 @@ async def test_studio_tos_grant_precedes_identity_and_propagates_failure(
         )
     resolve_key.assert_awaited_once_with(profile, cloud)
     role.assert_awaited_once()
+    assert grant.await_args is not None
     args, kwargs = grant.await_args
     assert args[0].runtime is cloud
     assert args[1:] == ("123", "agentkit-platform-output")
@@ -862,4 +900,34 @@ async def test_existing_runtime_keeps_network_when_new_standard_gateway_needs_co
     assert (
         cloud.runtimes["r-existing"]["NetworkConfigurations"][1]["VpcConfiguration"]
         == original["VpcConfiguration"]
+    )
+
+
+def test_byteplus_service_reuses_agent_key_in_ov_and_injects_library_key(monkeypatch):
+    monkeypatch.setenv("OV_MODEL_API_KEY", "unused-legacy-credential")
+    monkeypatch.setenv("OV_VLM_ENDPOINT_ID", "ep-vlm-selected")
+    monkeypatch.setenv("OV_EMBEDDING_ENDPOINT_ID", "ep-embedding-selected")
+    test_network_gateway_worker_precede_runtime(
+        monkeypatch,
+        "flat",
+        None,
+        False,
+        "auto",
+        "studio-user",
+        "Support-Agent_01",
+        provider="byteplus",
+    )
+
+
+@pytest.mark.parametrize("source", ["reference", "template", "flat"])
+def test_byteplus_without_ov_strips_inherited_settings(monkeypatch, source):
+    test_network_gateway_worker_precede_runtime(
+        monkeypatch,
+        source=source,
+        image=None,
+        split_workspaces=True,
+        openviking=False,
+        studio_runtime_owner=None,
+        runtime_name="overseas-no-ov",
+        provider="byteplus",
     )

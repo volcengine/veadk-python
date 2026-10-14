@@ -178,6 +178,7 @@ async def test_tos_role_grant_refuses_conflicts_without_overwriting(problem):
     await iam.ensure_tos_mount_permissions(
         cloud, "123", "session-output", poll_interval=0
     )
+    assert cloud.role is not None
     if problem == "account":
         cloud.role["Trn"] = f"trn:iam::456:role/{ROLE_NAME}"
     elif problem == "trust":
@@ -241,6 +242,7 @@ async def test_tos_role_grant_transient_deadline_and_actual_worker_role(monkeypa
     from veadk.integrations.mpa.managed import iam
 
     cloud = FakeTosIAM()
+    assert cloud.role is not None
     cloud.role.update(RoleName="WorkerRole", Trn="trn:iam::123:role/WorkerRole")
     call = cloud.call
     attempts = 0
@@ -436,7 +438,7 @@ async def test_permission_error_does_not_trigger_create():
 async def test_readback_timeout_and_cancellation_keep_resources():
     cloud = FakeIAM()
     cloud.hidden = 100000
-    with pytest.raises(IamError, match="iamVerificationFailed"):
+    with pytest.raises(IamError, match="iamTemporaryFailure"):
         await ensure_runtime_role(cloud, "123", timeout=0.01, poll_interval=0.02)
     assert cloud.role and cloud.policy
     task = asyncio.create_task(ensure_runtime_role(cloud, "123", poll_interval=10))
