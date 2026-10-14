@@ -104,6 +104,86 @@ def test_download_can_propagate_tos_error(monkeypatch, fake_tos, tmp_path) -> No
         )
 
 
+def test_download_rejects_object_over_byte_limit(monkeypatch, fake_tos, tmp_path):
+    client = VeTOS(bucket_name="test-bucket")
+
+    monkeypatch.setattr(
+        client._client,
+        "get_object",
+        lambda *_args, **_kwargs: iter([b"123", b"45"]),
+        raising=False,
+    )
+
+    with pytest.raises(ValueError, match="exceeds download byte limit"):
+        client.download(
+            "test-bucket",
+            "skills/reporting/large.bin",
+            str(tmp_path / "large.bin"),
+            raise_on_error=True,
+            max_bytes=4,
+        )
+
+
+def test_download_directory_rejects_too_many_objects(monkeypatch, fake_tos, tmp_path):
+    client = VeTOS(bucket_name="test-bucket")
+    listing = SimpleNamespace(
+        is_truncated=False,
+        next_continuation_token="",
+        contents=[
+            SimpleNamespace(key="skills/reporting/SKILL.md", size=10),
+            SimpleNamespace(key="skills/reporting/run.py", size=10),
+        ],
+    )
+
+    monkeypatch.setattr(
+        client._client,
+        "list_objects_type2",
+        lambda *_args, **_kwargs: listing,
+        raising=False,
+    )
+
+    with pytest.raises(ValueError, match="file count limit"):
+        client.download_directory(
+            "test-bucket",
+            "skills/reporting/",
+            str(tmp_path),
+            raise_on_error=True,
+            max_files=0,
+        )
+
+
+def test_download_directory_rejects_total_bytes_from_listing(
+    monkeypatch,
+    fake_tos,
+    tmp_path,
+):
+    client = VeTOS(bucket_name="test-bucket")
+    listing = SimpleNamespace(
+        is_truncated=False,
+        next_continuation_token="",
+        contents=[
+            SimpleNamespace(key="skills/reporting/SKILL.md", size=10),
+            SimpleNamespace(key="skills/reporting/run.py", size=10),
+        ],
+    )
+
+    monkeypatch.setattr(
+        client._client,
+        "list_objects_type2",
+        lambda *_args, **_kwargs: listing,
+        raising=False,
+    )
+
+    with pytest.raises(ValueError, match="byte limit"):
+        client.download_directory(
+            "test-bucket",
+            "skills/reporting/",
+            str(tmp_path),
+            raise_on_error=True,
+            max_bytes=5,
+        )
+
+
 def test_tos_config_uses_region_env_fallback_and_updates_endpoint(monkeypatch):
     from veadk.configs.database_configs import TOSConfig
 

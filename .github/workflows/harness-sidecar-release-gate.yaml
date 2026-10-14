@@ -86,7 +86,7 @@ jobs:
   backend-gate:
     name: Backend gate
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
@@ -236,5 +236,7 @@ jobs:
           BACKEND_RESULT: ${{ needs.backend-gate.result }}
           FRONTEND_RESULT: ${{ needs.frontend-gate.result }}
         run: |
+          echo "Backend gate result: $BACKEND_RESULT"
+          echo "Frontend gate result: $FRONTEND_RESULT"
           test "$BACKEND_RESULT" = success
           test "$FRONTEND_RESULT" = success

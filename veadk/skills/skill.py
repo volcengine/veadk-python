@@ -27,6 +27,7 @@ class Skill(BaseModel):
     slug: Optional[str] = None
     source_type: Optional[str] = None
     version_id: Optional[str] = None
+    public_url: Optional[str] = None
 
     def get_checklist_items(self) -> List[str]:
         return [item.get("item", item.get("id", "")) for item in self.checklist]

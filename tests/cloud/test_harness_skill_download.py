@@ -153,6 +153,111 @@ def test_build_skill_toolset_loads_skills_center_space(monkeypatch, tmp_path):
     assert isinstance(toolset._code_executor, UnsafeLocalCodeExecutor)
 
 
+def test_build_skill_toolset_loads_tos_skill_uri(monkeypatch, tmp_path):
+    calls: list[dict[str, object]] = []
+
+    def fake_materialize_tos_skill_source(
+        *, uri, public_url, cache_dir, region, version=None
+    ):
+        calls.append(
+            {
+                "uri": uri,
+                "public_url": public_url,
+                "cache_dir": cache_dir,
+                "region": region,
+            }
+        )
+        skill_dir = tmp_path / "reporting"
+        _write_adk_skill(skill_dir, name="reporting")
+        return skill_dir
+
+    monkeypatch.setattr(
+        utils,
+        "materialize_tos_skill_source",
+        fake_materialize_tos_skill_source,
+    )
+
+    toolset = utils.build_skill_toolset(
+        [
+            (
+                'tos:{"tos_url":"tos://customer-bucket/skills/reporting/",'
+                '"region":"cn-beijing"}'
+            )
+        ],
+        download_dir=tmp_path,
+    )
+
+    assert calls == [
+        {
+            "uri": "tos://customer-bucket/skills/reporting/",
+            "public_url": None,
+            "cache_dir": tmp_path,
+            "region": "cn-beijing",
+        }
+    ]
+    assert [skill.name for skill in toolset._list_skills()] == ["reporting"]
+
+
+def test_build_skill_toolset_loads_multiple_tos_entries(monkeypatch, tmp_path):
+    def fake_materialize_tos_skill_source(
+        *, uri, public_url, cache_dir, region, version=None
+    ):
+        name = uri.rstrip("/").rsplit("/", 1)[-1]
+        skill_dir = tmp_path / name
+        _write_adk_skill(skill_dir, name=name)
+        return skill_dir
+
+    monkeypatch.setattr(
+        utils,
+        "materialize_tos_skill_source",
+        fake_materialize_tos_skill_source,
+    )
+
+    toolset = utils.build_skill_toolset(
+        [
+            'tos:{"tos_url":"tos://customer-bucket/skills/reporting/"}',
+            'tos:{"tos_url":"tos://customer-bucket/skills/search/"}',
+        ],
+        download_dir=tmp_path,
+    )
+
+    assert [skill.name for skill in toolset._list_skills()] == [
+        "reporting",
+        "search",
+    ]
+
+
+def test_build_skill_toolset_redacts_tos_ref_on_error(monkeypatch, tmp_path):
+    def fail_materialize_tos_skill_source(
+        *, uri, public_url, cache_dir, region, version=None
+    ):
+        raise RuntimeError("public URL rejected")
+
+    monkeypatch.setattr(
+        utils,
+        "materialize_tos_skill_source",
+        fail_materialize_tos_skill_source,
+    )
+    credential = "user" + ":" + "secret"
+
+    with pytest.raises(utils.SkillLoadError) as exc_info:
+        utils.build_skill_toolset(
+            [
+                (
+                    f'tos:{{"tos_public_url":"https://{credential}@bucket.'
+                    "tos-cn-beijing.volces.com/skills/reporting.zip"
+                    '?X-Tos-Signature=TOPSECRET"}'
+                )
+            ],
+            download_dir=tmp_path,
+        )
+
+    message = str(exc_info.value)
+    assert "tos:<redacted>" in message
+    assert "TOPSECRET" not in message
+    assert "user:secret" not in message
+
+
 @pytest.mark.parametrize(
     ("policy", "expected_names"),
     [
