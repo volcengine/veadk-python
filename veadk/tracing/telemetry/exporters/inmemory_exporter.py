@@ -12,6 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import sys
+from collections import deque
+from collections.abc import Mapping
+from threading import Lock
 from typing import Sequence
 
 from opentelemetry.context import (
@@ -20,7 +24,7 @@ from opentelemetry.context import (
     detach,
     set_value,
 )
-from opentelemetry.sdk.trace import ReadableSpan, export
+from opentelemetry.sdk.trace import ReadableSpan, TracerProvider, export
 from opentelemetry.trace import set_span_in_context
 from typing_extensions import override
 
@@ -28,67 +32,85 @@ from veadk.tracing.telemetry.exporters.base_exporter import BaseExporter
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
+_registration_lock = Lock()
+
+
+def _value_size(value) -> int:
+    """Estimate OTel attribute data without copying or serializing large strings"""
+    size = sys.getsizeof(value)
+    if isinstance(value, Mapping):
+        size += sum(_value_size(k) + _value_size(v) for k, v in value.items())
+    elif isinstance(value, (tuple, list)):
+        size += sum(_value_size(item) for item in value)
+    return size
+
+
+def _span_size(span: ReadableSpan) -> int:
+    """Estimate retained span data; this is a cache budget, not an RSS measurement"""
+    # Include fixed span/container bookkeeping and all variable-size OTel fields
+    size = 1024 + _value_size(span.name) + _value_size(span.attributes)
+    for context in (span.context, span.parent):
+        if context:
+            size += _value_size(dict(context.trace_state.items()))
+    if span.status:
+        size += _value_size(span.status.description)
+    if span.resource:
+        size += _value_size(span.resource.attributes)
+        size += _value_size(span.resource.schema_url)
+    scope = span.instrumentation_scope
+    if scope:
+        size += _value_size((scope.name, scope.version, scope.schema_url))
+        size += _value_size(scope.attributes)
+    for event in span.events or ():
+        size += 128 + _value_size(event.name) + _value_size(event.attributes)
+    for link in span.links or ():
+        size += 128 + _value_size(link.attributes)
+        size += _value_size(dict(link.context.trace_state.items()))
+    return size
 
 
 # ======== Adapted from Google ADK ========
 class _InMemoryExporter(export.SpanExporter):
-    """Internal span exporter that stores spans in memory for local analysis and debugging.
+    """Bounded local span history, independent of cloud exporter delivery"""
 
-    This exporter collects and stores OpenTelemetry spans in memory rather than
-    sending them to external services. It's particularly useful for development,
-    testing, and local trace analysis scenarios where immediate access to span
-    data is needed.
-
-    Key Features:
-    - In-memory span storage with session-based organization
-    - Trace ID tracking for span correlation
-    - Session-to-trace mapping for efficient filtering
-    - Support for span retrieval by session ID
-
-    Attributes:
-        _spans: List of all collected ReadableSpan objects
-        trace_id: Current trace identifier from the most recent span
-        session_trace_dict: Mapping of session IDs to their associated trace IDs
-    """
-
-    def __init__(self) -> None:
-        """Initialize the in-memory exporter with empty storage containers."""
+    def __init__(
+        self, max_spans: int = 1024, max_bytes: int = 16 * 1024 * 1024
+    ) -> None:
         super().__init__()
-        self._spans = []
+        if max_spans < 0 or max_bytes < 0:
+            raise ValueError("In-memory tracing limits must be nonnegative")
+        self._max_spans = max_spans
+        self._max_bytes = max_bytes
+        self._spans: deque[ReadableSpan] = deque()
+        self._span_sizes: deque[int] = deque()
+        self._retained_bytes = 0
+        self._lock = Lock()
+        self._shutdown = False
         self.trace_id = ""
-        self.session_trace_dict = {}
 
     @override
     def export(self, spans: Sequence[ReadableSpan]) -> export.SpanExportResult:
-        """Export spans to in-memory storage with session tracking.
-
-        Processes and stores spans while maintaining session-to-trace mapping
-        for efficient retrieval. Extracts session information from LLM call spans
-        to enable session-based filtering.
-
-        Args:
-            spans: Sequence of ReadableSpan objects to store
-
-        Returns:
-            SpanExportResult.SUCCESS: Always returns success for in-memory storage
-        """
-        for span in spans:
-            if span.context:
-                self.trace_id = span.context.trace_id
-            else:
-                logger.warning(
-                    f"Span context is missing, failed to get `trace_id`. span: {span}"
-                )
-
-            if span.name == "call_llm":
-                attributes = dict(span.attributes or {})
-                session_id = attributes.get("gen_ai.session.id", None)
-                if session_id:
-                    if session_id not in self.session_trace_dict:
-                        self.session_trace_dict[session_id] = [self.trace_id]
-                    else:
-                        self.session_trace_dict[session_id] += [self.trace_id]
-        self._spans.extend(spans)
+        """Retain recent spans within both limits without changing their contents"""
+        with self._lock:
+            if self._shutdown:
+                return export.SpanExportResult.SUCCESS
+            for span in spans:
+                if span.context:
+                    self.trace_id = span.context.trace_id
+                if not self._max_spans or not self._max_bytes:
+                    continue
+                size = _span_size(span)
+                if size > self._max_bytes:
+                    continue
+                while self._spans and (
+                    len(self._spans) >= self._max_spans
+                    or self._retained_bytes + size > self._max_bytes
+                ):
+                    self._spans.popleft()
+                    self._retained_bytes -= self._span_sizes.popleft()
+                self._spans.append(span)
+                self._span_sizes.append(size)
+                self._retained_bytes += size
         return export.SpanExportResult.SUCCESS
 
     @override
@@ -103,31 +125,49 @@ class _InMemoryExporter(export.SpanExporter):
         """
         return True
 
-    def get_finished_spans(self, session_id: str):
-        """Retrieve all spans associated with a specific session ID.
+    def _session_traces(self) -> dict[str, dict[int, None]]:
+        """Build an index only from retained anchors while holding the cache lock"""
+        sessions: dict[str, dict[int, None]] = {}
+        for span in self._spans:
+            if span.name == "call_llm" and span.context:
+                session_id = (span.attributes or {}).get("gen_ai.session.id")
+                if isinstance(session_id, str) and session_id:
+                    sessions.setdefault(session_id, {})[span.context.trace_id] = None
+        return sessions
 
-        Filters stored spans to return only those belonging to the specified
-        session, enabling session-scoped trace analysis and debugging.
+    @property
+    def session_trace_dict(self) -> dict[str, list[int]]:
+        """Return a snapshot with no independently retained session metadata"""
+        with self._lock:
+            return {key: list(traces) for key, traces in self._session_traces().items()}
 
-        Args:
-            session_id: Session identifier to filter spans by
-
-        Returns:
-            list[ReadableSpan]: List of spans associated with the session,
-                empty list if session not found or no spans available
-        """
-        trace_ids = self.session_trace_dict.get(session_id, None)
-        if trace_ids is None or not trace_ids:
-            return []
-        return [x for x in self._spans if x.context.trace_id in trace_ids]
+    def get_finished_spans(self, session_id: str) -> list[ReadableSpan]:
+        """Return retained session spans; evicted history is unavailable locally"""
+        with self._lock:
+            trace_ids = self._session_traces().get(session_id, {})
+            return [
+                span
+                for span in self._spans
+                if span.context and span.context.trace_id in trace_ids
+            ]
 
     def clear(self):
-        """Clear all stored spans and session mappings.
+        """Reset local history, accounting, session mappings, and the trace ID"""
+        with self._lock:
+            self._clear()
 
-        Removes all collected span data from memory, useful for cleanup
-        between test runs or to free memory in long-running processes.
-        """
+    def _clear(self) -> None:
         self._spans.clear()
+        self._span_sizes.clear()
+        self._retained_bytes = 0
+        self.trace_id = ""
+
+    @override
+    def shutdown(self) -> None:
+        """Release history and stop retaining spans after provider shutdown"""
+        with self._lock:
+            self._shutdown = True
+            self._clear()
 
 
 class _InMemorySpanProcessor(export.SimpleSpanProcessor):
@@ -239,7 +279,8 @@ class InMemoryExporter(BaseExporter):
     Note:
         - Cannot be added to exporter lists (validation prevents this)
         - Automatically managed by OpentelemetryTracer
-        - Memory usage grows with span count - consider periodic clearing
+        - Recent history is bounded by configured span and estimated byte limits
+        - Disabling retention preserves annotation and cloud export behavior
         - Session tracking requires properly configured session IDs
     """
 
@@ -253,5 +294,28 @@ class InMemoryExporter(BaseExporter):
 
         self.name = name
 
-        self._exporter = _InMemoryExporter()
+        from veadk.config import settings
+
+        config = settings.opentelemetry_config
+        self._exporter = _InMemoryExporter(
+            max_spans=config.inmemory_max_spans if config.inmemory_enabled else 0,
+            max_bytes=config.inmemory_max_bytes,
+        )
         self.processor = _InMemorySpanProcessor(self._exporter)
+
+    @classmethod
+    def for_provider(cls, provider: TracerProvider) -> "InMemoryExporter":
+        """Reuse one annotation processor and bounded cache for each provider"""
+        with _registration_lock:
+            existing = getattr(provider, "_veadk_inmemory_exporter", None)
+            if existing is not None:
+                return existing
+            exporter = cls()
+            # Preserve first-processor annotation order without racing registration
+            processors = provider._active_span_processor
+            with processors._lock:
+                processors._span_processors = (
+                    exporter.processor,
+                ) + processors._span_processors
+            provider._veadk_inmemory_exporter = exporter
+            return exporter

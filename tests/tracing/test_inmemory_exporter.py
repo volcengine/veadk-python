@@ -157,7 +157,7 @@ def test_processor_cleans_up_record_only_span():
 
     assert trace.get_current_span() is initial_span
     assert processor._context_tokens == {}
-    assert exporter._spans == []
+    assert len(exporter._spans) == 0
 
 
 def test_processor_uses_readable_span_to_clean_up_context():
