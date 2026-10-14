@@ -215,6 +215,7 @@ def test_nonsecret_resource_choices_reach_child_and_retain_request_identity(tmp_
             "agentId": "mi-test",
             "description": "",
             "region": "cn-beijing",
+            "businessWorkspaceMode": "per-agent",
             "pgHost": "db.example",
             "pgPort": "5432",
             "openvikingUrl": "https://api.example.test/openviking",
@@ -225,7 +226,13 @@ def test_nonsecret_resource_choices_reach_child_and_retain_request_identity(tmp_
         assert service.get("owner", task["taskId"])["state"] == "succeeded"
         assert json.loads(received.read_text()) == {
             key: payload[key]
-            for key in ("pgHost", "pgPort", "openvikingUrl", "openvikingResourceId")
+            for key in (
+                "pgHost",
+                "pgPort",
+                "openvikingUrl",
+                "openvikingResourceId",
+                "businessWorkspaceMode",
+            )
         }
         await service.close()
 
@@ -487,6 +494,11 @@ def test_duplicate_cancel_and_shutdown_do_not_interrupt_reaping(tmp_path):
     "key,expected",
     [
         ("iamPermissionDenied", "iamPermissionDenied"),
+        (
+            "openvikingModelConfigurationRejected",
+            "openvikingModelConfigurationRejected",
+        ),
+        ("openvikingCreateUnknown", "openvikingCreateUnknown"),
         ("private-provider-text", "creationFailed"),
     ],
 )
@@ -512,6 +524,60 @@ def test_only_allowlisted_iam_failure_keys_reach_ui(tmp_path, key, expected):
         assert result["state"] == "failed"
         assert result["stage"] == "iam_role"
         assert result["error"] == expected
+        await service.close()
+
+    asyncio.run(run())
+
+
+def test_name_scope_reserves_only_active_tasks_and_remains_private(tmp_path):
+    import json
+    import os
+    from veadk.integrations.mpa.managed.names import NameCheckError
+    from veadk.integrations.mpa.managed.tasks import TaskError
+
+    async def run():
+        service = CreationTasks(tmp_path / "tasks.sqlite3")
+        scope = {"provider": "volcengine", "account": "a", "region": "cn-beijing"}
+        first = {
+            "requestId": "first",
+            "name": "same-name",
+            "agentId": "mi-first",
+            "description": "",
+            "region": "cn-beijing",
+        }
+        with service.db() as db:
+            db.execute(
+                "INSERT INTO tasks (id,owner,request,payload,state,stage,supervisor,updated,name_scope) VALUES (?,?,?,?,?,?,?,?,?)",
+                (
+                    "old",
+                    "owner-a",
+                    "first",
+                    json.dumps(first, sort_keys=True),
+                    "running",
+                    "queued",
+                    os.getpid(),
+                    0,
+                    json.dumps(scope),
+                ),
+            )
+        other = {**first, "requestId": "second", "agentId": "mi-second"}
+        with pytest.raises(NameCheckError):
+            await service.start(
+                "owner-b", other, config_path=None, timeout=60, name_scope=scope
+            )
+        assert service.get("owner-a", "old")["state"] == "running"
+        assert "name_scope" not in service.get("owner-a", "old")
+        service.check_name("owner-b", other, {**scope, "account": "different"})
+        service._update("old", state="failed")
+        service.check_name("owner-b", other, scope)
+        with pytest.raises(TaskError, match="account snapshot"):
+            await service.start(
+                "owner-a",
+                first,
+                config_path=None,
+                timeout=60,
+                name_scope={**scope, "account": "different"},
+            )
         await service.close()
 
     asyncio.run(run())

@@ -20,7 +20,10 @@ import asyncio
 import copy
 import hashlib
 import json
+import logging
+import threading
 import time
+from contextlib import nullcontext
 
 import httpx
 from sqlalchemy.engine import make_url
@@ -49,10 +52,22 @@ def asyncpg_registry_url(url: str) -> str:
 
 
 class RuntimeCloud:
-    def __init__(self, *, region: str, credential_file: str, provider="volcengine"):
+    def __init__(
+        self,
+        *,
+        region: str,
+        credential_file: str,
+        provider="volcengine",
+        credentials=None,
+        cache_identity: bool = False,
+    ):
         self.region, self.credential_file = region, credential_file
         self.account = ""
         self.provider = provider
+        self.credentials = credentials
+        self.cache_identity = cache_identity
+        self._verified_credential: object | None = None
+        self._identity_lock = threading.Lock()
         self.network = NetworkCloud(
             region=region, credentials=self._credentials, provider=provider
         )
@@ -68,28 +83,37 @@ class RuntimeCloud:
         from .provider import managed_host
 
         credential = (
-            load_volcengine_credentials(self.credential_file)
-            if self.provider == "volcengine"
-            else load_provider_credentials(self.provider, self.credential_file)
-        )
-        account = str(
-            get_caller_identity(
-                credential.access_key_id,
-                credential.secret_access_key,
-                credential.session_token,
-                region=self.region,
-                host=managed_host("sts", self.region, self.provider)
-                if self.provider == "byteplus"
-                else None,
-            ).get("AccountId")
-            or ""
-        )
-        if not account or self.account and account != self.account:
-            raise DeploymentError(
-                "Cloud credentials changed accounts during deployment"
+            self.credentials()
+            if self.credentials is not None
+            else (
+                load_volcengine_credentials(self.credential_file)
+                if self.provider == "volcengine"
+                else load_provider_credentials(self.provider, self.credential_file)
             )
-        self.account = account
-        return credential
+        )
+        with self._identity_lock if self.cache_identity else nullcontext():
+            if self.cache_identity and credential == self._verified_credential:
+                return credential
+            account = str(
+                get_caller_identity(
+                    credential.access_key_id,
+                    credential.secret_access_key,
+                    credential.session_token,
+                    region=self.region,
+                    host=managed_host("sts", self.region, self.provider)
+                    if self.provider == "byteplus"
+                    else None,
+                ).get("AccountId")
+                or ""
+            )
+            if not account or self.account and account != self.account:
+                raise DeploymentError(
+                    "Cloud credentials changed accounts during deployment"
+                )
+            self.account = account
+            if self.cache_identity:
+                self._verified_credential = credential
+            return credential
 
     def _client(self, *, skills=False):
         from agentkit.sdk.runtime.client import AgentkitRuntimeClient
@@ -125,6 +149,77 @@ class RuntimeCloud:
         return await self.call(
             "get_skill_space", GetSkillSpaceRequest(Id=space_id), skills=True
         )
+
+    async def delete_skill_space(self, space_id):
+        from agentkit.sdk.skills.types import DeleteSkillSpaceRequest
+
+        await self.call(
+            "delete_skill_space", DeleteSkillSpaceRequest(Id=space_id), skills=True
+        )
+
+    async def list_runtimes(self):
+        from agentkit.sdk.runtime.types import ListRuntimesRequest
+
+        items, seen = [], set()
+        token = None
+        for _ in range(1000):
+            result = await self.call(
+                "list_runtimes", ListRuntimesRequest(PageSize=100, NextToken=token)
+            )
+            items.extend(result.get("AgentKitRuntimes") or [])
+            token = result.get("NextToken")
+            if not token:
+                # List responses may omit environments and Tool bindings.
+                logging.getLogger(__name__).info(
+                    "MPA deletion reference scan runtime_count=%d concurrency=4",
+                    len(items),
+                )
+                details = []
+                for offset in range(0, len(items), 4):
+                    batch = await asyncio.gather(
+                        *(
+                            self.get(item["RuntimeId"])
+                            for item in items[offset : offset + 4]
+                        ),
+                        return_exceptions=True,
+                    )
+                    for result in batch:
+                        if isinstance(result, BaseException):
+                            raise result
+                        details.append(result)
+                return details
+            if token in seen:
+                raise DeploymentError("Runtime discovery repeated pagination token")
+            seen.add(token)
+        raise DeploymentError("Runtime discovery exceeded pagination limit")
+
+    async def find_runtimes(self, name):
+        """Find exact names without loading unrelated Runtime environments."""
+        from agentkit.sdk.runtime.types import ListRuntimesRequest
+
+        matches, tokens, identifiers = [], set(), set()
+        token = None
+        for _ in range(1000):
+            result = await self.call(
+                "list_runtimes", ListRuntimesRequest(PageSize=100, NextToken=token)
+            )
+            for item in result.get("AgentKitRuntimes") or []:
+                if not item.get("Name") or not item.get("RuntimeId"):
+                    raise DeploymentError(
+                        "Runtime name discovery returned incomplete metadata"
+                    )
+                if item["Name"] == name and item["RuntimeId"] not in identifiers:
+                    matches.append(item)
+                    identifiers.add(item["RuntimeId"])
+            token = result.get("NextToken")
+            if not token:
+                return matches
+            if token in tokens:
+                raise DeploymentError(
+                    "Runtime name discovery repeated pagination token"
+                )
+            tokens.add(token)
+        raise DeploymentError("Runtime name discovery exceeded pagination limit")
 
     async def create_skill_space(self, request):
         from agentkit.sdk.skills.types import CreateSkillSpaceRequest
@@ -393,6 +488,8 @@ class AgentRuntimeDeployer:
         await self.registry.initialize()
         async with self.registry.lock(account, self.region, agent_id) as entry:
             record = await entry.read()
+            if record.get("state") in {"deleting", "deleted"}:
+                raise DeploymentError("Agent deletion has started; use a new agent ID")
             if runtime_id and record.get("runtime_id") not in (None, "", runtime_id):
                 raise DeploymentError(
                     "Agent already has another Runtime; explicit migration is required"
@@ -401,7 +498,9 @@ class AgentRuntimeDeployer:
             current = await self.cloud.get(runtime_id) if runtime_id else None
             from veadk.integrations.mpa.managed.database import database_name
 
-            name = database_name(account, self.region, agent_id)
+            name = getattr(
+                self.databases, "business_database_name", ""
+            ) or database_name(account, self.region, agent_id)
             if current:
                 # Check agent/database/role before even adopting network resources.
                 identity_template = {

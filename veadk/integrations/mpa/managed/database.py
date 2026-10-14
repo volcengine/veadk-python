@@ -140,6 +140,16 @@ class AgentDeploymentEntry:
         await self.conn.execute(query)
         await self.conn.commit()
 
+    async def other_records(self):
+        query = select(agent_deployments.c.record).where(
+            agent_deployments.c.account_id == self.keys["account_id"],
+            agent_deployments.c.region == self.keys["region"],
+            agent_deployments.c.agent_id != self.keys["agent_id"],
+        )
+        records = (await self.conn.execute(query)).scalars().all()
+        await self.conn.commit()
+        return [dict(record) for record in records]
+
 
 class AccountNetworkEntry:
     def __init__(self, conn, account, region):
@@ -170,7 +180,16 @@ class AccountNetworkEntry:
 
 
 class AgentDatabaseProvisioner:
-    def __init__(self, *, admin_url: str, runtime_env: dict[str, str]):
+    def __init__(
+        self,
+        *,
+        admin_url: str,
+        runtime_env: dict[str, str],
+        business_database_name: str = "",
+    ):
+        if business_database_name not in {"", "aidb"}:
+            raise DeploymentError("Unsupported dedicated business database")
+        self.business_database_name = business_database_name
         self.admin_url = make_url(admin_url)
         self.env = dict(runtime_env)
         for key in ("PGHOST", "PGUSER", "PGPASSWORD"):
@@ -225,7 +244,7 @@ class AgentDatabaseProvisioner:
                 )
 
     async def ensure(self, entry, *, account: str, region: str, agent_id: str):
-        name = database_name(account, region, agent_id)
+        name = self.business_database_name or database_name(account, region, agent_id)
         marker = database_marker(account, region, agent_id)
         record = await entry.read()
         identity = {
@@ -254,12 +273,18 @@ class AgentDatabaseProvisioner:
                 .first()
             )
             if row:
-                if row["owner"] != self.env["PGUSER"] or row["marker"] != marker:
+                if (
+                    row["owner"] == self.env["PGUSER"]
+                    and row["marker"] is None
+                    and name == "aidb"
+                ):
+                    await self.claim_initial_aidb(entry, record, identity, marker)
+                elif row["owner"] != self.env["PGUSER"] or row["marker"] != marker:
                     raise DeploymentError(
                         "Database name already exists without matching ownership; refusing to use it"
                     )
             else:
-                if record.get("database_ready"):
+                if record.get("database_ready") or name == "aidb":
                     raise DeploymentError(
                         "Registered business database is missing; restore it rather than create an empty replacement"
                     )
@@ -279,6 +304,64 @@ class AgentDatabaseProvisioner:
         record.setdefault("client_token", str(uuid.uuid4()))
         await entry.save(record)
         return name
+
+    async def claim_initial_aidb(self, entry, record, identity, marker):
+        """Claim only the empty initial database of a verified dedicated Workspace."""
+        if (
+            record.get("business_workspace_mode") != "per-agent"
+            or not record.get("business_workspace_id")
+            or record.get("business_database_name") != "aidb"
+            or record.get("database_ready")
+            or record.get("runtime_id")
+        ):
+            raise DeploymentError("Unmarked aidb has no safe initial dedicated binding")
+        engine = postgres_engine(self.runtime_url("aidb"), connect_args={"timeout": 10})
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(text("SET LOCAL statement_timeout = '30s'"))
+                await conn.execute(text("SET LOCAL lock_timeout = '10s'"))
+                await conn.execute(text("SELECT pg_advisory_xact_lock(783435789213)"))
+                row = (
+                    (
+                        await conn.execute(
+                            text(
+                                "SELECT pg_get_userbyid(datdba) AS owner, shobj_description(oid, 'pg_database') AS marker FROM pg_database WHERE datname='aidb'"
+                            )
+                        )
+                    )
+                    .mappings()
+                    .first()
+                )
+                if (
+                    not row
+                    or row["owner"] != self.env["PGUSER"]
+                    or row["marker"] not in (None, marker)
+                ):
+                    raise DeploymentError(
+                        "aidb ownership changed during initialization"
+                    )
+                if row["marker"] == marker:
+                    return
+                nonempty = await conn.scalar(
+                    text(
+                        "SELECT EXISTS(SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace "
+                        "WHERE n.nspname <> 'information_schema' AND left(n.nspname,3) <> 'pg_' "
+                        "AND c.relkind IN ('r','p','v','m','f','S') "
+                        "AND NOT EXISTS(SELECT 1 FROM pg_depend d WHERE d.classid='pg_class'::regclass "
+                        "AND d.objid=c.oid AND d.deptype='e'))"
+                    )
+                )
+                if nonempty is not False:
+                    raise DeploymentError(
+                        "Initial aidb contains user objects; refusing automatic adoption"
+                    )
+                record.update(identity, database_initialization_requested=True)
+                await entry.save(record)
+                await conn.execute(
+                    text(f"COMMENT ON DATABASE {identifier('aidb')} IS '{marker}'")
+                )
+        finally:
+            await engine.dispose()
 
     async def mcp_token_secret(self, name: str, *, preferred: str = "") -> str:
         """Persist the signing secret before cloud creation, including retries."""

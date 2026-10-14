@@ -405,7 +405,7 @@
     "deleteDraftDescription": "确定删除草稿“{{name}}”吗？",
     "deleteAgent": "删除 Agent",
     "closeDeleteConfirmation": "关闭删除确认",
-    "mpaDeletePreviewSummary": "Studio 会先删除可见的空闲 MPA Runtime 会话，再删除 AgentKit Runtime。运行中的任务需要先结束或停止后才能删除。",
+    "mpaDeletePreviewSummary": "Studio 将清理可见的空闲会话、该 MPA 独占的沙箱模板和 Skill Space，最后删除 Runtime。数据库及共享资源保留；运行中的任务需先结束或停止。",
     "mpaDeletePreviewSessions": "会话",
     "mpaDeletePreviewActiveSessions": "运行中",
     "mpaDeletePreviewIdleSessions": "空闲",
@@ -418,7 +418,9 @@
     "mpaDeleteStage": {
       "runtime_sessions": "删除 {{count}} 个可见空闲 Runtime 会话",
       "runtime_diagnostics": "清理这些会话关联的诊断数据和挂载元信息",
-      "agentkit_runtime": "删除 AgentKit Runtime"
+      "agentkit_runtime": "删除 AgentKit Runtime",
+      "worker_template": "删除独占沙箱模板",
+      "skill_space": "删除独占 Skill Space（含空间内技能）"
     },
     "draftDeletionWarning": "草稿将从当前浏览器中删除。",
     "runtimeDeletionWarning": "Runtime 和相关云端资源将被删除。",
@@ -543,6 +545,14 @@
       "updateConfigRestoring": "正在恢复更新配置",
       "updateUnsupported": "当前 Runtime 不支持更新",
       "usageMismatch": "返回的使用数据与当前 Agent 不匹配"
+    },
+    "mpaDeleteChecking": "正在检查会话和资源归属…",
+    "mpaDeleteRetryPreview": "重新检查",
+    "mpaDeletePreviewFailed": "删除前检查失败。请处理下面的错误后重新检查。",
+    "mpaDeleteRetained": "以下资源将保留",
+    "mpaDeleteRetainedReason": {
+      "shared": "有其他智能体引用",
+      "unproven": "无法确认是此智能体独占的受管资源"
     }
   },
   "environmentCenter": {
@@ -1594,6 +1604,9 @@
     },
     "wakingHint": "正在唤醒智能体，可能需要一些时间。",
     "mpaCreate": {
+      "maxInstance": "最大实例数",
+      "maxInstanceHelp": "默认 20，为 Runtime 自动扩容的实例数上限。",
+      "maxInstanceInvalid": "最大实例数必须为大于或等于 1 的整数。",
       "name": "名称",
       "namePlaceholder": "例如 test-agent",
       "nameHelp": "作为 Runtime 名称，支持 4–64 位字母、数字、下划线或连字符。",
@@ -1623,12 +1636,12 @@
       "openvikingInvalid": "请同时填写有效的 HTTPS 服务地址、资源 ID 和 API Key，或全部留空。",
       "openvikingCredentials": "API Key 仅用于本次创建，不保存到浏览器草稿；刷新页面后需重新填写。",
       "tosTitle": "会话输出存储",
-      "tosDescription": "可选。填写完整的 TOS 凭证和存储桶，为新智能体的每个会话挂载独立输出目录。三项均留空时使用服务端预设；服务端未配置时，不启用 TOS 挂载。",
-      "tosAccessKey": "TOS Access Key",
-      "tosSecretKey": "TOS Secret Key",
+      "tosDescription": "可选。选择存储桶，持久保存每个会话的输出目录，使用沙箱 IAM Role 鉴权。未选桶时文件保存在沙箱本地目录。",
       "tosBucket": "TOS 存储桶",
-      "tosInvalid": "TOS Access Key、Secret Key 和存储桶必须同时填写。",
-      "tosCredentials": "凭证仅用于本次创建，不会保存在浏览器恢复数据或创建任务记录中。",
+      "tosInvalid": "请选择以 agentkit-platform- 开头的可用存储桶。",
+      "tosCredentials": "创建时为共享角色追加所选桶的会话输出访问权限，使用该角色的其他运行时和沙箱也将获得相同权限。",
+      "tosDisable": "清除桶选择",
+      "tosBucketUnavailable": "当前部署账号或地域无法使用该桶，请从列表选择存储桶后重试。",
       "runtimeImage": "MPA 镜像",
       "workerImage": "Worker 镜像",
       "imageDefault": "留空使用配置文件中的默认镜像",
@@ -1688,12 +1701,30 @@
         "verifying": "等待智能体就绪",
         "admin_workspace": "准备管理 PG Workspace",
         "business_workspace": "准备业务 PG Workspace",
-        "admin_database": "初始化共享管理库"
+        "admin_database": "初始化共享管理库",
+        "openviking": "准备 OpenViking 库",
+        "openviking_key": "准备 OpenViking 访问凭证"
       },
       "back": "继续创建",
       "pgAutoDescription": "使用 VeADK 部署账号自动创建或复用两个 PG Workspace：mpa_admin_workspace / mpa_admin_db 存放共享资源记录，业务 Workspace 供多个智能体共用，每个智能体拥有独立业务库。无需填写 PG 连接信息，提交创建后开始准备。",
+      "pgPerAgentDescription": "创建流程会复用共享管理 Workspace，并为此智能体准备独立的业务 PG Workspace 和数据库。已有任务重试沿用原数据库。",
+      "pgAidbDescription": "创建流程会复用共享管理 Workspace，并为此智能体准备独立业务 Workspace 和 aidb 数据库。业务 Workspace 使用 mpa_agent_<智能体名称> 命名。已有任务重试沿用原数据库。",
+      "runtimeNameTaken": "该名称已被 Runtime、沙箱模板、业务 Workspace 或正在创建的任务占用，请更换名称。",
+      "runtimeNameCheckFailed": "暂时无法检查名称，请确认资源查询权限和网络后重试。",
       "pgModeChanged": "此创建任务使用旧的 PG 配置，不能直接切换为自动模式重试。请联系管理员确认已有资源和任务后重新创建。",
-      "pgMigrationRequired": "检测到旧共享注册库。请先将共享资源记录迁移到 mpa_admin_workspace / mpa_admin_db，并完成现有 Runtime 的注册库地址切换；完成后点击“重新检查”。"
+      "pgMigrationRequired": "检测到旧共享注册库。请先将共享资源记录迁移到 mpa_admin_workspace / mpa_admin_db，并完成现有 Runtime 的注册库地址切换；完成后点击“重新检查”。",
+      "openvikingAutoDescription": "将为此智能体创建独立 OpenViking 库，使用默认模型并自动准备连接配置。",
+      "openvikingAutoBilling": "企业版按量计费，建库成功后开始计费。重试此智能体将复用已登记的库。",
+      "openvikingPermissionDenied": "无权准备 OpenViking。请检查部署账号的建库、查询和获取 API Key 权限后重试。",
+      "openvikingConfigurationConflict": "OpenViking 的归属或配置与此智能体不一致，请核对登记的库后重试。",
+      "openvikingCreateUnknown": "OpenViking 创建结果尚未确认。请管理员核对云端库并补齐登记的资源 ID 后重试；不会自动重复建库。",
+      "openvikingNotReady": "OpenViking 仍在初始化，请稍后重试此智能体，将继续使用同一个库。",
+      "openvikingResourceFailed": "OpenViking 初始化失败，请在控制台检查库状态及模型配置后重试。",
+      "openvikingResourceMissing": "未找到已登记的 OpenViking 库或默认用户，请检查绑定及资源状态后重试。",
+      "openvikingModelConfigurationRejected": "平台拒绝了默认模型配置或建库参数，请检查 OpenViking 模型可用性及账号开通情况后重试。",
+      "openvikingUnavailable": "暂时无法连接 OpenViking，请检查服务及网络后重试。",
+      "openvikingInvalidResponse": "OpenViking 返回的配置不完整或无效，请检查库及默认用户后重试。",
+      "openvikingQuotaExceeded": "OpenViking 配额不足或请求过于频繁，请调整配额或稍后重试此智能体。"
     }
   },
   "skillCenter": {
@@ -1993,7 +2024,7 @@
     "routeDescription": "将渠道消息转发给当前智能体的路由配置。",
     "deliveryDescription": "实际观测到的回复投递状态，完成配置不代表已成功投递。",
     "groupsTitle": "群聊权限",
-    "groupsDescription": "添加允许访问的群，并设置群内对话的共享范围。",
+    "groupsDescription": "添加允许访问此智能体的群。",
     "providerBindingTitle": "绑定{{name}}",
     "providerUnbound": "绑定{{name}}机器人，让用户通过消息与此智能体对话。",
     "qrGuidance": "使用{{name}}扫码授权，Runtime 将保存机器人凭据并配置消息网关。",

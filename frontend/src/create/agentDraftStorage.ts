@@ -26,6 +26,7 @@ export interface WorkspaceAgentDraft {
   creationMode?: WorkspaceAgentCreationMode;
   deploymentTarget?: {
     runtimeId: string;
+    agentCategory?: "general" | "mpa";
     mpaInstanceId?: string;
     name: string;
     region: string;
@@ -63,6 +64,13 @@ function isWorkspaceAgentDraft(value: unknown): value is WorkspaceAgentDraft {
       value.creationMode === "traditional") &&
     isRecord(value.draft)
   );
+}
+
+/** Only explicit deployment intent enables the MPA lifecycle. */
+export function deploymentAgentCategory(
+  target?: { agentCategory?: "general" | "mpa"; mpaProfileOnly?: boolean },
+): "general" | "mpa" {
+  return target?.agentCategory ?? (target?.mpaProfileOnly === true ? "mpa" : "general");
 }
 
 export function workspaceAgentCreationMode(

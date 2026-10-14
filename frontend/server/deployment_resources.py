@@ -543,6 +543,7 @@ class DeploymentResourceService:
         namespace: str = "",
         workspace_id: str = "",
         search: str = "",
+        name_prefix: str = "",
         page_number: int = 1,
         page_size: int = 100,
     ) -> dict[str, Any]:
@@ -562,6 +563,10 @@ class DeploymentResourceService:
                 for item in _tos_buckets(client)
                 if not item.get("Location") or item.get("Location") == service_region
             ]
+            if name_prefix:
+                all_items = [
+                    item for item in all_items if item["name"].startswith(name_prefix)
+                ]
             if search:
                 normalized_search = search.casefold()
                 all_items = [
@@ -988,6 +993,7 @@ def mount_deployment_resource_routes(
                 namespace=str(request.query_params.get("namespace") or "").strip(),
                 workspace_id=str(request.query_params.get("workspaceId") or "").strip(),
                 search=str(request.query_params.get("search") or "").strip(),
+                name_prefix=str(request.query_params.get("namePrefix") or "").strip(),
                 page_number=page_number,
                 page_size=page_size,
             )

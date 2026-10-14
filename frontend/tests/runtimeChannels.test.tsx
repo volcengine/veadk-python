@@ -150,6 +150,64 @@ it("shows unsupported images and allows retry after an error", async () => {
   await click("common.retry");
   expect(host.textContent).toContain("channels.bind");
 });
+it("uses server defaults when adding a group without an isolation selector", async () => {
+  await render();
+  const form = host.querySelector<HTMLFormElement>(
+    ".runtime-channels-permissions form",
+  )!;
+  expect(form.querySelector("select")).toBeNull();
+  expect(form.textContent).not.toContain("channels.scope");
+  const input = form.querySelector<HTMLInputElement>("input")!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      "value",
+    )!.set!.call(input, " group-new ");
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () =>
+    form.dispatchEvent(
+      new Event("submit", { bubbles: true, cancelable: true }),
+    ),
+  );
+  const saves = request.mock.calls.filter(
+    ([, path, init]) => path === "/chat-permissions" && init?.method === "POST",
+  );
+  expect(saves).toHaveLength(1);
+  expect(JSON.parse(String(saves[0][2]?.body))).toEqual({
+    channel: "feishu",
+    chatId: "group-new",
+  });
+});
+
+it.each(["group_sender", "group_topic", "group_topic_sender"])(
+  "preserves existing %s group display without rewriting its configuration",
+  async (groupSessionScope) => {
+    const original = request.getMockImplementation()!;
+    request.mockImplementation(async (ep, path, init) =>
+      path.startsWith("/chat-permissions") && !init?.method
+        ? {
+            permissions: [
+              {
+                channel: "feishu",
+                chatId: "group-existing",
+                chatName: "Existing group",
+                groupSessionScope,
+              },
+            ],
+          }
+        : original(ep, path, init),
+    );
+    await render();
+    expect(host.textContent).toContain(`channels.scope_${groupSessionScope}`);
+    await click("channels.refresh");
+    expect(host.textContent).toContain(`channels.scope_${groupSessionScope}`);
+    expect(
+      request.mock.calls.some(([, , init]) => init?.method === "POST"),
+    ).toBe(false);
+  },
+);
+
 it("keeps the group form after a failed save", async () => {
   await render();
   const input = host.querySelector<HTMLInputElement>(
@@ -1078,7 +1136,8 @@ it("scopes permission writes and deletions to the selected bot", async () => {
     ([, path, init]) => path === "/chat-permissions" && init?.method === "POST",
   );
   expect(saves).toHaveLength(1);
-  expect(JSON.parse(String(saves[0][2]?.body))).toMatchObject({
+  expect(JSON.parse(String(saves[0][2]?.body))).toEqual({
+    channel: "feishu",
     appId: "bot-b",
     chatId: "group-new",
   });

@@ -90,6 +90,7 @@ def test_deployment_resource_route_passes_provider_region_and_parents(
                 "namespace": "",
                 "workspace_id": "workspace-id",
                 "search": "",
+                "name_prefix": "",
                 "page_number": 1,
                 "page_size": 100,
             },
@@ -423,6 +424,72 @@ def test_tos_search_filters_before_pagination() -> None:
     assert result["totalCount"] == 2
     assert result["hasMore"] is False
     assert [item["name"] for item in result["items"]] == ["theta"]
+
+
+@pytest.mark.parametrize(
+    "search,page_number,expected,total,has_more",
+    [
+        ("", 1, ["agentkit-platform-alpha"], 3, True),
+        ("TA", 2, ["agentkit-platform-theta"], 2, False),
+        ("not-found", 1, [], 0, False),
+    ],
+)
+def test_tos_name_prefix_filters_before_search_and_pagination(
+    search, page_number, expected, total, has_more
+):
+    service = object.__new__(deployment_resources.DeploymentResourceService)
+    service.provider = "volcengine"
+    service.region = "cn-beijing"
+    service.credentials = None
+    service._tos = cast(
+        Any,
+        SimpleNamespace(
+            actual_region="cn-beijing",
+            list_buckets=lambda: [
+                {"Name": name, "Location": region}
+                for name, region in [
+                    ("agentkit-platform-alpha", "cn-beijing"),
+                    ("agentkit-platform-beta", "cn-beijing"),
+                    ("agentkit-platform-theta", "cn-beijing"),
+                    ("agentkit-demo", "cn-beijing"),
+                    ("x-agentkit-platform-lookalike", "cn-beijing"),
+                    ("Agentkit-platform-case", "cn-beijing"),
+                    ("agentkit-platform-wrong-region", "cn-shanghai"),
+                ]
+            ],
+        ),
+    )
+    result = service.list_resources(
+        "tos-bucket",
+        name_prefix="agentkit-platform-",
+        search=search,
+        page_number=page_number,
+        page_size=1,
+    )
+    assert [item["name"] for item in result["items"]] == expected
+    assert result["totalCount"] == total
+    assert result["hasMore"] is has_more
+
+
+def test_resource_route_forwards_tos_name_prefix(monkeypatch):
+    service = _FakeResourceService("volcengine", "cn-beijing")
+    monkeypatch.setattr(
+        deployment_resources, "DeploymentResourceService", lambda *args: service
+    )
+    app = FastAPI()
+    deployment_resources.mount_deployment_resource_routes(
+        app, authorize=lambda request: None, provider="volcengine"
+    )
+    response = TestClient(app).get(
+        "/web/deployment-resources",
+        params={
+            "kind": "tos-bucket",
+            "region": "cn-beijing",
+            "namePrefix": "agentkit-platform-",
+        },
+    )
+    assert response.status_code == 200
+    assert service.calls[0][1]["name_prefix"] == "agentkit-platform-"
 
 
 def test_cr_search_scans_all_pages_before_paginating_matches() -> None:

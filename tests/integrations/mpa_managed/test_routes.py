@@ -192,3 +192,191 @@ def test_creation_key_is_passed_separately_from_stored_payload(tmp_path, monkeyp
     args, kwargs = start_call
     assert "openvikingApiKey" not in args[1]
     assert kwargs["secrets"] == {"openvikingApiKey": "private-ov-key-for-test"}
+
+
+def test_auto_openviking_mode_reaches_task_and_has_no_browser_secret(
+    tmp_path, monkeypatch
+):
+    from frontend.server import mpa_creation
+
+    monkeypatch.setattr(mpa_creation, "load_volcengine_credentials", lambda *_: None)
+    service = CreationTasks(tmp_path / "tasks.db")
+    service.start = AsyncMock(return_value={"taskId": "test-task"})
+    app = FastAPI()
+    mount_mpa_creation_routes(app, owner=lambda request: "local", service=service)
+    with TestClient(app) as client:
+        config = client.get("/web/mpa-creation/config?region=cn-beijing")
+        assert config.json()["openvikingMode"] == "auto"
+        result = client.post(
+            "/web/mpa-creation/tasks",
+            json={
+                "requestId": "11111111-1111-4111-8111-111111111111",
+                "name": "test-agent",
+                "region": "cn-beijing",
+                "openvikingMode": "auto",
+            },
+        )
+    assert result.status_code == 202
+    call = service.start.await_args
+    assert call is not None
+    payload = call.args[1]
+    assert payload["openvikingMode"] == "auto"
+    assert "openvikingApiKey" not in payload
+    assert call.kwargs["secrets"] == {"openvikingApiKey": ""}
+
+
+def test_business_workspace_request_mode_and_legacy_omission(tmp_path, monkeypatch):
+    from frontend.server import mpa_creation
+
+    monkeypatch.setattr(mpa_creation, "load_volcengine_credentials", lambda *_: None)
+    service = CreationTasks(tmp_path / "tasks.db")
+    service.start = AsyncMock(return_value={"taskId": "test-task"})
+    app = FastAPI()
+    mount_mpa_creation_routes(app, owner=lambda request: "local", service=service)
+    with TestClient(app) as client:
+        assert (
+            client.get("/web/mpa-creation/config?region=cn-beijing").json()[
+                "businessWorkspaceMode"
+            ]
+            == "per-agent"
+        )
+        for mode in [None, "shared", "per-agent"]:
+            payload = {
+                "requestId": "11111111-1111-4111-8111-111111111111",
+                "agentId": "mi-test",
+                "region": "cn-beijing",
+            }
+            if mode is not None:
+                payload["businessWorkspaceMode"] = mode
+            response = client.post("/web/mpa-creation/tasks", json=payload)
+            assert response.status_code == 202
+            call = service.start.await_args
+            assert call is not None
+            passed = call.args[1]
+            if mode == "per-agent":
+                assert passed["businessWorkspaceMode"] == mode
+            else:
+                assert "businessWorkspaceMode" not in passed
+
+
+def test_new_layout_checks_name_before_accepting_task_and_returns_only_codes(
+    tmp_path, monkeypatch
+):
+    from types import SimpleNamespace
+    from frontend.server import mpa_creation
+    from veadk.integrations.mpa.managed.names import NameCheckError
+
+    monkeypatch.setattr(mpa_creation, "load_volcengine_credentials", lambda *_: None)
+    monkeypatch.setattr(mpa_creation, "RuntimeCloud", lambda **kw: SimpleNamespace())
+    check = AsyncMock(return_value="test-account")
+    monkeypatch.setattr(mpa_creation, "check_creation_name", check)
+    service = CreationTasks(tmp_path / "tasks.db")
+    service.start = AsyncMock(return_value={"taskId": "new-task"})
+    app = FastAPI()
+    mount_mpa_creation_routes(app, owner=lambda request: "local", service=service)
+    payload = {
+        "requestId": "11111111-1111-4111-8111-111111111111",
+        "region": "cn-beijing",
+        "name": "test-name",
+        "businessWorkspaceMode": "per-agent",
+        "businessDatabaseName": "aidb",
+    }
+    with TestClient(app) as client:
+        for key, status in [("runtimeNameTaken", 409), ("runtimeNameCheckFailed", 503)]:
+            check.side_effect = NameCheckError(key)
+            result = client.post("/web/mpa-creation/tasks", json=payload)
+            assert result.status_code == status
+            assert result.json()["detail"] == {"code": key}
+            service.start.assert_not_awaited()
+        check.side_effect = None
+        result = client.post(
+            "/web/mpa-creation/name-check",
+            json={k: payload[k] for k in ["requestId", "name", "region"]},
+        )
+        assert result.json() == {"available": True}
+        assert "test-account" not in result.text
+        service.start.assert_not_awaited()
+        result = client.post("/web/mpa-creation/tasks", json=payload)
+        assert result.status_code == 202
+        call = service.start.await_args
+        assert call is not None
+        assert call.kwargs["name_scope"] == {
+            "provider": "volcengine",
+            "region": "cn-beijing",
+            "account": "test-account",
+        }
+        assert call.args[1]["businessDatabaseName"] == "aidb"
+        assert check.await_args is not None
+        assert check.await_args.kwargs["agent_id"] == call.args[1]["agentId"]
+
+
+def test_name_check_requires_auth_and_valid_input(tmp_path, monkeypatch):
+    from frontend.server import mpa_creation
+
+    check = AsyncMock()
+    monkeypatch.setattr(mpa_creation, "check_creation_name", check)
+    app = FastAPI()
+
+    def deny(_request):
+        raise HTTPException(403, "Denied")
+
+    mount_mpa_creation_routes(
+        app, owner=deny, service=CreationTasks(tmp_path / "tasks.db")
+    )
+    with TestClient(app) as client:
+        result = client.post(
+            "/web/mpa-creation/name-check",
+            json={
+                "requestId": "11111111-1111-4111-8111-111111111111",
+                "name": "test-name",
+                "region": "cn-beijing",
+            },
+        )
+        assert result.status_code == 403
+        result = client.post(
+            "/web/mpa-creation/name-check",
+            json={
+                "requestId": "11111111-1111-4111-8111-111111111111",
+                "name": "bad name",
+                "region": "cn-beijing",
+            },
+        )
+        assert result.status_code == 422
+    check.assert_not_awaited()
+
+
+def test_new_layout_cannot_claim_another_requests_internal_identity(
+    tmp_path, monkeypatch
+):
+    from frontend.server import mpa_creation
+
+    monkeypatch.setattr(mpa_creation, "load_volcengine_credentials", lambda *_: None)
+    check = AsyncMock()
+    monkeypatch.setattr(mpa_creation, "check_creation_name", check)
+    service = CreationTasks(tmp_path / "tasks.db")
+    service.start = AsyncMock()
+    app = FastAPI()
+    mount_mpa_creation_routes(app, owner=lambda request: "local", service=service)
+    payload = {
+        "requestId": "11111111-1111-4111-8111-111111111111",
+        "name": "test-name",
+        "agentId": "mi-other-request",
+        "region": "cn-beijing",
+    }
+    with TestClient(app) as client:
+        assert (
+            client.post("/web/mpa-creation/name-check", json=payload).status_code == 400
+        )
+        assert (
+            client.post(
+                "/web/mpa-creation/tasks",
+                json={
+                    **payload,
+                    "businessWorkspaceMode": "per-agent",
+                    "businessDatabaseName": "aidb",
+                },
+            ).status_code
+            == 400
+        )
+    check.assert_not_awaited()
+    service.start.assert_not_awaited()

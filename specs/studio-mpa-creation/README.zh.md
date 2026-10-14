@@ -2,9 +2,28 @@
 
 [English](README.md)
 
+### 会话输出存储 — 仅选桶 IAM TOS 挂载
+
+已批准的[仅选桶设计](../../prd-spec/features/studio-mpa-tos-iam/2026-10-12-bucket-only.zh.md)
+替代 Studio 的 AK/SK 输入。Studio 接受以 `agentkit-platform-` 开头的可选 `tosBucket`，使用实际
+Worker 角色的 IAM Role，清除旧草稿凭据，复用已有桶资源选择器。在其他准备
+写操作前核验桶账号/地域归属，增量绑定稳定、精确的桶专属 Global IAM 策略。
+桶动作仅 HeadBucket、ListBucket；对象动作仅 GetObject、PutObject、
+AbortMultipartUpload、DeleteObject，限定 `sandbox-session/*`。保留既有角色、
+信任、策略和绑定，冲突失败，重试/取消有界。Tool 不带 Credentials，复用核验
+包含模式/角色；CLI AK/SK 兼容。不得隐式修改已有 Tool/Session 或桶公开策略，
+不增加 KMS 授权，共享角色不提供严格租户隔离。实现、自动化/浏览器验证和云端
+E2E 是独立状态。
+空选择保留服务端 profile；内置 profile 默认不挂载 TOS。部署凭据须具备 TOS
+ListBuckets 和 IAM GetRole、GetPolicy、CreatePolicy、ListAttachedRolePolicies、
+AttachRolePolicy。桶授权不包含 KMS 授权，也不能覆盖现有 IAM Deny。
+现有 `/web/deployment-resources` 接口接受 TOS 列表可选 `namePrefix`，在搜索、计数
+和分页前过滤。只有 MPA 创建传入平台前缀，通用查询保持原行为。创建在云调用前
+验证前缀，也适用于恢复草稿；显式 CLI profile 不受这项 Studio 选择规则限制。
+
 - 组件 ID：`studio-mpa-creation`
 - 状态：active
-- 修订日期： 2026-10-09
+- 修订日期： 2026-10-12
 - 设计及证据：[Studio MPA 创建](../../prd-spec/features/mpa-agent-oneclick-provision/2026-09-20-studio-mpa-creation.zh.md)
 - 所属代码：`veadk/integrations/mpa/managed/`、`frontend/server/mpa_creation.py`、`frontend/src/adk/mpaCreation.ts`、`frontend/src/ui/mpa-create/`；CLI 和目录接入。
 - 测试：`tests/integrations/mpa_managed/`、`frontend/tests/mpaCreation.test.tsx`。
@@ -115,7 +134,7 @@ CON-10 元数据可见性：区分初始化元数据缺失和显式冲突。具�
 
 `managed.postgres.mode: auto` 显式启用基于部署账号 STS 的 AIDAP 准备流程。配置检查只读，无需 PG 凭据；返回 `postgresMode: "auto"` 以及空的 `pgHost`/`pgPort`。创建向导 PG 步骤展示准备说明；POST 拒绝非空 PG 地址/端口。未提交草稿清空旧 PG 目标；已提交请求保持不变，不兼容的重试被拦截。OpenViking 仍为第三步。Studio 执行角色必须覆盖调用方身份、`NetworkCloud` 执行的全部 VPC/子网查询与创建、`GatewayCloud` 执行的全部 APIG/IM Gateway 操作、`PGCloud` 执行的 9 项明确 AIDAP 操作，以及 AgentKit Worker、Skill Space 和 Runtime 操作。默认角色授予[经审计的明确云端权限集合](../../prd-spec/bugfixes/studio-mpa-aidap-permissions/2026-09-23-complete-mpa-cloud-runtime-policy.zh.md)及现有 `agentkit:*` 覆盖，并在 `studio update` 时刷新；客户自有角色仍由运维管理。
 
-每个已核验账号/地域/项目准备 `mpa_admin_workspace/mpa_admin_db` 及一个 `mpa_business_workspace`（业务名称可配置）。每个 MPA 保持独立业务库。AIDAP Workspace ID 必须与账号、地域、项目、名称、引擎和归属标签一致。可用显式 ID 接管已有 Workspace。旧配置/手动模式保持兼容。新增任务阶段为 `admin_workspace`、`business_workspace`、`admin_database`。
+共享布局请求（新独立布局见 CON-19）按已核验账号/地域/项目准备 `mpa_admin_workspace/mpa_admin_db` 及一个 `mpa_business_workspace`（业务名称可配置）。每个 MPA 保持独立业务库。AIDAP Workspace ID 必须与账号、地域、项目、名称、引擎和归属标签一致。可用显式 ID 接管已有 Workspace。旧配置/手动模式保持兼容。新增任务阶段为 `admin_workspace`、`business_workspace`、`admin_database`。
 
 在私有 SQLite 引导文件中保存无密钥的意图与资源身份。内置 Studio 配置临时使用 `/tmp/veadk-studio/mpa-pg-bootstrap.sqlite3`，避免云端创建写入只读代码目录；独立 YAML 未显式配置时仍使用 `.adk/mpa-pg-bootstrap.sqlite3`。同一实例上的所有创建进程必须共享该路径及操作系统锁。Studio 的 `/tmp` 路径在实例替换后不持久，也不被独立主机共享；状态丢失后，必须先检查云资源再重试结果不确定的创建。调用 CreateWorkspace 前保存意图，等待就绪前保存 ID。创建结果不确定时禁止盲目重试，按范围/标签发现或通过 ID 接管。确定的权限/参数拒绝允许修正后重试。取消、超时及后续失败保留资源，不替换已登记但删除的 Workspace。服务商错误脱敏；每次 SDK 请求刷新凭据并核验账号，凭据只在服务端使用，不进入配置/任务响应或引导状态文件。
 
@@ -186,3 +205,27 @@ BytePlus 默认使用现有海外 Studio 模型及地址，将平台/地域传�
 BytePlus 托管 IAM 默认通过 `open.byteplusapi.com` 调用，保留可信服务端 `IAM_OPENAPI_HOST` 覆盖；共享 IAM 工具与国内创建行为不变。
 
 BytePlus 托管 AIDAP 默认使用 `open.byteplusapi.com`，仍支持已校验的 `VEADK_MPA_BYTEPLUS_AIDAP_HOST` 覆盖。API 可访问不代表 Workspace 创建成功；继续保留失败状态及属主校验，不自动删除或接管失败的同名资源。
+
+## CON-18：自动 OpenViking
+
+新的北京内置 Studio 请求显式选择 `openvikingMode: auto`；缺少该值的旧请求、手动 CLI 和 BytePlus 保留现有行为。此类新请求第三步以自动准备替代 OV 手填。使用默认 VLM/Embedding 模型身份、显式 Credentials Source=volcengine 和带版本 EndpointID 创建独立企业库，已解析方舟 Key 仅加入复制的创建请求，不进入持久化意图，等待 INIT 至 READY，服务端取得 default 用户 Key，部署前注入 OPENVIKING_URL/RESOURCE_ID/API_KEY/USER。作用域非秘密意图/ID 写入授权部署注册库，重试复用并核验归属/配置。注册资源丢失、FAILED 或创建结果不确定均明确失败；不盲目重建或回退创建方舟接入点。Key 不存入注册库/任务/结果。取消及删除智能体保留 OV。默认模型建库能力在隔离实测前仍未确认。通用智能体不变。[设计](../../prd-spec/features/mpa-openviking-auto/2026-10-13-default-model-creation.zh.md)。
+
+CON-18 来源修正：仅在没有 OV ID、没有待完成 Runtime 操作、明确拒绝后创建发送标志为 false，且旧无 Credentials 意图完全匹配时允许升级。未知/进行中/改变及已登记意图保持冲突拒绝。Get 回读须匹配 Source/EndpointID。不增加 UI 字段或模型接入点创建。参见[来源修正](../../prd-spec/bugfixes/mpa-openviking-source/2026-10-13-model-source.zh.md)。
+
+## CON-19：新 MPA 请求独立业务 Workspace
+
+内置 Studio 新配置声明可选 `businessWorkspaceMode: "per-agent"`。新表单显式提交/持久化，缺省保持 `shared`，已提交草稿不升级。`managed.postgres.business-workspace-mode` 默认 `shared`；显式 `per-agent` 要求自动 PG 且未配置业务 Workspace ID。稳定智能体范围的名称/范围/标签保证独立创建和重试。先准备共享管理库再读取智能体部署绑定；旧共享绑定继续共享，冲突明确失败。管理注册库固定实际 Workspace ID、布局及端点；Runtime 获得自己的业务连接及不变的共享注册库连接。保留现有未知结果/取消恢复和本地锁限制。不迁移、不初始化业务表、不删除 Workspace；通用智能体和 Runtime 业务接口不变。两个现有提供商适配器均遵循此契约。见[设计与验证](../../prd-spec/features/mpa-agent-pg-workspace/2026-10-13-independent-business-workspace.zh.md)。
+
+## CON-20：名称预检查与独立 aidb 请求
+
+内置 Studio 新配置/表单显式选择 `businessDatabaseName: aidb` 及 `businessWorkspaceMode: per-agent`。Workspace 为 `mpa_agent_<Runtime 名称>`，业务库为 `aidb`。缺少库选择时保留旧哈希及请求指纹；已有 Workspace/数据库绑定不重命名、不切换。初始无标记 aidb 的接管要求独立 Workspace 归属已核验、数据库属主匹配、无非系统/非扩展关系数据且无已有 Runtime/ready 绑定；缺失/不匹配/非空明确失败。初始化使用事务锁，在创建 Runtime 前写入智能体标记。
+
+授权名称检查发生于首次下一步、任务接收及新布局云准备前。Runtime、worker 和目标 Workspace 重名时拒绝其他/不明确归属，已核验自身绑定可重试。查询失败/超时明确报错。私有提供商/账号/地域任务快照防止本机并发同名及换凭据重试，仅活跃任务占用名称。只读检查不保证跨主机原子互斥。通用智能体、共享控制资源及 PG 删除策略不变。见[批准设计](../../prd-spec/features/mpa-name-preflight/2026-10-13-runtime-name-and-workspace-labels.zh.md)。
+
+新布局 Web 预检查/提交使用服务端按用户/请求生成的内部身份；传入不同 agent ID 会被拒绝。旧显式 ID 请求保留原契约。
+
+## CON-21：本次创建最大实例数
+
+新的可编辑 MPA 表单在基本信息中提交严格正整数 `maxInstance`，默认 20。数值随请求身份保存、传入 runner 并应用为 Runtime `MaxInstance`。小于配置最小值在受理前拒绝。提交后重试数值不可更改；省略/null 的旧字段保留原指纹/配置默认，不自动升级。重名错误复用既有 danger/soft Alert，本地化文案不变。不影响通用创建及已部署 Runtime 设置。见[设计](../../prd-spec/features/mpa-create-scaling/2026-10-13-max-instance-input.zh.md)。
+
+OV 路由注册及配置检查须保留 Studio 延迟加载启动：签名/网络函数只在首次实际 OV API 调用时加载，不在导入适配器时加载。见[官方 PR 检查修正](../../prd-spec/bugfixes/mpa-upstream-readiness/2026-10-13-startup-and-lockfile.zh.md)。

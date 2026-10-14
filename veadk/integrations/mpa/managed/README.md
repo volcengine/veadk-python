@@ -4,6 +4,40 @@
 
 VeADK prepares MPA prerequisites and deploys an agent without an `agentkit-mpa-agent` source checkout. Studio and `veadk mpa provision` use the same implementation. The deployed MPA image must support account-shared APIG registration and metadata bootstrap.
 
+## TOS output storage with IAM Role
+
+In Studio, optionally select an owned bucket beginning with `agentkit-platform-`
+in the deployment region; no TOS
+access keys are requested. Creation adds a bucket-specific custom policy to the
+actual Worker Tool role (normally `IDRoleForArkClawShareAgent`) before preparing
+workload identity, databases or network resources. It preserves existing policies
+and refuses conflicting trust, account ownership or same-name policy content.
+Empty selection keeps server defaults; the built-in profile has no mount.
+
+The added policy allows HeadBucket/ListBucket on that bucket and
+GetObject/PutObject/AbortMultipartUpload/DeleteObject only on its
+`sandbox-session/*` objects. The read-write mount remains `/data/output`, with
+canonical per-session TOS paths. All consumers of the shared role receive these
+permissions; directory separation is not tenant authorization. Public bucket
+policies are unchanged and SSE-KMS needs separately approved key permissions.
+
+Deployment credentials must allow `tos:ListBuckets` and IAM GetRole, GetPolicy,
+CreatePolicy, ListAttachedRolePolicies and AttachRolePolicy, in addition to normal
+provisioning permissions. Managed CLI YAML can opt in without keys:
+
+```yaml
+managed:
+  worker:
+    tos-credential-type: iam_role
+    tos-bucket: example-output-bucket
+    # Keep the existing image, role and remaining managed options.
+```
+
+Historical CLI/YAML AK/SK mode remains compatible. Existing Tools/Sessions are
+not changed automatically. Old Studio pages sending credential fields must be
+refreshed. See [the maintained contract](../../../../specs/studio-mpa-creation/README.md#con-17--bucket-only-iam-tos-mounts)
+and [implementation/verification evidence](../../../../prd-spec/features/studio-mpa-tos-iam/2026-10-12-bucket-only.md).
+
 ## Automatic PG setup (recommended for new installations)
 
 Studio's built-in Beijing profile uses automatic PostgreSQL preparation; CLI users set `managed.postgres.mode: auto` in their private YAML. No PG host/user/password or PG URL environment variables are needed. Use the deployment account's rotating STS credentials with `GetCallerIdentity`, AIDAP `CreateWorkspace`, `DescribeWorkspaces`, `DescribeWorkspaceDetail`, `DescribeBranches`, `DescribeComputes`, `DescribeWorkspaceEndpoint`, `DescribeDBAccounts`, `DescribeDatabases`, and `DescribeDBAccountConnection` permissions, in addition to the existing AgentKit/VPC/APIG permissions and model/role setup. Enable AIDAP for that account and ensure the returned PostgreSQL endpoint is reachable from Studio and Runtime. This flow uses the provider's public endpoint and does not modify database network/allowlist settings.
@@ -26,6 +60,15 @@ After creation submission, prepare/reuse `mpa_admin_workspace/mpa_admin_db`, the
 All Studio/CLI processes for a scope must use the **same durable bootstrap file path on one coordinator host**. Preserve this file across restarts and redeployments. The private SQLite file contains only intents and IDs, never passwords. Cancelled/failed jobs retain resources. If a create response is lost, retry discovers the tagged Workspace; if its outcome is still uncertain, inspect AIDAP and provide the matching ID. Do not delete state to force another creation. Confirmed IAM/parameter rejections can be retried after correction. No Workspace is automatically deleted.
 
 Confirmed `CreateFailed` Workspaces no longer permanently block later automatic requests. The bootstrap validates their scope, retains their cloud resources and records their IDs separately before releasing the failed binding. Retry may create a replacement; a newly failed purchase is not repeated in the same task. Explicit Workspace IDs, operational failures and uncertain outcomes still require inspection rather than blind replacement. Previously retired failures cannot authorize repeating a newer timed-out request. See CON-13 in the [recovery contract](../../../../specs/studio-mpa-creation/README.md).
+
+
+### Independent business Workspace for new Studio agents
+
+New Studio forms submit `businessWorkspaceMode: per-agent` and `businessDatabaseName: aidb`. They reuse `mpa_admin_workspace/mpa_admin_db`, create `mpa_agent_<hand-entered Runtime name>` as the dedicated business Workspace, and use its initial `aidb` database. Workspace IDs, names, database selection and endpoints are pinned. Existing submitted requests/registered Workspaces keep their original hash or shared names and databases. No existing resource is renamed or migrated.
+
+The first Next and final submission perform authorized, bounded name checks for Runtime, sandbox template and target Workspace. Same-request own resources may be reused; foreign/ambiguous collisions require another name, and query failures require rechecking. Active requests on one Studio host reserve their names by verified provider/account/region; failed requests do not hold a local reservation. The backend checks again before new-layout prerequisites. Read-only checks do not provide atomic exclusion across independent hosts; cloud ownership/uniqueness enforcement remains authoritative.
+
+Explicit CLI/YAML profiles enable the new layout with `managed.postgres.mode: auto`, `business-workspace-mode: per-agent` and `business-database-name: aidb`, without a configured business Workspace ID. Omitting the database selection preserves the previous hashed per-agent layout; omitting both selects the original shared layout. Initial aidb adoption validates the dedicated Workspace, database owner, absence of non-system/non-extension relations and absence of a previous Runtime/ready binding, then transaction-locks and marks it. Missing, foreign or nonempty initial databases fail closed. `init-admin-db` migration remains a shared-layout operation. Runtime/skill/Feishu logic is unchanged; deleting MPA retains PG resources. See [design and verification](../../../../prd-spec/features/mpa-name-preflight/2026-10-13-runtime-name-and-workspace-labels.md).
 
 ### Existing installation cutover
 
@@ -131,7 +174,7 @@ VPC/APIG still share by account and region. Deployment JSON records retain both 
 
 After a new `veadk studio deploy`, managed creation automatically reuses that Studio's UserPool, client, Identity region, and `/oauth/callback` from server-side VeFaaS environment. Studio uses built-in Beijing Runtime/worker image and model defaults without any creation YAML; its deployment account comes from STS. Its model API key is read with deployment credentials during creation (see Ark key discovery below). For standalone CLI YAML profiles, explicitly different `user-pool-name`, `user-pool-client-name`, `identity-callback-url`, `identity-region`, or corresponding `managed.runtime.env` values fail configuration inspection before cloud writes. A Studio deployed before this capability must be redeployed to receive the values. Standalone `veadk mpa provision` without these Studio environment values continues to use explicit YAML. The shared PostgreSQL Workspace is created later during MPA creation and is not the deployment-time Identity store.
 
-Choose **Agents → MPA agents → Create MPA agent**. The three steps collect basic information, automatic PostgreSQL preparation, and optional OpenViking service URL/resource ID/API Key. Enter a Runtime name (4–64 ASCII letters, digits, underscores or hyphens). The server generates the agent ID and injects it into Agent and Worker; it is not shown as an input. New creations use `agentkit-platform-2112682748-cn-beijing.cr.volces.com/mpa/mpa_agent:latest` and `agentkit-platform-2112682748-cn-beijing.cr.volces.com/mpa/mpa_codex_worker:latest` without image inputs. Already-submitted tasks retain their image selection for retry. Existing Runtimes are not renamed or automatically upgraded. The PG step links to the [Volcengine AIDAP console](https://console.volcengine.com/aidap/region:aidap+cn-beijing/); the service obtains Workspace connections after submission. The OpenViking step links to the [context-management console](https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing/ov-6689fabdf032294/context-management?accountId=default&userId=default&projectName=default); this is a console page, not the service URL to enter. PG credentials stay server-configured. Enter the OpenViking URL, resource ID and masked API Key together to inject `OPENVIKING_URL`, `OPENVIKING_RESOURCE_ID`, `OPENVIKING_API_KEY` and `OPENVIKING_USER=default`. Leave all three blank to omit these variables, including inherited template/reference values. The key is not saved in browser drafts or task SQLite and must be re-entered after a browser restart. Review the resource plan and submit on step three. The workflow prepares account network/APIG/IM Gateway, a worker, an isolated business database and Skill Space, then deploys and checks Runtime and application readiness. Successful creation refreshes the directory.
+Choose **Agents → MPA agents → Create MPA agent**. The three steps collect basic information, automatic PostgreSQL preparation, and OpenViking preparation. Enter a Runtime name (4–64 ASCII letters, digits, underscores or hyphens). The server generates the agent ID and injects it into Agent and Worker; it is not shown as an input. New creations use `agentkit-platform-2112682748-cn-beijing.cr.volces.com/mpa/mpa_agent:latest` and `agentkit-platform-2112682748-cn-beijing.cr.volces.com/mpa/mpa_codex_worker:latest` without image inputs. Already-submitted tasks retain their image selection for retry. Existing Runtimes are not renamed or automatically upgraded. The PG step links to the [Volcengine AIDAP console](https://console.volcengine.com/aidap/region:aidap+cn-beijing/); the service obtains Workspace connections after submission. The OpenViking step links to the [OpenViking console](https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing/). New Beijing requests automatically create an independent enterprise library with default VLM/Embedding models, wait for READY, and obtain the default-user API Key server-side. The library is a paid retained resource and is not removed when an MPA is deleted. Registered libraries are reused on retry; an ambiguous create outcome requires operator reconciliation. Default-model acceptance for new API-created libraries requires live verification. PG credentials stay server-configured. For BytePlus and already-submitted manual requests, enter the OpenViking URL, resource ID and masked API Key together to inject `OPENVIKING_URL`, `OPENVIKING_RESOURCE_ID`, `OPENVIKING_API_KEY` and `OPENVIKING_USER=default`. In manual mode, leave all three blank to omit these variables, including inherited template/reference values. The key is not saved in browser drafts or task SQLite and must be re-entered after a browser restart. Review the resource plan and submit on step three. The workflow prepares account network/APIG/IM Gateway, a worker, an isolated business database and Skill Space, then deploys and checks Runtime and application readiness. Successful creation refreshes the directory.
 
 The initial configuration check is local validation, **not** proof of live permissions or connectivity. Cloud identity and database permissions are checked after submission and before resource creation; each later cloud step validates its own response. Close the dialog to leave creation running, or cancel explicitly to stop orchestration. Reopen it in the same browser session to recover progress. The dialog supports keyboard operation, multiline Chinese input, both themes and narrow windows.
 
@@ -297,3 +340,7 @@ Ark mode requires `model-provider: openai` and the selected region's Ark `/api/v
 Start Studio with `BYTEPLUS_ACCESS_KEY` / `BYTEPLUS_SECRET_KEY` in the server process and `uv run veadk studio --provider byteplus --open`. MPA creation currently targets `ap-southeast-1`, using the same three-step form and shared admin/business Workspace layout. Provider selection is server-owned; domestic credentials and recovery files are not reused. In role-based deployments, set `VEADK_MPA_BYTEPLUS_CREDENTIAL_FILE` to the rotating credential file explicitly. The default model is the existing overseas Studio ModelArk model; Ark key discovery requires overseas ListApiKeys/GetRawApiKey permissions and an existing usable key.
 
 There are no overseas image defaults yet. The existing public MPA/Worker images remain defaults, with optional server overrides `VEADK_MPA_BYTEPLUS_RUNTIME_IMAGE` / `VEADK_MPA_BYTEPLUS_WORKER_IMAGE`; overseas image pull and image compatibility require a real creation test. `VEADK_MPA_BYTEPLUS_AIDAP_HOST` optionally selects a deployment-specific AIDAP hostname. Cloud service activation, IAM policy/API availability, quotas and model access are account prerequisites; a locally configured form does not prove they are available. Missing overseas services fail instead of falling back to Volcengine. Existing Volcengine defaults and general-agent chat remain unchanged.
+
+### Automatic OpenViking for explicit CLI profiles
+
+Opt in with `managed.openviking.mode: auto` only in Volcengine `cn-beijing`; explicit profiles otherwise default to `manual`. Deployment credentials need `vikingdb:CreateOpenVikingCollection`, `vikingdb:GetOpenVikingCollection` and `vikingdb:AccessOpenVikingApiKey`. Do not combine auto mode with manual OV connection fields. Auto creates use VLM `doubao-seed-2.0-lite` / `260428` and Embedding `doubao-embedding-vision` / `251215` with explicit Credentials Source=volcengine and the versioned model identifier as EndpointID. The already resolved Ark model key (or the explicitly configured/template MODEL_AGENT_API_KEY for CLI) is added only to the copied create payload; it is not stored in the registry. An exactly matching legacy no-Credentials intent can be corrected after a proven rejection with no registered library or pending Runtime operation. Unknown/registered intents cannot be automatically replaced. The registry stores intent and ResourceID only; keys are read again on retry. `OPENVIKING_USER=default` and the other three OV variables are injected before Runtime deployment. Failed, cancelled or deleted MPA deployments retain OV; reconcile uncertain creates before retrying.

@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import time
 
@@ -75,6 +76,7 @@ ERROR_KEYS = frozenset(
         "iamOwnershipConflict",
         "iamVerificationFailed",
         "iamConfigurationConflict",
+        "tosBucketUnavailable",
     }
 )
 PERMISSION_CODES = {
@@ -125,6 +127,42 @@ class IamError(DeploymentError):
 class IamCloud:
     def __init__(self, runtime):
         self.runtime = runtime
+
+    async def verify_tos_bucket(self, bucket: str) -> None:
+        """Only authorize a bucket owned by the verified deployment account."""
+
+        def run():
+            import tos
+
+            client = None
+            try:
+                credential = self.runtime._credentials()
+                client = tos.TosClientV2(
+                    credential.access_key_id,
+                    credential.secret_access_key,
+                    f"https://tos-{self.runtime.region}.volces.com",
+                    self.runtime.region,
+                    security_token=credential.session_token,
+                    connection_time=5,
+                    socket_timeout=5,
+                    max_retry_count=0,
+                )
+                if not any(
+                    item.name == bucket and item.location == self.runtime.region
+                    for item in (client.list_buckets().buckets or [])
+                ):
+                    raise IamError(key="tosBucketUnavailable")
+            except IamError:
+                raise
+            except Exception as error:
+                raise IamError(
+                    "AccessDenied" if classify_error(error) == "permission" else ""
+                ) from None
+            finally:
+                if client is not None:
+                    client.close()
+
+        await asyncio.to_thread(run)
 
     async def call(self, method: str, **params):
         def run():
@@ -201,11 +239,17 @@ def _canonical(value):
     return value
 
 
-def _validate_role(result: dict, account: str):
+def _validate_role(
+    result: dict,
+    account: str,
+    *,
+    role_name: str = ROLE_NAME,
+    required_services: tuple[str, ...] = ("vefaas", "apig"),
+):
     role = result.get("Role", result)
     if (
-        role.get("RoleName") != ROLE_NAME
-        or role.get("Trn") != f"trn:iam::{account}:role/{ROLE_NAME}"
+        role.get("RoleName") != role_name
+        or role.get("Trn") != f"trn:iam::{account}:role/{role_name}"
     ):
         raise IamError(key="iamOwnershipConflict")
     trust = _document(role.get("TrustPolicyDocument"))
@@ -232,8 +276,117 @@ def _validate_role(result: dict, account: str):
                 isinstance(item, str) for item in service
             ):
                 services.update(service)
-    if not {"vefaas", "apig"} <= services:
+    if not set(required_services) <= services:
         raise IamError(key="iamTrustConflict")
+
+
+async def ensure_tos_mount_permissions(
+    cloud,
+    account: str,
+    bucket: str,
+    *,
+    role_name: str = ROLE_NAME,
+    timeout: float = 120,
+    poll_interval: float = 2,
+):
+    """Add one exact bucket policy without rewriting role or existing policies."""
+    from .config import validate_tos_bucket_name
+
+    bucket = validate_tos_bucket_name(bucket)
+    if not bucket:
+        raise IamError(key="iamConfigurationConflict")
+    name = "VeADKMPATosMountV1_" + hashlib.sha256(bucket.encode()).hexdigest()[:20]
+    document = {
+        "Statement": [
+            {
+                "Effect": "Allow",
+                "Action": ["tos:HeadBucket", "tos:ListBucket"],
+                "Resource": [f"trn:tos:::{bucket}"],
+            },
+            {
+                "Effect": "Allow",
+                "Action": [
+                    "tos:GetObject",
+                    "tos:PutObject",
+                    "tos:AbortMultipartUpload",
+                    "tos:DeleteObject",
+                ],
+                "Resource": [f"trn:tos:::{bucket}/sandbox-session/*"],
+            },
+        ]
+    }
+
+    async def bindings():
+        result = await cloud.call("list_attached_role_policies", RoleName=role_name)
+        return any(
+            item.get("PolicyName") == name
+            and item.get("PolicyType") == "Custom"
+            and any(
+                scope.get("PolicyScopeType") == "Global"
+                for scope in item.get("PolicyScope", [])
+            )
+            for item in result.get("AttachedPolicyMetadata", [])
+        )
+
+    async def reconcile():
+        await cloud.verify_tos_bucket(bucket)
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                _validate_role(
+                    await cloud.call("get_role", RoleName=role_name),
+                    account,
+                    role_name=role_name,
+                    required_services=("vefaas",),
+                )
+                query = {"PolicyName": name, "PolicyType": "Custom"}
+                try:
+                    policy = await cloud.call("get_policy", **query)
+                except IamError as error:
+                    if error.code != "PolicyNotExist":
+                        raise
+                    try:
+                        await cloud.call(
+                            "create_policy",
+                            PolicyName=name,
+                            PolicyDocument=json.dumps(document),
+                            Description="MPA session output bucket access",
+                        )
+                    except IamError as error:
+                        if error.code != "PolicyAlreadyExist":
+                            raise
+                    policy = await cloud.call("get_policy", **query)
+                if _canonical(
+                    _document(policy.get("Policy", policy).get("PolicyDocument"))
+                ) != _canonical(document):
+                    raise IamError(key="iamPolicyConflict")
+                if not await bindings():
+                    try:
+                        await cloud.call(
+                            "attach_role_policy", RoleName=role_name, **query
+                        )
+                    except IamError as error:
+                        if error.code != "PolicyAttachConflict":
+                            raise
+                if await bindings():
+                    _validate_role(
+                        await cloud.call("get_role", RoleName=role_name),
+                        account,
+                        role_name=role_name,
+                        required_services=("vefaas",),
+                    )
+                    return
+            except IamError as error:
+                if error.code not in TRANSIENT_CODES | {"PolicyNotExist"}:
+                    raise
+            if time.monotonic() >= deadline:
+                raise IamError()
+            await asyncio.sleep(poll_interval)
+
+    try:
+        await asyncio.wait_for(reconcile(), timeout)
+    except asyncio.TimeoutError:
+        raise IamError() from None
 
 
 async def ensure_runtime_role(

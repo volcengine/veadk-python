@@ -56,7 +56,7 @@ interface ResourceListState {
   loadMore: () => void;
 }
 
-function useDeploymentResourceList(
+export function useDeploymentResourceList(
   query: DeploymentResourceQuery | null,
 ): ResourceListState {
   const [items, setItems] = useState<DeploymentResource[]>([]);
@@ -192,7 +192,7 @@ function resourceOptions(
   }));
 }
 
-function ResourcePicker({
+export function ResourcePicker({
   ariaLabel,
   value,
   valueLabel,

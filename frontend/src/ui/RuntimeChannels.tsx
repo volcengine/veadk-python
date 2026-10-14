@@ -1,7 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@openai/apps-sdk-ui/components/Button";
-import { Select } from "../components/primitives/Select/Select";
 import { Radio } from "../components/primitives/Radio/Radio";
 import {
   channelRequest,
@@ -9,7 +8,6 @@ import {
   type ChannelCapabilities,
   type ChannelDiagnostics,
   type ChannelPermission,
-  type ChannelScope,
   type FeishuBinding,
 } from "../adk/client";
 import { TextShimmer } from "./text-shimmer/TextShimmer";
@@ -133,12 +131,6 @@ function ChannelStatus({
 }
 
 const terminal = new Set(["BOUND", "FAILED", "EXPIRED"]);
-const scopes: ChannelScope[] = [
-  "group_sender",
-  "group",
-  "group_topic_sender",
-  "group_topic",
-];
 function ProviderChannel({
   runtimeId,
   region,
@@ -172,7 +164,6 @@ function ProviderChannel({
   const [wecomPairingComplete, setWecomPairingComplete] = useState(false);
   const [uncertain, setUncertain] = useState(false);
   const [chatId, setChatId] = useState("");
-  const [scope, setScope] = useState<ChannelScope>("group_sender");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -904,7 +895,6 @@ function ProviderChannel({
                         channel: provider,
                         ...(accountId ? { appId: accountId } : {}),
                         chatId: chatId.trim(),
-                        groupSessionScope: scope,
                       }),
                       signal,
                     });
@@ -930,27 +920,6 @@ function ProviderChannel({
                       )
                         event.preventDefault();
                     }}
-                  />
-                </label>
-                <label>
-                  {t("channels.scope")}
-                  <Select
-                    style={{
-                      width: "100%",
-                      minWidth: 0,
-                      background: "hsl(var(--background))",
-                      color: "hsl(var(--foreground))",
-                      border: "1px solid hsl(var(--border))",
-                    }}
-                    value={scope}
-                    disabled={busy}
-                    options={scopes.map((value) => ({
-                      value,
-                      label: t(`channels.scope_${value}`),
-                    }))}
-                    onChange={(event) =>
-                      setScope(event.target.value as ChannelScope)
-                    }
                   />
                 </label>
                 <Button

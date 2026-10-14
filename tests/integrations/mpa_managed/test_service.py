@@ -38,7 +38,7 @@ from tests.integrations.mpa_managed.test_agent_deployment import (
 @pytest.mark.parametrize("source", ["reference", "template", "flat"])
 @pytest.mark.parametrize("image", [None, "registry.example/mpa:pinned"])
 @pytest.mark.parametrize("split_workspaces", [False, True])
-@pytest.mark.parametrize("openviking", [False, True])
+@pytest.mark.parametrize("openviking", [False, True, "auto"])
 @pytest.mark.parametrize("studio_runtime_owner", [None, "studio-user"])
 @pytest.mark.parametrize("runtime_name", ["", "Support-Agent_01"])
 def test_network_gateway_worker_precede_runtime(
@@ -128,9 +128,13 @@ def test_network_gateway_worker_precede_runtime(
             }
             if image is None:
                 profile.values["image"] = "registry/image:v1"
+        if openviking == "auto":
+            profile.values["model_api_key"] = "fake"
         profile = with_creation_resources(
             profile,
-            {
+            {"openvikingMode": "auto"}
+            if openviking == "auto"
+            else {
                 "openvikingUrl": "https://selected.example.test/openviking",
                 "openvikingResourceId": "ov-selected",
                 "openvikingApiKey": "selected-key",
@@ -197,10 +201,39 @@ def test_network_gateway_worker_precede_runtime(
         )
         monkeypatch.setattr(service, "SharedAPIGService", Gateway)
         monkeypatch.setattr(service, "ensure_worker", worker)
+        if openviking == "auto":
+
+            async def create_ov(request, *, model_api_key):
+                assert entry.mutex.locked()
+                assert events == ["identity", "gateway", "worker"]
+                assert request["VLM"]["Credentials"][0]["Source"] == "volcengine"
+                assert model_api_key == "fake"
+                assert "fake" not in str(entry.row["openviking_request"])
+                events.append("openviking")
+                return "ov-auto"
+
+            async def get_ov(ident):
+                return {
+                    **entry.row["openviking_request"],
+                    "ResourceID": ident,
+                    "Status": "READY",
+                }
+
+            monkeypatch.setattr(
+                service,
+                "OpenVikingCloud",
+                lambda _: SimpleNamespace(
+                    create=create_ov,
+                    get=get_ov,
+                    api_key=AsyncMock(return_value="auto-ov-key"),
+                ),
+            )
         cloud_create = cloud.create
 
         async def create(request):
-            assert events == ["identity", "gateway", "worker"]
+            assert events == ["identity", "gateway", "worker"] + (
+                ["openviking"] if openviking == "auto" else []
+            )
             assert request["Name"] == (runtime_name or "mi-123456789abc")
             assert cloud.space_creates[0]["Description"] == (
                 "Skills for MPA agent " + (runtime_name or "mi-123456789abc")
@@ -241,6 +274,13 @@ def test_network_gateway_worker_precede_runtime(
             }
             assert openviking_env == (
                 {
+                    "OPENVIKING_URL": "https://api.vikingdb.cn-beijing.volces.com/openviking",
+                    "OPENVIKING_RESOURCE_ID": "ov-auto",
+                    "OPENVIKING_API_KEY": "auto-ov-key",
+                    "OPENVIKING_USER": "default",
+                }
+                if openviking == "auto"
+                else {
                     "OPENVIKING_URL": "https://selected.example.test/openviking",
                     "OPENVIKING_RESOURCE_ID": "ov-selected",
                     "OPENVIKING_API_KEY": "selected-key",
@@ -317,6 +357,7 @@ def test_network_gateway_worker_precede_runtime(
         {"business_workspace_id": "ws-other"},
         {"database_host": "old-business"},
         {"database_port": 6543},
+        {"business_workspace_mode": "per-agent"},
     ],
 )
 def test_retry_does_not_rebind_existing_database(tmp_path, monkeypatch, existing):
@@ -666,6 +707,53 @@ async def test_explicit_profile_account_mismatch_stops_before_role(monkeypatch):
     assert stages == ["checking"]
     role.assert_not_awaited()
     identity.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("grant_failed", [False, True])
+async def test_studio_tos_grant_precedes_identity_and_propagates_failure(
+    monkeypatch, grant_failed
+):
+    from veadk.integrations.mpa.managed.config import (
+        load_studio_profile,
+        with_creation_tos,
+    )
+    from veadk.integrations.mpa.managed.iam import IamError, ROLE_NAME
+
+    monkeypatch.setenv("VEADK_MPA_CONFIG_MODEL_AGENT_API_KEY", "test-model-key")
+    profile = with_creation_tos(
+        load_studio_profile(), {"tosBucket": "agentkit-platform-output"}
+    )
+    resolve_key = AsyncMock(spec=service.resolve_model_key, return_value=profile)
+    monkeypatch.setattr(service, "resolve_model_key", resolve_key)
+    cloud = AsyncMock()
+    cloud.account_id.return_value = "123"
+    monkeypatch.setattr(service, "RuntimeCloud", lambda **kw: cloud)
+    role = AsyncMock()
+    grant = AsyncMock(side_effect=IamError("AccessDenied") if grant_failed else None)
+    identity = AsyncMock(side_effect=DeploymentError("stop after grant"))
+    monkeypatch.setattr(service, "ensure_runtime_role", role)
+    monkeypatch.setattr(service, "ensure_tos_mount_permissions", grant)
+    monkeypatch.setattr(service, "ensure_workload_identity", identity)
+    stages = []
+    with pytest.raises(
+        DeploymentError,
+        match="iamPermissionDenied" if grant_failed else "stop after grant",
+    ):
+        await service.provision(
+            profile, agent_id="mi-test", owner="user", progress=stages.append
+        )
+    resolve_key.assert_awaited_once_with(profile, cloud)
+    role.assert_awaited_once()
+    args, kwargs = grant.await_args
+    assert args[0].runtime is cloud
+    assert args[1:] == ("123", "agentkit-platform-output")
+    assert kwargs == {"role_name": ROLE_NAME}
+    assert stages == ["checking", "iam_role", "iam_role"]
+    if grant_failed:
+        identity.assert_not_awaited()
+    else:
+        identity.assert_awaited_once()
 
 
 @pytest.mark.parametrize("role", [None, "custom-role"])

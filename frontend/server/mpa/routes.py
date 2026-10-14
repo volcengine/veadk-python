@@ -16,14 +16,22 @@
 
 from __future__ import annotations
 
+import asyncio
+import inspect
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass
-import inspect
-from typing import Any
+from typing import Any, Literal, NoReturn
+
+if sys.version_info >= (3, 11):
+    from asyncio import timeout
+else:
+    from async_timeout import timeout
 
 from fastapi import Header, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, ConfigDict, Field
 
+from frontend.server.mpa.operations import MpaOperationConflict, MpaOperationNotFound
 from frontend.server.mpa.runtime_client import (
     MpaExecutionConfigChange,
     MpaProfile,
@@ -35,11 +43,11 @@ from frontend.server.mpa.service import (
     MpaAgentOperationRequest,
     MpaAgentOperationService,
 )
-from frontend.server.mpa.operations import MpaOperationConflict
-from frontend.server.mpa.operations import MpaOperationNotFound
 from veadk.integrations.mpa.control_plane_client import (
     MpaAgentOperationRequest as MpaAgentOperationBody,
 )
+
+MPA_DELETE_PREVIEW_TIMEOUT_SECONDS = 25.0
 
 RuntimeAuthorizer = Callable[[Request, str, str], Any]
 RuntimeConnectionResolver = Callable[
@@ -93,6 +101,7 @@ def mount_mpa_profile_routes(
     operation_service: MpaAgentOperationService | None = None,
     owner_resolver: Callable[[Request], str] | None = None,
     resolve_runtime_bindings: RuntimeBindingResolver | None = None,
+    resolve_delete_resources: Callable[[Any, str, str], Any] | None = None,
 ) -> None:
     def owner_id(request: Request) -> str:
         return owner_resolver(request) if owner_resolver is not None else "local"
@@ -102,7 +111,7 @@ def mount_mpa_profile_routes(
         request: Request,
         mpa_instance_id: str,
         body: MpaAgentOperationBody,
-        operation_kind: str,
+        operation_kind: Literal["create", "update"],
         create: bool,
     ) -> MpaAgentOperationRequest:
         runtime = authorize_runtime(request, body.runtime_id, body.region)
@@ -344,18 +353,29 @@ def mount_mpa_profile_routes(
         runtime_id: str = Query(default="", alias="runtimeId"),
         region: str = Query(default="all"),
     ) -> dict[str, Any]:
-        return await _mpa_agent_delete_preview_payload(
-            request=request,
-            mpa_instance_id=mpa_instance_id,
-            runtime_id=runtime_id,
-            region=region,
-            runtime_client=runtime_client,
-            authorize_runtime=authorize_runtime,
-            resolve_runtime_connection=resolve_runtime_connection,
-            operation_service=operation_service,
-            owner=owner_id(request),
-            resolve_runtime_bindings=resolve_runtime_bindings,
-        )
+        try:
+            async with timeout(MPA_DELETE_PREVIEW_TIMEOUT_SECONDS):
+                return await _mpa_agent_delete_preview_payload(
+                    request=request,
+                    mpa_instance_id=mpa_instance_id,
+                    runtime_id=runtime_id,
+                    region=region,
+                    runtime_client=runtime_client,
+                    authorize_runtime=authorize_runtime,
+                    resolve_runtime_connection=resolve_runtime_connection,
+                    operation_service=operation_service,
+                    owner=owner_id(request),
+                    resolve_runtime_bindings=resolve_runtime_bindings,
+                    resolve_delete_resources=resolve_delete_resources,
+                )
+        except asyncio.TimeoutError:
+            raise HTTPException(
+                status_code=504,
+                detail={
+                    "code": "mpa_delete_preview_timeout",
+                    "message": "MPA deletion checks timed out. Check the management database, Runtime API and cloud read permissions, then retry.",
+                },
+            ) from None
 
     @app.post(
         "/web/mpa/agent-operations/{operation_id}/retry",
@@ -370,11 +390,14 @@ def mount_mpa_profile_routes(
             raise HTTPException(
                 status_code=503, detail="mpa_operation_service_unavailable"
             )
-        operation_kind = str(body.operation_kind or "").strip() or (
+        operation_kind_value = str(body.operation_kind or "").strip() or (
             "update" if body.runtime_revision.strip() else "create"
         )
-        if operation_kind not in {"create", "update"}:
+        if operation_kind_value not in {"create", "update"}:
             raise HTTPException(status_code=400, detail="invalid operationKind")
+        operation_kind: Literal["create", "update"] = (
+            "create" if operation_kind_value == "create" else "update"
+        )
         mpa_instance_id = body.mpa_instance_id or (
             body.target_key if operation_kind == "update" else body.runtime_id
         )
@@ -604,8 +627,8 @@ def _result_payload(result: Any) -> dict[str, Any]:
     raise HTTPException(status_code=502, detail="runtime_invalid_response")
 
 
-def _raise_runtime_error(error: MpaRuntimeError) -> None:
-    detail = {
+def _raise_runtime_error(error: MpaRuntimeError) -> NoReturn:
+    detail: dict[str, Any] = {
         "code": error.code,
         "message": error.code,
         "requestId": error.request_id,
@@ -615,7 +638,7 @@ def _raise_runtime_error(error: MpaRuntimeError) -> None:
     raise HTTPException(status_code=error.status_code, detail=detail) from error
 
 
-def _raise_operation_conflict(error: MpaOperationConflict) -> None:
+def _raise_operation_conflict(error: MpaOperationConflict) -> NoReturn:
     raise HTTPException(
         status_code=409,
         detail={
@@ -661,16 +684,7 @@ def _operation_blocks_delete(
     """Return whether a lifecycle operation still represents unsafe deletion work."""
     if not operation:
         return False
-    status = str(operation.get("status") or "")
-    if status == "active":
-        return True
-    if status != "failed_retryable":
-        return False
-    if binding_status != "bound":
-        return True
-    if not profile:
-        return True
-    return str(profile.get("status") or "").casefold() != "applied"
+    return str(operation.get("status") or "") == "active"
 
 
 async def _runtime_bindings(
@@ -762,6 +776,7 @@ async def _mpa_agent_delete_preview_payload(
     operation_service: MpaAgentOperationService | None,
     owner: str,
     resolve_runtime_bindings: RuntimeBindingResolver | None,
+    resolve_delete_resources: Callable[[Any, str, str], Any] | None = None,
 ) -> dict[str, Any]:
     active_operation = await _active_operation(
         operation_service, owner, mpa_instance_id
@@ -804,24 +819,14 @@ async def _mpa_agent_delete_preview_payload(
             binding.region,
             binding.runtime,
         )
-        profile = _result_payload(
-            await runtime_client.profile_status(
-                endpoint=endpoint,
-                mpa_instance_id=mpa_instance_id,
-                bearer_token=_bearer_value(bearer_token),
-            )
-        )
         sessions = await runtime_client.list_sessions(
             endpoint=endpoint,
             bearer_token=_bearer_value(bearer_token),
             include_a2a=True,
+            user_id=owner,
         )
     except MpaRuntimeError as error:
-        if error.status_code == 404:
-            blockers.append("orphan_runtime")
-            binding_status = "orphan_runtime"
-        else:
-            _raise_runtime_error(error)
+        _raise_runtime_error(error)
     if _operation_blocks_delete(
         active_operation,
         binding_status=binding_status,
@@ -830,7 +835,7 @@ async def _mpa_agent_delete_preview_payload(
         blockers.append("active_operation")
     if _active_session_payloads(sessions):
         blockers.append("active_sessions")
-    return _delete_preview_payload(
+    payload = _delete_preview_payload(
         mpa_instance_id=mpa_instance_id,
         binding_status=binding_status,
         runtime=binding.visible,
@@ -840,6 +845,15 @@ async def _mpa_agent_delete_preview_payload(
         blockers=blockers,
         sessions=sessions,
     )
+    if resolve_delete_resources is not None and not blockers:
+        resources = resolve_delete_resources(
+            binding.runtime, mpa_instance_id, binding.region
+        )
+        if inspect.isawaitable(resources):
+            resources = await resources
+        payload["cleanupPlan"][-1:-1] = resources["cleanupPlan"]
+        payload["retainedResources"] = resources["retainedResources"]
+    return payload
 
 
 def _session_payload(session: Any) -> dict[str, Any]:
@@ -858,7 +872,7 @@ def _session_payload(session: Any) -> dict[str, Any]:
     session_id = str(
         payload.get("sessionId") or payload.get("session_id") or payload.get("id") or ""
     )
-    result = {
+    result: dict[str, Any] = {
         "sessionId": session_id,
         "status": str(payload.get("status") or ""),
         "appName": str(payload.get("appName") or payload.get("app_name") or ""),
@@ -1037,13 +1051,13 @@ def _mpa_agent_view_payload(
 
 
 __all__ = [
+    "_ACTIVE_SESSION_STATUSES",
     "MpaAgentOperationBody",
     "MpaProfileApplyBody",
     "MpaRuntimeBinding",
     "MpaRuntimeSessionBody",
     "MpaSessionExecutionConfigPatchBody",
     "MpaSessionProfileUpgradeBody",
-    "_ACTIVE_SESSION_STATUSES",
     "_active_operation",
     "_delete_preview_payload",
     "_mpa_agent_delete_preview_payload",

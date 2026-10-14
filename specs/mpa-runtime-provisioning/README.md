@@ -2,7 +2,7 @@
 
 - **Component ID:** `mpa-runtime-provisioning`
 - **Status:** Draft; proposed changes are governed by the related PRD
-- **Revision:** 2026-10-09
+- **Revision:** 2026-10-12
 - **Chinese version:** [README.zh.md](README.zh.md)
 - **Related PRD:** [MPA Runtime Integration Hardening](../../prd-spec/bugfixes/mpa-runtime-integration/2026-09-12-mpa-runtime-integration-hardening.md)
 - **Related PRD:** [MPA Studio Workload Identity Provisioning](../../prd-spec/features/mpa-studio-workload-identity/2026-09-20-mpa-studio-workload-identity.md)
@@ -93,15 +93,19 @@ Managed provisioning supports `managed.postgres.mode: auto`. It verifies deploym
 
 When the private MPA YAML supplies the complete `tos-access-key`,
 `tos-secret-key`, and `tos-bucket` tuple, a newly created worker Tool MUST carry
-an access-key TOS mount with `/sandbox-session/default/default` as its base and
+an access-key TOS mount with `/` as its legacy base and
 `/data/output` as its read-write local path. Credentials MUST remain in the
 Tool request. The Runtime receives `MPA_CODEX_WORKER_TOS_MOUNT_ENABLED=true`
 and the non-secret bucket name, but never AK/SK.
-The Studio creation page may submit a complete tuple for one creation and
-override the YAML defaults. AK/SK pass only in memory through child-process
-stdin and MUST NOT enter sessionStorage, task SQLite, or task responses. Partial
-input MUST be rejected. A profile using an existing Worker must first select a
-new Worker image for the creation.
+Studio submits only the optional `tosBucket` and overrides Worker credentials
+with IAM Role mode, using `/sandbox-session/default/default` as the IAM base.
+Explicit managed profiles may use `tos-credential-type: iam_role` and a bucket
+without keys; historical CLI/YAML AK/SK mode remains compatible. Empty Studio
+selection preserves server defaults. Bucket IAM authorization follows
+[CON-17](../studio-mpa-creation/README.md#con-17--bucket-only-iam-tos-mounts).
+Credentials MUST NOT enter sessionStorage, task SQLite, or task responses.
+A profile using an existing Worker must first select a new Worker image for the
+creation; existing Tools and Sessions are not implicitly modified.
 
 For a newly managed Runtime, the initial `CreateRuntime` request MUST include
 the `ToolId` of the already prepared worker Tool. The final convergent update
@@ -138,3 +142,7 @@ New shared standard gateways and cross-zone companion intents follow the [Studio
 Worker environment configuration and reference precedence follow the [Studio contract](../studio-mpa-creation/README.md#independent-worker-configuration). Built-in Studio does not require an old-account Tool. Explicit CLI references/existing IDs remain supported; legacy non-managed creation is unchanged.
 
 Managed Runtime subnet equality and stable retry ordering follow the [Studio network recovery contract](../studio-mpa-creation/README.md#runtime-subnet-ordering-and-recovery).
+
+## MPA owned-resource deletion (2026-10-12, implemented)
+
+This change supersedes the Profile prerequisite in the deletion contract: preview/execution do not query Profile; only active operations and active sessions block deletion, and session-query errors remain visible. After session cleanup, MPA deletion removes proven exclusive managed worker templates and Skill Spaces, then Runtime. Proof requires account/region deployment records, matching ownership tags and checks for other deployment/Runtime references. Shared, imported or unproven resources remain. Persist cleanup state for partial-failure retries; other resources and general Runtime deletion remain unchanged. Loading, errors, preview retry and cancellation are visible in the detail confirmation dialog. See the [design](../../prd-spec/features/mpa-owned-resource-deletion/2026-10-12-owned-resource-deletion.md).

@@ -648,6 +648,8 @@ export interface ProjectPreviewProps {
   deployDisabledReason?: string;
   /** Draft metadata summarized on the deployment page. */
   agentDraft?: AgentDraft;
+  /** Explicit deployment intent; ordinary drafts remain general by default. */
+  agentCategory?: "general" | "mpa";
   /** Main Agent display name. Generated project names may be normalized. */
   agentName?: string;
   /** Root Agent plus all recursively nested sub-Agents. */
@@ -839,6 +841,7 @@ export function ProjectPreview({
   embedded = false,
   deployDisabledReason,
   agentDraft,
+  agentCategory = "general",
   agentName,
   agentCount,
   releaseConfiguration,
@@ -1020,7 +1023,7 @@ export function ProjectPreview({
     (instanceRange.min !== 1 || instanceRange.max !== 5);
   const githubUpdateOffloaded =
     Boolean(deploymentRuntimeId && githubCicdBinding?.pipelineId);
-  const isMpaDeployment = Boolean(agentDraft);
+  const isMpaDeployment = agentCategory === "mpa";
   const shouldRunMpaLifecycle = isMpaDeployment && !githubUpdateOffloaded;
   const baseDeploymentSteps = deploymentPrimaryPane
     ? codePackageDeploySteps(t)
@@ -2241,8 +2244,8 @@ export function ProjectPreview({
           phase: latestPhase,
           label: t("projectPreview.task.deploymentStatusUnconfirmed"),
           message: t("projectPreview.errors.deploymentStatusUnconfirmed"),
-          mpaProfile: Boolean(agentDraft),
-          mpaSmoke: Boolean(agentDraft && !isRuntimeUpdate),
+          mpaProfile: shouldRunMpaLifecycle,
+          mpaSmoke: shouldRunMpaLifecycle && !isRuntimeUpdate,
           ...(latestBuildLog ? { buildLog: latestBuildLog } : {}),
         });
         return;

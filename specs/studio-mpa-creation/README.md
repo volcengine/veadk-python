@@ -4,7 +4,7 @@
 
 - Component ID: `studio-mpa-creation`
 - Status: active
-- Revised: 2026-10-09
+- Revised: 2026-10-12
 - Design and evidence: [Studio MPA creation](../../prd-spec/features/mpa-agent-oneclick-provision/2026-09-20-studio-mpa-creation.md)
 - Owned code: `veadk/integrations/mpa/managed/`, `frontend/server/mpa_creation.py`, `frontend/src/adk/mpaCreation.ts`, `frontend/src/ui/mpa-create/`; CLI and directory integration.
 - Tests: `tests/integrations/mpa_managed/`, `frontend/tests/mpaCreation.test.tsx`.
@@ -12,6 +12,31 @@
 - Operator guide: [Managed MPA creation](../../veadk/integrations/mpa/managed/README.md).
 
 ## Responsibility and boundaries
+
+### Session output storage — bucket-only IAM TOS mounts
+
+The approved [bucket-only design](../../prd-spec/features/studio-mpa-tos-iam/2026-10-12-bucket-only.md)
+supersedes Studio access-key input. Studio accepts an
+optional `tosBucket` beginning with `agentkit-platform-`, selects IAM Role using the actual Worker role, strips old
+draft credentials, and uses the existing bucket resource selector. Before other
+provisioning writes, verify account/region bucket ownership and add a stable,
+exact bucket-specific Global IAM policy binding. Bucket actions are HeadBucket
+and ListBucket; object actions are GetObject, PutObject, AbortMultipartUpload,
+and DeleteObject, restricted to `sandbox-session/*`. Preserve existing role,
+trust, policies, and bindings; reject conflicts and bound retries/cancellation.
+Tool payloads omit Credentials and reuse checks include mode/role. CLI access-key
+mode remains compatible. No implicit existing-Tool/Session or public-bucket-policy
+change, no KMS grants, and no strict tenant isolation from the shared role.
+Implementation, automated/browser verification, and cloud E2E are separate.
+An empty selection preserves the server profile; the built-in profile has no TOS
+mount by default. Deployment credentials require TOS ListBuckets and IAM GetRole,
+GetPolicy, CreatePolicy, ListAttachedRolePolicies and AttachRolePolicy. Granting
+bucket access does not imply KMS access or override existing IAM denies.
+The existing `/web/deployment-resources` API accepts optional `namePrefix` for
+TOS lists, applied before search/counts/pagination. Only MPA creation supplies the
+platform prefix; general queries remain unchanged. Creation validates the prefix
+before cloud calls, including recovered drafts; explicit CLI profiles are not
+restricted by this Studio-only selection rule.
 
 VeADK owns managed YAML parsing, cloud/database orchestration, authorized durable creation tasks and the MPA directory dialog. No external source checkout is required. Shared registry/bootstrap contracts remain interoperable with the MPA image. Legacy `veadk mpa create` remains separate and unchanged. Model execution and channel routing remain Runtime responsibilities. Managed runtime IAM preparation follows the contract below.
 
@@ -117,7 +142,7 @@ The config response adds optional `postgresLayout: "split-workspaces"`, `adminWo
 
 `managed.postgres.mode: auto` opts into deployment-STS-backed AIDAP preparation. Configuration inspection is read-only and needs no PG credentials; it returns `postgresMode: "auto"` and empty `pgHost`/`pgPort`. The PG wizard step explains preparation; POST rejects nonempty PG host/port fields. Unsubmitted drafts clear old PG targets; submitted payloads remain unchanged and incompatible retries are blocked. OpenViking configuration remains the third step. The Studio execution role must cover caller identity, all VPC/subnet discovery and creation performed by `NetworkCloud`, all APIG/IM Gateway operations performed by `GatewayCloud`, the nine explicit AIDAP operations performed by `PGCloud`, and AgentKit Worker, Skill Space, and Runtime operations. The default role grants the [audited explicit cloud set](../../prd-spec/bugfixes/studio-mpa-aidap-permissions/2026-09-23-complete-mpa-cloud-runtime-policy.md) plus its existing `agentkit:*` coverage and is refreshed during `studio update`; customer-owned roles remain operator-managed.
 
-For each verified account/region/project, prepare `mpa_admin_workspace/mpa_admin_db` and one `mpa_business_workspace` (business name configurable). Each MPA retains its independent business database. AIDAP Workspace IDs are resolved/validated against account, region, project, name, engine and ownership tags. Optional explicit IDs adopt existing Workspaces. Legacy/manual mode is unchanged. New task stages are `admin_workspace`, `business_workspace`, `admin_database`.
+For shared-layout requests (CON-19 defines new per-agent requests), prepare `mpa_admin_workspace/mpa_admin_db` and one `mpa_business_workspace` (business name configurable). Each MPA retains its independent business database. AIDAP Workspace IDs are resolved/validated against account, region, project, name, engine and ownership tags. Optional explicit IDs adopt existing Workspaces. Legacy/manual mode is unchanged. New task stages are `admin_workspace`, `business_workspace`, `admin_database`.
 
 Store nonsecret intent and resource identity in a private SQLite bootstrap file. The built-in Studio profile temporarily uses `/tmp/veadk-studio/mpa-pg-bootstrap.sqlite3` so cloud creation does not write to its read-only code directory; standalone YAML retains `.adk/mpa-pg-bootstrap.sqlite3` unless configured otherwise. All creation processes on one instance must share this state path and its OS locks. The Studio `/tmp` path is not durable across instance replacement and is not shared by independent hosts; after state loss, inspect cloud resources before retrying an uncertain create. Persist intent before CreateWorkspace and ID before readiness waits. Never blindly retry uncertain creation; discover by scope/tags or adopt by ID. Definite authorization/parameter rejections can retry after correction. Preserve resources on cancellation, timeout and downstream failure; never replace a deleted recorded Workspace. Provider errors are sanitized; credentials are refreshed and account-checked per SDK call, used only server-side, and never returned by config/tasks or written to bootstrap state.
 
@@ -188,3 +213,27 @@ BytePlus defaults to the existing overseas Studio model/base, propagates provide
 Managed BytePlus IAM defaults to `open.byteplusapi.com`, retaining the trusted server `IAM_OPENAPI_HOST` override; shared IAM utilities and domestic creation behavior remain unchanged.
 
 Managed BytePlus AIDAP defaults to `open.byteplusapi.com` and retains the validated `VEADK_MPA_BYTEPLUS_AIDAP_HOST` override. API connectivity is not proof of Workspace creation success; failed states and ownership checks remain enforced, with no automatic deletion or adoption of failed same-name resources.
+
+## CON-18: Automatic OpenViking
+
+New built-in Beijing Studio requests explicitly select `openvikingMode: auto`; old requests without it, manual CLI profiles and BytePlus retain existing behavior. Third-step automatic preparation replaces manual OV inputs for these new requests. Provision one enterprise library with default VLM/Embedding identities, explicit Credentials Source=volcengine and versioned EndpointID values; add the already resolved Ark key only to a copied create payload. Never persist the model key in the intent; wait INIT to READY, obtain default user API Key server-side and inject OPENVIKING_URL/RESOURCE_ID/API_KEY/USER before Runtime deployment. Record scoped nonsecret intent/ID in the authorized deployment registry, reuse on retry and validate ownership/configuration. Missing registered resources, FAILED status or ambiguous create outcome fail explicitly; no blind recreation or Ark endpoint fallback. Keys are never stored in registry/tasks/results. Cancellation and Agent deletion retain OV. Default-model creation capability remains unverified until isolated live acceptance. General agents are unaffected. [Design](../../prd-spec/features/mpa-openviking-auto/2026-10-13-default-model-creation.md).
+
+CON-18 source correction: permit a matching previous no-Credentials intent to upgrade only with no OV ID, no pending Runtime operation and an explicitly false create-dispatch flag after proven rejection. Unknown/in-flight/changed or registered intents remain conflicts. Get readback must match Source/EndpointID. No UI fields or model-endpoint creation are added. See [source correction](../../prd-spec/bugfixes/mpa-openviking-source/2026-10-13-model-source.md).
+
+## CON-19: Independent business Workspace for new MPA requests
+
+New built-in Studio configurations advertise optional `businessWorkspaceMode: "per-agent"`. New forms explicitly submit/persist it; omission preserves `shared` and submitted drafts are not upgraded. `managed.postgres.business-workspace-mode` defaults to `shared`; explicit `per-agent` requires automatic PG and no configured business Workspace ID. Stable agent-scoped name/scope/tags protect independent business creation and retry. Prepare the shared management DB before reading existing per-agent deployment bindings; registered legacy shared bindings remain shared, conflicts fail closed. The resolved Workspace ID, layout and endpoint are pinned in the management registry; each Runtime receives its own business connection and unchanged shared registry connection. Preserve current uncertainty/cancellation recovery and local-lock limitations. No migration, business table initialization or Workspace deletion occurs; generic agents and runtime business interfaces are unchanged. Both existing provider adapters follow this contract. See [design and verification](../../prd-spec/features/mpa-agent-pg-workspace/2026-10-13-independent-business-workspace.md).
+
+## CON-20: Name preflight and dedicated aidb requests
+
+New built-in Studio config/forms explicitly select `businessDatabaseName: aidb` with `businessWorkspaceMode: per-agent`. They use `mpa_agent_<Runtime name>` for the Workspace, and `aidb` for the business database. Missing database selection retains legacy hashes and request fingerprints. Existing Workspace/database bindings are never renamed or switched. Initial unmarked aidb adoption requires verified dedicated Workspace ownership, matching database owner, no non-system/non-extension relation data and no previous Runtime/ready binding; missing/mismatched/nonempty databases fail closed. Initialization is transaction-locked and agent-marked before Runtime creation.
+
+Authorized name checks precede first Next, task acceptance and new-layout cloud preparation. Runtime, worker and target Workspace collisions reject foreign/ambiguous ownership; validated own bindings permit retry. Query failures/timeouts are explicit errors. A private provider/account/region task snapshot guards same-host concurrent names and prevents retry under different credentials; only active tasks reserve names. Cross-host atomic exclusion is not guaranteed by read-only checks. Generic agents, shared control resources and PG deletion policy are unchanged. See [approved design](../../prd-spec/features/mpa-name-preflight/2026-10-13-runtime-name-and-workspace-labels.md).
+
+New-layout web preflight/submission uses the server-derived owner/request internal identity. A supplied different agent ID is rejected; legacy explicit-ID requests retain their previous contract.
+
+## CON-21: Per-request maximum instances
+
+New editable MPA forms submit strict positive integer `maxInstance`, default 20, in basic information. The value is persisted with request identity, forwarded to the runner and applied as Runtime `MaxInstance`. Below-configured-minimum values fail before acceptance. Submitted values are immutable on retry; omitted/null legacy fields preserve existing fingerprints/profile defaults and are not auto-upgraded. Name-conflict errors use the existing danger/soft Alert with unchanged localized text. General-agent creation and existing Runtime settings are unaffected. See [design](../../prd-spec/features/mpa-create-scaling/2026-10-13-max-instance-input.md).
+
+OV route registration and configuration inspection must preserve lazy Studio startup: the signing/network helper loads on the first actual OV API call, not when importing the adapter. See [upstream-readiness correction](../../prd-spec/bugfixes/mpa-upstream-readiness/2026-10-13-startup-and-lockfile.md).

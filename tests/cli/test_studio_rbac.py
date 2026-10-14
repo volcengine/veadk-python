@@ -3858,7 +3858,7 @@ def test_mpa_runtime_delete_blocks_active_sessions_before_runtime_delete(
     assert response.json()["detail"]["blockers"] == ["active_sessions"]
     assert response.json()["detail"]["sessionCounts"]["active"] == 1
     assert deleted == []
-    assert [method for method, _url in runtime_requests] == ["GET", "GET"]
+    assert [method for method, _url in runtime_requests] == ["GET"]
 
 
 def test_mpa_runtime_delete_cleans_idle_sessions_then_runtime(
@@ -3936,7 +3936,6 @@ def test_mpa_runtime_delete_cleans_idle_sessions_then_runtime(
     assert response.json() == {"success": True}
     assert deleted == [runtime.runtime_id]
     assert [method for method, _url in runtime_requests] == [
-        "GET",
         "GET",
         "DELETE",
         "DELETE",
@@ -4039,7 +4038,6 @@ def test_mpa_runtime_delete_ignores_recovered_retryable_operation(
     assert response.json() == {"success": True}
     assert deleted == [runtime.runtime_id]
     assert [method for method, _url in runtime_requests] == [
-        "GET",
         "GET",
         "DELETE",
     ]
@@ -9002,3 +9000,85 @@ def test_agent_review_flow_enforces_shared_use_and_private_management(
             == 404
         )
     assert writes
+
+
+@pytest.mark.parametrize("fail_cleanup", [False, True])
+def test_mpa_delete_cleans_exclusive_resources_before_runtime(
+    monkeypatch, tmp_path, fail_cleanup
+):
+    from contextlib import asynccontextmanager
+    from agentkit.sdk.runtime.client import AgentkitRuntimeClient
+    from veadk.integrations.mpa.managed.deletion import ResourceDeletionError
+
+    runtime = _runtime_with_public_endpoint(
+        _runtime("runtime-mpa-owned-delete", "developer")
+    )
+    runtime.tags.append(SimpleNamespace(key="veadk:agent-type", value="mpa"))
+    events = []
+
+    class Cleanup:
+        async def preview(self):
+            return {"cleanupPlan": [], "retainedResources": []}
+
+        async def delete_resources(self):
+            events.append("resources")
+            if fail_cleanup:
+                raise ResourceDeletionError("skill_space", "permission")
+
+        async def mark_runtime_deleted(self):
+            events.append("registry_deleted")
+
+    @asynccontextmanager
+    async def cleanup(**kwargs):
+        assert kwargs["runtime"]["RuntimeId"] == runtime.runtime_id
+        assert kwargs["agent_id"] == runtime.runtime_id
+        yield Cleanup()
+
+    class Client:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        async def request(self, method, url, **kwargs):
+            assert "profile-status" not in url
+            assert kwargs["headers"]["x-user-id"] == "developer"
+            if method == "GET":
+                return _RuntimeJsonResponse(
+                    {"sessions": [{"sessionId": "s-idle", "status": "idle"}]}
+                )
+            events.append("session")
+            return _RuntimeJsonResponse({}, status_code=204)
+
+    monkeypatch.setattr(AgentkitRuntimeClient, "get_runtime", lambda self, req: runtime)
+    monkeypatch.setattr(
+        AgentkitRuntimeClient,
+        "delete_runtime",
+        lambda self, req: events.append("runtime"),
+    )
+    monkeypatch.setattr("httpx.AsyncClient", Client)
+    monkeypatch.setattr(
+        "veadk.integrations.mpa.managed.deletion.owned_resource_cleanup", cleanup
+    )
+    app = _create_studio_app(monkeypatch, tmp_path, developers="developer")
+    with TestClient(app) as client:
+        response = client.post(
+            "/web/delete-runtime",
+            headers={"X-VeADK-Local-User": "developer", "x-user-id": "forged-user"},
+            json={
+                "runtimeId": runtime.runtime_id,
+                "region": "cn-beijing",
+                "mpaInstanceId": "untrusted-client-id",
+            },
+        )
+    if fail_cleanup:
+        assert response.status_code == 409, response.text
+        assert response.json()["detail"]["stage"] == "skill_space"
+        assert events == ["session", "resources"]
+    else:
+        assert response.status_code == 200, response.text
+        assert events == ["session", "resources", "runtime", "registry_deleted"]

@@ -338,3 +338,35 @@ async def test_session_list_and_delete_forward_runtime_cleanup_requests() -> Non
     assert requests[0].headers["authorization"] == "Bearer bearer-value"
     assert requests[1].method == "DELETE"
     assert str(requests[1].url) == ("https://runtime.example/api/v1/sessions/session-1")
+
+
+@pytest.mark.asyncio
+async def test_deletion_session_transport_forwards_authenticated_identity():
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        if request.method == "GET":
+            return httpx.Response(200, json={"sessions": []})
+        return httpx.Response(204)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as transport:
+        client = MpaRuntimeClient(transport=transport)
+        await client.list_sessions(
+            endpoint="https://runtime.example",
+            bearer_token="test-runtime-token",
+            user_id="authenticated-owner",
+        )
+        await client.delete_session(
+            endpoint="https://runtime.example",
+            session_id="s-one",
+            bearer_token="test-runtime-token",
+            user_id="authenticated-owner",
+        )
+    assert all(
+        request.headers["x-user-id"] == "authenticated-owner" for request in requests
+    )
+    assert all(
+        request.headers["authorization"] == "Bearer test-runtime-token"
+        for request in requests
+    )

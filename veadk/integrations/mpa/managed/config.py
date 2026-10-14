@@ -119,6 +119,15 @@ def validate_creation_resources(values: dict[str, str]) -> dict[str, str]:
         raise ConfigurationError("Enter a valid PostgreSQL port")
     url, resource_id = selected["openvikingUrl"], selected["openvikingResourceId"]
     api_key = str(values.get("openvikingApiKey", ""))
+    mode = values.get("openvikingMode", "manual")
+    if (
+        mode not in {"manual", "auto"}
+        or mode == "auto"
+        and any((url, resource_id, api_key))
+    ):
+        raise ConfigurationError(
+            "Automatic OpenViking does not accept manual connection values"
+        )
     if any((url, resource_id, api_key)) and not all(
         (url, resource_id, api_key.strip())
     ):
@@ -157,16 +166,22 @@ def validate_creation_resources(values: dict[str, str]) -> dict[str, str]:
 
 
 def validate_creation_tos(values: dict[str, str]) -> dict[str, str]:
-    """Validate optional per-creation TOS mount credentials."""
-    selected = {
-        key: str(values.get(key, "")).strip()
-        for key in ("tosAccessKey", "tosSecretKey", "tosBucket")
-    }
-    if any(selected.values()) and not all(selected.values()):
-        raise ConfigurationError(
-            "TOS access key, secret key, and bucket are all required"
-        )
-    return selected
+    """Validate the Studio bucket-only IAM mount request."""
+    if any(
+        str(values.get(key, "")).strip() for key in ("tosAccessKey", "tosSecretKey")
+    ):
+        raise ConfigurationError("Studio TOS mounts use IAM Role, not access keys")
+    bucket = validate_tos_bucket_name(str(values.get("tosBucket", "")))
+    if bucket and not bucket.startswith("agentkit-platform-"):
+        raise ConfigurationError("Select a bucket starting with agentkit-platform-")
+    return {"tosBucket": bucket}
+
+
+def validate_tos_bucket_name(value: str) -> str:
+    bucket = value.strip()
+    if bucket and not re.fullmatch(r"[a-z0-9][a-z0-9-]{1,61}[a-z0-9]", bucket):
+        raise ConfigurationError("Select a valid TOS bucket")
+    return bucket
 
 
 def validate_runtime_name(value: str) -> str:
@@ -217,9 +232,12 @@ class Worker(Options):
     tos_access_key: str = Field(default="", repr=False)
     tos_secret_key: str = Field(default="", repr=False)
     tos_bucket: str = ""
+    tos_credential_type: Literal["access_key", "iam_role"] = "access_key"
 
     @property
     def tos_mount_enabled(self) -> bool:
+        if self.tos_credential_type == "iam_role":
+            return bool(self.tos_bucket)
         return bool(self.tos_access_key and self.tos_secret_key and self.tos_bucket)
 
     @field_validator("tos_access_key", "tos_secret_key", "tos_bucket")
@@ -243,9 +261,13 @@ class Worker(Options):
         if bool(self.existing_id) == bool(self.image):
             raise ValueError("Select an existing worker or a worker image")
         tos_values = (self.tos_access_key, self.tos_secret_key, self.tos_bucket)
-        if any(tos_values) and not all(tos_values):
+        if self.tos_credential_type == "iam_role":
+            validate_tos_bucket_name(self.tos_bucket)
+            if self.tos_access_key or self.tos_secret_key:
+                raise ValueError("IAM Role TOS mounts must not contain access keys")
+        elif any(tos_values) and not all(tos_values):
             raise ValueError("TOS access key, secret key, and bucket are all required")
-        if self.existing_id and all(tos_values):
+        if self.existing_id and self.tos_mount_enabled:
             raise ValueError("TOS mount settings require a newly created worker")
         if self.existing_id and self.env:
             raise ValueError("Environment settings require a newly created worker")
@@ -308,6 +330,8 @@ class Runtime(Options):
 
 class PostgresWorkspaces(Options):
     mode: Literal["manual", "auto"] = "manual"
+    business_workspace_mode: Literal["shared", "per-agent"] = "shared"
+    business_database_name: Literal["", "aidb"] = ""
     legacy_urls: Literal["reject", "ignore"] = "reject"
     admin_workspace_id: str = Field(
         default="", max_length=128, pattern=r"^[A-Za-z0-9_-]*$"
@@ -319,7 +343,7 @@ class PostgresWorkspaces(Options):
     business_workspace_name: str = Field(
         default="mpa_business_workspace",
         min_length=1,
-        max_length=63,
+        max_length=128,
         pattern=r"^[A-Za-z0-9_-]+$",
     )
     project_name: str = Field(default="default", min_length=1, max_length=128)
@@ -331,6 +355,14 @@ class PostgresWorkspaces(Options):
 
     @model_validator(mode="after")
     def distinct_workspaces(self):
+        if self.business_database_name and self.business_workspace_mode != "per-agent":
+            raise ValueError("aidb requires a dedicated business Workspace")
+        if self.business_workspace_mode == "per-agent" and (
+            self.mode != "auto" or self.business_workspace_id
+        ):
+            raise ValueError(
+                "Per-agent Workspaces require automatic PG without a business Workspace ID"
+            )
         if self.mode != "auto" and self.legacy_urls != "reject":
             raise ValueError("Ignoring legacy URLs requires automatic PostgreSQL mode")
         if self.mode == "manual" and not (
@@ -349,6 +381,10 @@ class PostgresWorkspaces(Options):
 
 class Iam(Options):
     mode: Literal["existing", "auto"] = "existing"
+
+
+class OpenViking(Options):
+    mode: Literal["manual", "auto"] = "manual"
 
 
 class ModelKey(Options):
@@ -373,6 +409,7 @@ class Managed(Options):
     postgres: PostgresWorkspaces | None = None
     iam: Iam = Field(default_factory=Iam)
     model_key: ModelKey = Field(default_factory=ModelKey)
+    openviking: OpenViking = Field(default_factory=OpenViking)
     credential_file: str = ""
     from_runtime: str = ""
     template_file: str = ""
@@ -409,6 +446,8 @@ class Profile:
     admin_url: str
     shared_url: str
     openviking_enabled: bool | None = None
+    openviking_auto_available: bool = False
+    per_agent_postgres_available: bool = False
 
     @property
     def provider(self):
@@ -440,9 +479,33 @@ class Profile:
         migration_required = auto and bool(self.shared_url)
         return {
             **self.image_defaults(),
+            **(
+                {"openvikingMode": "auto"}
+                if self.openviking_auto_available
+                or self.managed.openviking.mode == "auto"
+                else {}
+            ),
             "pgHost": (admin.host or "") if admin else "",
             "pgPort": str(admin.port or 5432) if admin else "",
             **({"postgresMode": "auto"} if auto else {}),
+            **(
+                {
+                    "businessWorkspaceMode": "per-agent",
+                    **(
+                        {"businessDatabaseName": "aidb"}
+                        if self.per_agent_postgres_available
+                        or self.managed.postgres.business_database_name == "aidb"
+                        else {}
+                    ),
+                }
+                if auto
+                and self.managed.postgres is not None
+                and (
+                    self.per_agent_postgres_available
+                    or self.managed.postgres.business_workspace_mode == "per-agent"
+                )
+                else {}
+            ),
             **({"postgresMigrationRequired": True} if migration_required else {}),
             **(
                 {
@@ -481,9 +544,56 @@ def with_creation_images(profile: Profile, images: dict[str, str]) -> Profile:
     return replace(profile, managed=managed)
 
 
+def with_creation_scaling(profile: Profile, maximum: int | None) -> Profile:
+    """Apply an explicit request limit without upgrading legacy profile defaults."""
+    if maximum is None:
+        return profile
+    if type(maximum) is not int or not 1 <= maximum <= 2**53 - 1:
+        raise ConfigurationError("Maximum instances must be a positive safe integer")
+    minimum = profile.managed.runtime.min_instance
+    if minimum is not None and maximum < minimum:
+        raise ConfigurationError("Minimum instances exceed maximum instances")
+    managed = profile.managed.model_copy(deep=True)
+    managed.runtime.max_instance = maximum
+    return replace(profile, managed=managed)
+
+
 def with_creation_resources(profile: Profile, resources: dict[str, str]) -> Profile:
     selected = validate_creation_resources(resources)
     managed = profile.managed.model_copy(deep=True)
+    business_mode = resources.get("businessWorkspaceMode")
+    if business_mode is not None:
+        if business_mode not in {"shared", "per-agent"}:
+            raise ConfigurationError("Invalid business Workspace mode")
+        if managed.postgres is None or managed.postgres.mode != "auto":
+            raise ConfigurationError(
+                "Business Workspace selection requires automatic PG"
+            )
+        if business_mode == "per-agent" and managed.postgres.business_workspace_id:
+            raise ConfigurationError(
+                "Per-agent mode does not accept a shared business Workspace ID"
+            )
+        managed.postgres.business_workspace_mode = (
+            "per-agent" if business_mode == "per-agent" else "shared"
+        )
+    database = resources.get("businessDatabaseName")
+    if database is not None:
+        if database not in {"", "aidb"} or managed.postgres is None:
+            raise ConfigurationError("Invalid business database selection")
+        if database and (
+            managed.postgres.mode != "auto"
+            or managed.postgres.business_workspace_mode != "per-agent"
+        ):
+            raise ConfigurationError("aidb requires automatic dedicated PostgreSQL")
+        managed.postgres.business_database_name = "aidb" if database else ""
+    mode = resources.get("openvikingMode", "manual")
+    if mode == "auto" and (
+        profile.provider != "volcengine" or profile.region != "cn-beijing"
+    ):
+        raise ConfigurationError(
+            "Automatic OpenViking is available only in Volcengine Beijing"
+        )
+    managed.openviking.mode = "auto" if mode == "auto" else "manual"
     host, port = selected["pgHost"], selected["pgPort"]
     if (
         profile.managed.postgres
@@ -522,7 +632,9 @@ def with_creation_resources(profile: Profile, resources: dict[str, str]) -> Prof
         managed.runtime.env["OPENVIKING_API_KEY"] = resources["openvikingApiKey"]
         managed.runtime.env["OPENVIKING_USER"] = "default"
     return replace(
-        profile, managed=managed, openviking_enabled=bool(selected["openvikingUrl"])
+        profile,
+        managed=managed,
+        openviking_enabled=mode == "auto" or bool(selected["openvikingUrl"]),
     )
 
 
@@ -533,9 +645,10 @@ def with_creation_tos(profile: Profile, values: dict[str, str]) -> Profile:
     managed = profile.managed.model_copy(deep=True)
     worker = managed.worker.model_dump()
     worker.update(
-        tos_access_key=selected["tosAccessKey"],
-        tos_secret_key=selected["tosSecretKey"],
+        tos_access_key="",
+        tos_secret_key="",
         tos_bucket=selected["tosBucket"],
+        tos_credential_type="iam_role",
     )
     try:
         managed.worker = Worker.model_validate(worker)
@@ -638,7 +751,13 @@ def _read_configuration_file(path: Path, *, template: bool = False) -> str:
 
 def load_studio_profile(*, region: str = "", provider: str = "volcengine") -> Profile:
     """Load the code-owned Studio profile without a configuration file."""
-    return load_profile(None, region=region, provider=provider)
+    profile = load_profile(None, region=region, provider=provider)
+    return replace(
+        profile,
+        per_agent_postgres_available=True,
+        openviking_auto_available=profile.provider == "volcengine"
+        and profile.region == "cn-beijing",
+    )
 
 
 def load_profile(

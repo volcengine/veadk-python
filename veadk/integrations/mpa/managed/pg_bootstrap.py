@@ -29,8 +29,8 @@ import sqlite3
 from sqlalchemy.engine import make_url
 
 from .admin_database import initialize_admin_database
-from .config import ADMIN_DATABASE_NAME, validate_postgres_layout
-from .database import DeploymentError
+from .config import ADMIN_DATABASE_NAME, validate_postgres_layout, validate_runtime_name
+from .database import AgentDeploymentRegistry, DeploymentError, database_name
 from .pg_cloud import PGCloudError, PGNotReady, check_ready
 
 
@@ -124,6 +124,16 @@ class BootstrapStore:
                 )
 
 
+def agent_business_scope(account, region, project, agent_id):
+    return hashlib.sha256(
+        json.dumps([account, region, project, "business", agent_id]).encode()
+    ).hexdigest()[:32]
+
+
+def named_business_workspace(runtime_name):
+    return "mpa_agent_" + validate_runtime_name(runtime_name)
+
+
 def validate_workspace(row, *, account, region, project, name, tags, owned):
     expected = {
         "account_id": account,
@@ -170,7 +180,10 @@ async def ensure_workspace(store, cloud, settings, scope, account, region, purpo
         else settings.business_workspace_id
     )
     tags = {"veadk-pg-scope": scope, "veadk-pg-purpose": purpose}
-    config = json.dumps([name, "PostgreSQL_17"])
+    dedicated_aidb = purpose == "business" and settings.business_database_name == "aidb"
+    if dedicated_aidb:
+        tags["veadk-pg-database"] = "aidb"
+    config = json.dumps([name, "PostgreSQL_17", *(["aidb"] if dedicated_aidb else [])])
     record = store.read(scope, purpose)
     if record and record[0] != config:
         raise DeploymentError(
@@ -178,6 +191,9 @@ async def ensure_workspace(store, cloud, settings, scope, account, region, purpo
         )
     ident = record[1] if record else ""
     owned = bool(record and record[2])
+    agent_owned = (
+        purpose == "business" and settings.business_workspace_mode == "per-agent"
+    )
     if explicit and ident and explicit != ident:
         raise DeploymentError(
             "Configured Workspace ID differs from recorded bootstrap identity"
@@ -205,10 +221,10 @@ async def ensure_workspace(store, cloud, settings, scope, account, region, purpo
                     continue
                 if row.get("workspace_status") == "CreateFailed":
                     # Confirm terminal creation failure before changing local state.
-                    validate_workspace(row, **validation, owned=False)
+                    validate_workspace(row, **validation, owned=agent_owned)
                     row = await cloud.detail(candidate_id)
                 if row.get("workspace_status") == "CreateFailed":
-                    validate_workspace(row, **validation, owned=False)
+                    validate_workspace(row, **validation, owned=agent_owned)
                     failed.append(row["workspace_id"])
                 else:
                     candidates.append(row)
@@ -226,7 +242,7 @@ async def ensure_workspace(store, cloud, settings, scope, account, region, purpo
             if candidates:
                 row = candidates[0]
                 try:
-                    validate_workspace(row, **validation, owned=owned)
+                    validate_workspace(row, **validation, owned=owned or agent_owned)
                 except PGNotReady:
                     # Owned discovery metadata is subject to the same readiness wait.
                     if not row.get("workspace_id"):
@@ -265,7 +281,7 @@ async def ensure_workspace(store, cloud, settings, scope, account, region, purpo
         if explicit and not (record and record[1]):
             # Validate adoption before pinning an operator-supplied identity.
             row = await cloud.detail(ident)
-            validate_workspace(row, **validation, owned=owned)
+            validate_workspace(row, **validation, owned=owned or agent_owned)
         store.save(scope, purpose, config, ident, owned)
         try:
             try:
@@ -280,7 +296,7 @@ async def ensure_workspace(store, cloud, settings, scope, account, region, purpo
                     ) from None
                 raise
             if row.get("workspace_status") == "CreateFailed" and owned and not explicit:
-                validate_workspace(row, **validation, owned=False)
+                validate_workspace(row, **validation, owned=agent_owned)
                 store.retire_failed(scope, purpose, ident, clear_intent=True)
                 if dispatched:
                     raise DeploymentError(
@@ -289,7 +305,7 @@ async def ensure_workspace(store, cloud, settings, scope, account, region, purpo
                 ident, record, owned = "", None, False
                 continue
             try:
-                validate_workspace(row, **validation, owned=owned)
+                validate_workspace(row, **validation, owned=owned or agent_owned)
             except PGNotReady:
                 # Terminal/unknown states cannot masquerade as delayed metadata.
                 check_ready(row.get("workspace_status"))
@@ -301,12 +317,36 @@ async def ensure_workspace(store, cloud, settings, scope, account, region, purpo
             await asyncio.sleep(3)
 
 
+async def registered_business_binding(url, account, region, agent_id):
+    """Read existing bindings before allocating another business Workspace."""
+    registry = AgentDeploymentRegistry(url)
+    try:
+        async with registry.lock(account, region, agent_id) as entry:
+            return await entry.read()
+    finally:
+        await registry.close()
+
+
 async def prepare_postgres(
-    profile, cloud, account, *, progress=lambda stage: None, source_url=""
+    profile,
+    cloud,
+    account,
+    *,
+    progress=lambda stage: None,
+    source_url="",
+    agent_id="",
+    runtime_name="",
 ):
     settings = profile.managed.postgres
     if settings is None or settings.mode != "auto":
         return profile
+    per_agent = settings.business_workspace_mode == "per-agent"
+    if per_agent and (not agent_id or settings.business_workspace_id or source_url):
+        raise DeploymentError(
+            "Per-agent PG requires a stable agent ID and no shared Workspace adoption or migration"
+        )
+    if per_agent:
+        database_name(account, profile.region, agent_id)
     if profile.shared_url and not source_url:
         raise DeploymentError(
             "Legacy registry connection is configured; migrate with init-admin-db and remove the legacy registry URL before automatic provisioning"
@@ -326,11 +366,108 @@ async def prepare_postgres(
             admin_id, admin_connection = await ensure_workspace(
                 store, cloud, settings, scope, account, profile.region, "admin"
             )
+            admin = make_url(admin_connection)
+            shared_url = admin.set(database=ADMIN_DATABASE_NAME).render_as_string(
+                hide_password=False
+            )
+            business_settings, business_scope, binding = settings, scope, {}
+            if per_agent:
+                progress("admin_database")
+                await initialize_admin_database(
+                    replace(profile, shared_url=shared_url),
+                    maintenance_url=admin_connection,
+                )
+                binding = await registered_business_binding(
+                    shared_url, account, profile.region, agent_id
+                )
+                mode = (
+                    binding.get("business_workspace_mode", "shared")
+                    if binding
+                    else "per-agent"
+                )
+                if binding and (
+                    binding.get("state") in {"deleted", "deleting"}
+                    or binding.get("admin_workspace_id") != admin_id
+                    or not binding.get("business_workspace_id")
+                    or mode not in {"shared", "per-agent"}
+                ):
+                    raise DeploymentError(
+                        "Existing business Workspace binding cannot be safely reused"
+                    )
+                business_settings = settings.model_copy(
+                    update={
+                        "business_workspace_mode": mode,
+                        "business_database_name": (
+                            "aidb"
+                            if binding.get("business_database_name") == "aidb"
+                            or binding.get("database_name") == "aidb"
+                            else ""
+                        )
+                        if binding
+                        else settings.business_database_name,
+                        "business_workspace_id": binding.get(
+                            "business_workspace_id", ""
+                        ),
+                    }
+                )
+                if mode == "per-agent":
+                    business_scope = agent_business_scope(
+                        account, profile.region, settings.project_name, agent_id
+                    )
+                    selected = store.read(business_scope, "business")
+                    if selected:
+                        previous = json.loads(selected[0])
+                        previous_database = (
+                            "aidb"
+                            if len(previous) == 3 and previous[2] == "aidb"
+                            else ""
+                        )
+                        if (
+                            binding
+                            and business_settings.business_database_name
+                            != previous_database
+                        ):
+                            raise DeploymentError(
+                                "Registered database layout differs from bootstrap"
+                            )
+                        business_settings.business_workspace_name = previous[0]
+                        business_settings.business_database_name = previous_database
+                    elif binding:
+                        detail = await cloud.detail(binding["business_workspace_id"])
+                        business_settings.business_workspace_name = binding.get(
+                            "business_workspace_name"
+                        ) or detail.get("workspace_name", "")
+                    else:
+                        business_settings.business_workspace_name = (
+                            named_business_workspace(runtime_name or agent_id)
+                            if business_settings.business_database_name == "aidb"
+                            else database_name(account, profile.region, agent_id)
+                        )
+                else:
+                    business_settings.business_database_name = ""
             progress("business_workspace")
             business_id, business_connection = await ensure_workspace(
-                store, cloud, settings, scope, account, profile.region, "business"
+                store,
+                cloud,
+                business_settings,
+                business_scope,
+                account,
+                profile.region,
+                "business",
             )
-            admin, business = make_url(admin_connection), make_url(business_connection)
+            business = make_url(business_connection)
+            if binding and (
+                (
+                    "database_host" in binding
+                    and str(binding["database_host"]).lower()
+                    != (business.host or "").lower()
+                )
+                or (
+                    "database_port" in binding
+                    and binding["database_port"] != (business.port or 5432)
+                )
+            ):
+                raise DeploymentError("Registered business database endpoint changed")
             if profile.admin_url:
                 old = make_url(profile.admin_url)
                 if ((old.host or "").lower(), old.port or 5432) != (
@@ -341,7 +478,7 @@ async def prepare_postgres(
                         "Existing business PostgreSQL endpoint changed; explicitly adopt or migrate before provisioning"
                     )
             managed = profile.managed.model_copy(deep=True)
-            managed.postgres = settings.model_copy(
+            managed.postgres = business_settings.model_copy(
                 update={
                     "mode": "manual",
                     "admin_workspace_id": admin_id,
@@ -366,15 +503,14 @@ async def prepare_postgres(
                 managed=managed,
                 values=values,
                 admin_url=business_connection,
-                shared_url=admin.set(database=ADMIN_DATABASE_NAME).render_as_string(
-                    hide_password=False
-                ),
+                shared_url=shared_url,
             )
             validate_postgres_layout(resolved)
-            progress("admin_database")
-            await initialize_admin_database(
-                resolved, source_url=source_url, maintenance_url=admin_connection
-            )
+            if not per_agent:
+                progress("admin_database")
+                await initialize_admin_database(
+                    resolved, source_url=source_url, maintenance_url=admin_connection
+                )
             return resolved
 
     try:

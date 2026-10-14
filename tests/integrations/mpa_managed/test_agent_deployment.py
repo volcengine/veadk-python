@@ -88,6 +88,8 @@ class Registry:
 
 
 class Databases:
+    business_database_name: str = ""
+
     def __init__(self):
         self.key = ""
         self.mcp_key = ""
@@ -879,5 +881,30 @@ def test_legacy_pending_create_accepts_studio_provenance_upgrade():
             "veadk:mpa-instance-id": "agent-one",
         }
         assert not registry.row["pending"]
+
+    asyncio.run(run())
+
+
+def test_dedicated_aidb_deploys_and_reuses_the_same_database():
+    async def run():
+        svc, registry, cloud, databases = deployer()
+        databases.business_database_name = "aidb"
+        original = databases.ensure
+
+        async def ensure(*args, **kwargs):
+            await original(*args, **kwargs)
+            return "aidb"
+
+        databases.ensure = ensure
+        databases.mcp_token_secret = AsyncMock(wraps=databases.mcp_token_secret)
+        first = await svc.deploy(template())
+        second = await svc.deploy(template())
+        assert first["database_name"] == second["database_name"] == "aidb"
+        assert env_map(cloud.runtimes["r-agent"])["PGDATABASE"] == "aidb"
+        assert all(
+            call.args[0] == "aidb"
+            for call in databases.mcp_token_secret.await_args_list
+        )
+        assert len(cloud.creates) == 1
 
     asyncio.run(run())

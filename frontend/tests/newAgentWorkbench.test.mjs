@@ -417,8 +417,8 @@ test("MPA Profile-only edits apply the profile without the deployment steps", ()
   assert.match(workbenchSource, /step === "deployment" && !profileOnly/);
   assert.match(workbenchSource, /profileOnly[\s\S]*?t\("workbench\.actions\.applyProfileAgain"\)[\s\S]*?t\("workbench\.actions\.applyProfile"\)/);
   assert.match(customCreateSource, /mpaProfileOnly\?: boolean/);
-  assert.match(customCreateSource, /profileOnly=\{deploymentTarget\?\.mpaProfileOnly\}/);
-  const profileOnlyStart = customCreateSource.indexOf("if (deploymentTarget?.mpaProfileOnly) {");
+  assert.match(customCreateSource, /profileOnly=\{isMpaDeployment && deploymentTarget\?\.mpaProfileOnly\}/);
+  const profileOnlyStart = customCreateSource.indexOf("if (isMpaDeployment && deploymentTarget?.mpaProfileOnly) {");
   const normalDeployStart = customCreateSource.indexOf("const envMap = new Map", profileOnlyStart);
   assert.ok(profileOnlyStart >= 0 && normalDeployStart > profileOnlyStart);
   const profileOnlyBranch = customCreateSource.slice(profileOnlyStart, normalDeployStart);

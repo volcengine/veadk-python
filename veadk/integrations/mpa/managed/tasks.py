@@ -31,8 +31,11 @@ from pathlib import Path
 
 from .diagnostics import classify_error, validate_diagnostic
 from .iam import ERROR_KEYS
+from .openviking import ERROR_KEYS as OPENVIKING_ERROR_KEYS
+from .names import ERROR_KEYS as NAME_ERROR_KEYS, NameCheckError
 
 logger = logging.getLogger(__name__)
+ERROR_KEYS = ERROR_KEYS | OPENVIKING_ERROR_KEYS | NAME_ERROR_KEYS
 
 STAGES = {
     "queued",
@@ -46,6 +49,8 @@ STAGES = {
     "database",
     "skills",
     "worker",
+    "openviking",
+    "openviking_key",
     "deploying",
     "verifying",
 }
@@ -70,6 +75,12 @@ class CreationTasks:
             }:
                 db.execute(
                     "ALTER TABLE tasks ADD COLUMN images TEXT NOT NULL DEFAULT '{}'"
+                )
+            if "name_scope" not in {
+                row[1] for row in db.execute("PRAGMA table_info(tasks)")
+            }:
+                db.execute(
+                    "ALTER TABLE tasks ADD COLUMN name_scope TEXT NOT NULL DEFAULT '{}'"
                 )
             db.execute(
                 "CREATE TABLE IF NOT EXISTS task_diagnostics (id INTEGER PRIMARY KEY, task_id TEXT NOT NULL, stage TEXT NOT NULL, operation TEXT NOT NULL, category TEXT NOT NULL, attempt INTEGER NOT NULL, outcome TEXT NOT NULL, created REAL NOT NULL)"
@@ -180,6 +191,7 @@ class CreationTasks:
         secrets=None,
         studio_runtime_owner=None,
         tos=None,
+        name_scope=None,
     ):
         if "openvikingApiKey" in payload:
             raise TaskError("Secrets must not be included in stored task inputs")
@@ -193,6 +205,14 @@ class CreationTasks:
             if owner_key(studio_runtime_owner) != owner:
                 raise TaskError("Studio Runtime owner does not match task owner")
         encoded = json.dumps(payload, sort_keys=True)
+        if name_scope is not None and (
+            set(name_scope) != {"provider", "account", "region"}
+            or not all(
+                isinstance(value, str) and value and len(value) <= 128
+                for value in name_scope.values()
+            )
+        ):
+            raise TaskError("Invalid creation name scope")
         # Reconcile stopped supervisors before acquiring the write transaction.
         # get() may write interrupted status and must not nest a SQLite writer.
         with self.db() as db:
@@ -209,8 +229,21 @@ class CreationTasks:
             ).fetchone()
             if row and row["payload"] != encoded:
                 raise TaskError("Request identity already has different inputs")
+            if (
+                row
+                and json.loads(row["name_scope"])
+                and name_scope is not None
+                and json.loads(row["name_scope"]) != name_scope
+            ):
+                raise TaskError(
+                    "Creation account snapshot differs; restore the original deployment credentials"
+                )
             if row and row["state"] in ACTIVE | {"succeeded"}:
                 return self.get(owner, row["id"])
+            if name_scope is not None and self._name_taken(
+                db, owner, payload, name_scope
+            ):
+                raise NameCheckError("runtimeNameTaken")
             selected_images = json.loads(row["images"]) if row else dict(images or {})
             count = db.execute(
                 "SELECT COUNT(*) FROM tasks WHERE state IN ('running','cancelling')"
@@ -223,7 +256,7 @@ class CreationTasks:
                 raise TaskError("Another creation is running; wait or cancel it")
             task_id = row["id"] if row else str(uuid.uuid4())
             db.execute(
-                "INSERT INTO tasks (id,owner,request,payload,state,stage,supervisor,updated,images) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET state='running', stage='queued', result='{}', error='', supervisor=excluded.supervisor, updated=excluded.updated",
+                "INSERT INTO tasks (id,owner,request,payload,state,stage,supervisor,updated,images,name_scope) VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET state='running', stage='queued', result='{}', error='', supervisor=excluded.supervisor, updated=excluded.updated, name_scope=excluded.name_scope",
                 (
                     task_id,
                     owner,
@@ -234,6 +267,9 @@ class CreationTasks:
                     os.getpid(),
                     time.time(),
                     json.dumps(selected_images),
+                    json.dumps(
+                        name_scope or (json.loads(row["name_scope"]) if row else {})
+                    ),
                 ),
             )
         task = asyncio.create_task(
@@ -251,6 +287,36 @@ class CreationTasks:
         self.running[task_id] = task
         task.add_done_callback(lambda _: self.running.pop(task_id, None))
         return self.get(owner, task_id)
+
+    def _name_taken(self, db, owner, payload, scope):
+        for row in db.execute(
+            "SELECT owner,request,payload,name_scope FROM tasks WHERE state IN ('running','cancelling')"
+        ):
+            if row["owner"] == owner and row["request"] == payload["requestId"]:
+                continue
+            other = json.loads(row["payload"])
+            other_scope = json.loads(row["name_scope"])
+            if other_scope and other_scope != scope:
+                continue
+            if not other_scope and (
+                other.get("provider", "volcengine") != scope["provider"]
+                or other["region"] != scope["region"]
+            ):
+                continue
+            if other.get("name", other.get("agentId")) == payload["name"]:
+                return True
+        return False
+
+    def check_name(self, owner, payload, scope):
+        with self.db() as db:
+            active = db.execute(
+                "SELECT owner,id FROM tasks WHERE state IN ('running','cancelling')"
+            ).fetchall()
+        for row in active:
+            self.get(row["owner"], row["id"])
+        with self.db() as db:
+            if self._name_taken(db, owner, payload, scope):
+                raise NameCheckError("runtimeNameTaken")
 
     async def _run(
         self,
@@ -295,10 +361,23 @@ class CreationTasks:
                         "pgPort",
                         "openvikingUrl",
                         "openvikingResourceId",
+                        "openvikingMode",
+                        "businessWorkspaceMode",
+                        "businessDatabaseName",
                     )
                     if key in payload
                 },
             }
+            if "maxInstance" in payload:
+                data["maxInstance"] = payload["maxInstance"]
+            with self.db() as db:
+                snapshot = json.loads(
+                    db.execute(
+                        "SELECT name_scope FROM tasks WHERE id=?", (task_id,)
+                    ).fetchone()[0]
+                )
+            if snapshot:
+                data["expectedAccount"] = snapshot["account"]
             if payload.get("provider") == "byteplus":
                 data["provider"] = "byteplus"
             if studio_runtime_owner is not None:

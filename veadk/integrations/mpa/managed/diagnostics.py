@@ -52,6 +52,9 @@ CATEGORIES = {
     "protocol_error",
 }
 OPERATIONS = {
+    "create_openviking",
+    "get_openviking",
+    "get_openviking_key",
     "list_model_keys",
     "get_model_key",
     "get_reference_worker",
@@ -92,6 +95,8 @@ CODE_CATEGORIES = {
     "RequestTimeout": "timeout",
 }
 DEPLOYMENT_CATEGORIES = {
+    "runtimeNameTaken": "invalid_request",
+    "runtimeNameCheckFailed": "unavailable",
     "iamPermissionDenied": "permission",
     "iamTrustConflict": "ownership",
     "iamPolicyConflict": "ownership",
