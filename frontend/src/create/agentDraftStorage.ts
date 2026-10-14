@@ -109,7 +109,8 @@ function stripBrowserStorageSecrets(
           mcpTools: draft.mcpTools.map((tool) => {
             if (
               !tool.authTokenEnv ||
-              !transientMcpKeys.has(tool.authTokenEnv)
+              !transientMcpKeys.has(tool.authTokenEnv) ||
+              tool.credentialConfigured === true
             ) {
               return tool;
             }

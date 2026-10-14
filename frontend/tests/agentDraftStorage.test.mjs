@@ -698,3 +698,122 @@ test("reports browser storage write failures with a recovery action", () => {
     /Delete unused drafts or clear this site's storage/,
   );
 });
+
+
+const authBuild = await build({
+  entryPoints: [
+    fileURLToPath(new URL("../src/create/mcpAuth.ts", import.meta.url)),
+  ],
+  bundle: true,
+  format: "esm",
+  platform: "node",
+  target: "node20",
+  write: false,
+});
+const { hydrateMcpCredentialValues, prepareMcpAuth, updateMcpAuthTokenInput } =
+  await import(
+    `data:text/javascript;base64,${Buffer.from(authBuild.outputFiles[0].contents).toString("base64")}`
+  );
+
+for (const scope of ["root", "child", "workflow"]) {
+  test(`refresh retains the published MCP reference after hydration in ${scope}`, () => {
+    const storage = memoryStorage();
+    const owner = draft({
+      name: "published_agent",
+      mcpTools: [
+        {
+          name: "metrics",
+          url: "https://mcp.example.com/metrics",
+          transport: "http",
+          authTokenEnv: "PUBLISHED_METRICS_AUTH_TOKEN",
+          credentialConfigured: true,
+        },
+      ],
+      deployment: {
+        envValues: { PUBLISHED_METRICS_AUTH_TOKEN: "synthetic-hydrated-value" },
+      },
+    });
+    const source =
+      scope === "root"
+        ? owner
+        : scope === "child"
+          ? draft({ subAgents: [owner] })
+          : draft({
+              workflow: {
+                type: "sequential",
+                edges: [],
+                nodes: [{ id: "node", agent: owner }],
+              },
+            });
+    const hydrated = hydrateMcpCredentialValues(source, [
+      {
+        agentName: "published_agent",
+        authTokenEnv: "PUBLISHED_METRICS_AUTH_TOKEN",
+        url: "https://mcp.example.com/metrics",
+        value: "synthetic-hydrated-value",
+      },
+    ]);
+    const select = (value) =>
+      scope === "root"
+        ? value
+        : scope === "child"
+          ? value.subAgents[0]
+          : value.workflow.nodes[0].agent;
+    assert.equal(
+      select(hydrated).mcpTools[0].authToken,
+      "synthetic-hydrated-value",
+    );
+    writeWorkspaceDrafts(storage, "fixture", [
+      { id: "published", updatedAt: 1, draft: hydrated },
+    ]);
+    const loaded = loadWorkspaceDrafts(storage, "fixture")[0].draft;
+    assert.equal(
+      select(loaded).mcpTools[0].authTokenEnv,
+      "PUBLISHED_METRICS_AUTH_TOKEN",
+    );
+    assert.equal(select(loaded).mcpTools[0].credentialConfigured, true);
+    const prepared = prepareMcpAuth(loaded);
+    assert.equal(
+      select(prepared.draft).mcpTools[0].authTokenEnv,
+      "PUBLISHED_METRICS_AUTH_TOKEN",
+    );
+    assert.equal(select(prepared.draft).mcpTools[0].authToken, undefined);
+    assert.deepEqual(prepared.envValues, {});
+    assert.equal(
+      select(loaded).deployment.envValues.PUBLISHED_METRICS_AUTH_TOKEN,
+      undefined,
+    );
+    assert.doesNotMatch(
+      storage.value(workspaceDraftsKey("fixture")),
+      /synthetic-hydrated-value/,
+    );
+    assert.deepEqual(sanitizeAgentDraftForStorage(loaded), loaded);
+    assert.equal(
+      select(hydrated).mcpTools[0].authToken,
+      "synthetic-hydrated-value",
+    );
+  });
+}
+
+for (const value of ["", "synthetic-replacement-value"]) {
+  test(`storage does not restore a configured reference after explicit ${value ? "replacement" : "removal"}`, () => {
+    const configured = {
+      name: "metrics",
+      transport: "http",
+      url: "https://mcp.example.com/metrics",
+      authTokenEnv: "PUBLISHED_METRICS_AUTH_TOKEN",
+      authToken: "synthetic-old-value",
+      credentialConfigured: true,
+    };
+    const edited = updateMcpAuthTokenInput(configured, value);
+    const source = draft({ mcpTools: [edited] });
+    const safe = sanitizeAgentDraftForStorage(source);
+    assert.equal(safe.mcpTools[0].authTokenEnv, undefined);
+    assert.notEqual(safe.mcpTools[0].credentialConfigured, true);
+    assert.equal(safe.mcpTools[0].authToken, undefined);
+    assert.doesNotMatch(
+      JSON.stringify(safe),
+      /synthetic-old-value|synthetic-replacement-value/,
+    );
+  });
+}

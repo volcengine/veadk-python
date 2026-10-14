@@ -687,6 +687,8 @@ export interface ProjectPreviewProps {
   deploymentActionTargetId?: string;
   /** Existing Runtime id when this deployment updates an Agent in place. */
   deploymentRuntimeId?: string;
+  /** Source-preserving updates publish overlays without managing MPA Profiles. */
+  deploymentEditMode?: "source-preserving" | "regenerate";
   /** Existing MPA instance id when it differs from the platform Runtime id. */
   deploymentMpaInstanceId?: string;
   /** Existing platform Runtime resource name when publishing an update. */
@@ -850,6 +852,7 @@ export function ProjectPreview({
   deploymentConfirmation,
   deploymentActionTargetId,
   deploymentRuntimeId,
+  deploymentEditMode,
   deploymentMpaInstanceId,
   deploymentRuntimeName,
   deploymentRuntimeRevision,
@@ -1021,7 +1024,10 @@ export function ProjectPreview({
   const githubUpdateOffloaded =
     Boolean(deploymentRuntimeId && githubCicdBinding?.pipelineId);
   const isMpaDeployment = Boolean(agentDraft);
-  const shouldRunMpaLifecycle = isMpaDeployment && !githubUpdateOffloaded;
+  const shouldRunMpaLifecycle =
+    isMpaDeployment &&
+    deploymentEditMode !== "source-preserving" &&
+    !githubUpdateOffloaded;
   const baseDeploymentSteps = deploymentPrimaryPane
     ? codePackageDeploySteps(t)
     : deploySteps(t);

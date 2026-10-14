@@ -644,3 +644,63 @@ def test_run_agentkit_app_uses_explicit_and_environment_configuration(
 def test_run_agentkit_app_rejects_unmanaged_app() -> None:
     with pytest.raises(ValueError, match="create_agentkit_app"):
         agentkit_app.run_agentkit_app(FastAPI())
+
+
+@pytest.mark.parametrize(
+    "manifest_case",
+    ["valid", "extra_secret", "duplicate", "query", "missing", "symlink"],
+)
+def test_source_overlay_metadata_is_public_and_never_a_builder_draft(
+    monkeypatch,
+    tmp_path,
+    manifest_case,
+) -> None:
+    import json
+
+    from veadk.cli.runtime_update_recovery import assess_runtime_update_agent
+
+    entry = {
+        "name": "orders",
+        "transport": "http",
+        "url": "https://mcp.example.com/orders",
+        "authTokenEnv": "MCP_ORDERS_AUTH",
+    }
+    if manifest_case == "extra_secret":
+        entry["authToken"] = "synthetic-secret-must-not-escape"
+    if manifest_case == "query":
+        entry["url"] += "?key=synthetic-secret-must-not-escape"
+    manifest = json.dumps({"agent": [entry], "agent_sub_1": []})
+    if manifest_case == "duplicate":
+        manifest = '{"agent": [], "agent": []}'
+    if manifest_case == "symlink":
+        (tmp_path / "real.json").write_text(manifest)
+        (tmp_path / "mcp.json").symlink_to(tmp_path / "real.json")
+    elif manifest_case != "missing":
+        (tmp_path / "mcp.json").write_text(manifest)
+    monkeypatch.setenv("VEADK_STUDIO_SKILL_OVERLAY", str(tmp_path))
+    monkeypatch.setenv("MCP_ORDERS_AUTH", "synthetic-secret-must-not-escape")
+    client = TestClient(agentkit_app.create_agentkit_app(_root_agent()))
+    response = client.get("/web/agent-info/agent")
+    assert response.status_code == 200
+    assert "synthetic-secret-must-not-escape" not in response.text
+    info = response.json()
+    assert info["draft"] is None
+    assert client.get("/web/agent-draft/agent").status_code == 404
+    if manifest_case == "valid":
+        assert info["sourceOverlay"] == {
+            "schemaVersion": 1,
+            "mcp": {"agent": [entry], "agent_sub_1": []},
+        }
+    else:
+        assert info["sourceOverlay"] == {"schemaVersion": 1, "status": "unavailable"}
+    # Even a separate ordinary draft must not cause private code regeneration.
+    info["draft"] = {"name": "agent", "instruction": "Customer extension"}
+    recovery = assess_runtime_update_agent(
+        agent_info=info,
+        fallback_draft=None,
+        fallback_available=False,
+        runtime_id="runtime-test",
+        current_version=2,
+    )
+    assert recovery.status == "introspection-only"
+    assert recovery.edit_mode == "blocked"

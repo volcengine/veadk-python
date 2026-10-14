@@ -106,7 +106,7 @@ test("structured Agent deployments apply MPA Profile after Runtime publish", () 
   assert.match(projectPreviewSource, /applyMpaProfileAfterDeployment\(/);
   assert.match(
     projectPreviewSource,
-    /const isMpaDeployment = Boolean\(agentDraft\);[\s\S]*?const shouldRunMpaLifecycle = isMpaDeployment && !githubUpdateOffloaded/,
+    /const isMpaDeployment = Boolean\(agentDraft\);[\s\S]*?const shouldRunMpaLifecycle =\s*isMpaDeployment &&\s*deploymentEditMode !== "source-preserving" &&\s*!githubUpdateOffloaded/,
   );
   assert.match(
     projectPreviewSource,
@@ -136,6 +136,7 @@ test("structured Agent deployments apply MPA Profile after Runtime publish", () 
   assert.match(customCreateSource, /applyMpaProfileAfterDeployment/);
   assert.match(customCreateSource, /runtimeRevision: deploymentTarget\?\.etag/);
   assert.match(customCreateSource, /deploymentRuntimeRevision=\{deploymentTarget\?\.etag\}/);
+  assert.match(customCreateSource, /deploymentEditMode=\{deploymentTarget\?\.editMode\}/);
   assert.doesNotMatch(codePackageCreateSource, /agentDraft=\{/);
   assert.doesNotMatch(codePackageCreateSource, /applyMpaProfileAfterDeployment/);
 });

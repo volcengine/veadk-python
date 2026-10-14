@@ -449,3 +449,30 @@ def test_excessively_deep_editable_graph_is_blocked_without_recursion_failure() 
     assert recovery.status == "incompatible"
     assert recovery.reason_code == "runtime_editable_snapshot_incompatible"
     assert "draft" not in recovery.agent
+
+
+def test_image_overlay_never_uses_ordinary_draft_regeneration() -> None:
+    """Even an old host's valid draft cannot replace the custom application."""
+    draft = {"name": "domain-agent", "instruction": "Customer instructions"}
+    for overlay in (
+        {"schemaVersion": 1, "mcp": {"domain-agent": []}},
+        {"schemaVersion": 1, "status": "unavailable"},
+        None,
+    ):
+        for embedded_draft in (draft, None):
+            recovery = assess_runtime_update_agent(
+                agent_info={
+                    "name": "domain-agent",
+                    "draft": embedded_draft,
+                    "sourceOverlay": overlay,
+                },
+                fallback_draft=draft,
+                fallback_available=True,
+                runtime_id="runtime-domain",
+                current_version=2,
+            )
+            assert recovery.can_update is False
+            assert recovery.edit_mode == "blocked"
+            assert recovery.reason_code == "runtime_editable_snapshot_missing"
+            assert "draft" not in recovery.agent
+            assert not recovery.etag

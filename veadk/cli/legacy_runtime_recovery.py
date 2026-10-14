@@ -64,6 +64,7 @@ __all__ = [
     "resolve_source_preserving_mcp_owner",
     "resolve_source_preserving_mcp_secrets",
     "source_preserving_mcp_changed",
+    "source_preserving_runtime_environment",
 ]
 
 _IMAGE_HOST_RE = re.compile(
@@ -98,6 +99,80 @@ _MAX_SKILL_FILES = 256
 _MAX_SKILL_FILE_BYTES = 1024 * 1024
 _MAX_SKILL_TOTAL_BYTES = 8 * 1024 * 1024
 _MAX_MCP_SECRET_BYTES = 8192
+_OVERLAY_ROOT = PurePosixPath("opt/veadk-studio-overlay")
+_OVERLAY_REVISIONS = PurePosixPath("opt/veadk-studio-updates")
+_OVERLAY_LAYOUT = "opt/veadk-studio-layout.json"
+_OVERLAY_MANIFEST_PATHS = {
+    (_OVERLAY_ROOT / filename).as_posix()
+    for filename in ("managed.json", "selected.json", "final.json")
+}
+
+
+def _overlay_layout_root(raw: str | bytes) -> PurePosixPath:
+    def unique_fields(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate layout field")
+            result[key] = value
+        return result
+
+    try:
+        layout = json.loads(raw, object_pairs_hook=unique_fields)
+    except (ValueError, UnicodeDecodeError) as error:
+        raise LegacyRecoveryError("legacy_overlay_layout_invalid") from error
+    if (
+        not isinstance(layout, dict)
+        or set(layout) != {"schemaVersion", "root"}
+        or type(layout["schemaVersion"]) is not int
+        or layout["schemaVersion"] != 1
+        or not isinstance(layout["root"], str)
+        or re.fullmatch(
+            r"opt/veadk-studio-updates/[a-f0-9]{64}/overlay", layout["root"]
+        )
+        is None
+    ):
+        raise LegacyRecoveryError("legacy_overlay_layout_invalid")
+    return PurePosixPath(layout["root"])
+
+
+def source_preserving_runtime_environment(
+    environment: Mapping[str, str],
+    *,
+    overlay_files: Iterable[Mapping[str, str]] | None = None,
+) -> dict[str, str]:
+    """Activate packaged overlays while preserving application import paths."""
+    bootstrap = "/opt/veadk-studio-python"
+    root = "/opt/veadk-studio-overlay"
+    if overlay_files is not None:
+        layouts = [
+            item["content"]
+            for item in overlay_files
+            if item.get("path") == ".veadk-studio-layout.json"
+        ]
+        if len(layouts) != 1:
+            raise LegacyRecoveryError("legacy_overlay_layout_invalid")
+        revision_root = _overlay_layout_root(layouts[0])
+        root = "/" + revision_root.as_posix()
+        bootstrap = "/" + (revision_root.parent / "python").as_posix()
+    previous = environment.get("PYTHONPATH", "")
+    paths = (
+        [
+            path
+            for path in previous.split(":")
+            if path not in {bootstrap, "/opt/veadk-studio-python"}
+            and re.fullmatch(r"/opt/veadk-studio-updates/[a-f0-9]{64}/python", path)
+            is None
+        ]
+        if previous
+        else []
+    )
+    return {
+        **environment,
+        "VEADK_STUDIO_SKILL_OVERLAY": root,
+        "VEADK_STUDIO_OVERLAY_READY_FILE": "/tmp/veadk-studio-overlay-ready",
+        "PYTHONPATH": ":".join([bootstrap, *paths]),
+    }
 
 
 def _legacy_mcp_auth_reference(name: str, url: str) -> str:
@@ -110,6 +185,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 
 _ROOT = Path(os.environ.get("VEADK_STUDIO_SKILL_OVERLAY", ""))
@@ -118,7 +194,9 @@ _ROOT = Path(os.environ.get("VEADK_STUDIO_SKILL_OVERLAY", ""))
 def _names(filename):
     value = json.loads((_ROOT / filename).read_text(encoding="utf-8"))
     if not isinstance(value, list) or any(
-        not isinstance(item, str) or not item for item in value
+        not isinstance(item, str)
+        or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}", item) is None
+        for item in value
     ):
         raise RuntimeError("Studio Skill overlay manifest is invalid: " + filename)
     names = set(value)
@@ -148,23 +226,33 @@ def _overlay_skills(selected):
     return loaded
 
 
-def _merge(original, managed, overlays):
+def _merge(original, managed, overlays, final=None):
     result = [
         item
         for item in list(original or [])
-        if str(getattr(item, "name", "")) not in managed
+        if (
+            str(getattr(item, "name", "")) not in managed
+            if final is None
+            else str(getattr(item, "name", "")) in final
+            and str(getattr(item, "name", "")) not in overlays
+        )
     ]
     result.extend(overlays[name] for name in sorted(overlays))
     names = [str(getattr(item, "name", "")) for item in result]
     if not all(names) or len(names) != len(set(names)):
         raise RuntimeError("Studio Skill overlay produces duplicate identities")
+    if final is not None and set(names) != final:
+        raise RuntimeError("Studio Skill overlay final selection is incomplete")
     return result
 
 
 def _apply_skills(root_agent):
     managed = _names("managed.json")
     selected = _names("selected.json")
-    if not managed and not selected:
+    final = _names("final.json") if (_ROOT / "final.json").exists() else None
+    if final is not None and not selected.issubset(final):
+        raise RuntimeError("Studio Skill overlay selection is outside final manifest")
+    if final is None and not managed and not selected:
         return
     try:
         from google.adk.tools.skill_toolset import SkillToolset
@@ -180,12 +268,15 @@ def _apply_skills(root_agent):
         current = getattr(toolset, "_skills", None)
         if not isinstance(current, dict):
             raise RuntimeError("Studio SkillToolset layout is unsupported")
-        merged = _merge(list(current.values()), managed, overlays)
+        merged = _merge(list(current.values()), managed, overlays, final)
         toolset._skills = {str(getattr(skill, "name", "")): skill for skill in merged}
         return
-    if managed:
+    if managed and final is None:
         raise RuntimeError("Studio cannot remove Skills without a root SkillToolset")
-    tools.append(SkillToolset(skills=list(overlays.values()), registry=None))
+    merged = _merge([], managed, overlays, final)
+    if not merged:
+        return
+    tools.append(SkillToolset(skills=merged, registry=None))
     root_agent.tools = tools
 
 
@@ -199,7 +290,49 @@ def _mcp_configuration():
     return value
 
 
+def _application_environment_bootstrap(root_agent, configuration):
+    descriptor = _ROOT / "mcp-bootstrap.json"
+    if not descriptor.exists():
+        return False
+    error_message = "Studio MCP bootstrap configuration is invalid"
+
+    def unique_fields(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(error_message)
+            result[key] = value
+        return result
+
+    try:
+        mode = json.loads(descriptor.read_text(encoding="utf-8"), object_pairs_hook=unique_fields)
+        name = str(getattr(root_agent, "name", ""))
+        if (mode != {"schemaVersion": 1, "mode": "application-environment"}
+                or set(configuration) != {name}
+                or list(getattr(root_agent, "sub_agents", None) or [])):
+            raise ValueError(error_message)
+        expected = []
+        for item in configuration[name]:
+            if not isinstance(item, dict) or item.get("transport") != "http":
+                raise ValueError(error_message)
+            server = {"name": item["name"], "url": item["url"]}
+            reference = item.get("authTokenEnv")
+            if reference:
+                token = os.environ.get(reference, "")
+                if not token:
+                    raise ValueError(error_message)
+                server["headers"] = {"Authorization": "Bearer " + token}
+            expected.append(server)
+        actual = json.loads(os.environ["MCP_SERVERS_JSON"], object_pairs_hook=unique_fields)
+        if actual != expected:
+            raise ValueError(error_message)
+    except (OSError, KeyError, TypeError, ValueError, RecursionError):
+        raise RuntimeError(error_message) from None
+    return True
+
+
 def _replace_mcp(root_agent, configuration):
+    application_bootstrap = _application_environment_bootstrap(root_agent, configuration)
     if not configuration:
         return
     try:
@@ -218,7 +351,12 @@ def _replace_mcp(root_agent, configuration):
             raise RuntimeError("Studio MCP overlay Agent identity is invalid")
         visited.add(name)
         configured = configuration.get(name)
-        if isinstance(configured, list):
+        handler = getattr(agent, "_veadk_studio_mcp_overlay_handler", None)
+        if isinstance(configured, list) and handler is not None:
+            if not callable(handler):
+                raise RuntimeError("Studio MCP overlay handler is invalid")
+            handler(configured)
+        elif isinstance(configured, list) and not application_bootstrap:
             tools = [
                 item
                 for item in list(getattr(agent, "tools", None) or [])
@@ -261,14 +399,8 @@ def _mark_ready():
     marker.write_text("ready\n", encoding="utf-8")
 
 
-def _install():
-    if not _ROOT.is_dir():
-        raise RuntimeError("Studio overlay root is unavailable")
-
-    try:
-        from google.adk.apps.app import App
-    except Exception as error:
-        raise RuntimeError("Studio App compatibility hook is unavailable") from error
+def _patch_app_module(module):
+    App = module.App
     original_app_init = App.__init__
     if getattr(original_app_init, "_veadk_studio_overlay", False):
         return
@@ -286,7 +418,159 @@ def _install():
     App.__init__ = app_init
 
 
+def _install():
+    if not _ROOT.is_dir():
+        raise RuntimeError("Studio overlay root is unavailable")
+
+    # The platform may select application site-packages after Python startup.
+    # Importing ADK here would cache the system installation before that choice.
+    import sys
+
+    target_name = "google.adk.apps.app"
+    loaded = sys.modules.get(target_name)
+    if loaded is not None:
+        _patch_app_module(loaded)
+        return
+    if any(getattr(item, "_veadk_studio_app_observer", False)
+           for item in sys.meta_path):
+        return
+
+    class AppLoader:
+        def __init__(self, original):
+            self.original = original
+
+        def __getattr__(self, name):
+            return getattr(self.original, name)
+
+        def create_module(self, spec):
+            create = getattr(self.original, "create_module", None)
+            return create(spec) if create is not None else None
+
+        def exec_module(self, module):
+            self.original.exec_module(module)
+            _patch_app_module(module)
+
+    class AppObserver:
+        _veadk_studio_app_observer = True
+
+        def find_spec(self, fullname, path=None, target=None):
+            if fullname != target_name:
+                return None
+            for finder in tuple(sys.meta_path):
+                if finder is self:
+                    continue
+                spec = finder.find_spec(fullname, path, target)
+                if spec is not None:
+                    sys.meta_path.remove(self)
+                    if spec.loader is None:
+                        raise RuntimeError("Studio App compatibility loader is unavailable")
+                    spec.loader = AppLoader(spec.loader)
+                    return spec
+            return None
+
+    sys.meta_path.insert(0, AppObserver())
+
+
 _install()
+'''
+
+
+_BUILD_VALIDATOR = r'''"""Prepare an overlay without losing retained Skills from the pinned image."""
+import json
+import os
+import re
+import stat
+import sys
+from pathlib import Path
+
+
+def _validate_previous_overlay(root, preserved):
+    if root.is_symlink():
+        raise RuntimeError("legacy_overlay_previous_manifest_invalid")
+    if not root.exists():
+        return set()
+
+    def names(filename):
+        path = root / filename
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > 32768:
+            raise RuntimeError("legacy_overlay_previous_manifest_invalid")
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (ValueError, OSError) as error:
+            raise RuntimeError("legacy_overlay_previous_manifest_invalid") from error
+        if (
+            not isinstance(value, list)
+            or len(value) > 64
+            or any(not isinstance(name, str) or re.fullmatch(
+                r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}", name
+            ) is None for name in value)
+            or len(value) != len(set(value))
+        ):
+            raise RuntimeError("legacy_overlay_previous_manifest_invalid")
+        return set(value)
+
+    selected = names("selected.json")
+    if (root / "final.json").exists() or (root / "final.json").is_symlink():
+        final = names("final.json")
+        if not selected.issubset(final):
+            raise RuntimeError("legacy_overlay_previous_manifest_invalid")
+    return selected.intersection(preserved)
+
+
+def _prepare_overlay(previous, preserved, source, output):
+    inherited = _validate_previous_overlay(previous, preserved)
+    count, total = 0, 0
+
+    def copy_tree(origin, destination, *, skill=False, depth=0):
+        nonlocal count, total
+        info = origin.lstat()
+        if not stat.S_ISDIR(info.st_mode) or depth > 32:
+            raise RuntimeError("legacy_overlay_source_invalid")
+        destination.mkdir(mode=0o755)
+        for item in sorted(origin.iterdir()):
+            target = destination / item.name
+            info = item.lstat()
+            is_skill = skill or (depth == 0 and item.name == "skills")
+            if stat.S_ISDIR(info.st_mode):
+                copy_tree(item, target, skill=is_skill, depth=depth + 1)
+            elif stat.S_ISREG(info.st_mode) and info.st_nlink == 1:
+                if info.st_size > 1024 * 1024:
+                    raise RuntimeError("legacy_skill_file_too_large")
+                data = item.read_bytes()
+                if len(data) != info.st_size:
+                    raise RuntimeError("legacy_overlay_source_changed")
+                if is_skill:
+                    count += 1
+                    total += len(data)
+                    if count > 256 or total > 8 * 1024 * 1024:
+                        raise RuntimeError("legacy_skill_total_too_large")
+                with target.open("xb") as stream:
+                    stream.write(data)
+                target.chmod(0o644)
+            else:
+                raise RuntimeError("legacy_overlay_source_invalid")
+
+    copy_tree(source, output)
+    selected = json.loads((output / "selected.json").read_text(encoding="utf-8"))
+    final = json.loads((output / "final.json").read_text(encoding="utf-8"))
+    if (not isinstance(selected, list) or not isinstance(final, list)
+            or not inherited.issubset(final) or inherited.intersection(selected)):
+        raise RuntimeError("legacy_overlay_selection_invalid")
+    for name in sorted(inherited):
+        parent = previous / "skills"
+        origin = parent / name
+        if parent.is_symlink() or origin.is_symlink():
+            raise RuntimeError("legacy_overlay_source_invalid")
+        manifest = origin / "SKILL.md"
+        if manifest.is_symlink() or not manifest.is_file():
+            raise RuntimeError("legacy_overlay_skill_manifest_missing")
+        destination = output / "skills" / name
+        destination.parent.mkdir(mode=0o755, exist_ok=True)
+        copy_tree(origin, destination, skill=True)
+    (output / "selected.json").write_text(
+        json.dumps(sorted(set(selected) | inherited), separators=(",", ":")),
+        encoding="utf-8",
+    )
 '''
 
 
@@ -305,6 +589,7 @@ def build_source_preserving_overlay(
     edited_draft: Mapping[str, Any],
     canonical_skills: Iterable[CanonicalSkillSnapshot],
     application_mcp: bool,
+    application_mcp_bootstrap: bool = False,
 ) -> tuple[dict[str, str], ...]:
     """Build a minimal OCI layer that keeps the deployed application intact."""
 
@@ -414,21 +699,68 @@ def build_source_preserving_overlay(
     files[".veadk-studio-overlay/selected.json"] = json.dumps(
         sorted(selected_names), ensure_ascii=False, separators=(",", ":")
     )
+    files[".veadk-studio-overlay/final.json"] = json.dumps(
+        sorted(edited_names), ensure_ascii=False, separators=(",", ":")
+    )
+    mcp_configuration = (
+        _source_preserving_mcp_configuration(edited_draft) if application_mcp else {}
+    )
+    if application_mcp_bootstrap:
+        if (
+            not application_mcp
+            or set(mcp_configuration) != {str(edited_draft.get("name") or "")}
+            or any(
+                item["transport"] != "http"
+                for items in mcp_configuration.values()
+                for item in items
+            )
+        ):
+            raise LegacyRecoveryError("legacy_mcp_bootstrap_topology_unsupported")
+        files[".veadk-studio-overlay/mcp-bootstrap.json"] = json.dumps(
+            {"schemaVersion": 1, "mode": "application-environment"},
+            separators=(",", ":"),
+        )
     files[".veadk-studio-overlay/mcp.json"] = json.dumps(
-        _source_preserving_mcp_configuration(edited_draft) if application_mcp else {},
+        mcp_configuration,
         ensure_ascii=False,
         separators=(",", ":"),
         sort_keys=True,
     )
     files[".veadk-studio-python/sitecustomize.py"] = _SITECUSTOMIZE
+    files[".veadk-studio-validate.py"] = (
+        _BUILD_VALIDATOR
+        + '\n_prepare_overlay(Path(os.environ.get("VEADK_STUDIO_SKILL_OVERLAY", "/opt/veadk-studio-overlay")), '
+        + repr(sorted(preserved_runtime_names))
+        + ", Path(sys.argv[1]), Path(sys.argv[2]))\n"
+    )
+    revision = hashlib.sha256(
+        json.dumps(
+            {"sourceImage": source_image, "files": files},
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+    revision_path = _OVERLAY_REVISIONS / revision
+    overlay_root = "/" + (revision_path / "overlay").as_posix()
+    python_root = "/" + (revision_path / "python").as_posix()
+    files[".veadk-studio-layout.json"] = json.dumps(
+        {"schemaVersion": 1, "root": overlay_root.removeprefix("/")},
+        separators=(",", ":"),
+    )
     files["Dockerfile"] = "\n".join(
         (
             f"FROM {source_image}",
-            "COPY .veadk-studio-overlay /opt/veadk-studio-overlay",
-            "COPY .veadk-studio-python /opt/veadk-studio-python",
-            "ENV VEADK_STUDIO_SKILL_OVERLAY=/opt/veadk-studio-overlay",
+            "COPY --chmod=0444 .veadk-studio-validate.py /tmp/veadk-studio-validate.py",
+            f"COPY --chmod=0555 .veadk-studio-overlay /tmp/veadk-studio-input-{revision}",
+            "RUN python -I -S /tmp/veadk-studio-validate.py "
+            f"/tmp/veadk-studio-input-{revision} /tmp/veadk-studio-prepared-{revision}",
+            f"FROM {source_image}",
+            f"COPY --from=0 --chmod=0555 /tmp/veadk-studio-prepared-{revision} {overlay_root}",
+            f"COPY --chmod=0555 .veadk-studio-python {python_root}",
+            "COPY --chmod=0444 .veadk-studio-layout.json /opt/veadk-studio-layout.json",
+            f"ENV VEADK_STUDIO_SKILL_OVERLAY={overlay_root}",
             "ENV VEADK_STUDIO_OVERLAY_READY_FILE=/tmp/veadk-studio-overlay-ready",
-            "ENV PYTHONPATH=/opt/veadk-studio-python:${PYTHONPATH}",
+            f"ENV PYTHONPATH={python_root}:${{PYTHONPATH}}",
             "",
         )
     )
@@ -1878,6 +2210,7 @@ class OciImageInspector:
 
         manifest, digest = self.resolve_manifest(image)
         roots: dict[str, dict[str, dict[str, bytes]]] = {name: {} for name in requested}
+        overlay_manifests: dict[str, bytes] = {}
         for layer in manifest["layers"]:
             if not isinstance(layer, Mapping):
                 raise LegacyRecoveryError("legacy_image_layer_invalid")
@@ -1900,11 +2233,45 @@ class OciImageInspector:
             actual_digest = "sha256:" + hashlib.sha256(response.content).hexdigest()
             if not secrets.compare_digest(actual_digest, layer_digest):
                 raise LegacyRecoveryError("legacy_image_layer_digest_mismatch")
-            self._apply_layer(roots, requested, response.content)
+            if len(response.content) != layer_size:
+                raise LegacyRecoveryError("legacy_image_layer_size_mismatch")
+            self._apply_layer(roots, requested, response.content, overlay_manifests)
 
+        overlay_root = _OVERLAY_ROOT
+        if _OVERLAY_LAYOUT in overlay_manifests:
+            overlay_root = _overlay_layout_root(overlay_manifests[_OVERLAY_LAYOUT])
+        active_manifests = {
+            path: raw
+            for path, raw in overlay_manifests.items()
+            if PurePosixPath(path).parent == overlay_root
+        }
+        if _OVERLAY_LAYOUT in overlay_manifests and {
+            PurePosixPath(path).name for path in active_manifests
+        } != {"managed.json", "selected.json", "final.json"}:
+            raise LegacyRecoveryError("legacy_overlay_manifest_incomplete")
+        manifests = self._overlay_manifest_names(active_manifests)
         recovered = []
         for name, description in requested.items():
             candidates = roots[name]
+            if manifests:
+                selected = manifests["selected.json"]
+                final = manifests.get("final.json")
+                if final is not None and name not in final:
+                    raise LegacyRecoveryError("legacy_skill_not_in_final_selection")
+                official_root = (overlay_root / "skills" / name).as_posix()
+                if name in selected:
+                    # Only this root has verified selection provenance. A newer
+                    # unrelated directory or the base application is not a fallback.
+                    candidates = {official_root: candidates.get(official_root, {})}
+                else:
+                    if final is None and name in manifests["managed.json"]:
+                        raise LegacyRecoveryError("legacy_skill_not_in_final_selection")
+                    candidates = {
+                        root: files
+                        for root, files in candidates.items()
+                        if not PurePosixPath(root).is_relative_to(_OVERLAY_ROOT)
+                        and not PurePosixPath(root).is_relative_to(_OVERLAY_REVISIONS)
+                    }
             complete = [
                 (root, files)
                 for root, files in candidates.items()
@@ -1923,20 +2290,113 @@ class OciImageInspector:
         return image.pinned(digest), tuple(recovered)
 
     @staticmethod
+    def _overlay_manifest_names(values: Mapping[str, bytes]) -> dict[str, set[str]]:
+        if not values:
+            return {}
+        result: dict[str, set[str]] = {}
+        for path, raw in values.items():
+            try:
+                value = json.loads(raw)
+            except (ValueError, UnicodeDecodeError) as error:
+                raise LegacyRecoveryError("legacy_overlay_manifest_invalid") from error
+            if (
+                not isinstance(value, list)
+                or len(value) > 64
+                or any(
+                    not isinstance(name, str) or _SKILL_NAME_RE.fullmatch(name) is None
+                    for name in value
+                )
+                or len(value) != len(set(value))
+            ):
+                raise LegacyRecoveryError("legacy_overlay_manifest_invalid")
+            result[PurePosixPath(path).name] = set(value)
+        if not {"managed.json", "selected.json"}.issubset(result):
+            raise LegacyRecoveryError("legacy_overlay_manifest_incomplete")
+        if "final.json" in result and not result["selected.json"].issubset(
+            result["final.json"]
+        ):
+            raise LegacyRecoveryError("legacy_overlay_manifest_invalid")
+        return result
+
+    @staticmethod
     def _apply_layer(
         roots: dict[str, dict[str, dict[str, bytes]]],
         requested: Mapping[str, str],
         content: bytes,
+        overlay_manifests: dict[str, bytes] | None = None,
     ) -> None:
         try:
             archive = tarfile.open(fileobj=io.BytesIO(content), mode="r:*")
         except (tarfile.TarError, OSError) as error:
             raise LegacyRecoveryError("legacy_image_layer_invalid") from error
+        if overlay_manifests is None:
+            overlay_manifests = {}
+
+        def remove_lower(target: PurePosixPath) -> None:
+            # Check full paths so directory and ancestor whiteouts also remove
+            # skill roots and metadata, not only individual resource files.
+            for candidates in roots.values():
+                for root, files in list(candidates.items()):
+                    for relative in list(files):
+                        if (PurePosixPath(root) / relative).is_relative_to(target):
+                            del files[relative]
+                    if not files:
+                        del candidates[root]
+            for path in list(overlay_manifests):
+                if PurePosixPath(path).is_relative_to(target):
+                    del overlay_manifests[path]
+
         with archive:
+            members = []
             for index, member in enumerate(archive):
                 if index >= _MAX_LAYER_MEMBERS:
                     raise LegacyRecoveryError("legacy_image_layer_member_limit")
                 path = OciImageInspector._safe_tar_path(member.name)
+                members.append((member, path))
+                if path.name == ".wh..wh..opq":
+                    remove_lower(path.parent)
+                elif path.name.startswith(".wh."):
+                    remove_lower(path.parent / path.name[4:])
+
+            # OCI whiteouts affect lower layers only. Collect them before adding
+            # this layer, irrespective of the order of entries inside its tar.
+            for member, path in members:
+                if path.name.startswith(".wh."):
+                    continue
+                if member.issym() or member.islnk():
+                    protected = [
+                        PurePosixPath(root)
+                        for candidates in roots.values()
+                        for root in candidates
+                    ]
+                    protected.append(_OVERLAY_ROOT)
+                    protected.append(_OVERLAY_REVISIONS)
+                    if path.is_relative_to(_OVERLAY_REVISIONS) or any(
+                        root.is_relative_to(path) for root in protected
+                    ):
+                        raise LegacyRecoveryError("legacy_skill_symlink_forbidden")
+                full_path = path.as_posix()
+                is_manifest = (
+                    full_path in _OVERLAY_MANIFEST_PATHS
+                    or full_path == _OVERLAY_LAYOUT
+                    or re.fullmatch(
+                        r"opt/veadk-studio-updates/[a-f0-9]{64}/overlay/(managed|selected|final)\.json",
+                        full_path,
+                    )
+                    is not None
+                )
+                if is_manifest:
+                    if not member.isfile() or member.issym() or member.islnk():
+                        raise LegacyRecoveryError("legacy_overlay_manifest_invalid")
+                    if member.size > 32768:
+                        raise LegacyRecoveryError("legacy_overlay_manifest_invalid")
+                    stream = archive.extractfile(member)
+                    if stream is None:
+                        raise LegacyRecoveryError("legacy_image_layer_invalid")
+                    raw = stream.read(32769)
+                    if len(raw) != member.size or len(raw) > 32768:
+                        raise LegacyRecoveryError("legacy_overlay_manifest_invalid")
+                    overlay_manifests[full_path] = raw
                 parts = path.parts
                 for name in requested:
                     match_index = next(
@@ -1951,23 +2411,11 @@ class OciImageInspector:
                         continue
                     root = PurePosixPath(*parts[: match_index + 2]).as_posix()
                     relative = PurePosixPath(*parts[match_index + 2 :]).as_posix()
+                    if member.issym() or member.islnk():
+                        raise LegacyRecoveryError("legacy_skill_symlink_forbidden")
                     if not relative or relative == ".":
                         continue
                     files = roots[name].setdefault(root, {})
-                    base = PurePosixPath(relative).name
-                    parent = PurePosixPath(relative).parent
-                    if base == ".wh..wh..opq":
-                        prefix = "" if str(parent) == "." else parent.as_posix() + "/"
-                        for existing in list(files):
-                            if existing.startswith(prefix):
-                                files.pop(existing, None)
-                        continue
-                    if base.startswith(".wh."):
-                        target = parent / base[4:]
-                        files.pop(target.as_posix(), None)
-                        continue
-                    if member.issym() or member.islnk():
-                        raise LegacyRecoveryError("legacy_skill_symlink_forbidden")
                     if not member.isfile():
                         continue
                     if member.size > _MAX_SKILL_FILE_BYTES:
