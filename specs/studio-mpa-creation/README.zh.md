@@ -228,7 +228,7 @@ CON-18 来源修正：仅在没有 OV ID、没有待完成 Runtime 操作、明�
 
 ## CON-21：本次创建最大实例数
 
-新的可编辑 MPA 表单在基本信息中提交严格正整数 `maxInstance`，默认 20。数值随请求身份保存、传入 runner 并应用为 Runtime `MaxInstance`。小于配置最小值在受理前拒绝。提交后重试数值不可更改；省略/null 的旧字段保留原指纹/配置默认，不自动升级。重名错误复用既有 danger/soft Alert，本地化文案不变。不影响通用创建及已部署 Runtime 设置。见[设计](../../prd-spec/features/mpa-create-scaling/2026-10-13-max-instance-input.zh.md)。
+新的可编辑 MPA 表单在基本信息中提交严格正整数 `maxInstance`，火山默认 20、BytePlus 默认 10。提供商帮助文字和新请求重置使用相同默认值；显式已保存草稿及已提交/旧请求重试输入保持原样。数值随请求身份保存、传入 runner 并应用为 Runtime `MaxInstance`。小于配置最小值在受理前拒绝。提交后重试数值不可更改；省略/null 的旧字段保留原指纹/配置默认，不自动升级。重名错误复用既有 danger/soft Alert，本地化文案不变。不影响通用创建及已部署 Runtime 设置。见[设计](../../prd-spec/features/mpa-create-scaling/2026-10-13-max-instance-input.zh.md)。
 
 OV 路由注册及配置检查须保留 Studio 延迟加载启动：签名/网络函数只在首次实际 OV API 调用时加载，不在导入适配器时加载。见[官方 PR 检查修正](../../prd-spec/bugfixes/mpa-upstream-readiness/2026-10-13-startup-and-lockfile.zh.md)。
 
@@ -248,3 +248,5 @@ CON-20 实现纠正：组合对应 Runtime 列表／详情归属证据，Worker 
 CON-20 重试证明：仅认证过的已接受请求，且标准化参数与存储值完全一致、服务端派生 agent 身份及私有 provider/account/region 快照通过 STS 核对时，才能补足空的云端创建者标签。明确外部标签仍拒绝。POST 在服务端取得证明，已有 expectedAccount 快照将同一检查带入子进程创建。不信任浏览器重试标志、不增加公开字段、不直接跳过云端预检。
 
 CON-17 APM Key 传递：Studio BytePlus 创建在写资源前使用已核验部署凭据，向 `apmplus-server.ap-southeast-1.byteplusapi.com` 调用 `GetAppKey`，取得 `data.app_key`，注入 Runtime Envs 的 `OBSERVABILITY_OPENTELEMETRY_APMPLUS_API_KEY`。保留可信配置中的有效显式 Runtime Key。获取失败时停止创建，采用有限重试和安全的 `get_apm_key` 诊断；Key 不保存在任务/启动/部署记录或浏览器结果中。国内和非 Studio 路径不变。保留未完成输入哈希检查，不静默升级旧任务。见[服务端 APM Key 设计](../../prd-spec/bugfixes/mpa-byteplus-apm/2026-10-14-server-app-key.zh.md)。
+
+分提供商默认值调整：[BytePlus 最大实例数](../../prd-spec/bugfixes/mpa-byteplus-scaling/2026-10-15-default-maximum.zh.md)。后端/YAML/CLI 配置默认值保持不变。

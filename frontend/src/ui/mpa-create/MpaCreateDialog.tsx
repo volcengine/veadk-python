@@ -29,13 +29,17 @@ const PG_CONSOLE_URL =
 const OPENVIKING_CONSOLE_URL =
   "https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing/ov-6689fabdf032294/context-management?accountId=default&userId=default&projectName=default";
 
-function freshInput(region: string): MpaCreationInput {
+function defaultMaximumInstances(cloudProvider: CloudProvider): number {
+  return cloudProvider === "byteplus" ? 10 : 20;
+}
+
+function freshInput(region: string, cloudProvider: CloudProvider): MpaCreationInput {
   return {
     region,
     requestId: crypto.randomUUID(),
     name: "",
     description: "",
-    maxInstance: 20,
+    maxInstance: defaultMaximumInstances(cloudProvider),
   };
 }
 
@@ -46,7 +50,7 @@ function withoutTosCredentials(input: MpaCreationInput): MpaCreationInput {
   return clean;
 }
 
-function initial(region: string): {
+function initial(region: string, cloudProvider: CloudProvider): {
   input: MpaCreationInput;
   taskId?: string;
   submitted?: boolean;
@@ -66,7 +70,7 @@ function initial(region: string): {
       const draft: MpaCreationInput = {
         ...saved.input,
         name: typeof saved.input.name === "string" ? saved.input.name : "",
-        maxInstance: saved.input.maxInstance ?? 20,
+        maxInstance: saved.input.maxInstance ?? defaultMaximumInstances(cloudProvider),
       };
       delete draft.agentId;
       delete draft.runtimeImage;
@@ -76,7 +80,7 @@ function initial(region: string): {
   } catch {
     /* A fresh form is safe when browser storage is unavailable. */
   }
-  return { input: freshInput(region) };
+  return { input: freshInput(region, cloudProvider) };
 }
 
 export function MpaCreateDialog({
@@ -92,10 +96,11 @@ export function MpaCreateDialog({
 }) {
   const { t } = useTranslation("ui");
   const key = (name: string) => `myAgents.mpaCreate.${name}`;
-  const [saved] = useState(() => initial(region));
+  const defaultMaximum = defaultMaximumInstances(cloudProvider);
+  const [saved] = useState(() => initial(region, cloudProvider));
   const [input, setInput] = useState(saved.input);
   const [maximumInput, setMaximumInput] = useState(
-    String(saved.input.maxInstance ?? 20),
+    String(saved.input.maxInstance ?? defaultMaximum),
   );
   const [openvikingApiKey, setOpenvikingApiKey] = useState("");
   const [step, setStep] = useState(
@@ -398,7 +403,7 @@ export function MpaCreateDialog({
   }
   function startAnotherAgent() {
     const nextInput: MpaCreationInput = {
-      ...freshInput(region),
+      ...freshInput(region, cloudProvider),
       ...(config?.businessDatabaseName === "aidb"
         ? { businessDatabaseName: "aidb" as const }
         : {}),
@@ -420,7 +425,7 @@ export function MpaCreateDialog({
       /* The new in-memory draft remains usable without browser storage. */
     }
     setInput(nextInput);
-    setMaximumInput("20");
+    setMaximumInput(String(defaultMaximum));
     setOpenvikingApiKey("");
     setStep(0);
     setTaskId(undefined);
@@ -566,6 +571,7 @@ export function MpaCreateDialog({
                                 ? "maxInstanceHelp"
                                 : "maxInstanceInvalid",
                             ),
+                            { maximum: defaultMaximum },
                           )}
                         </p>
                       </label>

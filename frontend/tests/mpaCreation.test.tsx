@@ -1392,6 +1392,62 @@ it("new MPA requests default maximum instances to 20 and submit edits", async ()
   expect(field("maxInstance").disabled).toBe(true);
 });
 
+async function mountByteplusScaling() {
+  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
+    configured: true,
+    region: "ap-southeast-1",
+    postgresMode: "auto",
+  });
+  vi.mocked(api.startMpaCreation).mockResolvedValue({
+    requestId: "bp-scaling",
+    description: "",
+    region: "ap-southeast-1",
+    taskId: "bp-scaling-task",
+    state: "failed",
+    stage: "worker",
+  });
+  await act(async () => root.render(
+    <MpaCreateDialog region="ap-southeast-1" cloudProvider="byteplus"
+      onClose={() => {}} onCreated={() => {}} />,
+  ));
+}
+
+it("defaults new BytePlus maximum instances to 10 and resets new requests to 10", async () => {
+  await mountByteplusScaling();
+  expect(field("maxInstance").value).toBe("10");
+  await goToFinal();
+  await act(async () => submitButton().click());
+  expect(vi.mocked(api.startMpaCreation).mock.calls[0][0].maxInstance).toBe(10);
+  await act(async () => button("newAgent").click());
+  expect(field("maxInstance").value).toBe("10");
+  expect(field("maxInstance").disabled).toBe(false);
+});
+
+it.each([undefined, 35])("preserves BytePlus editable draft maximum %s", async (maximum) => {
+  sessionStorage.setItem("mpa-create:ap-southeast-1", JSON.stringify({
+    input: { requestId: "bp-draft", region: "ap-southeast-1", name: "bp-draft",
+      description: "", ...(maximum === undefined ? {} : { maxInstance: maximum }) },
+    step: 0,
+  }));
+  await mountByteplusScaling();
+  expect(field("maxInstance").value).toBe(String(maximum ?? 10));
+  await goToFinal();
+  await act(async () => submitButton().click());
+  expect(vi.mocked(api.startMpaCreation).mock.calls[0][0].maxInstance).toBe(maximum ?? 10);
+});
+
+it.each([undefined, 20])("preserves submitted BytePlus maximum %s on retry", async (maximum) => {
+  sessionStorage.setItem("mpa-create:ap-southeast-1", JSON.stringify({
+    input: { requestId: "bp-retry", region: "ap-southeast-1", name: "bp-retry",
+      description: "", ...(maximum === undefined ? {} : { maxInstance: maximum }) },
+    submitted: true,
+    step: 2,
+  }));
+  await mountByteplusScaling();
+  await act(async () => submitButton().click());
+  expect(vi.mocked(api.startMpaCreation).mock.calls[0][0].maxInstance).toBe(maximum);
+});
+
 it.each(["", "0", "-1", "1.5", "9007199254740992"])(
   "rejects invalid maximum instances %s before Next",
   async (value) => {

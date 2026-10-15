@@ -5,14 +5,15 @@ server that `veadk frontend` launches — no separate backend.
 
 ## Release notifications
 
-MPA basic information includes an editable maximum instance count, default 20.
+MPA basic information includes an editable maximum instance count, defaulting to
+20 for Volcengine and 10 for BytePlus.
 This is the Runtime autoscaling ceiling (`MaxInstance`), not the initial number
 of running instances. Submitted requests retain their selected value on retry;
 legacy requests without this field keep their original configuration. Duplicate
 names show the existing error message in a red alert. General-agent creation is unchanged.
 See [the creation contract](../specs/studio-mpa-creation/README.md).
 
-MPA 基本信息新增可编辑的“最大实例数”，默认 20，对应 Runtime 的扩容上限
+MPA 基本信息提供可编辑的“最大实例数”，火山默认 20、BytePlus 默认 10，对应 Runtime 的扩容上限
 `MaxInstance`，并非初始启动实例数。已提交请求重试沿用原值；没有此字段的旧请求
 保留原配置。名称重复时以红色错误框突出原提示，通用智能体创建不变。
 参见[创建契约](../specs/studio-mpa-creation/README.zh.md)。
