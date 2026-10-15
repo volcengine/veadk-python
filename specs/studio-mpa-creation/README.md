@@ -277,3 +277,6 @@ Redeploy existing Studio installations to apply the environment and update the d
 role policy. Custom roles need equivalent authorization separately. Service activation,
 quotas, model access and network connectivity remain prerequisites; this change does
 not claim live cloud verification.
+
+
+CON-17 TOS resource credentials: `/web/deployment-resources` passes the current server-resolved AK/SK/session token to TOS queries as well as CR. Each request resolves credentials anew; clients are not cached across requests. Without complete explicit credentials, existing SDK discovery remains available. Provider endpoint resolution, filtering and credential-redacted failures are preserved.

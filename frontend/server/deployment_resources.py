@@ -20,6 +20,7 @@ import asyncio
 import json
 from collections.abc import Callable, Mapping
 from contextlib import contextmanager
+from types import SimpleNamespace
 from typing import Any, cast
 from urllib.parse import urlsplit
 
@@ -486,6 +487,34 @@ class DeploymentResourceService:
 
     def _tos_client(self):
         if self._tos is None:
+            access_key, secret_key, session_token = self.credentials or ("", "", None)
+            if access_key and secret_key:
+                import tos
+
+                from agentkit.platform import VolcConfiguration
+
+                config = VolcConfiguration(
+                    access_key=access_key,
+                    secret_key=secret_key,
+                    session_token=session_token,
+                    region=self.region,
+                    provider=self.provider,
+                )
+                endpoint = config.get_service_endpoint("tos")
+                # TOSService does not accept explicit credentials. Preserve the
+                # shape consumed by _tos_buckets without SDK rediscovery.
+                self._tos = SimpleNamespace(
+                    client=tos.TosClientV2(
+                        access_key,
+                        secret_key,
+                        endpoint.host,
+                        endpoint.region,
+                        security_token=session_token or "",
+                    ),
+                    actual_region=endpoint.region,
+                )
+                return self._tos
+
             from agentkit.toolkit.volcengine.services.tos_service import (
                 TOSService,
                 TOSServiceConfig,

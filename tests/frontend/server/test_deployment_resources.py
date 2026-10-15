@@ -1096,3 +1096,108 @@ def test_all_resource_mode_combinations_map_to_agentkit_config(monkeypatch) -> N
         assert ("cp_workspace_name" in resolved) is (cp_mode != "auto")
         assert ("cp_pipeline_name" in resolved) is (cp_mode != "auto")
         assert ("cp_pipeline_id" in resolved) is (cp_mode == "existing")
+
+
+@pytest.mark.parametrize(
+    ("provider", "region"),
+    [("byteplus", "ap-southeast-1"), ("volcengine", "cn-beijing")],
+)
+@pytest.mark.parametrize("token", [None, "rotating-session-token"])
+def test_tos_explicit_credentials_reach_sdk(monkeypatch, provider, region, token):
+    from agentkit.platform import VolcConfiguration
+
+    calls = []
+
+    def create_client(access_key, secret_key, endpoint, actual_region, **kwargs):
+        calls.append((access_key, secret_key, endpoint, actual_region, kwargs))
+        return SimpleNamespace(
+            list_buckets=lambda: SimpleNamespace(
+                buckets=[SimpleNamespace(name="bucket-a", location=region)]
+            )
+        )
+
+    monkeypatch.setattr("tos.TosClientV2", create_client)
+    monkeypatch.setattr(
+        VolcConfiguration,
+        "_get_global_env_credentials",
+        lambda *_: pytest.fail("Explicit credentials must bypass SDK rediscovery"),
+    )
+    endpoint = VolcConfiguration(provider=provider, region=region).get_service_endpoint(
+        "tos"
+    )
+    service = deployment_resources.DeploymentResourceService(
+        provider, region, ("test-access", "test-secret", token)
+    )
+    assert service.list_resources("tos-bucket")["items"][0]["name"] == "bucket-a"
+    assert (
+        service._require_existing_resource("tos-bucket", resource_id="bucket-a")["name"]
+        == "bucket-a"
+    )
+    assert calls == [
+        (
+            "test-access",
+            "test-secret",
+            endpoint.host,
+            endpoint.region,
+            {"security_token": token or ""},
+        )
+    ]
+
+
+@pytest.mark.parametrize("provider", ["byteplus", "volcengine"])
+def test_tos_without_explicit_credentials_preserves_sdk_fallback(monkeypatch, provider):
+    calls = []
+    expected = SimpleNamespace(actual_region="test-region")
+
+    def create_service(config, *, provider):
+        calls.append((config.bucket, config.region, provider))
+        return expected
+
+    monkeypatch.setattr(
+        "agentkit.toolkit.volcengine.services.tos_service.TOSService", create_service
+    )
+    service = deployment_resources.DeploymentResourceService(provider, "test-region")
+    assert service._tos_client() is expected
+    assert calls == [("", "test-region", provider)]
+
+
+def test_tos_route_refreshes_credentials_and_redacts_sdk_failure(monkeypatch):
+    snapshots = iter(
+        [
+            ("test-access-one", "test-secret-one", "test-token-one"),
+            ("test-access-two", "test-secret-two", "test-token-two"),
+        ]
+    )
+    calls = []
+
+    def create_client(access_key, secret_key, endpoint, region, **kwargs):
+        token = kwargs["security_token"]
+        calls.append((access_key, secret_key, token))
+
+        def list_buckets():
+            if len(calls) == 2:
+                raise RuntimeError(f"TOS failed: {access_key} {secret_key} {token}")
+            return SimpleNamespace(buckets=[])
+
+        return SimpleNamespace(list_buckets=list_buckets)
+
+    monkeypatch.setattr("tos.TosClientV2", create_client)
+    app = FastAPI()
+    deployment_resources.mount_deployment_resource_routes(
+        app,
+        authorize=lambda _: None,
+        provider="byteplus",
+        resolve_credentials=lambda: next(snapshots),
+    )
+    with TestClient(app) as client:
+        params = {"kind": "tos-bucket", "region": "ap-southeast-1"}
+        first = client.get("/web/deployment-resources", params=params)
+        second = client.get("/web/deployment-resources", params=params)
+    assert first.status_code == 200
+    assert first.json()["items"] == []
+    assert second.status_code == 502
+    assert second.json()["detail"] == "TOS failed: *** *** ***"
+    assert calls == [
+        ("test-access-one", "test-secret-one", "test-token-one"),
+        ("test-access-two", "test-secret-two", "test-token-two"),
+    ]

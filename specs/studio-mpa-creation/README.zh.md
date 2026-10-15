@@ -266,3 +266,6 @@ BytePlus `veadk studio deploy` 自动写入非密钥函数环境变量
 `vikingdb:AccessOpenVikingApiKey`，不增加 OV 删除权限。
 已有 Studio 需重新部署以应用环境变量并更新默认角色策略；自定义角色需单独具备等价权限。
 服务开通、配额、模型访问和网络连通仍是前置条件，本改动不代表已经完成真实云端验证。
+
+
+CON-17 TOS 资源凭据：`/web/deployment-resources` 将当前服务端解析的 AK/SK/session token 传给 TOS 和 CR 查询。每次请求重新解析凭据，客户端不跨请求缓存。没有完整显式凭据时保留原有 SDK 发现机制。保持 provider endpoint 解析、过滤和凭据脱敏错误行为。
