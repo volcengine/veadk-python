@@ -111,6 +111,7 @@ from veadk.utils.cloud_provider import (
     default_region,
     default_vefaas_application_template_id,
     normalize_cloud_provider,
+    tag_openapi_host,
 )
 from veadk.utils.logger import get_logger
 
@@ -10061,6 +10062,12 @@ def _run_frontend_server(
             configuration.session_token = token or ""
             configuration.region = region
             configuration.client_side_validation = True
+            if provider == "byteplus":
+                setattr(
+                    configuration,
+                    "host",
+                    f"https://{tag_openapi_host(provider)}",
+                )
             client = volcenginesdktag.TAGApi(volcenginesdkcore.ApiClient(configuration))
             response = client.get_resources(
                 volcenginesdktag.GetResourcesRequest(
@@ -10116,6 +10123,12 @@ def _run_frontend_server(
             configuration.session_token = token or ""
             configuration.region = region
             configuration.client_side_validation = True
+            if provider == "byteplus":
+                setattr(
+                    configuration,
+                    "host",
+                    f"https://{tag_openapi_host(provider)}",
+                )
             client = volcenginesdktag.TAGApi(volcenginesdkcore.ApiClient(configuration))
             request = volcenginesdktag.GetResourcesRequest(
                 max_results=max(1, min(max_results, 100)),
