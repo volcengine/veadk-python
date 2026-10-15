@@ -14,7 +14,9 @@
 
 import asyncio
 import json
+import sqlite3
 import sys
+from contextlib import closing
 
 import pytest
 from fastapi import FastAPI
@@ -144,9 +146,17 @@ def test_authorized_config_returns_defaults_and_task_freezes_them(
             "runtimeImage": config["runtimeImage"],
             "workerImage": "registry.example/worker:custom",
         }
-        assert "tosBucket" not in response.json()
-        database = service.path.read_bytes().decode(errors="ignore")
-        assert "agentkit-platform-output" not in database
+        task = response.json()
+        assert task["tosBucket"] == payload["tosBucket"]
+        with closing(sqlite3.connect(service.path)) as database:
+            row = database.execute(
+                "SELECT payload FROM tasks WHERE id = ?", (task["taskId"],)
+            ).fetchone()
+        assert row is not None
+        durable = json.loads(row[0])
+        assert durable["tosBucket"] == payload["tosBucket"]
+        for data in (task, durable):
+            assert "tosAccessKey" not in data and "tosSecretKey" not in data
         rejected = client.post(
             "/web/mpa-creation/tasks",
             json={**payload, "workerImage": "https://repo?token=private"},
@@ -227,7 +237,7 @@ def test_role_bucket_preserves_dedicated_lifecycle_request(
         assert durable["openvikingMode"] == "auto"
     else:
         assert "openvikingMode" not in durable
-    assert "tosBucket" not in durable
+    assert durable["tosBucket"] == payload["tosBucket"]
     assert "tosAccessKey" not in durable and "tosSecretKey" not in durable
     assert call.kwargs["tos"] == {"tosBucket": "agentkit-platform-output"}
     assert call.kwargs["name_scope"] == {
