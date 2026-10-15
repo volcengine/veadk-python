@@ -9,6 +9,7 @@ import {
   getMpaCreationConfig,
   checkMpaCreationName,
   startMpaCreation,
+  listMpaCreations,
   getMpaCreation,
   cancelMpaCreation,
   type MpaCreationInput,
@@ -47,6 +48,14 @@ function withoutTosCredentials(input: MpaCreationInput): MpaCreationInput {
   const clean = { ...input };
   Reflect.deleteProperty(clean, "tosAccessKey");
   Reflect.deleteProperty(clean, "tosSecretKey");
+  return clean;
+}
+
+function cleanInput(input: MpaCreationInput): MpaCreationInput {
+  const clean = withoutTosCredentials(input);
+  for (const key of Object.keys(clean) as Array<keyof MpaCreationInput>) {
+    if (clean[key] === undefined || clean[key] === "") delete clean[key];
+  }
   return clean;
 }
 
@@ -98,6 +107,17 @@ export function MpaCreateDialog({
   const key = (name: string) => `myAgents.mpaCreate.${name}`;
   const defaultMaximum = defaultMaximumInstances(cloudProvider);
   const [saved] = useState(() => initial(region, cloudProvider));
+  const hasBrowserDraft = Boolean(
+    saved.step ||
+      saved.input.name ||
+      saved.input.description ||
+      saved.input.agentId ||
+      saved.input.pgHost ||
+      saved.input.pgPort ||
+      saved.input.openvikingUrl ||
+      saved.input.openvikingResourceId ||
+      saved.input.tosBucket,
+  );
   const [input, setInput] = useState(saved.input);
   const [maximumInput, setMaximumInput] = useState(
     String(saved.input.maxInstance ?? defaultMaximum),
@@ -125,6 +145,7 @@ export function MpaCreateDialog({
     finished = useRef(false),
     alive = useRef(true);
   const action = useRef<AbortController | null>(null);
+  const serverRecoveryAttempted = useRef(false);
   const created = useRef(onCreated);
   created.current = onCreated;
   const running = task?.state === "running" || task?.state === "cancelling";
@@ -194,6 +215,45 @@ export function MpaCreateDialog({
       /* Server identity still makes retries idempotent. */
     }
   }
+  function restoreTask(value: MpaCreationTask) {
+    const restoredInput: MpaCreationInput = cleanInput({
+      requestId: value.requestId,
+      agentId: value.agentId,
+      name: value.name,
+      description: value.description ?? "",
+      maxInstance: value.maxInstance ?? defaultMaximum,
+      region: value.region,
+      runtimeImage: value.runtimeImage,
+      workerImage: value.workerImage,
+      pgHost: value.pgHost,
+      pgPort: value.pgPort,
+      openvikingUrl: value.openvikingUrl,
+      openvikingResourceId: value.openvikingResourceId,
+      openvikingMode: value.openvikingMode,
+      businessWorkspaceMode: value.businessWorkspaceMode,
+      businessDatabaseName: value.businessDatabaseName,
+      tosBucket: value.tosBucket,
+    });
+    setInput(restoredInput);
+    setMaximumInput(String(restoredInput.maxInstance ?? defaultMaximum));
+    setStep(2);
+    setSubmitted(true);
+    setTaskId(value.taskId);
+    setTask(value);
+    try {
+      sessionStorage.setItem(
+        `mpa-create:${region}`,
+        JSON.stringify({
+          input: restoredInput,
+          taskId: value.taskId,
+          submitted: true,
+          step: 2,
+        }),
+      );
+    } catch {
+      /* Server task storage remains the source of truth. */
+    }
+  }
   useEffect(() => {
     alive.current = true;
     return () => {
@@ -201,6 +261,37 @@ export function MpaCreateDialog({
       action.current?.abort();
     };
   }, []);
+  useEffect(() => {
+    if (
+      serverRecoveryAttempted.current ||
+      taskId ||
+      saved.taskId ||
+      (hasBrowserDraft && !submitted && !saved.submitted)
+    )
+      return;
+    serverRecoveryAttempted.current = true;
+    const controller = new AbortController();
+    void listMpaCreations(region, controller.signal)
+      .then((value) => {
+        if (controller.signal.aborted || !alive.current) return;
+        const restored =
+          value.tasks.find((item) => item.requestId === input.requestId) ??
+          value.tasks.find((item) => item.state !== "succeeded");
+        if (restored) restoreTask(restored);
+      })
+      .catch(() => {
+        /* Local task recovery is best-effort; config loading still drives errors. */
+      });
+    return () => controller.abort();
+  }, [
+    hasBrowserDraft,
+    input.requestId,
+    region,
+    saved.submitted,
+    saved.taskId,
+    submitted,
+    taskId,
+  ]);
   useEffect(() => {
     const controller = new AbortController();
     setLoading(true);
@@ -290,6 +381,11 @@ export function MpaCreateDialog({
     )
       return t(key(reason.code));
     return reason instanceof Error ? reason.message : t(key("creationFailed"));
+  }
+  function taskErrorKey(value: MpaCreationTask): string {
+    if (value.latestDiagnostic?.category === "configuration_changed")
+      return "configurationChanged";
+    return value.error || "creationFailed";
   }
   async function nextStep() {
     if (lock.current || !nameValid || !maximumValid) return;
@@ -834,7 +930,7 @@ export function MpaCreateDialog({
                           description={t(key(task.error))}
                         />
                       ) : (
-                        <p>{t(key(task.error || "creationFailed"))}</p>
+                        <p>{t(key(taskErrorKey(task)))}</p>
                       )
                     ) : null}
                     {task.result?.runtime_id && (
@@ -932,7 +1028,7 @@ export function MpaCreateDialog({
                         }
                         onClick={() => void submit()}
                       >
-                        {t(key(task ? "retry" : "submit"))}
+                        {t(key(task || submitted ? "retry" : "submit"))}
                       </Button>
                     ) : null}
                   </div>

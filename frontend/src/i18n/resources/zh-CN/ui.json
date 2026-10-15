@@ -1677,6 +1677,7 @@
       "iamVerificationFailed": "尚未确认运行角色的权限已就绪，请检查 IAM 服务及策略可用性后重试。",
       "iamConfigurationConflict": "自动准备运行角色仅支持默认 MPA 角色，请检查服务端创建配置。",
       "creationFailed": "当前步骤未完成，请检查对应资源、服务端配置及权限后，用同一智能体 ID 重试。",
+      "configurationChanged": "此智能体的创建配置已与上次提交不一致。请恢复原配置后重试，或新建另一个智能体请求。",
       "cancelFailed": "取消请求失败，请重新查询进度后重试。",
       "cancelled": "创建已取消，已登记资源保留供重试。",
       "timeout": "创建超时，已登记资源保留。请检查对应资源后重试。",

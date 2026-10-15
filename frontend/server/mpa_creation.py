@@ -243,7 +243,9 @@ def mount_mpa_creation_routes(
             if not payload["name"]:
                 # Keep the exact input shape of already-submitted legacy tasks.
                 payload.pop("name")
-            tos = {"tosBucket": payload.pop("tosBucket")}
+            tos = {"tosBucket": payload.get("tosBucket", "")}
+            if not payload["tosBucket"]:
+                payload.pop("tosBucket")
             selected_config = with_creation_resources(config, payload)
             openviking_api_key = payload.pop("openvikingApiKey")
             resources = validate_creation_resources(
@@ -264,9 +266,17 @@ def mount_mpa_creation_routes(
             name_options = {}
             if body.businessDatabaseName == "aidb":
                 saved_scope = get_tasks().name_scope_for_request(identity, payload)
-                name_options["name_scope"] = await check_name(
-                    body, selected_config, studio_runtime_owner, saved_scope
-                )
+                if saved_scope:
+                    get_tasks().check_name(
+                        identity,
+                        {"requestId": str(body.requestId), "name": body.name},
+                        saved_scope,
+                    )
+                    name_options["name_scope"] = saved_scope
+                else:
+                    name_options["name_scope"] = await check_name(
+                        body, selected_config, studio_runtime_owner
+                    )
             return await get_tasks().start(
                 identity,
                 payload,
@@ -286,6 +296,18 @@ def mount_mpa_creation_routes(
             raise HTTPException(400, str(exc)) from None
         except TaskError as exc:
             raise HTTPException(409, str(exc)) from None
+
+    @app.get("/web/mpa-creation/tasks")
+    async def list_tasks(
+        request: Request, region: str = "", limit: int = 10
+    ) -> dict[str, Any]:
+        identity = owner_key(owner(request))
+        bounded_limit = max(1, min(limit, 50))
+        return {
+            "tasks": get_tasks().list(
+                identity, region=region.strip(), limit=bounded_limit
+            )
+        }
 
     @app.get("/web/mpa-creation/tasks/{task_id}")
     async def status(request: Request, task_id: str):

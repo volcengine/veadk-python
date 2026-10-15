@@ -1677,6 +1677,7 @@
       "iamVerificationFailed": "Runtime role permissions could not be confirmed. Check IAM availability and policies, then retry.",
       "iamConfigurationConflict": "Automatic runtime role preparation requires the default MPA role. Check the server creation configuration.",
       "creationFailed": "This step failed. Check its resources, server configuration and permissions, then retry the same agent ID.",
+      "configurationChanged": "This agent's creation configuration no longer matches the original submission. Restore the original settings before retrying, or create another agent request.",
       "cancelFailed": "Cancellation failed. Check the current progress and retry.",
       "cancelled": "Creation cancelled. Registered resources are retained for retry.",
       "timeout": "Creation timed out. Registered resources are retained. Inspect them before retrying.",

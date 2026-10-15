@@ -61,6 +61,49 @@ class TaskError(ValueError):
     pass
 
 
+def _changed_payload_fields(original: str, current: str) -> str:
+    try:
+        before = json.loads(original)
+        after = json.loads(current)
+    except (TypeError, ValueError):
+        return ""
+    if not isinstance(before, dict) or not isinstance(after, dict):
+        return ""
+    if "tosBucket" not in before:
+        after = dict(after)
+        after.pop("tosBucket", None)
+    changed = sorted(
+        key for key in set(before) | set(after) if before.get(key) != after.get(key)
+    )
+    safe = [
+        key
+        for key in changed
+        if key
+        not in {
+            "openvikingApiKey",
+            "tosAccessKey",
+            "tosSecretKey",
+        }
+    ]
+    return ", ".join(safe[:8])
+
+
+def _payloads_match(original: str, current: str) -> bool:
+    if original == current:
+        return True
+    try:
+        before = json.loads(original)
+        after = json.loads(current)
+    except (TypeError, ValueError):
+        return False
+    if not isinstance(before, dict) or not isinstance(after, dict):
+        return False
+    if "tosBucket" not in before:
+        after = dict(after)
+        after.pop("tosBucket", None)
+    return before == after
+
+
 class CreationTasks:
     def __init__(self, path: Path):
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -191,8 +234,48 @@ class CreationTasks:
             "result": json.loads(row["result"]),
             "error": row["error"],
             "images": json.loads(row["images"]),
+            **self._latest_diagnostic(task_id),
             **json.loads(row["payload"]),
         }
+
+    def _latest_diagnostic(self, task_id):
+        with self.db() as db:
+            row = db.execute(
+                "SELECT stage,operation,category,attempt,outcome,request_id,error_code "
+                "FROM task_diagnostics WHERE task_id=? ORDER BY id DESC LIMIT 1",
+                (task_id,),
+            ).fetchone()
+        if row is None:
+            return {}
+        return {
+            "latestDiagnostic": {
+                "stage": row["stage"],
+                "operation": row["operation"],
+                "category": row["category"],
+                "attempt": row["attempt"],
+                "outcome": row["outcome"],
+                **({"requestId": row["request_id"]} if row["request_id"] else {}),
+                **({"errorCode": row["error_code"]} if row["error_code"] else {}),
+            }
+        }
+
+    def list(self, owner, *, region="", limit=10):
+        with self.db() as db:
+            rows = db.execute(
+                "SELECT id,payload FROM tasks WHERE owner=? "
+                "ORDER BY updated DESC LIMIT ?",
+                (owner, max(1, min(int(limit), 50))),
+            ).fetchall()
+        tasks = []
+        for row in rows:
+            payload = json.loads(row["payload"])
+            if region and payload.get("region") != region:
+                continue
+            try:
+                tasks.append(self.get(owner, row["id"]))
+            except TaskError:
+                continue
+        return tasks
 
     async def start(
         self,
@@ -241,8 +324,12 @@ class CreationTasks:
                 "SELECT * FROM tasks WHERE owner=? AND request=?",
                 (owner, payload["requestId"]),
             ).fetchone()
-            if row and row["payload"] != encoded:
-                raise TaskError("Request identity already has different inputs")
+            if row and not _payloads_match(row["payload"], encoded):
+                fields = _changed_payload_fields(row["payload"], encoded)
+                detail = f": {fields}" if fields else ""
+                raise TaskError(
+                    "Request identity already has different inputs" + detail
+                )
             if (
                 row
                 and json.loads(row["name_scope"])
@@ -330,8 +417,11 @@ class CreationTasks:
             ).fetchone()
         if row is None:
             return None
-        if row["payload"] != json.dumps(payload, sort_keys=True):
-            raise TaskError("Request identity already has different inputs")
+        encoded = json.dumps(payload, sort_keys=True)
+        if not _payloads_match(row["payload"], encoded):
+            fields = _changed_payload_fields(row["payload"], encoded)
+            detail = f": {fields}" if fields else ""
+            raise TaskError("Request identity already has different inputs" + detail)
         scope = json.loads(row["name_scope"])
         if not scope:
             return None

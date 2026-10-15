@@ -23,7 +23,7 @@ from frontend.server.mpa_creation import (
     _studio_task_path,
     mount_mpa_creation_routes,
 )
-from veadk.integrations.mpa.managed.tasks import CreationTasks
+from veadk.integrations.mpa.managed.tasks import CreationTasks, owner_key
 
 
 def test_studio_task_path_uses_tmp_by_default_and_honors_override(
@@ -105,6 +105,111 @@ def test_creation_routes_require_management_authorization(tmp_path):
             ("post", "/web/mpa-creation/tasks/unknown/cancel"),
         ]:
             assert getattr(client, method)(path).status_code == 403
+
+
+def test_creation_task_list_recovers_owner_scoped_local_state_with_diagnostics(
+    tmp_path,
+):
+    import json
+    import time
+
+    service = CreationTasks(tmp_path / "tasks.db")
+    payload = {
+        "requestId": "11111111-1111-4111-8111-111111111111",
+        "agentId": "mi-test",
+        "name": "test-agent",
+        "description": "",
+        "region": "cn-beijing",
+        "tosBucket": "agentkit-platform-output",
+    }
+    with service.db() as db:
+        db.execute(
+            "INSERT INTO tasks (id,owner,request,payload,state,stage,supervisor,updated,images,name_scope) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (
+                "task-1",
+                owner_key("local"),
+                payload["requestId"],
+                json.dumps(payload, sort_keys=True),
+                "failed",
+                "worker",
+                0,
+                time.time(),
+                "{}",
+                "{}",
+            ),
+        )
+    service.record_diagnostic(
+        "task-1",
+        {
+            "operation": "provision",
+            "category": "configuration_changed",
+            "attempt": 1,
+            "outcome": "failed",
+        },
+    )
+    app = FastAPI()
+    mount_mpa_creation_routes(app, owner=lambda request: "local", service=service)
+    with TestClient(app) as client:
+        response = client.get("/web/mpa-creation/tasks?region=cn-beijing")
+        other = client.get("/web/mpa-creation/tasks?region=ap-southeast-1")
+    assert response.status_code == 200
+    assert other.json() == {"tasks": []}
+    task = response.json()["tasks"][0]
+    assert task["taskId"] == "task-1"
+    assert task["name"] == "test-agent"
+    assert task["tosBucket"] == "agentkit-platform-output"
+    assert task["latestDiagnostic"] == {
+        "stage": "worker",
+        "operation": "provision",
+        "category": "configuration_changed",
+        "attempt": 1,
+        "outcome": "failed",
+    }
+
+
+def test_creation_route_reports_changed_request_fields(tmp_path, monkeypatch):
+    import json
+    import time
+
+    from frontend.server import mpa_creation
+
+    monkeypatch.setattr(mpa_creation, "load_volcengine_credentials", lambda *_: None)
+    service = CreationTasks(tmp_path / "tasks.db")
+    payload = {
+        "requestId": "11111111-1111-4111-8111-111111111111",
+        "agentId": "mi-test",
+        "description": "",
+        "region": "cn-beijing",
+        "tosBucket": "agentkit-platform-old",
+    }
+    with service.db() as db:
+        db.execute(
+            "INSERT INTO tasks (id,owner,request,payload,state,stage,supervisor,updated,images,name_scope) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (
+                "task-1",
+                owner_key("local"),
+                payload["requestId"],
+                json.dumps(payload, sort_keys=True),
+                "failed",
+                "worker",
+                0,
+                time.time(),
+                "{}",
+                "{}",
+            ),
+        )
+    app = FastAPI()
+    mount_mpa_creation_routes(app, owner=lambda request: "local", service=service)
+    with TestClient(app) as client:
+        response = client.post(
+            "/web/mpa-creation/tasks",
+            json={**payload, "tosBucket": "agentkit-platform-new"},
+        )
+    assert response.status_code == 409
+    assert response.json()["detail"] == (
+        "Request identity already has different inputs: tosBucket"
+    )
+    assert "agentkit-platform" not in response.text
 
 
 def test_model_key_discovery_needs_no_secret_for_local_inspection(
@@ -430,8 +535,7 @@ def test_retry_uses_private_scope_after_exact_payload_normalization(
                 ),
             )
         assert client.post("/web/mpa-creation/tasks", json=payload).status_code == 202
-        assert check.await_args is not None
-        assert check.await_args.kwargs["verified_creation_account"] == "test-account"
+        assert check.await_count == 1
         count = check.await_count
         changed = client.post(
             "/web/mpa-creation/tasks", json={**payload, "description": "changed"}

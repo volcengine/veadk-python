@@ -15,11 +15,14 @@
 """Provider isolation for managed creation; no real cloud operations."""
 
 import asyncio
+import hashlib
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from agentkit.toolkit.errors import ApiError
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -577,6 +580,7 @@ async def test_byteplus_worker_mount_and_environment_are_overseas():
         runtime=SimpleNamespace(provider="byteplus"),
         find=AsyncMock(return_value=[]),
         create=AsyncMock(side_effect=DeploymentError("request captured")),
+        get=AsyncMock(),
     )
     with pytest.raises(DeploymentError, match="request captured"):
         await ensure_worker(
@@ -590,11 +594,230 @@ async def test_byteplus_worker_mount_and_environment_are_overseas():
     request = cloud.create.await_args.args[0]
     assert (
         request["TosMountConfig"]["MountPoints"][0]["Endpoint"]
-        == "https://tos-ap-southeast-1.bytepluses.com"
+        == "http://tos-ap-southeast-1.bytepluses.com"
     )
     assert {item["Key"]: item["Value"] for item in request["Envs"]}[
         "CLOUD_PROVIDER"
     ] == "byteplus"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "legacy_endpoint",
+    [
+        "",
+        "tos-ap-southeast-1.bytepluses.com",
+        "https://tos-ap-southeast-1.bytepluses.com",
+    ],
+)
+async def test_byteplus_worker_recovers_legacy_tos_endpoint(legacy_endpoint):
+    from tests.integrations.mpa_managed.test_agent_deployment import Registry
+    from veadk.integrations.mpa.managed.database import DeploymentError
+    from veadk.integrations.mpa.managed.worker import ensure_worker
+
+    profile = load_studio_profile(provider="byteplus")
+    profile.managed.worker.tos_bucket = "test-bucket"
+    profile.managed.worker.tos_credential_type = "iam_role"
+    registry = Registry()
+    cloud = SimpleNamespace(
+        runtime=SimpleNamespace(provider="byteplus"),
+        find=AsyncMock(return_value=[]),
+        create=AsyncMock(side_effect=DeploymentError("request captured")),
+        get=AsyncMock(),
+    )
+    with pytest.raises(DeploymentError, match="request captured"):
+        await ensure_worker(
+            registry,
+            cloud,
+            profile.managed.worker,
+            account="test-account",
+            region="ap-southeast-1",
+            agent_id="mi-test",
+            runtime_name="test-agent",
+        )
+    original = dict(cloud.create.await_args.args[0])
+    original.pop("ClientToken")
+    legacy = json.loads(json.dumps(original))
+    if legacy_endpoint:
+        legacy["TosMountConfig"]["MountPoints"][0]["Endpoint"] = legacy_endpoint
+    else:
+        legacy["TosMountConfig"]["MountPoints"][0].pop("Endpoint")
+    registry.row["worker_hash"] = hashlib.sha256(
+        json.dumps(legacy, sort_keys=True).encode()
+    ).hexdigest()
+    registry.row["worker_name"] = "test-agent"
+    registry.row.pop("worker_id", None)
+    cloud.create.reset_mock()
+    with pytest.raises(DeploymentError, match="request captured"):
+        await ensure_worker(
+            registry,
+            cloud,
+            profile.managed.worker,
+            account="test-account",
+            region="ap-southeast-1",
+            agent_id="mi-test",
+            runtime_name="test-agent",
+        )
+    request = cloud.create.await_args.args[0]
+    assert (
+        request["TosMountConfig"]["MountPoints"][0]["Endpoint"]
+        == "http://tos-ap-southeast-1.bytepluses.com"
+    )
+    assert (
+        registry.row["worker_hash"]
+        == hashlib.sha256(
+            json.dumps(
+                {key: value for key, value in request.items() if key != "ClientToken"},
+                sort_keys=True,
+            ).encode()
+        ).hexdigest()
+    )
+
+
+@pytest.mark.asyncio
+async def test_byteplus_worker_tos_endpoint_failure_falls_back_without_mount():
+    from tests.integrations.mpa_managed.test_agent_deployment import Registry
+    from veadk.integrations.mpa.managed.database import agent_suffix
+    from veadk.integrations.mpa.managed.worker import ensure_worker
+
+    profile = load_studio_profile(provider="byteplus")
+    profile.managed.worker.tos_bucket = "test-bucket"
+    profile.managed.worker.tos_credential_type = "iam_role"
+    registry = Registry()
+    cloud = SimpleNamespace(
+        runtime=SimpleNamespace(provider="byteplus"),
+        find=AsyncMock(return_value=[]),
+        create=AsyncMock(
+            side_effect=[
+                ApiError("private", error_code="InvalidParameter.TosEndpoint"),
+                "t-created",
+            ]
+        ),
+        get=AsyncMock(
+            return_value={
+                "ToolId": "t-created",
+                "ProjectName": "default",
+                "Status": "Ready",
+                "Tags": [
+                    {"Key": "managed_by", "Value": "mpa-deployment"},
+                    {
+                        "Key": "mpa_agent_key",
+                        "Value": agent_suffix(
+                            "test-account", "ap-southeast-1", "mi-test"
+                        ),
+                    },
+                ],
+                "Envs": [{"Key": "MPA_AGENT_ID", "Value": "mi-test"}],
+            }
+        ),
+    )
+    assert (
+        await ensure_worker(
+            registry,
+            cloud,
+            profile.managed.worker,
+            account="test-account",
+            region="ap-southeast-1",
+            agent_id="mi-test",
+            runtime_name="test-agent",
+        )
+        == "t-created"
+    )
+    first, second = [call.args[0] for call in cloud.create.call_args_list]
+    assert (
+        first["TosMountConfig"]["MountPoints"][0]["Endpoint"]
+        == "http://tos-ap-southeast-1.bytepluses.com"
+    )
+    assert "TosMountConfig" not in second
+    assert first["ClientToken"] != second["ClientToken"]
+    assert registry.row["worker_tos_mount_disabled"] is True
+    assert (
+        registry.row["worker_tos_mount_disabled_reason"]
+        == "InvalidParameter.TosEndpoint"
+    )
+    assert (
+        registry.row["worker_hash"]
+        == hashlib.sha256(
+            json.dumps(
+                {key: value for key, value in second.items() if key != "ClientToken"},
+                sort_keys=True,
+            ).encode()
+        ).hexdigest()
+    )
+
+
+@pytest.mark.asyncio
+async def test_byteplus_worker_resumes_tos_intent_after_ui_loses_bucket():
+    from tests.integrations.mpa_managed.test_agent_deployment import Registry
+    from veadk.integrations.mpa.managed.database import DeploymentError, agent_suffix
+    from veadk.integrations.mpa.managed.worker import ensure_worker
+
+    profile = load_studio_profile(provider="byteplus")
+    tos_profile = load_studio_profile(provider="byteplus")
+    tos_profile.managed.worker.tos_bucket = "agentkit-platform-test-account"
+    tos_profile.managed.worker.tos_credential_type = "iam_role"
+    registry = Registry()
+    cloud = SimpleNamespace(
+        runtime=SimpleNamespace(provider="byteplus"),
+        find=AsyncMock(return_value=[]),
+        create=AsyncMock(side_effect=DeploymentError("request captured")),
+        get=AsyncMock(),
+    )
+    with pytest.raises(DeploymentError, match="request captured"):
+        await ensure_worker(
+            registry,
+            cloud,
+            tos_profile.managed.worker,
+            account="test-account",
+            region="ap-southeast-1",
+            agent_id="mi-test",
+            runtime_name="test-agent",
+        )
+    previous_hash = registry.row["worker_hash"]
+    registry.row = {
+        "worker_hash": previous_hash,
+        "worker_name": "test-agent",
+        "worker_managed": True,
+    }
+    cloud.create.reset_mock()
+    cloud.get.return_value = {
+        "ToolId": "t-created",
+        "ProjectName": "default",
+        "Status": "Ready",
+        "Tags": [
+            {"Key": "managed_by", "Value": "mpa-deployment"},
+            {
+                "Key": "mpa_agent_key",
+                "Value": agent_suffix("test-account", "ap-southeast-1", "mi-test"),
+            },
+        ],
+        "Envs": [{"Key": "MPA_AGENT_ID", "Value": "mi-test"}],
+    }
+    cloud.create.side_effect = ["t-created"]
+    assert (
+        await ensure_worker(
+            registry,
+            cloud,
+            profile.managed.worker,
+            account="test-account",
+            region="ap-southeast-1",
+            agent_id="mi-test",
+            runtime_name="test-agent",
+        )
+        == "t-created"
+    )
+    request = cloud.create.await_args.args[0]
+    assert "TosMountConfig" not in request
+    assert registry.row["worker_tos_mount_disabled"] is True
+    assert (
+        registry.row["worker_hash"]
+        == hashlib.sha256(
+            json.dumps(
+                {key: value for key, value in request.items() if key != "ClientToken"},
+                sort_keys=True,
+            ).encode()
+        ).hexdigest()
+    )
 
 
 @pytest.mark.parametrize(

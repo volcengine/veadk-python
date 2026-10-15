@@ -16,7 +16,9 @@
 
 from __future__ import annotations
 
+import ast
 import asyncio
+import json
 import logging
 import re
 from collections.abc import Awaitable, Callable, Iterator
@@ -68,6 +70,15 @@ OPERATIONS = {
     "list_model_keys",
     "get_model_key",
     "get_apm_key",
+    "aidap_describe_workspaces",
+    "aidap_describe_workspace_detail",
+    "aidap_create_workspace",
+    "aidap_describe_branches",
+    "aidap_describe_computes",
+    "aidap_describe_workspace_endpoint",
+    "aidap_describe_db_accounts",
+    "aidap_describe_databases",
+    "aidap_describe_db_account_connection",
     "get_reference_worker",
     "find_worker",
     "create_worker",
@@ -100,6 +111,7 @@ CODE_CATEGORIES = {
     "ThrottlingException": "throttled",
     "TooManyRequests": "throttled",
     "RequestLimitExceeded": "throttled",
+    "QuotaExceeded": "throttled",
     "InternalError": "unavailable",
     "InternalServerError": "unavailable",
     "ServiceUnavailable": "unavailable",
@@ -125,6 +137,7 @@ DEPLOYMENT_CATEGORIES = {
     "Worker is not ready; inspect it and retry the same agent": "resource_failed",
 }
 Diagnostic = dict[str, str | int]
+MAX_DIAGNOSTIC_ATTEMPT = 8
 _sink: ContextVar[Callable[[Diagnostic], None] | None] = ContextVar(
     "mpa_diagnostic_sink", default=None
 )
@@ -199,6 +212,57 @@ def safe_error_code(value: object) -> str:
     return value
 
 
+def sdk_argument_identifiers(value: object) -> tuple[str, str]:
+    """Decode bounded JSON or SDK bytes literals; never evaluate provider text."""
+    from .openviking import response_metadata
+
+    if not isinstance(value, (str, bytes)) or len(value) > 65536:
+        return "", ""
+    try:
+        if isinstance(value, str) and value.startswith(("b'", 'b"')):
+            value = ast.literal_eval(value)
+            if not isinstance(value, bytes) or len(value) > 65536:
+                return "", ""
+        return response_metadata(json.loads(value))
+    except (ValueError, TypeError, SyntaxError, RecursionError):
+        return "", ""
+
+
+def failure_identifiers(error: Exception) -> tuple[str, str]:
+    """Read bounded SDK metadata through a cycle-safe exception chain."""
+    from .openviking import exception_metadata
+
+    code, request_id = "", ""
+    cause: BaseException | None = error
+    seen: set[int] = set()
+    for _ in range(8):
+        if cause is None or id(cause) in seen:
+            break
+        seen.add(id(cause))
+        code = code or safe_error_code(getattr(cause, "error_code", None))
+        request_id = request_id or safe_request_id(getattr(cause, "request_id", None))
+        if isinstance(cause, Exception):
+            try:
+                response_body = getattr(
+                    getattr(cause, "response", None), "content", None
+                )
+                if (
+                    isinstance(response_body, (str, bytes))
+                    and len(response_body) > 65536
+                ):
+                    body_code, body_request_id = "", ""
+                else:
+                    body_code, body_request_id = exception_metadata(cause)
+            except RecursionError:
+                body_code, body_request_id = "", ""
+            code, request_id = code or body_code, request_id or body_request_id
+        if len(cause.args) == 1:
+            arg_code, arg_request_id = sdk_argument_identifiers(cause.args[0])
+            code, request_id = code or arg_code, request_id or arg_request_id
+        cause = cause.__cause__
+    return code, request_id
+
+
 def validate_diagnostic(value: object) -> Diagnostic | None:
     required = {"operation", "category", "attempt", "outcome"}
     if (
@@ -213,7 +277,7 @@ def validate_diagnostic(value: object) -> Diagnostic | None:
         or not isinstance(value["category"], str)
         or value["category"] not in CATEGORIES
         or type(value["attempt"]) is not int
-        or not 1 <= value["attempt"] <= 4
+        or not 1 <= value["attempt"] <= MAX_DIAGNOSTIC_ATTEMPT
         or not isinstance(value["outcome"], str)
         or value["outcome"] not in {"retrying", "failed", "cancelled"}
     ):
@@ -272,7 +336,10 @@ async def retry_worker(
         try:
             return await call()
         except Exception as error:
+            error_code, request_id = failure_identifiers(error)
             category = classify_error(error)
+            if error_code and category in {"provider_error", "unknown"}:
+                category = CODE_CATEGORIES.get(error_code, category)
             recoverable = category in {
                 "timeout",
                 "connection",
@@ -285,6 +352,8 @@ async def retry_worker(
                 category,
                 attempt=attempt,
                 outcome="retrying" if retrying else "failed",
+                error_code=error_code,
+                request_id=request_id,
             )
             if not retrying:
                 raise

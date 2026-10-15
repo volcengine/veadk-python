@@ -61,6 +61,70 @@ def test_tasks_are_owner_scoped_and_duplicate_submission_reuses_identity(tmp_pat
     asyncio.run(run())
 
 
+def test_changed_request_identity_reports_safe_field_names(tmp_path):
+    async def run():
+        service = CreationTasks(tmp_path / "tasks.sqlite3")
+        service.command = lambda: [sys.executable, "-c", "import time; time.sleep(30)"]
+        payload = {
+            "requestId": "11111111-1111-4111-8111-111111111111",
+            "agentId": "mi-test",
+            "description": "",
+            "region": "cn-beijing",
+            "tosBucket": "agentkit-platform-old",
+        }
+        task = await service.start(
+            "owner",
+            payload,
+            config_path="not-read-by-fake",
+            timeout=60,
+            tos={"tosBucket": "agentkit-platform-old"},
+        )
+        with pytest.raises(TaskError) as caught:
+            await service.start(
+                "owner",
+                {**payload, "tosBucket": "agentkit-platform-new"},
+                config_path="x",
+                timeout=60,
+                tos={"tosBucket": "agentkit-platform-new"},
+            )
+        assert "tosBucket" in str(caught.value)
+        assert "agentkit-platform" not in str(caught.value)
+        await service.cancel("owner", task["taskId"])
+        await service.close()
+
+    asyncio.run(run())
+
+
+def test_legacy_task_without_bucket_can_resume_with_bucket(tmp_path):
+    async def run():
+        service = CreationTasks(tmp_path / "tasks.sqlite3")
+        service.command = lambda: [sys.executable, "-c", "import time; time.sleep(30)"]
+        legacy = {
+            "requestId": "12121212-1212-4121-8121-121212121212",
+            "agentId": "mi-test",
+            "description": "",
+            "region": "cn-beijing",
+        }
+        task = await service.start(
+            "owner",
+            legacy,
+            config_path="unused",
+            timeout=60,
+        )
+        await service.cancel("owner", task["taskId"])
+        resumed = await service.start(
+            "owner",
+            {**legacy, "tosBucket": "agentkit-platform-output"},
+            config_path="unused",
+            timeout=60,
+            tos={"tosBucket": "agentkit-platform-output"},
+        )
+        assert resumed["taskId"] == task["taskId"]
+        await service.close()
+
+    asyncio.run(run())
+
+
 def test_raw_child_errors_never_reach_task_response(tmp_path):
     async def run():
         service = CreationTasks(tmp_path / "tasks.sqlite3")
@@ -338,6 +402,60 @@ def test_tos_credentials_reach_child_without_persistence(tmp_path):
         database = service.path.read_bytes().decode(errors="ignore")
         assert "sensitive-ak" not in database
         assert "sensitive-sk" not in database
+        await service.close()
+
+    asyncio.run(run())
+
+
+def test_tos_bucket_is_part_of_request_identity_and_reaches_child(tmp_path):
+    import json
+
+    async def run():
+        service = CreationTasks(tmp_path / "tasks.sqlite3")
+        received = tmp_path / "tos.json"
+        result = {
+            "runtime_id": "r-test",
+            "skill_space_id": "ss-test",
+            "gateway_id": "gw-test",
+            "agent_id": "mi-test",
+            "region": "cn-beijing",
+            "state": "ready",
+        }
+        code = (
+            "import json,sys,pathlib; "
+            "data=json.loads(sys.stdin.read()); "
+            f"pathlib.Path({str(received)!r}).write_text(json.dumps(data['tos'])); "
+            f"print('MPA_EVENT '+json.dumps({{'result': {result!r}}}))"
+        )
+        service.command = lambda: [sys.executable, "-c", code]
+        payload = {
+            "requestId": "91919191-9191-4191-8191-919191919191",
+            "agentId": "mi-test",
+            "description": "",
+            "region": "cn-beijing",
+            "tosBucket": "agentkit-platform-output",
+        }
+        task = await service.start(
+            "owner",
+            payload,
+            config_path="unused",
+            timeout=60,
+            tos={"tosBucket": payload["tosBucket"]},
+        )
+        await asyncio.gather(*service.running.values())
+        response = service.get("owner", task["taskId"])
+        assert response["tosBucket"] == "agentkit-platform-output"
+        assert json.loads(received.read_text()) == {
+            "tosBucket": "agentkit-platform-output"
+        }
+        with pytest.raises(TaskError, match="different inputs"):
+            await service.start(
+                "owner",
+                {**payload, "tosBucket": "agentkit-platform-other"},
+                config_path="unused",
+                timeout=60,
+                tos={"tosBucket": "agentkit-platform-other"},
+            )
         await service.close()
 
     asyncio.run(run())

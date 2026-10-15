@@ -17,6 +17,7 @@
 import asyncio
 import json
 import sys
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -156,6 +157,85 @@ def test_exhaustion_is_bounded_and_reports_final_failure(monkeypatch):
         assert [e["attempt"] for e in events] == [1, 2, 3, 4]
         assert events[-1]["outcome"] == "failed"
         cloud.create.assert_not_called()
+
+    asyncio.run(run())
+
+
+def test_worker_retry_records_safe_wrapped_provider_metadata(monkeypatch):
+    from veadk.integrations.mpa.managed import diagnostics
+
+    metadata = {
+        "ResponseMetadata": {
+            "RequestId": "20261015153100ABCDEF0123456789ABCD",
+            "Error": {
+                "Code": "AccessDenied",
+                "Message": "private provider detail",
+            },
+        },
+        "Result": {"Secret": "private value"},
+    }
+
+    class SDKBodyError(Exception):
+        response = SimpleNamespace(json=lambda: metadata)
+
+    async def run():
+        sleep = AsyncMock()
+        monkeypatch.setattr(diagnostics.asyncio, "sleep", sleep)
+        outer = ApiError("private wrapper")
+        outer.__cause__ = SDKBodyError("private body")
+
+        async def fail():
+            raise outer
+
+        events = []
+        with diagnostics.diagnostic_scope(events.append), pytest.raises(ApiError):
+            await diagnostics.retry_worker("create_worker", fail)
+        assert events == [
+            {
+                "operation": "create_worker",
+                "category": "permission",
+                "attempt": 1,
+                "outcome": "failed",
+                "errorCode": "AccessDenied",
+                "requestId": metadata["ResponseMetadata"]["RequestId"],
+            }
+        ]
+        sleep.assert_not_called()
+        assert "private" not in json.dumps(events)
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    "argument",
+    [
+        "private non-JSON response",
+        b"not JSON",
+        '{"ResponseMetadata":{"Error":{"Code":"SK_private_token"},"RequestId":"private token"}}',
+    ],
+)
+def test_worker_retry_rejects_unsafe_wrapped_provider_metadata(argument):
+    from veadk.integrations.mpa.managed import diagnostics
+
+    async def run():
+        outer = ApiError("private wrapper")
+        outer.__cause__ = Exception(argument)
+
+        async def fail():
+            raise outer
+
+        events = []
+        with diagnostics.diagnostic_scope(events.append), pytest.raises(ApiError):
+            await diagnostics.retry_worker("create_worker", fail)
+        assert events == [
+            {
+                "operation": "create_worker",
+                "category": "provider_error",
+                "attempt": 1,
+                "outcome": "failed",
+            }
+        ]
+        assert "private" not in json.dumps(events)
 
     asyncio.run(run())
 

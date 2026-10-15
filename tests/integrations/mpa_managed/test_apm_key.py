@@ -211,7 +211,7 @@ def test_cancellation_does_not_retry_or_continue(monkeypatch):
     asyncio.run(run())
 
 
-def test_lookup_failure_precedes_resource_mutations(monkeypatch):
+def test_lookup_failure_does_not_block_resource_preparation(monkeypatch):
     profile = load_studio_profile(provider="byteplus")
     cloud = Cloud()
     monkeypatch.setattr(
@@ -223,8 +223,9 @@ def test_lookup_failure_precedes_resource_mutations(monkeypatch):
     monkeypatch.setattr(service, "get_runtime_apm_key", lookup)
     iam, identity = AsyncMock(), AsyncMock()
     monkeypatch.setattr(service, "ensure_runtime_role", iam)
+    identity.side_effect = RuntimeError("isolated-stop-after-apm-skip")
     monkeypatch.setattr(service, "ensure_workload_identity", identity)
-    with pytest.raises(apm_key.ApmKeyError):
+    with pytest.raises(RuntimeError, match="isolated-stop-after-apm-skip"):
         asyncio.run(
             service.provision(
                 profile,
@@ -234,6 +235,31 @@ def test_lookup_failure_precedes_resource_mutations(monkeypatch):
             )
         )
     lookup.assert_awaited_once_with(profile, cloud)
+    iam.assert_awaited_once()
+    identity.assert_awaited_once()
+
+
+def test_invalid_explicit_apm_key_still_blocks_resource_preparation(monkeypatch):
+    profile = load_studio_profile(provider="byteplus")
+    profile.managed.runtime.env[apm_key.RUNTIME_APM_KEY] = "bad\nkey"
+    cloud = Cloud()
+    monkeypatch.setattr(
+        cloud, "account_id", AsyncMock(return_value="test-account"), raising=False
+    )
+    monkeypatch.setattr(service, "RuntimeCloud", lambda **kw: cloud)
+    monkeypatch.setattr(service, "resolve_model_key", AsyncMock(return_value=profile))
+    iam, identity = AsyncMock(), AsyncMock()
+    monkeypatch.setattr(service, "ensure_runtime_role", iam)
+    monkeypatch.setattr(service, "ensure_workload_identity", identity)
+    with pytest.raises(apm_key.ApmKeyError, match="Configured APM AppKey is invalid"):
+        asyncio.run(
+            service.provision(
+                profile,
+                agent_id="mi-test",
+                owner="test-owner",
+                studio_runtime_owner="studio-user",
+            )
+        )
     iam.assert_not_awaited()
     identity.assert_not_awaited()
 

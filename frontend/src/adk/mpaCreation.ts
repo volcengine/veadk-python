@@ -25,14 +25,20 @@ export interface MpaCreationRequest extends MpaCreationInput {
   openvikingApiKey?: string;
 }
 export interface MpaCreationTask
-  extends Omit<
-    MpaCreationInput,
-    "tosBucket"
-  > {
+  extends MpaCreationInput {
   taskId: string;
   state: "running" | "cancelling" | "succeeded" | "failed" | "cancelled";
   stage: string;
   error?: string;
+  latestDiagnostic?: {
+    stage: string;
+    operation: string;
+    category: string;
+    attempt: number;
+    outcome: string;
+    errorCode?: string;
+    requestId?: string;
+  };
   images?: { runtimeImage?: string; workerImage?: string };
   result?: {
     runtime_id?: string;
@@ -103,6 +109,11 @@ export const startMpaCreation = (
   input: MpaCreationRequest,
   signal: AbortSignal,
 ) => request<MpaCreationTask>("tasks", signal, input);
+export const listMpaCreations = (region: string, signal: AbortSignal) =>
+  request<{ tasks: MpaCreationTask[] }>(
+    `tasks?region=${encodeURIComponent(region)}`,
+    signal,
+  );
 export const checkMpaCreationName = (
   input: Pick<MpaCreationInput, "requestId" | "name" | "agentId" | "region">,
   signal: AbortSignal,

@@ -707,6 +707,18 @@ def test_tos_runtime_env_is_owned_and_contains_no_credentials():
         "MPA_CODEX_WORKER_TOS_BUCKET": "mpa-output",
     }
 
+    service.apply_tos_runtime_env(
+        env,
+        Worker(
+            image="worker:v1",
+            tos_access_key="private-ak",
+            tos_secret_key="private-sk",
+            tos_bucket="mpa-output",
+        ),
+        enabled=False,
+    )
+    assert env == {}
+
 
 @pytest.mark.parametrize(
     "settings,source_values",

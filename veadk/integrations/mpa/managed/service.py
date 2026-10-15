@@ -36,7 +36,7 @@ from veadk.integrations.mpa.tags import (
 )
 from veadk.integrations.ve_identity.identity_client import IdentityClient
 
-from .apm_key import RUNTIME_APM_KEY, get_runtime_apm_key
+from .apm_key import ApmKeyError, RUNTIME_APM_KEY, get_runtime_apm_key
 from .config import ConfigurationError, Profile, Runtime, validate_postgres_layout
 from .database import AgentDatabaseProvisioner, AgentDeploymentRegistry, DeploymentError
 from .gateway import SharedAPIGService
@@ -223,11 +223,11 @@ def apply_identity_settings(template: dict, values: dict):
     template["Envs"] = [{"Key": key, "Value": value} for key, value in env.items()]
 
 
-def apply_tos_runtime_env(env: dict[str, str], worker) -> None:
+def apply_tos_runtime_env(env: dict[str, str], worker, *, enabled: bool = True) -> None:
     """Set provisioner-owned, non-secret TOS Session mount metadata."""
     env.pop("MPA_CODEX_WORKER_TOS_MOUNT_ENABLED", None)
     env.pop("MPA_CODEX_WORKER_TOS_BUCKET", None)
-    if worker.tos_mount_enabled:
+    if enabled and worker.tos_mount_enabled:
         env["MPA_CODEX_WORKER_TOS_MOUNT_ENABLED"] = "true"
         env["MPA_CODEX_WORKER_TOS_BUCKET"] = worker.tos_bucket
 
@@ -279,7 +279,8 @@ async def provision(
             "Deployment credentials differ from the creation account snapshot"
         )
     if (
-        profile.managed.postgres
+        not expected_account
+        and profile.managed.postgres
         and profile.managed.postgres.business_database_name == "aidb"
     ):
         await check_creation_name(
@@ -291,11 +292,13 @@ async def provision(
             verified_creation_account=expected_account,
         )
     profile = await resolve_model_key(profile, cloud)
-    apm_key = (
-        await get_runtime_apm_key(profile, cloud)
-        if studio_runtime_owner is not None and profile.provider == "byteplus"
-        else ""
-    )
+    apm_key = ""
+    if studio_runtime_owner is not None and profile.provider == "byteplus":
+        try:
+            apm_key = await get_runtime_apm_key(profile, cloud)
+        except ApmKeyError:
+            if profile.managed.runtime.env.get(RUNTIME_APM_KEY, ""):
+                raise
     if profile.managed.iam.mode == "auto":
         if (
             profile.managed.runtime.role_name
@@ -478,6 +481,12 @@ async def provision(
                 agent_id=agent_id,
                 project=template.get("ProjectName") or "default",
                 runtime_name=runtime_name,
+            )
+            worker_record = await entry.read()
+            apply_tos_runtime_env(
+                env,
+                profile.managed.worker,
+                enabled=not bool(worker_record.get("worker_tos_mount_disabled")),
             )
             if profile.managed.openviking.mode == "auto":
                 env.update(
