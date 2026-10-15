@@ -260,3 +260,20 @@ CON-17 APM key handoff: Studio BytePlus creation obtains `data.app_key` through 
 Provider-specific default adjustment: [BytePlus maximum instances](../../prd-spec/bugfixes/mpa-byteplus-scaling/2026-10-15-default-maximum.md). Backend/YAML/CLI profile defaults remain unchanged.
 
 CON-17 OTLP collector: new BytePlus Studio profiles inject `OBSERVABILITY_OPENTELEMETRY_APMPLUS_ENDPOINT=http://apmplus-ap-southeast-1.bytepluses.com:4317`. Trusted explicit Runtime environment overrides retain precedence. Domestic defaults, generic agents, AppKey retrieval, existing resources and submitted snapshots are unchanged. See [endpoint design](../../prd-spec/bugfixes/mpa-byteplus-apm/2026-10-15-otlp-endpoint.md).
+
+
+### Cloud Studio MPA IAM credentials and OpenViking permissions
+
+BytePlus `veadk studio deploy` supplies the nonsecret function environment variable
+`VEADK_MPA_BYTEPLUS_CREDENTIAL_FILE=/var/run/secrets/iam/credential`. Managed creation
+uses the mounted rotating role credentials, rereading the file for each call; missing,
+malformed or incomplete credentials fail explicitly. Deployment does not copy the
+operator's AK/SK or local credential-file path. Local BytePlus AK/SK and explicit CLI
+file selection are unchanged; domestic creation retains its existing IAM fallback.
+The shared default Studio custom role policy grants
+`vikingdb:CreateOpenVikingCollection`, `vikingdb:GetOpenVikingCollection` and
+`vikingdb:AccessOpenVikingApiKey` for both providers, without OV deletion permission.
+Redeploy existing Studio installations to apply the environment and update the default
+role policy. Custom roles need equivalent authorization separately. Service activation,
+quotas, model access and network connectivity remain prerequisites; this change does
+not claim live cloud verification.

@@ -252,3 +252,17 @@ CON-17 APM Key 传递：Studio BytePlus 创建在写资源前使用已核验部�
 分提供商默认值调整：[BytePlus 最大实例数](../../prd-spec/bugfixes/mpa-byteplus-scaling/2026-10-15-default-maximum.zh.md)。后端/YAML/CLI 配置默认值保持不变。
 
 CON-17 OTLP 采集地址：新的 BytePlus Studio 配置注入 `OBSERVABILITY_OPENTELEMETRY_APMPLUS_ENDPOINT=http://apmplus-ap-southeast-1.bytepluses.com:4317`。可信的显式 Runtime 环境变量仍按既有优先级覆盖。国内默认值、通用智能体、AppKey 获取、已有资源和已提交快照不变。见[地址设计](../../prd-spec/bugfixes/mpa-byteplus-apm/2026-10-15-otlp-endpoint.zh.md)。
+
+
+### 云端 Studio MPA IAM 凭据与 OpenViking 权限
+
+BytePlus `veadk studio deploy` 自动写入非密钥函数环境变量
+`VEADK_MPA_BYTEPLUS_CREDENTIAL_FILE=/var/run/secrets/iam/credential`。托管创建使用
+挂载的轮转角色凭据，每次调用重新读取；文件缺失、格式错误或字段不完整时明确失败。
+部署不复制操作者的 AK/SK 或本地凭据文件路径。本地 BytePlus AK/SK 和显式 CLI 文件
+选择不变，国内创建保留现有 IAM 回退。
+两个平台共用的默认 Studio 自定义角色策略授权
+`vikingdb:CreateOpenVikingCollection`、`vikingdb:GetOpenVikingCollection` 和
+`vikingdb:AccessOpenVikingApiKey`，不增加 OV 删除权限。
+已有 Studio 需重新部署以应用环境变量并更新默认角色策略；自定义角色需单独具备等价权限。
+服务开通、配额、模型访问和网络连通仍是前置条件，本改动不代表已经完成真实云端验证。

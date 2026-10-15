@@ -635,3 +635,39 @@ def test_managed_byteplus_iam_retains_trusted_host_override(monkeypatch):
         managed_host("iam", "ap-southeast-1", "byteplus") == "iam-test.byteplusapi.com"
     )
     assert managed_host("iam", "cn-beijing", "volcengine") == "iam.volcengineapi.com"
+
+
+@pytest.mark.parametrize("invalid", [None, "not-json", "{}"])
+def test_byteplus_cloud_profile_refreshes_iam_file_and_rejects_invalid_file(
+    monkeypatch, tmp_path, invalid
+):
+    import json
+
+    from veadk.integrations.mpa.managed.credentials import load_provider_credentials
+
+    credential_file = tmp_path / "credential"
+    monkeypatch.setenv("VEADK_MPA_BYTEPLUS_CREDENTIAL_FILE", str(credential_file))
+    monkeypatch.delenv("BYTEPLUS_ACCESS_KEY", raising=False)
+    monkeypatch.delenv("BYTEPLUS_SECRET_KEY", raising=False)
+    profile = load_studio_profile(provider="byteplus", region="ap-southeast-1")
+    for generation in ("first", "rotated"):
+        credential_file.write_text(
+            json.dumps(
+                {
+                    "AccessKeyId": generation,
+                    "SecretAccessKey": generation,
+                    "SessionToken": generation,
+                }
+            )
+        )
+        credential = load_provider_credentials(
+            profile.provider, profile.managed.credential_file
+        )
+        assert credential.access_key_id == generation
+        assert credential.session_token == generation
+    if invalid is None:
+        credential_file.unlink()
+    else:
+        credential_file.write_text(invalid)
+    with pytest.raises(ValueError, match="unavailable or invalid"):
+        load_provider_credentials(profile.provider, profile.managed.credential_file)

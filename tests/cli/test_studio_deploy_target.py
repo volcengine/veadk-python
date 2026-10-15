@@ -1032,6 +1032,22 @@ def test_studio_deploy_passes_region_and_project_to_cloud_engine(
         "existing-studio-storage",
     )
 
+    monkeypatch.setitem(
+        veadk_environments,
+        "VEADK_MPA_BYTEPLUS_CREDENTIAL_FILE",
+        "/developer-only/credential",
+    )
+    monkeypatch.setenv(
+        "VEADK_MPA_BYTEPLUS_CREDENTIAL_FILE", "/developer-only/credential"
+    )
+    for secret_name in (
+        "BYTEPLUS_ACCESS_KEY",
+        "BYTEPLUS_SECRET_KEY",
+        "VOLCENGINE_ACCESS_KEY",
+        "VOLCENGINE_SECRET_KEY",
+    ):
+        monkeypatch.setitem(veadk_environments, secret_name, "test-deployer-secret")
+
     if update_bucket_env is None:
         monkeypatch.delenv("VEADK_STUDIO_UPDATE_BUCKET", raising=False)
     else:
@@ -1142,6 +1158,18 @@ def test_studio_deploy_passes_region_and_project_to_cloud_engine(
     }
     assert captured["provider"] == provider
     assert veadk_environments["CLOUD_PROVIDER"] == provider
+    credential_env = "VEADK_MPA_BYTEPLUS_CREDENTIAL_FILE"
+    if provider == "byteplus":
+        assert veadk_environments[credential_env] == "/var/run/secrets/iam/credential"
+    else:
+        assert credential_env not in veadk_environments
+    for secret_name in (
+        "BYTEPLUS_ACCESS_KEY",
+        "BYTEPLUS_SECRET_KEY",
+        "VOLCENGINE_ACCESS_KEY",
+        "VOLCENGINE_SECRET_KEY",
+    ):
+        assert secret_name not in veadk_environments
     assert veadk_environments["AGENTKIT_CLOUD_PROVIDER"] == provider
     assert veadk_environments["VEIDENTITY_REGION"] == expected_identity_region
     assert veadk_environments["VEADK_STUDIO_ADMINS"] == ""

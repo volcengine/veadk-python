@@ -324,7 +324,7 @@ Ark 模式要求 `model-provider: openai` 和所选地域方舟 `/api/v3/` 地�
 
 ### BytePlus 托管创建 MPA
 
-在服务端进程中设置 `BYTEPLUS_ACCESS_KEY` / `BYTEPLUS_SECRET_KEY`，使用 `uv run veadk studio --provider byteplus --open` 启动。MPA 创建目前面向 `ap-southeast-1`，沿用三步表单及共享管理/业务 Workspace 布局。平台由服务端决定，不复用国内凭据及恢复文件。角色部署时，显式设置 `VEADK_MPA_BYTEPLUS_CREDENTIAL_FILE` 指向轮转凭据文件。默认模型为现有海外 Studio ModelArk 模型；方舟 Key 发现要求海外 ListApiKeys/GetRawApiKey 权限及一个已有可用 Key。
+在服务端进程中设置 `BYTEPLUS_ACCESS_KEY` / `BYTEPLUS_SECRET_KEY`，使用 `uv run veadk studio --provider byteplus --open` 启动。MPA 创建目前面向 `ap-southeast-1`，沿用三步表单及共享管理/业务 Workspace 布局。平台由服务端决定，不复用国内凭据及恢复文件。云端 `veadk studio deploy` 自动设置 `VEADK_MPA_BYTEPLUS_CREDENTIAL_FILE` 指向挂载的轮转 IAM 凭据文件；其他角色托管方式仍需显式配置文件。默认模型为现有海外 Studio ModelArk 模型；方舟 Key 发现要求海外 ListApiKeys/GetRawApiKey 权限及一个已有可用 Key。
 
 目前没有海外默认镜像，仍使用现有公开 MPA/Worker 镜像，可通过服务端 `VEADK_MPA_BYTEPLUS_RUNTIME_IMAGE` / `VEADK_MPA_BYTEPLUS_WORKER_IMAGE` 覆盖；海外拉取及镜像兼容性需实际创建验证。`VEADK_MPA_BYTEPLUS_AIDAP_HOST` 可选指定部署对应的 AIDAP 主机名。服务开通、IAM 策略/API 可用性、配额及模型访问是账号前置条件；表单配置就绪不能证明这些资源可用。海外服务缺失时显式失败，不回退火山引擎。火山引擎默认配置及通用智能体聊天保持不变。
 
@@ -366,3 +366,13 @@ BytePlus Studio 在 ap-southeast-1 的新请求重新自动准备个人版 OV。
 Runtime 创建/更新失败从结构化 SDK/HTTP 元信息及有界 JSON／SDK 字节串异常参数提取已验证的 errorCode/requestId（65,536 字节／字符，八个防循环 cause）。排除原始云端文案、响应体和凭证。复现前重启 Studio；重试保留原输入和 ClientToken，历史错误无法恢复。
 
 新的 BytePlus Studio 创建还会注入 `OBSERVABILITY_OPENTELEMETRY_APMPLUS_ENDPOINT=http://apmplus-ap-southeast-1.bytepluses.com:4317`，用于 OTLP/gRPC 上报。此采集地址与 GetAppKey 控制面地址不同。可信的显式 Runtime 环境变量仍按既有优先级覆盖。新请求前需重启 Studio；已有 Runtime 及已提交任务快照不会更新。国内创建流程不变，实际 Trace 投递需单独云端验证。
+
+
+### 云端 Studio MPA IAM 凭据与 OpenViking 权限
+
+BytePlus `veadk studio deploy` 自动设置
+`VEADK_MPA_BYTEPLUS_CREDENTIAL_FILE=/var/run/secrets/iam/credential`，使用轮转的
+函数角色凭据，本地 AK/SK 用法不变。已有部署需重新部署以应用此设置并更新默认 Studio
+角色策略，两个平台的策略均补齐三个 OV 准备操作。自定义角色需单独具备等价授权。
+凭据失败行为和前置条件见维护中的
+[云端 IAM 契约](../../../../specs/studio-mpa-creation/README.zh.md#云端-studio-mpa-iam-凭据与-openviking-权限)。

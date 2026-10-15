@@ -17938,6 +17938,9 @@ def frontend_deploy(
     veadk_environments["AGENTKIT_CLOUD_PROVIDER"] = provider_id
     if provider_id == "byteplus":
         veadk_environments["BYTEPLUS_REGION"] = region
+        veadk_environments["VEADK_MPA_BYTEPLUS_CREDENTIAL_FILE"] = (
+            "/var/run/secrets/iam/credential"
+        )
         veadk_environments["DATABASE_VIKING_REGION"] = (
             DEFAULT_BYTEPLUS_VIKING_MEMORY_REGION
         )

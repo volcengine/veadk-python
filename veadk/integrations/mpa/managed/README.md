@@ -337,7 +337,7 @@ Ark mode requires `model-provider: openai` and the selected region's Ark `/api/v
 
 ### BytePlus managed MPA creation
 
-Start Studio with `BYTEPLUS_ACCESS_KEY` / `BYTEPLUS_SECRET_KEY` in the server process and `uv run veadk studio --provider byteplus --open`. MPA creation currently targets `ap-southeast-1`, using the same three-step form and shared admin/business Workspace layout. Provider selection is server-owned; domestic credentials and recovery files are not reused. In role-based deployments, set `VEADK_MPA_BYTEPLUS_CREDENTIAL_FILE` to the rotating credential file explicitly. The default model is the existing overseas Studio ModelArk model; Ark key discovery requires overseas ListApiKeys/GetRawApiKey permissions and an existing usable key.
+Start Studio with `BYTEPLUS_ACCESS_KEY` / `BYTEPLUS_SECRET_KEY` in the server process and `uv run veadk studio --provider byteplus --open`. MPA creation currently targets `ap-southeast-1`, using the same three-step form and shared admin/business Workspace layout. Provider selection is server-owned; domestic credentials and recovery files are not reused. Cloud `veadk studio deploy` sets `VEADK_MPA_BYTEPLUS_CREDENTIAL_FILE` to the mounted rotating IAM credential file automatically; other role-based hosting must configure the file explicitly. The default model is the existing overseas Studio ModelArk model; Ark key discovery requires overseas ListApiKeys/GetRawApiKey permissions and an existing usable key.
 
 There are no overseas image defaults yet. The existing public MPA/Worker images remain defaults, with optional server overrides `VEADK_MPA_BYTEPLUS_RUNTIME_IMAGE` / `VEADK_MPA_BYTEPLUS_WORKER_IMAGE`; overseas image pull and image compatibility require a real creation test. `VEADK_MPA_BYTEPLUS_AIDAP_HOST` optionally selects a deployment-specific AIDAP hostname. Cloud service activation, IAM policy/API availability, quotas and model access are account prerequisites; a locally configured form does not prove they are available. Missing overseas services fail instead of falling back to Volcengine. Existing Volcengine defaults and general-agent chat remain unchanged.
 
@@ -379,3 +379,15 @@ BytePlus Studio new requests in ap-southeast-1 again automatically prepare perso
 Runtime create/update failures retain validated errorCode/requestId from structured SDK/HTTP metadata and bounded JSON or SDK bytes-literal exception arguments (65,536 bytes/characters, eight cycle-safe causes). Raw provider text, body and credentials are excluded. Restart Studio before reproducing; retries preserve existing inputs and ClientToken. Historical errors cannot be recovered.
 
 New BytePlus Studio creation also injects `OBSERVABILITY_OPENTELEMETRY_APMPLUS_ENDPOINT=http://apmplus-ap-southeast-1.bytepluses.com:4317` for OTLP/gRPC export. This collector differs from the GetAppKey control-plane host. Trusted explicit Runtime environment overrides retain precedence. Restart Studio before new requests; existing Runtimes and submitted task snapshots are not updated. Domestic creation remains unchanged. Actual Trace delivery requires separate live verification.
+
+
+### Cloud Studio MPA IAM credentials and OpenViking permissions
+
+BytePlus `veadk studio deploy` automatically sets
+`VEADK_MPA_BYTEPLUS_CREDENTIAL_FILE=/var/run/secrets/iam/credential` for rotating
+function-role credentials. Local AK/SK usage remains unchanged. Redeploy existing
+installations to apply this setting and refresh the default Studio role policy, which
+now includes the three OV provisioning operations on both providers. Custom roles
+need equivalent authorization separately. See the maintained
+[cloud IAM contract](../../../../specs/studio-mpa-creation/README.md#cloud-studio-mpa-iam-credentials-and-openviking-permissions)
+for credential failure behavior and prerequisites.

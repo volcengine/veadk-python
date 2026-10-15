@@ -18,6 +18,8 @@ from unittest.mock import MagicMock, call
 
 import pytest
 
+from veadk.utils.cloud_provider import CloudProvider
+
 from veadk.cli.frontend_deploy_iam import (
     ensure_default_frontend_role_policy,
     ensure_frontend_role,
@@ -445,3 +447,55 @@ def test_custom_frontend_role_policy_is_not_replaced(
         )
         is False
     )
+
+
+@pytest.mark.parametrize("provider", ["volcengine", "byteplus"])
+@pytest.mark.parametrize("existing", [False, True])
+def test_frontend_role_provisions_openviking_permissions(
+    monkeypatch: pytest.MonkeyPatch, provider: CloudProvider, existing: bool
+) -> None:
+    service = MagicMock()
+    if existing:
+        service.get_role.return_value = {
+            "Result": {"Role": {"Trn": "trn:iam::123:role/VeADKFrontendServiceRole"}}
+        }
+        service.update_policy.return_value = {"Result": {}}
+    else:
+        service.get_role.return_value = {
+            "ResponseMetadata": {"Error": {"Message": "role not found"}}
+        }
+        service.update_policy.return_value = {
+            "ResponseMetadata": {"Error": {"Message": "policy not found"}}
+        }
+        service.create_policy.return_value = {"Result": {}}
+        service.create_role.return_value = {
+            "Result": {"Role": {"Trn": "trn:iam::123:role/VeADKFrontendServiceRole"}}
+        }
+    service.get_policy.return_value = _policy_response()
+    service.list_attached_role_policies.return_value = {
+        "Result": {"AttachedPolicyMetadata": []}
+    }
+    service.attach_role_policy.return_value = {"Result": {}}
+    _install_iam_service(monkeypatch, service)
+
+    ensure_frontend_role("ak", "sk", provider=provider)
+
+    operation = service.update_policy if existing else service.create_policy
+    document = json.loads(
+        operation.call_args.args[0][
+            "NewPolicyDocument" if existing else "PolicyDocument"
+        ]
+    )
+    actions = {
+        action
+        for statement in document["Statement"]
+        if statement["Effect"] == "Allow"
+        for action in statement["Action"]
+    }
+    assert {
+        "vikingdb:CreateOpenVikingCollection",
+        "vikingdb:GetOpenVikingCollection",
+        "vikingdb:AccessOpenVikingApiKey",
+    } <= actions
+    assert "vikingdb:DeleteOpenVikingCollection" not in actions
+    assert "vikingdb:*" not in actions
