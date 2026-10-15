@@ -7621,6 +7621,7 @@ export default function App() {
               />
             ) : applicationsView === "mpa-channels" ? (
               <MpaChannelsAutomation
+                cloudProvider={cloudProvider}
                 role={access.role}
                 runtimeScope={access.capabilities.runtimeScope}
                 onBack={() => setApplicationsView("catalog")}

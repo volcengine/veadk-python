@@ -2071,6 +2071,10 @@
     "noAccounts": "No Feishu bots are bound.",
     "accountsFailed": "Could not load bots. Try again.",
     "accountConflict": "The bot account is ambiguous or conflicts with its configuration. Refresh and select a bot.",
-    "multiBotPairingDescription": "Binding a new Feishu app adds a bot. Binding the same App ID updates that bot."
+    "multiBotPairingDescription": "Binding a new Feishu app adds a bot. Binding the same App ID updates that bot.",
+    "provider_lark": "Lark",
+    "larkPairingDescription": "Scan with Lark to authorize a bot. Existing bots remain bound until this setup succeeds.",
+    "larkAccountsTitle": "Lark bots",
+    "noLarkAccounts": "No Lark bots are bound."
   }
 }

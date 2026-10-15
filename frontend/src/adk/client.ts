@@ -6596,7 +6596,7 @@ export async function updateSandboxTool(kind: SandboxToolKind): Promise<{
 
 
 export type ChannelScope = "group" | "group_sender" | "group_topic" | "group_topic_sender";
-export interface ChannelCapabilities { channels?: string[]; credentialBindingChannels?: string[]; serverSideBinding: boolean; bindingReady: boolean; bindingError?: string | null; multiBotChannels?: string[]; accountScopedPermissions?: boolean; }
+export interface ChannelCapabilities { feishuDomains?: string[]; channels?: string[]; credentialBindingChannels?: string[]; serverSideBinding: boolean; bindingReady: boolean; bindingError?: string | null; multiBotChannels?: string[]; accountScopedPermissions?: boolean; }
 export interface FeishuBinding {
   id: string;
   status: "PENDING" | "SCANNED" | "AUTHORIZED" | "REGISTERING" | "BOUND" | "FAILED" | "EXPIRED";

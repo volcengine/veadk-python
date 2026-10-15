@@ -2071,6 +2071,10 @@
     "noAccounts": "尚未绑定飞书机器人。",
     "accountsFailed": "读取机器人列表失败，请重试。",
     "accountConflict": "机器人账号存在歧义或配置冲突，请刷新并选择机器人。",
-    "multiBotPairingDescription": "绑定新的飞书应用会添加机器人；绑定相同 App ID 会更新对应机器人。"
+    "multiBotPairingDescription": "绑定新的飞书应用会添加机器人；绑定相同 App ID 会更新对应机器人。",
+    "provider_lark": "Lark",
+    "larkPairingDescription": "使用 Lark 扫码授权机器人。当前配置成功前，已有机器人仍保持绑定。",
+    "larkAccountsTitle": "Lark 机器人",
+    "noLarkAccounts": "尚未绑定 Lark 机器人。"
   }
 }

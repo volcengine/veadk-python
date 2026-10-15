@@ -53,3 +53,8 @@ CON-16：multiBotChannels 包含 feishu 时启用账号管理。根 GET 返回�
 CON-17：Studio 新增群表单不提供会话隔离选择器，仅提交 channel、去空白 chatId，以及适用时所选 appId，完全省略 groupSessionScope。最终策略由 Runtime 的默认/继承规则决定。已有群记录及服务端返回策略的展示保持不变；加载、刷新或新增其他群不会迁移或改写既有策略。其他调用方仍可使用可选 API 字段，服务端行为不变。再次添加已有 ID 仍遵循 Runtime 原 upsert 契约。
 
 设计：[server-default-scope](../../prd-spec/bugfixes/channel-group-actions/2026-10-12-server-default-scope.zh.md)。验证：frontend/tests/runtimeChannels.test.tsx（单/多机器人请求体及既有策略展示）；本地浏览器 fixture，不是云上 E2E。
+
+
+## Lark 品牌（2026-10-15）
+
+CON-18（已批准增量）：BytePlus 仅在 `feishuDomains` 包含 `lark` 且声明飞书多账号支持时开放 Lark。复用 `/feishu/bindings` 和 `/feishu/bindings/manual`，传 `domain=lark`；省略仍为飞书。存储/API 的 channel 仍为 `feishu`，以 `config.domain` 区分品牌，缺失为飞书。列表按品牌过滤，账号操作始终带 appId。Runtime 负责固定域名及 Gateway adapter=lark 注册，校验入站 Bot 身份并保留 request/delivery ID。国内已有记录及接口兼容。见[设计](../../prd-spec/features/lark-binding/2026-10-15-lark-binding.zh.md)。

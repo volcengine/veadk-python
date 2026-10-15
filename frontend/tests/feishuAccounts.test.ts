@@ -64,3 +64,27 @@ it("propagates request errors rather than returning an empty list", async () => 
     listFeishuAccounts(ep, new AbortController().signal),
   ).rejects.toBe(failure);
 });
+it("filters channel management by brand while unfiltered consumers retain both", async () => {
+  request.mockResolvedValue({
+    channels: [
+      { channel: "feishu", appId: "domestic", enabled: true },
+      {
+        channel: "feishu",
+        appId: "overseas",
+        enabled: true,
+        config: { domain: "lark" },
+      },
+    ],
+  });
+  const signal = new AbortController().signal;
+  expect(
+    (await listFeishuAccounts(ep, signal, "feishu")).map((a) => a.appId),
+  ).toEqual(["domestic"]);
+  expect(
+    (await listFeishuAccounts(ep, signal, "lark")).map((a) => a.appId),
+  ).toEqual(["overseas"]);
+  expect((await listFeishuAccounts(ep, signal)).map((a) => a.appId)).toEqual([
+    "domestic",
+    "overseas",
+  ]);
+});

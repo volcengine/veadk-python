@@ -53,3 +53,8 @@ See [design](../../prd-spec/features/mpa-feishu-multi-bot/2026-10-09-studio-mult
 CON-17: The Studio add-group form exposes no session-isolation selector and sends channel, trimmed chatId, and selected appId when applicable, omitting groupSessionScope entirely. Runtime default/inheritance rules own the resulting scope. Existing group records and their returned scope display remain unchanged; loading, refreshing or adding another group does not migrate or rewrite existing scopes. The optional API field and server behavior remain available to other callers. Adding an existing ID still follows the unchanged Runtime upsert contract.
 
 Design: [server-default-scope](../../prd-spec/bugfixes/channel-group-actions/2026-10-12-server-default-scope.md). Verification: frontend/tests/runtimeChannels.test.tsx (single/multi-bot payload and existing scope display); local browser fixtures, not cloud E2E.
+
+
+## Lark brand (2026-10-15)
+
+CON-18 (approved addition): BytePlus exposes Lark only when `feishuDomains` includes `lark` and Feishu multi-account support is advertised. Reuse `/feishu/bindings` and `/feishu/bindings/manual` with `domain=lark`; omission remains Feishu. Canonical storage/API channel is `feishu`; `config.domain` identifies brand, absent means Feishu. Lists filter brand; account operations always carry appId. Runtime owns fixed API hosts and Gateway adapter=lark registration, validates inbound Bot identity and preserves request/delivery IDs. Existing domestic records and APIs remain compatible. See [design](../../prd-spec/features/lark-binding/2026-10-15-lark-binding.md).

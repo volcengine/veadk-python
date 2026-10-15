@@ -10,6 +10,7 @@ export interface FeishuAccount {
 export async function listFeishuAccounts(
   ep: AdkEndpoint,
   signal: AbortSignal,
+  domain?: "feishu" | "lark",
 ): Promise<FeishuAccount[]> {
   const data = await channelRequest<{ channels: unknown[] }>(ep, "", {
     signal,
@@ -21,6 +22,13 @@ export async function listFeishuAccounts(
     if (!value || typeof value !== "object" || !("channel" in value))
       throw new ChannelApiError(502);
     if (value.channel !== "feishu") continue;
+    const config =
+      "config" in value && value.config && typeof value.config === "object"
+        ? value.config
+        : {};
+    const brand = "domain" in config ? config.domain : "feishu";
+    if (brand !== "feishu" && brand !== "lark") throw new ChannelApiError(502);
+    if (domain && brand !== domain) continue;
     if (
       !("appId" in value) ||
       typeof value.appId !== "string" ||

@@ -22,11 +22,13 @@ export function FeishuAccounts({
   runtimeId,
   region,
   capability,
+  domain = "feishu",
   renderPanel,
 }: {
   runtimeId: string;
   region: string;
   capability: ChannelCapabilities;
+  domain?: "feishu" | "lark";
   renderPanel: (props: FeishuAccountPanelProps) => ReactNode;
 }) {
   const { t } = useTranslation("ui");
@@ -47,7 +49,7 @@ export function FeishuAccounts({
     read.current = controller;
     setLoading(true);
     setError("");
-    void listFeishuAccounts(ep, controller.signal)
+    void listFeishuAccounts(ep, controller.signal, domain)
       .then((values) => {
         if (controller.signal.aborted) return;
         setAccounts(values);
@@ -77,7 +79,7 @@ export function FeishuAccounts({
         if (!controller.signal.aborted) setLoading(false);
       });
     return () => controller.abort();
-  }, [ep, reload, t]);
+  }, [ep, reload, t, domain]);
   useEffect(
     () => () => {
       read.current?.abort();
@@ -125,11 +127,21 @@ export function FeishuAccounts({
   return (
     <section
       className="runtime-channels runtime-channels-accounts"
-      aria-label={t("channels.accountsTitle")}
+      aria-label={t(
+        domain === "lark"
+          ? "channels.larkAccountsTitle"
+          : "channels.accountsTitle",
+      )}
       aria-busy={loading || busy}
     >
       <div className="runtime-channels-heading">
-        <h3>{t("channels.accountsTitle")}</h3>
+        <h3>
+          {t(
+            domain === "lark"
+              ? "channels.larkAccountsTitle"
+              : "channels.accountsTitle",
+          )}
+        </h3>
         <Button
           variant="outline"
           size="compact"
@@ -201,7 +213,13 @@ export function FeishuAccounts({
         )}
       </div>
       {!loading && !error && !accounts.length && (
-        <p role="status">{t("channels.noAccounts")}</p>
+        <p role="status">
+          {t(
+            domain === "lark"
+              ? "channels.noLarkAccounts"
+              : "channels.noAccounts",
+          )}
+        </p>
       )}
       {!loading && !error && !adding && !selected && accounts.length > 0 && (
         <p role="status">{t("channels.selectAccount")}</p>
