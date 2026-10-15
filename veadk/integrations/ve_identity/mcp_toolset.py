@@ -139,16 +139,16 @@ class VeIdentityMcpToolset(VeIdentityAuthMixin, BaseToolset):
         if not connection_params:
             raise ValueError("Missing connection params in VeIdentityMcpToolset.")
 
-        # Initialize mixins first
+        # Initialize mixins and parent class with all parameters
         super().__init__(
             auth_config=auth_config,
+            tool_filter=tool_filter,
+            tool_name_prefix=tool_name_prefix,
         )
 
         # Store Identity specific configuration
         self._auth_config = auth_config
         self._connection_params = connection_params
-        self._tool_filter = tool_filter
-        self._tool_name_prefix = tool_name_prefix
         self._errlog = errlog
 
         # Create MCP session manager
@@ -196,30 +196,9 @@ class VeIdentityMcpToolset(VeIdentityAuthMixin, BaseToolset):
                 auth_config=self._auth_config,
             )
 
-            # Apply tool name prefix if specified
-            if self._tool_name_prefix:
-                mcp_tool._name = f"{self._tool_name_prefix}{mcp_tool.name}"
-
             if self._is_tool_selected(mcp_tool, readonly_context):
                 tools.append(mcp_tool)
         return tools
-
-    def _is_tool_selected(
-        self, tool: BaseTool, readonly_context: Optional[ReadonlyContext]
-    ) -> bool:
-        """Check if a tool should be included based on filters and context."""
-        # Apply tool filter if specified
-        if self._tool_filter is not None:
-            if callable(self._tool_filter):
-                # ToolPredicate function
-                if not self._tool_filter(tool, readonly_context):
-                    return False
-            elif isinstance(self._tool_filter, list):
-                # List of tool names
-                if tool.name not in self._tool_filter:
-                    return False
-
-        return True
 
     async def close(self) -> None:
         """Performs cleanup and releases resources held by the toolset.
