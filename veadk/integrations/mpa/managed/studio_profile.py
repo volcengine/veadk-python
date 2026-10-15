@@ -144,6 +144,9 @@ def studio_profile_values(provider: str = "volcengine") -> dict:
             "MPA_CODEX_WORKER_DEFAULT_MODEL": model,
             "MPA_SELECTABLE_MODELS": model,
             "APIG_TOP_ENDPOINT": managed_host("apig", region, provider),
+            "OBSERVABILITY_OPENTELEMETRY_APMPLUS_ENDPOINT": (
+                "http://apmplus-ap-southeast-1.bytepluses.com:4317"
+            ),
         }
     )
     # The Worker SDK must resolve overseas services in the same way as Runtime.

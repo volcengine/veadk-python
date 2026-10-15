@@ -103,6 +103,19 @@ def test_provider_application_apm_defaults_are_isolated(
     assert env["ENABLE_APMPLUS"] == expected
     assert env["FORCE_APMPLUS_EXPORTER_REGISTRATION"] == expected
 
+    endpoint_key = "OBSERVABILITY_OPENTELEMETRY_APMPLUS_ENDPOINT"
+    endpoint = "http://apmplus-ap-southeast-1.bytepluses.com:4317"
+    for configured_env in (raw_env, profile.managed.runtime.env, env):
+        if provider == "byteplus":
+            assert configured_env[endpoint_key] == endpoint
+        else:
+            assert endpoint_key not in configured_env
+
+    profile.managed.runtime.env[endpoint_key] = "http://collector.example.test:4317"
+    service.apply_runtime_settings(template, profile.managed.runtime)
+    overridden = {item["Key"]: item["Value"] for item in template["Envs"]}
+    assert overridden[endpoint_key] == "http://collector.example.test:4317"
+
     domestic = studio_profile_values("volcengine")
     assert domestic["managed"]["runtime"]["env"]["ENABLE_APMPLUS"] == "true"
 

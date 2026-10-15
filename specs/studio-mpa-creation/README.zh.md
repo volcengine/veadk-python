@@ -250,3 +250,5 @@ CON-20 重试证明：仅认证过的已接受请求，且标准化参数与存�
 CON-17 APM Key 传递：Studio BytePlus 创建在写资源前使用已核验部署凭据，向 `apmplus-server.ap-southeast-1.byteplusapi.com` 调用 `GetAppKey`，取得 `data.app_key`，注入 Runtime Envs 的 `OBSERVABILITY_OPENTELEMETRY_APMPLUS_API_KEY`。保留可信配置中的有效显式 Runtime Key。获取失败时停止创建，采用有限重试和安全的 `get_apm_key` 诊断；Key 不保存在任务/启动/部署记录或浏览器结果中。国内和非 Studio 路径不变。保留未完成输入哈希检查，不静默升级旧任务。见[服务端 APM Key 设计](../../prd-spec/bugfixes/mpa-byteplus-apm/2026-10-14-server-app-key.zh.md)。
 
 分提供商默认值调整：[BytePlus 最大实例数](../../prd-spec/bugfixes/mpa-byteplus-scaling/2026-10-15-default-maximum.zh.md)。后端/YAML/CLI 配置默认值保持不变。
+
+CON-17 OTLP 采集地址：新的 BytePlus Studio 配置注入 `OBSERVABILITY_OPENTELEMETRY_APMPLUS_ENDPOINT=http://apmplus-ap-southeast-1.bytepluses.com:4317`。可信的显式 Runtime 环境变量仍按既有优先级覆盖。国内默认值、通用智能体、AppKey 获取、已有资源和已提交快照不变。见[地址设计](../../prd-spec/bugfixes/mpa-byteplus-apm/2026-10-15-otlp-endpoint.zh.md)。

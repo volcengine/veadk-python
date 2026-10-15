@@ -364,3 +364,5 @@ OpenViking 失败时，若云端提供结构化元信息，Studio 后台日志�
 BytePlus Studio 在 ap-southeast-1 的新请求重新自动准备个人版 OV。已提交无 OV 请求重试保留原模式，要测试 OV 须“新建另一个智能体”。国内自动 OV 及已有绑定／不确定建库保护保持不变。
 
 Runtime 创建/更新失败从结构化 SDK/HTTP 元信息及有界 JSON／SDK 字节串异常参数提取已验证的 errorCode/requestId（65,536 字节／字符，八个防循环 cause）。排除原始云端文案、响应体和凭证。复现前重启 Studio；重试保留原输入和 ClientToken，历史错误无法恢复。
+
+新的 BytePlus Studio 创建还会注入 `OBSERVABILITY_OPENTELEMETRY_APMPLUS_ENDPOINT=http://apmplus-ap-southeast-1.bytepluses.com:4317`，用于 OTLP/gRPC 上报。此采集地址与 GetAppKey 控制面地址不同。可信的显式 Runtime 环境变量仍按既有优先级覆盖。新请求前需重启 Studio；已有 Runtime 及已提交任务快照不会更新。国内创建流程不变，实际 Trace 投递需单独云端验证。
