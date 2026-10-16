@@ -1968,6 +1968,11 @@
     }
   },
   "channels": {
+    "bindingType": "Bot 类型",
+    "bindingType_shared": "共享",
+    "bindingType_private": "私有",
+    "bindingTypeHelp_shared": "各会话相互隔离。",
+    "bindingTypeHelp_private": "私聊可召回同 Bot 的历史，包括群聊。",
     "title": "飞书渠道",
     "refresh": "刷新",
     "loading": "正在加载渠道配置…",

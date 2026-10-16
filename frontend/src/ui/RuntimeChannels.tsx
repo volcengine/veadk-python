@@ -6,6 +6,7 @@ import { Radio } from "../components/primitives/Radio/Radio";
 import {
   channelRequest,
   ChannelApiError,
+  type BotBindingType,
   type ChannelCapabilities,
   type ChannelDiagnostics,
   type ChannelPermission,
@@ -164,6 +165,17 @@ function ProviderChannel({
     null,
   );
   const [groups, setGroups] = useState<ChannelPermission[]>([]);
+  const [selectedBindingType, setSelectedBindingType] =
+    useState<BotBindingType>("shared");
+  const bindingTypes = (["shared", "private"] as const).filter(
+    (value) =>
+      isFeishu &&
+      Array.isArray(capability?.botBindingTypes) &&
+      capability.botBindingTypes.includes(value),
+  );
+  const bindingType =
+    bindingTypes.find((value) => value === selectedBindingType) ??
+    bindingTypes[0];
   const [pairingRequested, setPairingRequested] = useState(false);
   const [binding, setBinding] = useState<FeishuBinding | null>(null);
   const [botId, setBotId] = useState("");
@@ -363,7 +375,10 @@ function ProviderChannel({
           : `/${apiProvider}/bindings`,
         {
           method: "POST",
-          body: provider === "lark" ? JSON.stringify({ domain }) : "{}",
+          body: JSON.stringify({
+            ...(provider === "lark" ? { domain } : {}),
+            ...(bindingType ? { bindingType } : {}),
+          }),
           signal,
         },
       );
@@ -596,6 +611,28 @@ function ProviderChannel({
           )}
           {accountMode !== "manage" && (
             <>
+              {bindingType && (
+                <fieldset className="runtime-channels-methods">
+                  <legend>{t("channels.bindingType")}</legend>
+                  <div>
+                    {bindingTypes.map((value) => (
+                      <Radio
+                        key={value}
+                        name={`${methodId}-binding-type`}
+                        value={value}
+                        checked={bindingType === value}
+                        disabled={credentialDisabled || !!binding}
+                        aria-describedby={`${methodId}-binding-type-help`}
+                        label={t(`channels.bindingType_${value}`)}
+                        onChange={() => setSelectedBindingType(value)}
+                      />
+                    ))}
+                  </div>
+                  <p id={`${methodId}-binding-type-help`}>
+                    {t(`channels.bindingTypeHelp_${bindingType}`)}
+                  </p>
+                </fieldset>
+              )}
               <fieldset className="runtime-channels-methods">
                 <legend>{t("channels.configurationMethod")}</legend>
                 <div>
@@ -667,6 +704,7 @@ function ProviderChannel({
                                 ? {
                                     appId: botId.trim(),
                                     appSecret: secret.trim(),
+                                    ...(bindingType ? { bindingType } : {}),
                                     ...(provider === "lark" ? { domain } : {}),
                                   }
                                 : {

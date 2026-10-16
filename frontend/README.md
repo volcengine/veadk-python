@@ -1856,6 +1856,10 @@ MPA 智能体详情当前仅显示基本信息。其他页面及 Profile 配置�
 
 ### MPA Feishu multi-bot accounts / MPA 飞书多机器人
 
+When Runtime advertises `botBindingTypes`, adding a Feishu or Lark Bot offers Shared/Private (Shared by default). QR, retry and manual binding send the selected `bindingType`; older Runtime payloads remain unchanged. The choice is locked during binding and is not an existing-account editing control. Private: “Private chats can recall this Bot’s history, including group chats.” Runtime still enforces recall authorization and isolation.
+
+Runtime 声明 `botBindingTypes` 时，添加飞书或 Lark Bot 可选择共享／私有（默认共享）；扫码、重试和手动绑定携带所选 `bindingType`，旧 Runtime 请求不变。绑定过程中锁定类型，不提供已有账号类型编辑。私有说明：“私聊可召回同 Bot 的历史，包括群聊。”召回鉴权和隔离仍由 Runtime 执行。
+
 Runtimes advertising `multiBotChannels: ["feishu"]` expose a robot selector in
 Automations → Messaging channels → MPA agent messaging channels. Add bots with
 QR or manual binding, then manage enablement, unbinding, diagnostics and group

@@ -58,3 +58,10 @@ Design: [server-default-scope](../../prd-spec/bugfixes/channel-group-actions/202
 ## Lark brand (2026-10-15)
 
 CON-18 (approved addition): BytePlus exposes Lark only when `feishuDomains` includes `lark` and Feishu multi-account support is advertised. Reuse `/feishu/bindings` and `/feishu/bindings/manual` with `domain=lark`; omission remains Feishu. Canonical storage/API channel is `feishu`; `config.domain` identifies brand, absent means Feishu. Lists filter brand; account operations always carry appId. Runtime owns fixed API hosts and Gateway adapter=lark registration, validates inbound Bot identity and preserves request/delivery IDs. Existing domestic records and APIs remain compatible. See [design](../../prd-spec/features/lark-binding/2026-10-15-lark-binding.md).
+
+
+## Bot binding types (2026-10-16)
+
+CON-19: Optional botBindingTypes advertises shared/private for Feishu and Lark. Studio shows only known advertised types while adding a Bot, prefers shared by default, and sends bindingType on QR creation, QR retry and manual binding. Lark retains domain=lark. Missing/empty/unknown-only capabilities omit the field and retain legacy behavior. Other providers are unchanged. Existing-account management does not edit type. Selection is memory-only, resets on Runtime/provider or add-panel remount, and is locked while busy or a durable QR binding exists; retries preserve its type. Runtime remains responsible for authorization, immutable type validation and recall isolation. Private UI description is “Private chats can recall this Bot’s history, including group chats.”
+
+Design: [Bot binding types](../../prd-spec/features/bot-binding-types/2026-10-16-bot-binding-types.md).
