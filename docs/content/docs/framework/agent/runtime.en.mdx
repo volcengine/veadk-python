@@ -30,10 +30,11 @@ agent = Agent(name="assistant", runtime="codex")
 | `adk` (default) | Google ADK's built-in execution flow; fits almost every case. |
 | `codex` | Uses the OpenAI Codex SDK to drive the inner loop, executing commands and file edits inside a sandbox. |
 | `piagent` | Uses a local Pi coding agent binary (through its RPC mode) to drive the inner loop. The binary is downloaded on first run, or point `PIAGENT_BINARY` at an existing executable. |
+| `dsh` | Uses the DeepSeek Harness SDK to drive the inner loop. The `dsh` binary is acquired at Python extra install time through `deepseek-harness-runtime-bin` and starts lazily at runtime. |
 
 <Callout type="warn">
-**Positioning: `codex` and `piagent` are *sandboxed-execution* runtimes, not drop-in equivalents of the ADK flow.**
-They hand the entire inner loop to an external agent harness, so ADK request/response processors (planner, code executor, example store, knowledge base injection), per-LLM-call callbacks and spans do not run there. VeADK bridges `sub_agents` as a `transfer_to_agent` tool, but these runtimes are still best suited for work where the model needs to run commands and edit files under a controlled sandbox, not as a transparent backend swap for every ADK feature. See the [support matrix](#support-matrix) for the exact differences.
+**Positioning: `codex`, `piagent`, and `dsh` are external agent-harness runtimes, not drop-in equivalents of the ADK flow.**
+They hand the entire inner loop to an external agent harness, so ADK request/response processors (planner, code executor, example store, knowledge base injection), per-LLM-call callbacks and spans do not run there. `codex`, `piagent`, and `dsh` bridge ordinary ADK tools and `sub_agents`; `dsh` also bridges VeADK skills through DSH's native skill plugins and maps root-session partial stream events. See the [support matrix](#support-matrix) for the exact differences.
 </Callout>
 
 Install the optional dependency before using the Codex runtime:
@@ -41,6 +42,49 @@ Install the optional dependency before using the Codex runtime:
 ```bash
 pip install "veadk-python[codex]"
 ```
+
+Install the optional dependency before using the DSH runtime:
+
+```bash
+pip install "veadk-python[dsh]"
+```
+
+### DeepSeek Harness installation and runtime state
+
+`runtime="dsh"` follows the Codex-style installation model, not PiAgent's first-run downloader model:
+
+- **Binary acquisition happens at install time.** `veadk-python[dsh]` depends on `deepseek-harness-sdk`, and that SDK depends on the matching `deepseek-harness-runtime-bin`. The `dsh` executable arrives with the wheel; VeADK does not download a binary on the first turn.
+- **Startup is lazy.** Importing VeADK or constructing `Agent(...)` does not start DSH. The SDK starts the bundled `dsh` subprocess when execution first reaches `DeepSeekHarnessRuntime.run_async`.
+- **Long-lived sidecar.** One effective runtime configuration reuses one `DeepSeekHarness` SDK object and DSH subprocess. The same VeADK app/user/session/agent maps to a stable DSH `session_id`.
+- **VeADK session as short-term memory.** Like Codex, DSH receives the visible ADK session history as structured conversation data in the prompt. The DSH session id is still stable, but VeADK/ADK session history remains the source of truth for short-term memory.
+- **Callback-selected model.** A before-model callback may update `llm_request.model`; DSH uses that final model when choosing the SDK config and manager.
+- **Native tool plugin bridge.** VeADK expands ADK function tools and ADK/MCP toolsets before the DSH run, generates a DSH `defineTool` plugin patch, and serves actual tool execution through an authenticated loopback callback server. `sub_agents` use the same injected `transfer_to_agent` path as other external runtimes.
+- **Native skill bridge.** VeADK materializes ADK `SkillToolset` and legacy skills into an isolated skill root, then registers DSH's native `@deepseek-ai/dsh-skill`, `@deepseek-ai/dsh-skill-filesystem`, and `@deepseek-ai/dsh-tool-skill` plugins. The materialized skill content participates in the runtime manager key.
+- **ADK event mapping.** Root-session DSH assistant stream chunks become ADK partial model events. DSH native `tool/call` and `tool/result` events become ADK function call/response events, while VeADK-bridged Python tool events are de-duplicated.
+- **Provider aliases.** You may omit `provider`, use `provider="openai"` for the common OpenAI-compatible convention, or use `provider="volcengine"` / `provider="third-party"` for endpoints such as Ark. VeADK maps those aliases to the current DSH adapter name and still passes your explicit `base_url` and `api_key`. The DSH-native `deepseek-official` provider name also remains valid.
+- **Explicit `DSH_HOME`.** When `dsh_home` is not configured, VeADK generates an isolated process-owned directory and passes it to the SDK. It never implicitly uses `~/.dsh`. Configure a persistent `dsh_home` when DSH sessions must survive process restarts.
+
+```python title="agent.py"
+import os
+
+from veadk import Agent
+from veadk.runtime.deepseek_harness import DeepSeekHarnessRuntimeConfig
+
+agent = Agent(
+    name="assistant",
+    runtime="dsh",
+    model_name="doubao-seed-2-1-pro-260628",
+    model_api_base="https://ark.cn-beijing.volces.com/api/v3",
+    model_api_key=os.environ["MODEL_AGENT_API_KEY"],
+    deepseek_harness_runtime_config=DeepSeekHarnessRuntimeConfig(
+        provider="volcengine",
+        profile="sdk-minimal",
+        # dsh_home="/var/lib/my-app/dsh",  # set explicitly for persistence
+    ),
+)
+```
+
+DeepSeek Harness emits ADK partial stream events, ADK tool call/response events for both bridged Python tools and DSH-native skill/tool events, and one final model event for the completed non-transfer turn. `enable_skills_checklist` is not enforced inside DSH's native skill loader, and descendant DSH subagent session notifications are not yet projected as first-class child-session UI events.
 
 ### When to use the Codex runtime
 
@@ -377,7 +421,7 @@ The runtime emits the following metrics through the process's OpenTelemetry Mete
 
 ## Support matrix
 
-`runtime="codex"` and `runtime="piagent"` replace the whole ADK LLM flow, so a substantial part of the `Agent` configuration surface has no effect. VeADK checks for this at construction time and again before every invocation: **configuration that produces a wrong result raises `ValueError`**, and **configuration that is merely ignored logs a warning once**.
+`runtime="codex"`, `runtime="piagent"`, and `runtime="dsh"` replace the whole ADK LLM flow, so a substantial part of the `Agent` configuration surface has no effect. VeADK checks for this at construction time and again before every invocation: **configuration that produces a wrong result raises `ValueError`**, and **configuration that is merely ignored logs a warning once**.
 
 ### Error — the agent refuses to run
 
@@ -391,7 +435,7 @@ The runtime emits the following metrics through the process's OpenTelemetry Mete
 | `enable_supervisor=True` | Supervision is installed through the ADK LLM flow, which the runtime replaces. |
 
 <Callout type="info">
-`sub_agents` are supported for `runtime="codex"` and `runtime="piagent"` through an injected `transfer_to_agent` tool. Placing a `runtime="codex"` agent inside a `SequentialAgent`/`ParallelAgent`'s `sub_agents` is also supported — in that case the parent does the orchestration.
+`sub_agents` are supported for `runtime="codex"`, `runtime="piagent"`, and `runtime="dsh"` through an injected `transfer_to_agent` tool. Placing an external-runtime agent inside a `SequentialAgent`/`ParallelAgent`'s `sub_agents` is also supported — in that case the parent does the orchestration.
 </Callout>
 
 ### Warning — ignored, but the turn still answers
@@ -399,17 +443,18 @@ The runtime emits the following metrics through the process's OpenTelemetry Mete
 | Configuration | Behavior |
 | :--- | :--- |
 | `model_name=[primary, fallback...]` | Only the first entry is used; the fallback chain does not apply. |
-| `model_provider` (non-`openai`) | The runtime always talks to `model_api_base` over an OpenAI-compatible API. |
-| `model_extra_config` | `piagent` only. **codex forwards it**: the shim puts `extra_headers` and `extra_body` — including VeADK's Ark defaults for request encryption and prompt caching — onto the backend request, matching the `adk` path. The `direct` transport forwards only `extra_headers`; with a non-empty `extra_body`, `auto` stays on `shim` — see [Codex execution knobs](#codex-execution-knobs). |
+| `model_provider` (non-`openai`) | External runtimes do not use the LiteLLM provider prefix; for `dsh`, configure its own `provider` / endpoint, and use each other runtime's own configuration. |
+| `model_extra_config` | Applies to `piagent` / `dsh`. **codex forwards it**: the shim puts `extra_headers` and `extra_body` — including VeADK's Ark defaults for request encryption and prompt caching — onto the backend request, matching the `adk` path. The `direct` transport forwards only `extra_headers`; with a non-empty `extra_body`, `auto` stays on `shim` — see [Codex execution knobs](#codex-execution-knobs). |
 | `enable_responses` / `enable_responses_cache` | The Ark Responses API is unused, so `previous_response_id` continuation and response caching do not apply. |
 | `example_store` | Delivered by `ExampleTool.process_llm_request`, a hook external runtimes never call, so no few-shot examples reach the model. |
 | `knowledgebase` | **The knowledge base is silently disabled.** Same root cause: `LoadKnowledgebaseTool.process_llm_request` is what tells the model the knowledge base exists and when to query it, and that hook is never called, so retrieval is never triggered. |
-| `skills_mode` | External runtimes skip VeADK's `SkillsToolset` when bridging tools, so the `execute_skills`/`skills_tool` the instruction advertises is not registered. |
-| `enable_skills_checklist` | Depends on an ADK before-tool callback over the skills toolset; neither is bridged. |
+| `skills_mode` | `codex` and `piagent` skip VeADK's `SkillsToolset` when bridging tools, so the `execute_skills`/`skills_tool` the instruction advertises is not registered there. `dsh` materializes `SkillToolset` and legacy skills into DSH's native skill filesystem provider. |
+| `enable_skills_checklist` | Depends on an ADK before-tool callback over the skills toolset. `dsh` makes skills available through DSH's native loader, but this ADK checklist callback is not enforced inside that loader; `codex` and `piagent` do not bridge the skills toolset. |
 | `after_model_callback` | Different semantics: it fires once per turn on the merged final text, not once per LLM call. |
-| `tracers` | Different granularity: codex does add a `call_llm` span (prompt, response, whole-turn token usage), but **one per turn** — the inner model loop runs inside the external harness, so there are still no per-model-call spans. |
-| `codex_runtime_config` (with `runtime="piagent"`) | Codex-only; piagent ignores it entirely. |
-| `RunConfig(max_llm_calls=...)` | `piagent` only — its model loop counts its own iterations inside the harness and the budget does not bind. **codex enforces it**; see [Codex observability](#codex-observability) above. |
+| `tracers` | Different granularity: codex and dsh add a `call_llm` span (prompt, response, whole-turn token usage), but **one per turn** — the inner model loop runs inside the external harness, so there are still no per-model-call spans. |
+| `codex_runtime_config` (with a non-codex runtime) | Codex-only; other runtimes ignore it entirely. |
+| `deepseek_harness_runtime_config` (with a non-`dsh` runtime) | DSH-only; other runtimes ignore it entirely. |
+| `RunConfig(max_llm_calls=...)` | Coarse or best-effort for `piagent` / `dsh`; the inner model loop runs inside the external harness, so VeADK cannot charge every real model request before dispatch. **codex enforces it**; see [Codex observability](#codex-observability) above. |
 
 ### `run_live` is unsupported
 

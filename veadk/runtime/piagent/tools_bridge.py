@@ -76,6 +76,7 @@ class PiToolBundle:
     tools: dict[str, Any] = field(default_factory=dict)
     skipped: list[SkippedTool] = field(default_factory=list)
     opened_toolsets: list[BaseToolset] = field(default_factory=list)
+    runtime_label: str = "piagent"
 
     @property
     def has_tools(self) -> bool:
@@ -88,6 +89,7 @@ async def build_executable_tools(
     *,
     event_sink: EventSink | None = None,
     timeout_seconds: float | None = None,
+    runtime_label: str = "piagent",
 ) -> PiToolBundle:
     """Collect ADK tools and toolsets as Pi custom tools.
 
@@ -101,14 +103,14 @@ async def build_executable_tools(
     from google.adk.tools.base_toolset import BaseToolset
     from google.adk.tools.function_tool import FunctionTool
 
-    bundle = PiToolBundle()
+    bundle = PiToolBundle(runtime_label=runtime_label)
     seen: set[str] = set()
 
-    _ensure_invocation_context_defaults(ctx, agent)
+    _ensure_invocation_context_defaults(ctx, agent, runtime_label=runtime_label)
     readonly_context = ReadonlyContext(ctx)
 
     def _skip(name: str, reason: str) -> None:
-        logger.warning(f"piagent: skipping tool {name!r}: {reason}")
+        logger.warning("%s: skipping tool %r: %s", runtime_label, name, reason)
         bundle.skipped.append(SkippedTool(name=name, reason=reason))
 
     def _add(tool: BaseTool) -> None:
@@ -119,6 +121,7 @@ async def build_executable_tools(
             seen=seen,
             event_sink=event_sink,
             timeout_seconds=timeout_seconds,
+            runtime_label=runtime_label,
             skip=_skip,
         )
 
@@ -134,7 +137,7 @@ async def build_executable_tools(
                 try:
                     tools = await entry.get_tools(readonly_context=readonly_context)
                 except Exception as e:  # noqa: BLE001
-                    await close_toolsets([entry])
+                    await close_toolsets([entry], runtime_label=runtime_label)
                     _skip(
                         type(entry).__name__,
                         f"failed to list toolset tools: {e}",
@@ -152,14 +155,16 @@ async def build_executable_tools(
                 continue
             _skip(type(entry).__name__, "tool type is not supported by piagent")
     except Exception:
-        await close_toolsets(bundle.opened_toolsets)
+        await close_toolsets(bundle.opened_toolsets, runtime_label=runtime_label)
         bundle.opened_toolsets.clear()
         raise
 
     if bundle.executors:
         logger.info(
-            f"piagent: bridging {len(bundle.executors)} agent tool(s): "
-            f"{list(bundle.executors)}"
+            "%s: bridging %d agent tool(s): %s",
+            runtime_label,
+            len(bundle.executors),
+            list(bundle.executors),
         )
     return bundle
 
@@ -172,6 +177,7 @@ def add_tool_to_bundle(
     seen: set[str],
     event_sink: EventSink | None = None,
     timeout_seconds: float | None = None,
+    runtime_label: str = "piagent",
     skip: Callable[[str, str], None] | None = None,
 ) -> None:
     """Add one ADK tool to an existing Pi tool bundle."""
@@ -182,7 +188,7 @@ def add_tool_to_bundle(
         if skip is not None:
             skip(name, reason)
         else:
-            logger.warning(f"piagent: skipping tool {name!r}: {reason}")
+            logger.warning("%s: skipping tool %r: %s", runtime_label, name, reason)
             bundle.skipped.append(SkippedTool(name=name, reason=reason))
 
     try:
@@ -196,7 +202,12 @@ def add_tool_to_bundle(
     original_name = str(declaration.name)
     name = _pi_tool_name(original_name, seen)
     if name != original_name:
-        logger.info(f"piagent: exposing tool {original_name!r} to Pi as {name!r}")
+        logger.info(
+            "%s: exposing tool %r to Pi as %r",
+            runtime_label,
+            original_name,
+            name,
+        )
 
     chat_param = _function_declaration_to_tool_param(declaration)
     function = chat_param.get("function") or {}
@@ -213,11 +224,13 @@ def add_tool_to_bundle(
     )
     bundle.specs.append(spec)
     bundle.tools[original_name] = tool
+    bundle.runtime_label = runtime_label
     bundle.executors[name] = _make_executor(
         tool,
         ctx,
         event_sink=event_sink,
         timeout_seconds=timeout_seconds,
+        runtime_label=runtime_label,
     )
     seen.add(name)
 
@@ -229,12 +242,14 @@ def sync_bundle_to_tools_dict(
     *,
     event_sink: EventSink | None = None,
     timeout_seconds: float | None = None,
+    runtime_label: str = "piagent",
 ) -> None:
     """Rebuild Pi tool specs and executors from callback-mutated tools."""
 
     bundle.specs = []
     bundle.executors = {}
     bundle.tools = {}
+    bundle.runtime_label = runtime_label
     seen: set[str] = set()
     for tool in tools_dict.values():
         add_tool_to_bundle(
@@ -244,6 +259,7 @@ def sync_bundle_to_tools_dict(
             seen=seen,
             event_sink=event_sink,
             timeout_seconds=timeout_seconds,
+            runtime_label=runtime_label,
         )
 
 
@@ -253,6 +269,7 @@ def _make_executor(
     *,
     event_sink: EventSink | None,
     timeout_seconds: float | None,
+    runtime_label: str,
 ) -> Executor:
     async def _emit(event: Event) -> None:
         if event_sink is not None:
@@ -260,9 +277,10 @@ def _make_executor(
 
     async def _run(args: dict[str, Any], call_id: str = "") -> Any:
         started_at = time.monotonic()
-        call_id = call_id or f"piagent-{time.time_ns()}"
+        call_id = call_id or f"{runtime_label}-{time.time_ns()}"
         logger.debug(
-            "piagent_tool_start invocation_id=%s call_id=%s tool=%s",
+            "%s_tool_start invocation_id=%s call_id=%s tool=%s",
+            runtime_label,
             ctx.invocation_id,
             call_id,
             tool.name,
@@ -270,8 +288,9 @@ def _make_executor(
 
         def _log_complete(status: str) -> None:
             logger.info(
-                "piagent_tool_complete invocation_id=%s call_id=%s tool=%s "
+                "%s_tool_complete invocation_id=%s call_id=%s tool=%s "
                 "status=%s duration_ms=%d",
+                runtime_label,
                 ctx.invocation_id,
                 call_id,
                 tool.name,
@@ -317,8 +336,9 @@ def _make_executor(
             )
         except asyncio.TimeoutError:
             logger.warning(
-                "piagent_tool_timeout invocation_id=%s call_id=%s tool=%s "
+                "%s_tool_timeout invocation_id=%s call_id=%s tool=%s "
                 "timeout_seconds=%s",
+                runtime_label,
                 ctx.invocation_id,
                 call_id,
                 tool.name,
@@ -335,7 +355,8 @@ def _make_executor(
             raise
         except Exception as e:  # noqa: BLE001 - surface tool failure to Pi
             logger.warning(
-                "piagent_tool_failed invocation_id=%s call_id=%s tool=%s error_type=%s",
+                "%s_tool_failed invocation_id=%s call_id=%s tool=%s error_type=%s",
+                runtime_label,
                 ctx.invocation_id,
                 call_id,
                 tool.name,
@@ -444,32 +465,54 @@ class _NoopPluginManager:
         return None
 
 
-def _ensure_invocation_context_defaults(ctx: InvocationContext, agent: Agent) -> None:
+def _ensure_invocation_context_defaults(
+    ctx: InvocationContext,
+    agent: Agent,
+    *,
+    runtime_label: str = "piagent",
+) -> None:
     if getattr(agent, "name", None) is None:
-        _set_default_attr(agent, "name", "assistant")
+        _set_default_attr(agent, "name", "assistant", runtime_label=runtime_label)
     for callback_name in (
         "canonical_before_tool_callbacks",
         "canonical_after_tool_callbacks",
         "canonical_on_tool_error_callbacks",
     ):
         if getattr(agent, callback_name, None) is None:
-            _set_default_attr(agent, callback_name, [])
+            _set_default_attr(
+                agent,
+                callback_name,
+                [],
+                runtime_label=runtime_label,
+            )
     if getattr(ctx, "agent", None) is None:
-        _set_default_attr(ctx, "agent", agent)
+        _set_default_attr(ctx, "agent", agent, runtime_label=runtime_label)
     if getattr(ctx, "run_config", None) is None:
         from google.adk.agents import RunConfig
 
-        _set_default_attr(ctx, "run_config", RunConfig())
+        _set_default_attr(ctx, "run_config", RunConfig(), runtime_label=runtime_label)
     if getattr(ctx, "plugin_manager", None) is None:
-        _set_default_attr(ctx, "plugin_manager", _NoopPluginManager())
+        _set_default_attr(
+            ctx,
+            "plugin_manager",
+            _NoopPluginManager(),
+            runtime_label=runtime_label,
+        )
 
 
-def _set_default_attr(target: Any, name: str, value: Any) -> None:
+def _set_default_attr(
+    target: Any,
+    name: str,
+    value: Any,
+    *,
+    runtime_label: str = "piagent",
+) -> None:
     try:
         setattr(target, name, value)
     except Exception as e:  # noqa: BLE001
         logger.debug(
-            "piagent: failed to set default %s on %s: %s",
+            "%s: failed to set default %s on %s: %s",
+            runtime_label,
             name,
             type(target).__name__,
             type(e).__name__,
@@ -530,7 +573,11 @@ def _short_hash(value: str) -> str:
     return hashlib.sha1(value.encode("utf-8")).hexdigest()[:8]
 
 
-async def close_toolsets(toolsets: list[BaseToolset]) -> None:
+async def close_toolsets(
+    toolsets: list[BaseToolset],
+    *,
+    runtime_label: str = "piagent",
+) -> None:
     """Best-effort close of toolsets opened during Pi tool collection."""
     for toolset in toolsets:
         close = getattr(toolset, "close", None)
@@ -539,4 +586,9 @@ async def close_toolsets(toolsets: list[BaseToolset]) -> None:
         try:
             await close()
         except Exception as e:  # noqa: BLE001
-            logger.warning(f"piagent: failed to close toolset {toolset!r}: {e}")
+            logger.warning(
+                "%s: failed to close toolset %r: %s",
+                runtime_label,
+                toolset,
+                e,
+            )

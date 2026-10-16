@@ -324,16 +324,23 @@ class Agent(LlmAgent):
     re-assigns every list field on the copy. Consumed by
     :func:`veadk.runtime.compat.explicit_fields`."""
 
-    runtime: Literal["adk", "codex", "piagent"] = "adk"
+    runtime: Literal["adk", "codex", "piagent", "dsh"] = "adk"
     """Agent runtime backend. ``"adk"`` (default) uses Google ADK's built-in LLM
     flow. ``"codex"`` delegates the inner agent loop to the OpenAI Codex SDK.
     ``"piagent"`` delegates the inner agent loop to a local Pi coding agent
-    binary through its RPC mode. Non-``adk`` runtimes are implemented under
-    :mod:`veadk.runtime`."""
+    binary through its RPC mode. ``"dsh"`` delegates the inner agent loop to the
+    DeepSeek Harness SDK/runtime binary. Non-``adk`` runtimes are implemented
+    under :mod:`veadk.runtime`."""
 
     codex_runtime_config: Optional[Any] = None
     """Optional :class:`veadk.runtime.codex.config.CodexRuntimeConfig` (or a
     matching dict). Codex defaults are fail-closed and invocation-isolated."""
+
+    deepseek_harness_runtime_config: Optional[Any] = None
+    """Optional
+    :class:`veadk.runtime.deepseek_harness.config.DeepSeekHarnessRuntimeConfig`
+    (or a matching dict). DeepSeek Harness starts lazily through its SDK and
+    uses an explicit ``DSH_HOME``."""
 
     enable_a2ui: bool = False
     """Enable A2UI (agent-driven UI). When True, a `SendA2uiToClientToolset` is

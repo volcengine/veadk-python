@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import stat
 import sys
 import tarfile
@@ -1122,6 +1123,59 @@ async def test_build_executable_tools_collects_function_tool():
     assert bundle.specs[0].parameters["type"] == "object"
     output = await bundle.executors["get_weather"]({"city": "Beijing"})
     assert output == {"weather": "sunny in Beijing"}
+
+
+@pytest.mark.asyncio
+async def test_build_executable_tools_default_logs_use_piagent_label(caplog):
+    def get_weather(city: str) -> dict[str, str]:
+        """Get weather.
+
+        Args:
+            city: City name.
+        """
+        return {"weather": f"sunny in {city}"}
+
+    caplog.set_level(logging.DEBUG, logger="veadk.runtime.piagent.tools_bridge")
+    agent = SimpleNamespace(tools=[FunctionTool(get_weather)])
+    bundle = await build_executable_tools(agent, _fake_ctx(_user_event("hi")))
+
+    assert bundle.runtime_label == "piagent"
+    await bundle.executors["get_weather"]({"city": "Beijing"})
+
+    messages = "\n".join(record.getMessage() for record in caplog.records)
+    assert "piagent: bridging 1 agent tool(s): ['get_weather']" in messages
+    assert "piagent_tool_start invocation_id=inv-1" in messages
+    assert "piagent_tool_complete invocation_id=inv-1" in messages
+
+
+@pytest.mark.asyncio
+async def test_build_executable_tools_custom_runtime_label_controls_logs(caplog):
+    def get_weather(city: str) -> dict[str, str]:
+        """Get weather.
+
+        Args:
+            city: City name.
+        """
+        return {"weather": f"sunny in {city}"}
+
+    caplog.set_level(logging.DEBUG, logger="veadk.runtime.piagent.tools_bridge")
+    agent = SimpleNamespace(tools=[FunctionTool(get_weather)])
+    bundle = await build_executable_tools(
+        agent,
+        _fake_ctx(_user_event("hi")),
+        runtime_label="dsh",
+    )
+
+    assert bundle.runtime_label == "dsh"
+    await bundle.executors["get_weather"]({"city": "Beijing"})
+
+    messages = "\n".join(record.getMessage() for record in caplog.records)
+    assert "dsh: bridging 1 agent tool(s): ['get_weather']" in messages
+    assert "dsh_tool_start invocation_id=inv-1" in messages
+    assert "dsh_tool_complete invocation_id=inv-1" in messages
+    assert "piagent: bridging" not in messages
+    assert "piagent_tool_start" not in messages
+    assert "piagent_tool_complete" not in messages
 
 
 @pytest.mark.asyncio

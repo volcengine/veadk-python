@@ -14,9 +14,10 @@
 
 """Support matrix for non-``adk`` agent runtimes.
 
-``Agent(runtime="codex")`` and ``Agent(runtime="piagent")`` replace the *entire*
-ADK LLM flow with an external harness. Everything ADK implements inside that
-flow — agent transfer, request/response processors, the ``LlmRequest``
+``Agent(runtime="codex")``, ``Agent(runtime="piagent")`` and
+``Agent(runtime="dsh")`` replace the *entire* ADK LLM flow with an
+external harness. Everything ADK implements inside that flow — agent transfer,
+request/response processors, the ``LlmRequest``
 assembly, per-call callbacks — therefore does not run. Without a check, a large
 part of :class:`veadk.agent.Agent`'s configuration surface is accepted at
 construction time and then silently ignored at run time.
@@ -52,7 +53,7 @@ logger = get_logger(__name__)
 Policy = Literal["error", "warn"]
 """How loudly an unsupported configuration is reported."""
 
-ALL_RUNTIMES: frozenset[str] = frozenset({"codex", "piagent"})
+ALL_RUNTIMES: frozenset[str] = frozenset({"codex", "piagent", "dsh"})
 """Every runtime that bypasses ADK's LLM flow."""
 
 EXPLICIT_FIELDS_ATTR = "_veadk_explicit_fields"
@@ -152,6 +153,26 @@ def _model_fallbacks(agent: Any) -> list[Any]:
     model_fallbacks = getattr(agent, "model_fallbacks", None)
     if isinstance(model_fallbacks, list):
         return list(model_fallbacks)
+    return []
+
+
+def _runtime_tools(agent: Any) -> list[Any]:
+    """Return configured tools/toolsets."""
+    tools = getattr(agent, "tools", None)
+    if isinstance(tools, list):
+        return list(tools)
+    if isinstance(tools, tuple):
+        return list(tools)
+    return []
+
+
+def _sub_agents(agent: Any) -> list[Any]:
+    """Return configured sub-agents."""
+    sub_agents = getattr(agent, "sub_agents", None)
+    if isinstance(sub_agents, list):
+        return list(sub_agents)
+    if isinstance(sub_agents, tuple):
+        return list(sub_agents)
     return []
 
 
@@ -267,12 +288,12 @@ SUPPORT_RULES: tuple[SupportRule, ...] = (
         predicate=lambda agent, _explicit: bool(getattr(agent, "model_provider", None))
         and getattr(agent, "model_provider", None) != "openai",
         message=lambda agent, rt: (
-            f"{rt} runtime always talks to model_api_base over an "
-            "OpenAI-compatible API and ignores "
+            f"{rt} runtime ignores "
             f"Agent(model_provider={getattr(agent, 'model_provider', None)!r}), "
             "because the provider prefix only selects a LiteLLM client that is "
-            "never created here; a non-OpenAI-compatible endpoint will fail at "
-            "call time. Use runtime='adk' if the provider matters."
+            "never created here. Configure the runtime-specific provider or "
+            "endpoint instead, or use runtime='adk' if the LiteLLM provider "
+            "must apply."
         ),
     ),
     SupportRule(
@@ -288,7 +309,7 @@ SUPPORT_RULES: tuple[SupportRule, ...] = (
         ),
         # codex forwards it: the runtime hands it to `register_turn` and the
         # shim applies extra_headers/extra_body to every backend call.
-        applies_to=frozenset({"piagent"}),
+        applies_to=frozenset({"piagent", "dsh"}),
     ),
     SupportRule(
         field="enable_responses",
@@ -332,6 +353,7 @@ SUPPORT_RULES: tuple[SupportRule, ...] = (
         field="skills_mode",
         policy="warn",
         predicate=_truthy("skills_mode"),
+        applies_to=frozenset({"codex", "piagent"}),
         message=lambda agent, rt: (
             "Agent(skills_mode="
             f"{getattr(agent, 'skills_mode', None)!r}) has no effect: {rt} "
@@ -347,8 +369,8 @@ SUPPORT_RULES: tuple[SupportRule, ...] = (
         predicate=_truthy("enable_skills_checklist"),
         message=lambda _agent, rt: (
             "Agent(enable_skills_checklist=True) installs an ADK before-tool "
-            f"callback over VeADK skills, and {rt} runtime bridges neither the "
-            "skills toolset nor per-tool ADK callbacks, so no checklist is ever "
+            f"callback over VeADK skills, and {rt} runtime does not execute that "
+            "ADK skill checklist callback inside its native skill loader, so no checklist is ever "
             "enforced. Use runtime='adk', or set enable_skills_checklist=False."
         ),
     ),
@@ -383,12 +405,24 @@ SUPPORT_RULES: tuple[SupportRule, ...] = (
         field="codex_runtime_config",
         policy="warn",
         predicate=_truthy("codex_runtime_config"),
-        applies_to=frozenset({"piagent"}),
+        applies_to=frozenset({"piagent", "dsh"}),
         message=lambda agent, rt: (
             "Agent(codex_runtime_config=...) configures the codex runtime only; "
             f"{rt} runtime ignores it, so its sandbox, approval_mode, "
             "network_access and workspace settings do not apply to this agent. "
             "Remove it, or set runtime='codex'."
+        ),
+    ),
+    SupportRule(
+        field="deepseek_harness_runtime_config",
+        policy="warn",
+        predicate=_truthy("deepseek_harness_runtime_config"),
+        applies_to=frozenset({"codex", "piagent"}),
+        message=lambda agent, rt: (
+            "Agent(deepseek_harness_runtime_config=...) configures the "
+            f"dsh runtime only; {rt} runtime ignores it, so its "
+            "provider, DSH_HOME, profile, binary and timeout settings do not "
+            "apply to this agent. Remove it, or set runtime='dsh'."
         ),
     ),
 )

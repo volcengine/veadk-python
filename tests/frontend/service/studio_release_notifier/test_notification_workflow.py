@@ -15,9 +15,9 @@
 """Run the actual workflow notification script against a mocked HTTP boundary."""
 
 import copy
+import builtins
 import io
 import json
-import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -49,6 +49,19 @@ def workflow_script(monkeypatch):
     }.items():
         monkeypatch.setenv(name, value)
     return compile(source, str(WORKFLOW) + ":notify", "exec")
+
+
+def execute_workflow_script(monkeypatch, workflow_script, *, sleep):
+    real_import = builtins.__import__
+    fake_time = SimpleNamespace(sleep=sleep)
+
+    def import_module(name, globals=None, locals=None, fromlist=(), level=0):
+        if level == 0 and name == "time":
+            return fake_time
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", import_module)
+    exec(workflow_script, {"__name__": "__main__"})
 
 
 def test_notification_is_downstream_of_both_publish_jobs():
@@ -97,12 +110,11 @@ def test_actual_workflow_retry_policy(
         return io.BytesIO(b'{"ok":true}')
 
     monkeypatch.setattr(urllib.request, "urlopen", urlopen)
-    monkeypatch.setattr(time, "sleep", sleeps.append)
     if success:
-        exec(workflow_script, {"__name__": "__main__"})
+        execute_workflow_script(monkeypatch, workflow_script, sleep=sleeps.append)
     else:
         with pytest.raises(SystemExit):
-            exec(workflow_script, {"__name__": "__main__"})
+            execute_workflow_script(monkeypatch, workflow_script, sleep=sleeps.append)
     assert len(requests) == calls
     assert sleeps == delays
     assert all(payload == requests[0] for payload in requests)
@@ -150,7 +162,6 @@ def test_workflow_through_real_http_handler_and_broadcast(
 
     monkeypatch.setattr(notifier, "Store", Store)
     monkeypatch.setattr(notifier, "Feishu", Bot)
-    monkeypatch.setattr(time, "sleep", lambda _: None)
     with TestClient(notifier.app) as client:
 
         def urlopen(request, timeout):
@@ -173,9 +184,11 @@ def test_workflow_through_real_http_handler_and_broadcast(
             with pytest.raises(
                 SystemExit, match="Release succeeded, but notification failed"
             ):
-                exec(workflow_script, {"__name__": "__main__"})
+                execute_workflow_script(
+                    monkeypatch, workflow_script, sleep=lambda _: None
+                )
         else:
-            exec(workflow_script, {"__name__": "__main__"})
+            execute_workflow_script(monkeypatch, workflow_script, sleep=lambda _: None)
 
     assert len(requests) == (3 if permanent_failure else 2)
     assert sent == (["oc_a"] if permanent_failure else ["oc_a", "oc_b"])
