@@ -61,6 +61,70 @@ def test_tasks_are_owner_scoped_and_duplicate_submission_reuses_identity(tmp_pat
     asyncio.run(run())
 
 
+def test_changed_request_identity_reports_safe_field_names(tmp_path):
+    async def run():
+        service = CreationTasks(tmp_path / "tasks.sqlite3")
+        service.command = lambda: [sys.executable, "-c", "import time; time.sleep(30)"]
+        payload = {
+            "requestId": "11111111-1111-4111-8111-111111111111",
+            "agentId": "mi-test",
+            "description": "",
+            "region": "cn-beijing",
+            "tosBucket": "agentkit-platform-old",
+        }
+        task = await service.start(
+            "owner",
+            payload,
+            config_path="not-read-by-fake",
+            timeout=60,
+            tos={"tosBucket": "agentkit-platform-old"},
+        )
+        with pytest.raises(TaskError) as caught:
+            await service.start(
+                "owner",
+                {**payload, "tosBucket": "agentkit-platform-new"},
+                config_path="x",
+                timeout=60,
+                tos={"tosBucket": "agentkit-platform-new"},
+            )
+        assert "tosBucket" in str(caught.value)
+        assert "agentkit-platform" not in str(caught.value)
+        await service.cancel("owner", task["taskId"])
+        await service.close()
+
+    asyncio.run(run())
+
+
+def test_legacy_task_without_bucket_can_resume_with_bucket(tmp_path):
+    async def run():
+        service = CreationTasks(tmp_path / "tasks.sqlite3")
+        service.command = lambda: [sys.executable, "-c", "import time; time.sleep(30)"]
+        legacy = {
+            "requestId": "12121212-1212-4121-8121-121212121212",
+            "agentId": "mi-test",
+            "description": "",
+            "region": "cn-beijing",
+        }
+        task = await service.start(
+            "owner",
+            legacy,
+            config_path="unused",
+            timeout=60,
+        )
+        await service.cancel("owner", task["taskId"])
+        resumed = await service.start(
+            "owner",
+            {**legacy, "tosBucket": "agentkit-platform-output"},
+            config_path="unused",
+            timeout=60,
+            tos={"tosBucket": "agentkit-platform-output"},
+        )
+        assert resumed["taskId"] == task["taskId"]
+        await service.close()
+
+    asyncio.run(run())
+
+
 def test_raw_child_errors_never_reach_task_response(tmp_path):
     async def run():
         service = CreationTasks(tmp_path / "tasks.sqlite3")
@@ -215,6 +279,7 @@ def test_nonsecret_resource_choices_reach_child_and_retain_request_identity(tmp_
             "agentId": "mi-test",
             "description": "",
             "region": "cn-beijing",
+            "businessWorkspaceMode": "per-agent",
             "pgHost": "db.example",
             "pgPort": "5432",
             "openvikingUrl": "https://api.example.test/openviking",
@@ -225,7 +290,13 @@ def test_nonsecret_resource_choices_reach_child_and_retain_request_identity(tmp_
         assert service.get("owner", task["taskId"])["state"] == "succeeded"
         assert json.loads(received.read_text()) == {
             key: payload[key]
-            for key in ("pgHost", "pgPort", "openvikingUrl", "openvikingResourceId")
+            for key in (
+                "pgHost",
+                "pgPort",
+                "openvikingUrl",
+                "openvikingResourceId",
+                "businessWorkspaceMode",
+            )
         }
         await service.close()
 
@@ -331,6 +402,60 @@ def test_tos_credentials_reach_child_without_persistence(tmp_path):
         database = service.path.read_bytes().decode(errors="ignore")
         assert "sensitive-ak" not in database
         assert "sensitive-sk" not in database
+        await service.close()
+
+    asyncio.run(run())
+
+
+def test_tos_bucket_is_part_of_request_identity_and_reaches_child(tmp_path):
+    import json
+
+    async def run():
+        service = CreationTasks(tmp_path / "tasks.sqlite3")
+        received = tmp_path / "tos.json"
+        result = {
+            "runtime_id": "r-test",
+            "skill_space_id": "ss-test",
+            "gateway_id": "gw-test",
+            "agent_id": "mi-test",
+            "region": "cn-beijing",
+            "state": "ready",
+        }
+        code = (
+            "import json,sys,pathlib; "
+            "data=json.loads(sys.stdin.read()); "
+            f"pathlib.Path({str(received)!r}).write_text(json.dumps(data['tos'])); "
+            f"print('MPA_EVENT '+json.dumps({{'result': {result!r}}}))"
+        )
+        service.command = lambda: [sys.executable, "-c", code]
+        payload = {
+            "requestId": "91919191-9191-4191-8191-919191919191",
+            "agentId": "mi-test",
+            "description": "",
+            "region": "cn-beijing",
+            "tosBucket": "agentkit-platform-output",
+        }
+        task = await service.start(
+            "owner",
+            payload,
+            config_path="unused",
+            timeout=60,
+            tos={"tosBucket": payload["tosBucket"]},
+        )
+        await asyncio.gather(*service.running.values())
+        response = service.get("owner", task["taskId"])
+        assert response["tosBucket"] == "agentkit-platform-output"
+        assert json.loads(received.read_text()) == {
+            "tosBucket": "agentkit-platform-output"
+        }
+        with pytest.raises(TaskError, match="different inputs"):
+            await service.start(
+                "owner",
+                {**payload, "tosBucket": "agentkit-platform-other"},
+                config_path="unused",
+                timeout=60,
+                tos={"tosBucket": "agentkit-platform-other"},
+            )
         await service.close()
 
     asyncio.run(run())
@@ -487,6 +612,11 @@ def test_duplicate_cancel_and_shutdown_do_not_interrupt_reaping(tmp_path):
     "key,expected",
     [
         ("iamPermissionDenied", "iamPermissionDenied"),
+        (
+            "openvikingModelConfigurationRejected",
+            "openvikingModelConfigurationRejected",
+        ),
+        ("openvikingCreateUnknown", "openvikingCreateUnknown"),
         ("private-provider-text", "creationFailed"),
     ],
 )
@@ -512,6 +642,60 @@ def test_only_allowlisted_iam_failure_keys_reach_ui(tmp_path, key, expected):
         assert result["state"] == "failed"
         assert result["stage"] == "iam_role"
         assert result["error"] == expected
+        await service.close()
+
+    asyncio.run(run())
+
+
+def test_name_scope_reserves_only_active_tasks_and_remains_private(tmp_path):
+    import json
+    import os
+    from veadk.integrations.mpa.managed.names import NameCheckError
+    from veadk.integrations.mpa.managed.tasks import TaskError
+
+    async def run():
+        service = CreationTasks(tmp_path / "tasks.sqlite3")
+        scope = {"provider": "volcengine", "account": "a", "region": "cn-beijing"}
+        first = {
+            "requestId": "first",
+            "name": "same-name",
+            "agentId": "mi-first",
+            "description": "",
+            "region": "cn-beijing",
+        }
+        with service.db() as db:
+            db.execute(
+                "INSERT INTO tasks (id,owner,request,payload,state,stage,supervisor,updated,name_scope) VALUES (?,?,?,?,?,?,?,?,?)",
+                (
+                    "old",
+                    "owner-a",
+                    "first",
+                    json.dumps(first, sort_keys=True),
+                    "running",
+                    "queued",
+                    os.getpid(),
+                    0,
+                    json.dumps(scope),
+                ),
+            )
+        other = {**first, "requestId": "second", "agentId": "mi-second"}
+        with pytest.raises(NameCheckError):
+            await service.start(
+                "owner-b", other, config_path=None, timeout=60, name_scope=scope
+            )
+        assert service.get("owner-a", "old")["state"] == "running"
+        assert "name_scope" not in service.get("owner-a", "old")
+        service.check_name("owner-b", other, {**scope, "account": "different"})
+        service._update("old", state="failed")
+        service.check_name("owner-b", other, scope)
+        with pytest.raises(TaskError, match="account snapshot"):
+            await service.start(
+                "owner-a",
+                first,
+                config_path=None,
+                timeout=60,
+                name_scope={**scope, "account": "different"},
+            )
         await service.close()
 
     asyncio.run(run())

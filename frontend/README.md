@@ -5,6 +5,31 @@ server that `veadk frontend` launches — no separate backend.
 
 ## Release notifications
 
+MPA basic information includes an editable maximum instance count, defaulting to
+20 for Volcengine and 10 for BytePlus.
+This is the Runtime autoscaling ceiling (`MaxInstance`), not the initial number
+of running instances. Submitted requests retain their selected value on retry;
+legacy requests without this field keep their original configuration. Duplicate
+names show the existing error message in a red alert. General-agent creation is unchanged.
+See [the creation contract](../specs/studio-mpa-creation/README.md).
+
+MPA 基本信息提供可编辑的“最大实例数”，火山默认 20、BytePlus 默认 10，对应 Runtime 的扩容上限
+`MaxInstance`，并非初始启动实例数。已提交请求重试沿用原值；没有此字段的旧请求
+保留原配置。名称重复时以红色错误框突出原提示，通用智能体创建不变。
+参见[创建契约](../specs/studio-mpa-creation/README.zh.md)。
+
+MPA session output storage accepts only optional buckets beginning with `agentkit-platform-`. The
+Worker Tool uses IAM Role without TOS keys; creation additively grants that role
+bucket metadata access and object read/write/delete under `sandbox-session/*`.
+The shared role's other consumers receive the same access. Existing Tools,
+Sessions and public bucket policies are not changed. Empty selection preserves
+server defaults. See [the managed setup](../veadk/integrations/mpa/managed/README.md#tos-output-storage-with-iam-role).
+
+MPA 会话输出存储仅可选以 `agentkit-platform-` 开头的桶，Worker Tool 使用 IAM Role，不再要求 TOS 密钥。
+创建时增量补齐角色的桶元数据权限和 `sandbox-session/*` 对象读写/删除权限；共享
+角色的其他使用者同样获得该权限。不修改已有 Tool、会话或桶公开策略；空选择保留
+服务端默认配置。参见[托管配置](../veadk/integrations/mpa/managed/README.zh.md#使用-iam-role-的-tos-输出存储)。
+
 The MPA creation wizard supports clicking step headings and returning to earlier
 settings after restoring a submitted draft. Submitted settings remain read-only;
 retry retains the original identity. Any submitted draft offers New Agent to
@@ -1593,7 +1618,7 @@ DatePicker 在基础组件中展示日期与日期时间选择；IndexLayout 在
 
 三个渠道的解除连接操作统一为“解除绑定”；已绑定企业微信的“重新生成二维码”与“解除绑定”横向排列，与飞书和钉钉一致。
 
-飞书群聊权限列表不再提供“编辑”；每行右侧的 × 按钮用于移除该群权限。
+飞书群聊权限列表不再提供“编辑”；每行右侧的 × 按钮用于移除该群权限。 新增群权限仅填写群 ID，不再提供会话隔离选项或提交 `groupSessionScope`；新群沿用 Runtime 默认/继承策略，已有群配置及列表中的策略展示保持不变。
 
 配置方式不跨页面或 Runtime 保存。切换方式会清空未提交凭据、隐藏二维码并停止前端轮询或企微授权等待；注册提交进行中禁止切换。已绑定机器人也可以通过手动配置替换，失败保留现有绑定。飞书与钉钉手动配置须由 Runtime 的 `credentialBindingChannels` 声明支持；旧镜像显示升级提示。
 
@@ -1640,15 +1665,15 @@ Studio 从 `mpa_admin_workspace/mpa_admin_db` 的账号/地域记录解析共享
 APIG/IM Gateway；缺失时创建并保存，后续智能体复用。内置配置不固定已有资源 ID。
 已有记录保持不变；本次不迁移智能体或绕过资源配额。
 
-With `managed.postgres` configured, the PG step uses a shared business Workspace with a separate database per MPA. Shared account/region resource records live in `mpa_admin_workspace/mpa_admin_db`. With `managed.postgres.mode: auto`, deployment STS creates/reuses both Workspaces and the PG step needs no connection input. Manual profiles remain supported. See the [setup and registry migration instructions](../veadk/integrations/mpa/managed/README.md).
+New Studio requests prepare a dedicated `mpa_agent_<Runtime name>` Workspace and its `aidb` business database per MPA. Name checks before first Next and task acceptance block foreign Runtime/template/Workspace collisions; own bindings remain reusable on retry. Existing submitted requests and registered shared bindings retain the original shared business Workspace. Shared account/region resource records live in `mpa_admin_workspace/mpa_admin_db`. With `managed.postgres.mode: auto`, deployment STS creates/reuses both Workspaces and the PG step needs no connection input. Manual profiles remain supported. See the [setup and registry migration instructions](../veadk/integrations/mpa/managed/README.md).
 
-配置 `managed.postgres` 后，PG 步骤使用共享业务 Workspace，每个 MPA 保留独立业务库。账号/地域共享资源记录存入 `mpa_admin_workspace/mpa_admin_db`。设置 `managed.postgres.mode: auto` 后，由部署 STS 创建/复用两个 Workspace，PG 步骤无需填写连接信息；仍兼容手动配置。参见[配置和注册库迁移说明](../veadk/integrations/mpa/managed/README.zh.md)。
+Studio 新请求为每个 MPA 准备独立 `mpa_agent_<Runtime 名称>` Workspace 及 `aidb` 业务库。首次下一步及任务接收前检查名称，阻止其他归属 Runtime/模板/Workspace 重名，自身绑定仍可重试复用。已提交请求及已登记的共享绑定沿用原共享业务 Workspace。账号/地域共享资源记录存入 `mpa_admin_workspace/mpa_admin_db`。设置 `managed.postgres.mode: auto` 后，由部署 STS 创建/复用两个 Workspace，PG 步骤无需填写连接信息；仍兼容手动配置。参见[配置和注册库迁移说明](../veadk/integrations/mpa/managed/README.zh.md)。
 
 The MPA creation dialog asks for a Runtime name (4–64 ASCII letters, digits, underscores or hyphens) and description. The server generates the stable Agent ID; neither ID nor image inputs are shown. Fresh requests use the built-in `mpa/mpa_agent:latest` and `mpa/mpa_codex_worker:latest` images. Submitted legacy drafts retain their original request and images for retry. Existing Runtimes are unchanged. See [managed creation](../veadk/integrations/mpa/managed/README.md).
 
-The dialog now uses three steps: basics (required Runtime name and description), automatic PostgreSQL preparation, and optional OpenViking HTTPS URL/resource ID/API Key. It links to the relevant Volcengine console pages. The server obtains PostgreSQL Workspace connections through deployment credentials. OpenViking is enabled only when the HTTPS URL, resource ID and masked API Key are all entered; leaving all three blank omits its four Runtime variables, including any values inherited from a template or reference Runtime. The key is never saved in browser drafts or task SQLite. Only the final step submits; nonsecret draft choices and request identity survive reopening in the same browser session. See the [creation contract](../specs/studio-mpa-creation/README.md).
+The dialog now uses three steps: basics (required Runtime name and description), automatic PostgreSQL preparation, and OpenViking preparation. It links to the relevant Volcengine console pages. The server obtains PostgreSQL Workspace connections through deployment credentials. New Volcengine Beijing requests automatically prepare an independent paid enterprise OpenViking library and inject its four Runtime variables; retries reuse the registered library. New BytePlus Johor requests automatically prepare a personal library using the resolved MPA ModelArk API Key and two inference endpoints (server overrides: `OV_VLM_ENDPOINT_ID` / `OV_EMBEDDING_ENDPOINT_ID`). Its default-user and overseas data-plane behavior require a separately adapted Runtime image before memory works. Already-submitted manual requests still enable OpenViking only when all three connection values are entered; leaving them blank omits the four variables, including inherited values. The key is never saved in browser drafts or task SQLite. Only the final step submits; nonsecret draft choices and request identity survive reopening in the same browser session. See the [creation contract](../specs/studio-mpa-creation/README.md).
 
-创建弹窗现分为基础信息（必填 Runtime 名称和描述）、PostgreSQL 自动准备、可选 OpenViking HTTPS 地址/资源 ID/API Key 三步，并提供对应的火山引擎控制台入口。服务端通过部署凭据获取 PostgreSQL Workspace 连接。仅在 HTTPS 地址、资源 ID 和遮罩的 API Key 三项均填写时启用 OpenViking；三项全空时，新 Runtime 不注入其四个变量，也不继承模板或参考 Runtime 中的旧值。密钥不保存到浏览器草稿或任务 SQLite。仅最后一步提交，非密钥草稿与请求身份在同一浏览器会话中可恢复。参见[创建契约](../specs/studio-mpa-creation/README.zh.md)。
+创建弹窗现分为基础信息（必填 Runtime 名称和描述）、PostgreSQL 自动准备、OpenViking 准备说明三步，并提供对应的火山引擎控制台入口。服务端通过部署凭据获取 PostgreSQL Workspace 连接。火山北京新请求自动准备独立的付费企业版 OpenViking 库并注入四个 Runtime 变量，重试复用已登记库。BytePlus 柔佛新请求使用已解析的 MPA ModelArk API Key 和两个推理接入点（服务端可通过 `OV_VLM_ENDPOINT_ID` / `OV_EMBEDDING_ENDPOINT_ID` 覆盖）自动准备个人版库；其 default 用户及海外数据面行为需要单独适配 Runtime 镜像后才能使用记忆。已提交手动请求仍在三项连接值全部填写时启用 OpenViking；全空时不注入四个变量，也不继承旧值。密钥不保存到浏览器草稿或任务 SQLite。仅最后一步提交，非密钥草稿与请求身份在同一浏览器会话中可恢复。参见[创建契约](../specs/studio-mpa-creation/README.zh.md)。
 
 After a confirmed failure or cancellation, the dialog retains the old task for same-ID retry. “Create another agent” generates a new request UUID and blank name; the server derives the new agent ID on submission and returns to the first step. It replaces only the browser draft, not any cloud resources from the previous attempt. Running or uncertain submissions cannot switch identities.
 
@@ -1760,7 +1785,7 @@ large collections will need a separate rebuildable query index.
 
 三个渠道的解除连接操作统一为“解除绑定”；已绑定企业微信的“重新生成二维码”与“解除绑定”横向排列，与飞书和钉钉一致。
 
-飞书群聊权限列表不再提供“编辑”；每行右侧的 × 按钮用于移除该群权限。
+飞书群聊权限列表不再提供“编辑”；每行右侧的 × 按钮用于移除该群权限。 新增群权限仅填写群 ID，不再提供会话隔离选项或提交 `groupSessionScope`；新群沿用 Runtime 默认/继承策略，已有群配置及列表中的策略展示保持不变。
 
 配置方式不跨页面或 Runtime 保存。切换方式会清空未提交凭据、隐藏二维码并停止前端轮询或企微授权等待；注册提交进行中禁止切换。已绑定机器人也可以通过手动配置替换，失败保留现有绑定。飞书与钉钉手动配置须由 Runtime 的 `credentialBindingChannels` 声明支持；旧镜像显示升级提示。
 
@@ -1797,15 +1822,15 @@ The production entry loads both component token stylesheets before rendering. Wh
 
 ### Named MPA creation / MPA 名称创建
 
-With `managed.postgres` configured, the PG step uses a shared business Workspace with a separate database per MPA. Shared account/region resource records live in `mpa_admin_workspace/mpa_admin_db`. With `managed.postgres.mode: auto`, deployment STS creates/reuses both Workspaces and the PG step needs no connection input. Manual profiles remain supported. See the [setup and registry migration instructions](../veadk/integrations/mpa/managed/README.md).
+New Studio requests prepare a dedicated `mpa_agent_<Runtime name>` Workspace and its `aidb` business database per MPA. Name checks before first Next and task acceptance block foreign Runtime/template/Workspace collisions; own bindings remain reusable on retry. Existing submitted requests and registered shared bindings retain the original shared business Workspace. Shared account/region resource records live in `mpa_admin_workspace/mpa_admin_db`. With `managed.postgres.mode: auto`, deployment STS creates/reuses both Workspaces and the PG step needs no connection input. Manual profiles remain supported. See the [setup and registry migration instructions](../veadk/integrations/mpa/managed/README.md).
 
-配置 `managed.postgres` 后，PG 步骤使用共享业务 Workspace，每个 MPA 保留独立业务库。账号/地域共享资源记录存入 `mpa_admin_workspace/mpa_admin_db`。设置 `managed.postgres.mode: auto` 后，由部署 STS 创建/复用两个 Workspace，PG 步骤无需填写连接信息；仍兼容手动配置。参见[配置和注册库迁移说明](../veadk/integrations/mpa/managed/README.zh.md)。
+Studio 新请求为每个 MPA 准备独立 `mpa_agent_<Runtime 名称>` Workspace 及 `aidb` 业务库。首次下一步及任务接收前检查名称，阻止其他归属 Runtime/模板/Workspace 重名，自身绑定仍可重试复用。已提交请求及已登记的共享绑定沿用原共享业务 Workspace。账号/地域共享资源记录存入 `mpa_admin_workspace/mpa_admin_db`。设置 `managed.postgres.mode: auto` 后，由部署 STS 创建/复用两个 Workspace，PG 步骤无需填写连接信息；仍兼容手动配置。参见[配置和注册库迁移说明](../veadk/integrations/mpa/managed/README.zh.md)。
 
 The MPA creation dialog asks for a Runtime name (4–64 ASCII letters, digits, underscores or hyphens) and description. The server generates the stable Agent ID; neither ID nor image inputs are shown. Fresh requests use the built-in `mpa/mpa_agent:latest` and `mpa/mpa_codex_worker:latest` images. Submitted legacy drafts retain their original request and images for retry. Existing Runtimes are unchanged. See [managed creation](../veadk/integrations/mpa/managed/README.md).
 
-The dialog now uses three steps: basics (required Runtime name and description), automatic PostgreSQL preparation, and optional OpenViking HTTPS URL/resource ID/API Key. It links to the relevant Volcengine console pages. The server obtains PostgreSQL Workspace connections through deployment credentials. OpenViking is enabled only when the HTTPS URL, resource ID and masked API Key are all entered; leaving all three blank omits its four Runtime variables, including any values inherited from a template or reference Runtime. The key is never saved in browser drafts or task SQLite. Only the final step submits; nonsecret draft choices and request identity survive reopening in the same browser session. See the [creation contract](../specs/studio-mpa-creation/README.md).
+The dialog now uses three steps: basics (required Runtime name and description), automatic PostgreSQL preparation, and OpenViking preparation. It links to the relevant Volcengine console pages. The server obtains PostgreSQL Workspace connections through deployment credentials. New Volcengine Beijing requests automatically prepare an independent paid enterprise OpenViking library and inject its four Runtime variables; retries reuse the registered library. New BytePlus Johor requests automatically prepare a personal library using the resolved MPA ModelArk API Key and two inference endpoints (server overrides: `OV_VLM_ENDPOINT_ID` / `OV_EMBEDDING_ENDPOINT_ID`). Its default-user and overseas data-plane behavior require a separately adapted Runtime image before memory works. Already-submitted manual requests still enable OpenViking only when all three connection values are entered; leaving them blank omits the four variables, including inherited values. The key is never saved in browser drafts or task SQLite. Only the final step submits; nonsecret draft choices and request identity survive reopening in the same browser session. See the [creation contract](../specs/studio-mpa-creation/README.md).
 
-创建弹窗现分为基础信息（必填 Runtime 名称和描述）、PostgreSQL 自动准备、可选 OpenViking HTTPS 地址/资源 ID/API Key 三步，并提供对应的火山引擎控制台入口。服务端通过部署凭据获取 PostgreSQL Workspace 连接。仅在 HTTPS 地址、资源 ID 和遮罩的 API Key 三项均填写时启用 OpenViking；三项全空时，新 Runtime 不注入其四个变量，也不继承模板或参考 Runtime 中的旧值。密钥不保存到浏览器草稿或任务 SQLite。仅最后一步提交，非密钥草稿与请求身份在同一浏览器会话中可恢复。参见[创建契约](../specs/studio-mpa-creation/README.zh.md)。
+创建弹窗现分为基础信息（必填 Runtime 名称和描述）、PostgreSQL 自动准备、OpenViking 准备说明三步，并提供对应的火山引擎控制台入口。服务端通过部署凭据获取 PostgreSQL Workspace 连接。火山北京新请求自动准备独立的付费企业版 OpenViking 库并注入四个 Runtime 变量，重试复用已登记库。BytePlus 柔佛新请求使用已解析的 MPA ModelArk API Key 和两个推理接入点（服务端可通过 `OV_VLM_ENDPOINT_ID` / `OV_EMBEDDING_ENDPOINT_ID` 覆盖）自动准备个人版库；其 default 用户及海外数据面行为需要单独适配 Runtime 镜像后才能使用记忆。已提交手动请求仍在三项连接值全部填写时启用 OpenViking；全空时不注入四个变量，也不继承旧值。密钥不保存到浏览器草稿或任务 SQLite。仅最后一步提交，非密钥草稿与请求身份在同一浏览器会话中可恢复。参见[创建契约](../specs/studio-mpa-creation/README.zh.md)。
 
 After a confirmed failure or cancellation, the dialog retains the old task for same-ID retry. “Create another agent” generates a new request UUID and blank name; the server derives the new agent ID on submission and returns to the first step. It replaces only the browser draft, not any cloud resources from the previous attempt. Running or uncertain submissions cannot switch identities.
 
@@ -1841,6 +1866,8 @@ administrator access. A failed or unauthorized account lookup blocks Feishu
 task submission instead of selecting an arbitrary bot. Older runtimes keep the
 single-bot interface. Compatible MPA images must be deployed separately.
 
+Adding a Feishu group only requires its chat ID; Studio no longer exposes a session-isolation selector or sends `groupSessionScope`. New groups use Runtime default/inheritance rules. Existing group configuration and returned scope labels remain unchanged.
+
 Runtime 声明 `multiBotChannels: ["feishu"]` 后，可在“自动化 → 消息渠道 →
 MPA 智能体消息渠道”中选择机器人。扫码或手动添加后，启停、解绑、诊断和群权限
 均按选中的 `appId` 管理；新增不同机器人保留既有绑定。飞书定时任务须选择已启用
@@ -1852,3 +1879,35 @@ Contracts and verification / 契约与验证：
 [channels](../specs/mpa-channels/README.md),
 [tasks](../specs/studio-mpa-cron-tasks/README.md),
 [design](../prd-spec/features/mpa-feishu-multi-bot/2026-10-09-studio-multi-bot.md).
+
+### General and MPA deployment isolation
+
+Generic structured/YAML creation retains the ordinary build, deploy and publish flow (plus selected scaling, evaluation and GitHub options). Only explicitly identified MPA targets apply Profile/smoke phases. Local drafts are filtered by type; legacy drafts without explicit MPA intent default to general. This does not repair cloud Runtime tags written by previous versions.
+
+### 通用与 MPA 部署隔离
+
+通用结构化/YAML 创建保留原构建、部署和发布流程（以及选中的实例配置、评测和 GitHub 选项）。仅明确标识为 MPA 的目标执行 Profile/smoke 阶段。本地草稿按类型筛选；无明确 MPA 意图的旧草稿默认通用。此修改不会修复旧版本已写入的云端 Runtime 标签。
+
+### Deleting MPA agents / 删除 MPA 智能体
+
+MPA deletion checks sessions and active lifecycle operations without querying Profile. Confirmation lists exclusive managed sandbox templates and Skill Spaces to delete, and shared or unproven resources to retain. Cleanup failures keep Runtime available for retry; databases, Workspaces, network, APIG and other resources remain. General agents use their existing Runtime deletion flow. Check errors are shown in the confirmation dialog and can be retried or cancelled. Restart Studio after updating the backend. Session authentication remains required; deletion forwards the same server-authenticated user identity as chat.
+
+MPA 删除检查会话和活动生命周期操作，不查询 Profile。确认弹窗列出待删除的独占受管沙箱模板、Skill Space，以及保留的共享或归属不明资源。清理失败保留 Runtime 供重试；数据库、Workspace、网络、APIG 及其他资源保留。通用智能体沿用现有 Runtime 删除流程。检查错误在弹窗内显示，可重新检查或取消。更新后端后需重启 Studio；会话接口仍需通过鉴权；删除流程传递与聊天一致的服务端已认证用户身份。
+
+MPA deletion waits up to 180 seconds. If the browser times out, Studio makes one read-only check: only explicit Runtime NotFound plus complete list absence confirms completion. Otherwise it shows that the outcome is not yet confirmed; refresh and check later rather than assuming failure. General-agent deletion retains its existing 30-second timeout. Confirmation requires the same authenticated Studio user and deployment credentials; a backend restart or credential rotation can leave the outcome unconfirmed. This change does not alter resource cleanup or retention. Restart Studio and refresh the page after updating.
+
+MPA 删除最多等待 180 秒。浏览器超时后，Studio 会只读检查一次：仅 Runtime 明确返回 NotFound 且完整列表也不存在时确认完成。否则显示结果尚未确认，需稍后刷新检查，不能直接认定失败。通用智能体仍使用原来的 30 秒超时。结果确认要求相同的 Studio 已认证用户和部署凭据；后端重启或凭据轮换可能导致结果无法确认。此修改不改变资源清理和保留规则。更新后请重启 Studio 并刷新页面。
+
+
+MPA runtime-role preparation now distinguishes missing deployment IAM permissions from temporary IAM/network failures. Temporary failures retry within the role deadline; exhausted attempts display an actionable same-agent retry message. Safe operation/category/Request ID diagnostics are retained by the server. See the [IAM recovery design](../prd-spec/bugfixes/mpa-iam-retry/2026-10-14-transient-errors.md).
+
+MPA 运行角色准备现区分部署 IAM 权限不足与临时 IAM/网络失败。临时失败在角色期限内重试，耗尽后提示用同一智能体重试。服务端保留安全的接口/类别/Request ID 诊断。见[IAM 恢复设计](../prd-spec/bugfixes/mpa-iam-retry/2026-10-14-transient-errors.zh.md)。
+
+BytePlus managed MPA creation in ap-southeast-1 again automatically prepares personal OpenViking. New/editable requests use automatic configuration without manual credentials. Submitted no-OV/automatic/manual requests retain their original recovery mode; use New Agent to enable OV after a no-OV submission. Domestic automatic OV and uncertain-create protection are unchanged.
+
+MPA same-request retries validate the original stored payload and deployment-account snapshot before checking owned Runtime/Worker names. A fresh same-name request still fails. Empty Runtime owner tags can only be supplemented by the authenticated original intent; foreign metadata remains rejected. This restores recovery after a failed readiness check without changing generic-agent creation.
+
+
+BytePlus Studio MPA creation now retrieves the deployment-account APM AppKey through the overseas service host and injects `OBSERVABILITY_OPENTELEMETRY_APMPLUS_API_KEY` into Runtime Envs. The key stays out of browser/task/deployment records; lookup failures stop resource preparation with safe diagnostics. Restart Studio and use a new request. Domestic/general-agent creation and CLI profiles are unchanged. See the [APM key design](../prd-spec/bugfixes/mpa-byteplus-apm/2026-10-14-server-app-key.md).
+
+BytePlus Studio MPA 创建现通过海外服务 Host 获取部署账号的 APM AppKey，注入 Runtime Envs 的 `OBSERVABILITY_OPENTELEMETRY_APMPLUS_API_KEY`。Key 不进入浏览器/任务/部署记录；获取失败时以安全诊断停止资源准备。重启 Studio 后使用新请求。国内/通用智能体创建和 CLI 配置不变。见 [APM Key 设计](../prd-spec/bugfixes/mpa-byteplus-apm/2026-10-14-server-app-key.zh.md)。

@@ -405,7 +405,7 @@
     "deleteDraftDescription": "Delete draft “{{name}}”?",
     "deleteAgent": "Delete Agent",
     "closeDeleteConfirmation": "Close delete confirmation",
-    "mpaDeletePreviewSummary": "Studio will delete visible idle MPA Runtime sessions first, then delete the AgentKit Runtime. Running work must finish or be stopped before deletion.",
+    "mpaDeletePreviewSummary": "Studio will clean visible idle sessions, this MPA’s exclusive sandbox template and Skill Space, then delete the Runtime. Databases and shared resources remain; running work must finish or stop first.",
     "mpaDeletePreviewSessions": "Sessions",
     "mpaDeletePreviewActiveSessions": "Active",
     "mpaDeletePreviewIdleSessions": "Idle",
@@ -418,7 +418,9 @@
     "mpaDeleteStage": {
       "runtime_sessions": "Delete {{count}} visible idle Runtime sessions",
       "runtime_diagnostics": "Remove diagnostics and mounted metadata owned by those sessions",
-      "agentkit_runtime": "Delete the AgentKit Runtime"
+      "agentkit_runtime": "Delete the AgentKit Runtime",
+      "worker_template": "Delete exclusive sandbox template",
+      "skill_space": "Delete exclusive Skill Space (including its skills)"
     },
     "draftDeletionWarning": "The draft will be removed from this browser.",
     "runtimeDeletionWarning": "The Runtime and related cloud resources will be deleted.",
@@ -543,6 +545,14 @@
       "updateConfigRestoring": "Restoring update configuration",
       "updateUnsupported": "This Runtime cannot be updated",
       "usageMismatch": "The returned usage data does not match this Agent"
+    },
+    "mpaDeleteChecking": "Checking sessions and resource ownership…",
+    "mpaDeleteRetryPreview": "Check again",
+    "mpaDeletePreviewFailed": "Deletion checks failed. Resolve the error below and check again.",
+    "mpaDeleteRetained": "Resources to retain",
+    "mpaDeleteRetainedReason": {
+      "shared": "Referenced by another agent",
+      "unproven": "Exclusive managed ownership could not be verified"
     }
   },
   "environmentCenter": {
@@ -1594,6 +1604,9 @@
     },
     "wakingHint": "Waking the agent. This may take some time.",
     "mpaCreate": {
+      "maxInstance": "Maximum instances",
+      "maxInstanceHelp": "Defaults to {{maximum}}; this limits the number of Runtime instances during autoscaling.",
+      "maxInstanceInvalid": "Maximum instances must be an integer of at least 1.",
       "name": "Name",
       "namePlaceholder": "e.g. test-agent",
       "nameHelp": "Used as the Runtime name. Use 4–64 letters, numbers, underscores or hyphens.",
@@ -1623,12 +1636,12 @@
       "openvikingInvalid": "Enter a valid HTTPS service URL, resource ID and API Key together, or leave all blank.",
       "openvikingCredentials": "The API Key is used only for this creation and is not saved in browser drafts; re-enter it after a refresh.",
       "tosTitle": "Session output storage",
-      "tosDescription": "Optional. Enter complete TOS credentials and a bucket to mount an isolated output directory for every Session. Leave all three blank to use the server defaults; TOS mounting is disabled if no defaults are configured.",
-      "tosAccessKey": "TOS Access Key",
-      "tosSecretKey": "TOS Secret Key",
+      "tosDescription": "Optional. Select a bucket to persist each Session's output directory. Access uses the sandbox IAM Role. Without a bucket, files are stored in the sandbox's local directory.",
       "tosBucket": "TOS bucket",
-      "tosInvalid": "TOS Access Key, Secret Key, and bucket are all required together.",
-      "tosCredentials": "Credentials are used only for this creation and are not saved in browser recovery data or creation task records.",
+      "tosInvalid": "Select an available bucket starting with agentkit-platform-.",
+      "tosCredentials": "Creation adds session-output access for the selected bucket to the shared role. Other runtimes and sandboxes using that role receive the same access.",
+      "tosDisable": "Clear bucket selection",
+      "tosBucketUnavailable": "The bucket is unavailable in this deployment account or region. Select a bucket from the list and retry.",
       "runtimeImage": "MPA image",
       "workerImage": "Worker image",
       "imageDefault": "Leave blank to use the configured image",
@@ -1660,9 +1673,11 @@
       "iamTrustConflict": "The runtime role trust is incompatible. Ask an administrator to check VeFaaS and APIG access, then retry.",
       "iamPolicyConflict": "An existing runtime policy with the required name has conflicting contents. Ask an administrator to check it, then retry.",
       "iamOwnershipConflict": "The runtime role does not belong to the deployment account. Ask an administrator to check it, then retry.",
+      "iamTemporaryFailure": "IAM requests temporarily failed or timed out after retries. Check the Studio network connection and IAM service, then retry with the same agent ID.",
       "iamVerificationFailed": "Runtime role permissions could not be confirmed. Check IAM availability and policies, then retry.",
       "iamConfigurationConflict": "Automatic runtime role preparation requires the default MPA role. Check the server creation configuration.",
       "creationFailed": "This step failed. Check its resources, server configuration and permissions, then retry the same agent ID.",
+      "configurationChanged": "This agent's creation configuration no longer matches the original submission. Restore the original settings before retrying, or create another agent request.",
       "cancelFailed": "Cancellation failed. Check the current progress and retry.",
       "cancelled": "Creation cancelled. Registered resources are retained for retry.",
       "timeout": "Creation timed out. Registered resources are retained. Inspect them before retrying.",
@@ -1688,12 +1703,33 @@
         "verifying": "Waiting for agent readiness",
         "admin_workspace": "Prepare management PG Workspace",
         "business_workspace": "Prepare business PG Workspace",
-        "admin_database": "Initialize shared management database"
+        "admin_database": "Initialize shared management database",
+        "openviking": "Preparing OpenViking library",
+        "openviking_key": "Preparing OpenViking credentials"
       },
       "back": "Keep creating",
       "pgAutoDescription": "VeADK uses its deployment account to create or reuse two PG Workspaces. mpa_admin_workspace / mpa_admin_db stores shared resource records; the business Workspace hosts an independent database for each agent. No PG connection input is needed. Preparation starts after submission.",
+      "pgPerAgentDescription": "Creation reuses the shared management Workspace and prepares a dedicated business PG Workspace and database for this agent. Existing tasks retain their database on retry.",
+      "pgAidbDescription": "Creation reuses the shared management Workspace and prepares a dedicated business Workspace with an aidb database. The business Workspace is named mpa_agent_<agent name>. Existing retries retain their original database.",
+      "runtimeNameTaken": "This name is used by a Runtime, sandbox template, business Workspace, or active creation. Choose another name.",
+      "runtimeNameCheckFailed": "Unable to check this name. Check resource query permissions and connectivity, then retry.",
       "pgModeChanged": "This submitted task uses previous PG settings and cannot be retried in automatic mode. Ask an administrator to reconcile its resources and task before starting a new creation.",
-      "pgMigrationRequired": "An existing shared registry is configured. Migrate its resource records to mpa_admin_workspace / mpa_admin_db and coordinate the registry URL cutover for existing Runtimes, then recheck this configuration."
+      "pgMigrationRequired": "An existing shared registry is configured. Migrate its resource records to mpa_admin_workspace / mpa_admin_db and coordinate the registry URL cutover for existing Runtimes, then recheck this configuration.",
+      "openvikingAutoDescription": "An independent OpenViking library will be created for this agent using default models. Its connection settings will be prepared automatically.",
+      "openvikingAutoByteplusDescription": "Creates a personal OpenViking library for this agent in BytePlus Johor, and prepares the connection settings automatically. Retrying reuses its registered library.",
+      "openvikingAutoByteplusRequirements": "Uses the MPA ModelArk API Key and the VLM/Embedding inference endpoints configured by the administrator. Personal libraries use one default user; the Runtime image must support this mode and overseas data-plane access before memory can be used. Libraries are retained after cancellation or agent deletion.",
+      "openvikingModelEndpointsInvalid": "Ask the administrator to configure valid OV_VLM_ENDPOINT_ID and OV_EMBEDDING_ENDPOINT_ID values on the Studio server, then retry.",
+      "openvikingAutoBilling": "Enterprise libraries are billed by usage starting when creation succeeds. Retrying this agent reuses its registered library.",
+      "openvikingPermissionDenied": "OpenViking permission denied. Check the deployment account’s library creation, query and API Key access permissions, then retry.",
+      "openvikingConfigurationConflict": "OpenViking ownership or configuration differs from this agent. Check its registered library before retrying.",
+      "openvikingCreateUnknown": "The OpenViking creation result is unknown. An administrator must verify the cloud library and reconcile its resource ID before retrying; another library will not be created automatically.",
+      "openvikingNotReady": "OpenViking is still initializing. Wait, then retry this agent to continue with the same library.",
+      "openvikingResourceFailed": "OpenViking initialization failed. Check the library status and model configuration in the console before retrying.",
+      "openvikingResourceMissing": "The registered OpenViking library or default user was not found. Check its binding and availability before retrying.",
+      "openvikingModelConfigurationRejected": "The platform rejected the default model configuration or library parameters. Check OpenViking model availability and account eligibility before retrying.",
+      "openvikingUnavailable": "OpenViking could not be reached. Check the service and network, then retry.",
+      "openvikingInvalidResponse": "OpenViking returned incomplete or invalid configuration. Check the library and default user before retrying.",
+      "openvikingQuotaExceeded": "OpenViking quota or request rate was exceeded. Adjust the quota or retry this agent later."
     }
   },
   "skillCenter": {
@@ -1993,7 +2029,7 @@
     "routeDescription": "Routing configuration for delivering messages to this Agent.",
     "deliveryDescription": "Observed reply delivery; configuration alone does not confirm delivery.",
     "groupsTitle": "Group access",
-    "groupsDescription": "Allow specific groups and choose how conversations are shared.",
+    "groupsDescription": "Allow specific groups to access this agent.",
     "providerBindingTitle": "Connect {{name}}",
     "providerUnbound": "Connect a {{name}} bot to let users message this agent.",
     "qrGuidance": "Authorize with {{name}}. The Runtime saves the bot credentials and configures the message gateway.",
@@ -2036,6 +2072,10 @@
     "noAccounts": "No Feishu bots are bound.",
     "accountsFailed": "Could not load bots. Try again.",
     "accountConflict": "The bot account is ambiguous or conflicts with its configuration. Refresh and select a bot.",
-    "multiBotPairingDescription": "Binding a new Feishu app adds a bot. Binding the same App ID updates that bot."
+    "multiBotPairingDescription": "Binding a new Feishu app adds a bot. Binding the same App ID updates that bot.",
+    "provider_lark": "Lark",
+    "larkPairingDescription": "Scan with Lark to authorize a bot. Existing bots remain bound until this setup succeeds.",
+    "larkAccountsTitle": "Lark bots",
+    "noLarkAccounts": "No Lark bots are bound."
   }
 }

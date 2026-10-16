@@ -205,11 +205,15 @@ class MpaRuntimeClient:
         endpoint: str,
         bearer_token: str,
         include_a2a: bool = True,
+        user_id: str = "",
     ) -> list[MpaRuntimeSessionSummary]:
         response = await self._request(
             "GET",
             f"{endpoint.rstrip('/')}/api/v1/sessions",
-            headers={"Authorization": f"Bearer {bearer_token}"},
+            headers={
+                "Authorization": f"Bearer {bearer_token}",
+                **({"x-user-id": user_id} if user_id else {}),
+            },
             params={"include_a2a": "true" if include_a2a else "false"},
         )
         return self._session_list_result(response)
@@ -220,11 +224,15 @@ class MpaRuntimeClient:
         endpoint: str,
         session_id: str,
         bearer_token: str,
+        user_id: str = "",
     ) -> None:
         await self._request(
             "DELETE",
             f"{endpoint.rstrip('/')}/api/v1/sessions/{session_id}",
-            headers={"Authorization": f"Bearer {bearer_token}"},
+            headers={
+                "Authorization": f"Bearer {bearer_token}",
+                **({"x-user-id": user_id} if user_id else {}),
+            },
         )
 
     async def patch_session_execution_config(

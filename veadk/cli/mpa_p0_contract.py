@@ -62,6 +62,9 @@ DEFAULT_COMPATIBILITY_MATRIX = {
 def default_matrix_path() -> Path:
     return (
         Path(__file__).resolve().parents[2]
+        / "frontend"
+        / "server"
+        / "mpa"
         / "contracts"
         / "mpa-p0"
         / "compatibility-matrix.json"

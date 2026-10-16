@@ -38,7 +38,7 @@ from tests.integrations.mpa_managed.test_agent_deployment import (
 @pytest.mark.parametrize("source", ["reference", "template", "flat"])
 @pytest.mark.parametrize("image", [None, "registry.example/mpa:pinned"])
 @pytest.mark.parametrize("split_workspaces", [False, True])
-@pytest.mark.parametrize("openviking", [False, True])
+@pytest.mark.parametrize("openviking", [False, True, "auto"])
 @pytest.mark.parametrize("studio_runtime_owner", [None, "studio-user"])
 @pytest.mark.parametrize("runtime_name", ["", "Support-Agent_01"])
 def test_network_gateway_worker_precede_runtime(
@@ -49,18 +49,24 @@ def test_network_gateway_worker_precede_runtime(
     openviking,
     studio_runtime_owner,
     runtime_name,
+    provider="volcengine",
 ):
     async def run():
         entry = Registry()
         cloud = Cloud(entry)
+        if provider == "byteplus":
+            cloud.network.zone_ids = ["ap-southeast-1a", "ap-southeast-1b"]
+            cloud.network.subnet_rows["subnet-one"]["zone_id"] = "ap-southeast-1a"
+            monkeypatch.setattr(cloud.network, "provider", provider, raising=False)
         events = []
         identity_values = {
+            "cloud_provider": provider,
             "user_pool_name": "studio-pool",
             "user_pool_client_name": "studio-client",
             "identity_callback_url": "https://studio.example.com/oauth/callback",
         }
         profile = Profile(
-            region="cn-beijing",
+            region="ap-southeast-1" if provider == "byteplus" else "cn-beijing",
             values=identity_values,
             template=template(),
             admin_url="fake",
@@ -128,9 +134,13 @@ def test_network_gateway_worker_precede_runtime(
             }
             if image is None:
                 profile.values["image"] = "registry/image:v1"
+        if openviking == "auto":
+            profile.values["model_api_key"] = "fake"
         profile = with_creation_resources(
             profile,
-            {
+            {"openvikingMode": "auto"}
+            if openviking == "auto"
+            else {
                 "openvikingUrl": "https://selected.example.test/openviking",
                 "openvikingResourceId": "ov-selected",
                 "openvikingApiKey": "selected-key",
@@ -139,6 +149,14 @@ def test_network_gateway_worker_precede_runtime(
             else {},
         )
         monkeypatch.setattr(service, "RuntimeCloud", lambda **kw: cloud)
+        if provider == "byteplus":
+            from veadk.integrations.mpa.managed import apm_key
+
+            monkeypatch.setattr(
+                apm_key,
+                "volcengine_signed_request",
+                lambda **kw: {"data": {"app_key": "test-apm-app-value"}},
+            )
         monkeypatch.setattr(service, "AgentDeploymentRegistry", lambda url: entry)
         databases = Databases()
         monkeypatch.setattr(service, "AgentDatabaseProvisioner", lambda **kw: databases)
@@ -192,20 +210,67 @@ def test_network_gateway_worker_precede_runtime(
             service,
             "GatewayCloud",
             lambda _: SimpleNamespace(
-                available_zones=AsyncMock(return_value=["cn-beijing-a", "cn-beijing-c"])
+                available_zones=AsyncMock(return_value=cloud.network.zone_ids)
             ),
         )
         monkeypatch.setattr(service, "SharedAPIGService", Gateway)
         monkeypatch.setattr(service, "ensure_worker", worker)
+        if openviking == "auto":
+
+            async def create_ov(request, *, model_api_key):
+                assert entry.mutex.locked()
+                assert events == ["identity", "gateway", "worker"]
+                assert request["VLM"]["Credentials"][0]["Source"] == "volcengine"
+                assert model_api_key == "fake"
+                if provider == "byteplus":
+                    assert request["Source"] == "volcengine"
+                    assert request["Version"] == "developer"
+                    assert (
+                        request["VLM"]["Credentials"][0]["EndpointID"]
+                        == "ep-vlm-selected"
+                    )
+                    assert (
+                        request["Embedding"]["Credentials"][0]["EndpointID"]
+                        == "ep-embedding-selected"
+                    )
+                assert "fake" not in str(entry.row["openviking_request"])
+                events.append("openviking")
+                return "ov-auto"
+
+            async def get_ov(ident):
+                return {
+                    **entry.row["openviking_request"],
+                    "ResourceID": ident,
+                    "Status": "READY",
+                }
+
+            monkeypatch.setattr(
+                service,
+                "OpenVikingCloud",
+                lambda _: SimpleNamespace(
+                    create=create_ov,
+                    get=get_ov,
+                    api_key=AsyncMock(return_value="auto-ov-key"),
+                ),
+            )
         cloud_create = cloud.create
 
         async def create(request):
-            assert events == ["identity", "gateway", "worker"]
+            assert events == ["identity", "gateway", "worker"] + (
+                ["openviking"] if openviking == "auto" else []
+            )
             assert request["Name"] == (runtime_name or "mi-123456789abc")
             assert cloud.space_creates[0]["Description"] == (
                 "Skills for MPA agent " + (runtime_name or "mi-123456789abc")
             )
             assert request["ToolId"] == "t-one"
+            if provider == "byteplus" and studio_runtime_owner is not None:
+                assert (
+                    service.env_map(request)[
+                        "OBSERVABILITY_OPENTELEMETRY_APMPLUS_API_KEY"
+                    ]
+                    == "test-apm-app-value"
+                )
             runtime_tags = {
                 item["Key"]: item["Value"] for item in request.get("Tags", [])
             }
@@ -241,6 +306,17 @@ def test_network_gateway_worker_precede_runtime(
             }
             assert openviking_env == (
                 {
+                    "OPENVIKING_URL": (
+                        "https://api.vikingdb.ap-southeast-1.bytepluses.com/openviking"
+                        if provider == "byteplus"
+                        else "https://api.vikingdb.cn-beijing.volces.com/openviking"
+                    ),
+                    "OPENVIKING_RESOURCE_ID": "ov-auto",
+                    "OPENVIKING_API_KEY": "auto-ov-key",
+                    "OPENVIKING_USER": "default",
+                }
+                if openviking == "auto"
+                else {
                     "OPENVIKING_URL": "https://selected.example.test/openviking",
                     "OPENVIKING_RESOURCE_ID": "ov-selected",
                     "OPENVIKING_API_KEY": "selected-key",
@@ -285,6 +361,7 @@ def test_network_gateway_worker_precede_runtime(
         )
         assert cloud.creates[0]["Name"] == (runtime_name or "mi-123456789abc")
         assert result["runtime_id"] == "r-agent"
+        assert "test-apm-app-value" not in str(entry.row) + str(result)
         assert result["gateway_id"] == "gw-one"
         assert cloud.runtimes[result["runtime_id"]]["ToolId"] == "t-one"
         if split_workspaces:
@@ -317,6 +394,7 @@ def test_network_gateway_worker_precede_runtime(
         {"business_workspace_id": "ws-other"},
         {"database_host": "old-business"},
         {"database_port": 6543},
+        {"business_workspace_mode": "per-agent"},
     ],
 )
 def test_retry_does_not_rebind_existing_database(tmp_path, monkeypatch, existing):
@@ -629,6 +707,18 @@ def test_tos_runtime_env_is_owned_and_contains_no_credentials():
         "MPA_CODEX_WORKER_TOS_BUCKET": "mpa-output",
     }
 
+    service.apply_tos_runtime_env(
+        env,
+        Worker(
+            image="worker:v1",
+            tos_access_key="private-ak",
+            tos_secret_key="private-sk",
+            tos_bucket="mpa-output",
+        ),
+        enabled=False,
+    )
+    assert env == {}
+
 
 @pytest.mark.parametrize(
     "settings,source_values",
@@ -666,6 +756,54 @@ async def test_explicit_profile_account_mismatch_stops_before_role(monkeypatch):
     assert stages == ["checking"]
     role.assert_not_awaited()
     identity.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("grant_failed", [False, True])
+async def test_studio_tos_grant_precedes_identity_and_propagates_failure(
+    monkeypatch, grant_failed
+):
+    from veadk.integrations.mpa.managed.config import (
+        load_studio_profile,
+        with_creation_tos,
+    )
+    from veadk.integrations.mpa.managed.iam import IamError, ROLE_NAME
+
+    monkeypatch.setenv("VEADK_MPA_CONFIG_MODEL_AGENT_API_KEY", "test-model-key")
+    profile = with_creation_tos(
+        load_studio_profile(), {"tosBucket": "agentkit-platform-output"}
+    )
+    resolve_key = AsyncMock(spec=service.resolve_model_key, return_value=profile)
+    monkeypatch.setattr(service, "resolve_model_key", resolve_key)
+    cloud = AsyncMock()
+    cloud.account_id.return_value = "123"
+    monkeypatch.setattr(service, "RuntimeCloud", lambda **kw: cloud)
+    role = AsyncMock()
+    grant = AsyncMock(side_effect=IamError("AccessDenied") if grant_failed else None)
+    identity = AsyncMock(side_effect=DeploymentError("stop after grant"))
+    monkeypatch.setattr(service, "ensure_runtime_role", role)
+    monkeypatch.setattr(service, "ensure_tos_mount_permissions", grant)
+    monkeypatch.setattr(service, "ensure_workload_identity", identity)
+    stages = []
+    with pytest.raises(
+        DeploymentError,
+        match="iamPermissionDenied" if grant_failed else "stop after grant",
+    ):
+        await service.provision(
+            profile, agent_id="mi-test", owner="user", progress=stages.append
+        )
+    resolve_key.assert_awaited_once_with(profile, cloud)
+    role.assert_awaited_once()
+    assert grant.await_args is not None
+    args, kwargs = grant.await_args
+    assert args[0].runtime is cloud
+    assert args[1:] == ("123", "agentkit-platform-output")
+    assert kwargs == {"role_name": ROLE_NAME}
+    assert stages == ["checking", "iam_role", "iam_role"]
+    if grant_failed:
+        identity.assert_not_awaited()
+    else:
+        identity.assert_awaited_once()
 
 
 @pytest.mark.parametrize("role", [None, "custom-role"])
@@ -774,4 +912,34 @@ async def test_existing_runtime_keeps_network_when_new_standard_gateway_needs_co
     assert (
         cloud.runtimes["r-existing"]["NetworkConfigurations"][1]["VpcConfiguration"]
         == original["VpcConfiguration"]
+    )
+
+
+def test_byteplus_service_reuses_agent_key_in_ov_and_injects_library_key(monkeypatch):
+    monkeypatch.setenv("OV_MODEL_API_KEY", "unused-legacy-credential")
+    monkeypatch.setenv("OV_VLM_ENDPOINT_ID", "ep-vlm-selected")
+    monkeypatch.setenv("OV_EMBEDDING_ENDPOINT_ID", "ep-embedding-selected")
+    test_network_gateway_worker_precede_runtime(
+        monkeypatch,
+        "flat",
+        None,
+        False,
+        "auto",
+        "studio-user",
+        "Support-Agent_01",
+        provider="byteplus",
+    )
+
+
+@pytest.mark.parametrize("source", ["reference", "template", "flat"])
+def test_byteplus_without_ov_strips_inherited_settings(monkeypatch, source):
+    test_network_gateway_worker_precede_runtime(
+        monkeypatch,
+        source=source,
+        image=None,
+        split_workspaces=True,
+        openviking=False,
+        studio_runtime_owner=None,
+        runtime_name="overseas-no-ov",
+        provider="byteplus",
     )

@@ -98,7 +98,7 @@ test("renders the Runtime update progress step conditionally", () => {
   );
 });
 
-test("structured Agent deployments apply MPA Profile after Runtime publish", () => {
+test("only explicit MPA deployments apply Profile after Runtime publish", () => {
   assert.match(clientSource, /export async function applyMpaProfileAfterDeployment/);
   assert.match(clientSource, /sourceProfileId = params\.sourceDraftId\?\.trim\(\)/);
   assert.match(clientSource, /`studio-draft:\$\{params\.sourceDraftId\.trim\(\)\}`/);
@@ -106,7 +106,7 @@ test("structured Agent deployments apply MPA Profile after Runtime publish", () 
   assert.match(projectPreviewSource, /applyMpaProfileAfterDeployment\(/);
   assert.match(
     projectPreviewSource,
-    /const isMpaDeployment = Boolean\(agentDraft\);[\s\S]*?const shouldRunMpaLifecycle = isMpaDeployment && !githubUpdateOffloaded/,
+    /const isMpaDeployment = agentCategory === "mpa";[\s\S]*?const shouldRunMpaLifecycle = isMpaDeployment && !githubUpdateOffloaded/,
   );
   assert.match(
     projectPreviewSource,
@@ -124,7 +124,7 @@ test("structured Agent deployments apply MPA Profile after Runtime publish", () 
     projectPreviewSource,
     /syncGithubCicdRuntime\(\{[\s\S]*?agentCategory: isMpaDeployment \? "mpa" : "general"/,
   );
-  assert.match(customCreateSource, /agentCategory: "mpa"/);
+  assert.match(customCreateSource, /agentCategory: deploymentAgentCategory\(deploymentTarget\)/);
   assert.match(
     projectPreviewSource,
     /runtimeRevision: isRuntimeUpdate \? deploymentRuntimeRevision : undefined/,
@@ -172,4 +172,12 @@ test("draws complete native radio and checkbox states after the global reset", (
     projectPreviewStyles,
     /\.pp-network-check input:checked::before,\s*\.pp-evaluation-set-option input:checked::before\s*\{[\s\S]*?rotate\(45deg\)/,
   );
+});
+
+test("quick deploy and failure tasks keep generic agents out of the MPA lifecycle", () => {
+  assert.match(customCreateSource, /if \(isMpaDeployment && mpaRuntimeId\)/);
+  assert.match(customCreateSource, /if \(isMpaDeployment && deploymentTarget\?\.mpaProfileOnly\)/);
+  assert.doesNotMatch(projectPreviewSource, /mpaProfile: Boolean\(agentDraft\)/);
+  assert.doesNotMatch(customCreateSource, /mpaProfile: true/);
+  assert.match(customCreateSource, /agentCategory=\{deploymentAgentCategory\(deploymentTarget\)\}/);
 });

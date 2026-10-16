@@ -698,3 +698,21 @@ test("reports browser storage write failures with a recovery action", () => {
     /Delete unused drafts or clear this site's storage/,
   );
 });
+
+test("deployment categories do not infer MPA from generic drafts or instance identifiers", async () => {
+  const { deploymentAgentCategory } = await import(moduleUrl);
+  assert.equal(typeof deploymentAgentCategory, "function");
+  assert.equal(deploymentAgentCategory(), "general");
+  assert.equal(deploymentAgentCategory({ mpaInstanceId: "mi-legacy" }), "general");
+  assert.equal(deploymentAgentCategory({ mpaProfileOnly: true }), "mpa");
+  assert.equal(deploymentAgentCategory({ agentCategory: "general", mpaProfileOnly: true }), "general");
+  assert.equal(deploymentAgentCategory({ agentCategory: "mpa" }), "mpa");
+  for (const category of ["general", "mpa"]) {
+    const storage = memoryStorage();
+    const item = { id: category, draft: draft({ dynamicAgentDelegation: true }), updatedAt: 1,
+      deploymentTarget: { runtimeId: "r-test", name: "test", region: "cn-beijing", agentCategory: category } };
+    writeWorkspaceDrafts(storage, "test", [item]);
+    const restored = loadWorkspaceDrafts(storage, "test")[0];
+    assert.equal(deploymentAgentCategory(restored.deploymentTarget), category);
+  }
+});

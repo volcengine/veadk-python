@@ -532,6 +532,7 @@
     "runtimeApiKeyMissing": "The Runtime did not return a usable API key",
     "loadMcpCredentialsFailed": "Failed to load MCP authentication",
     "invalidMcpCredentials": "Studio returned invalid MCP authentication data",
+    "mpaDeleteUnconfirmed": "The deletion request timed out and Runtime deletion is not confirmed. Cleanup may still be running; refresh and check again later.",
     "deleteFailed": "Delete failed ({{status}})",
     "runtimeManageForbidden": "This account cannot manage the Runtime.",
     "runtimeNotFound": "The Runtime does not exist or has been deleted.",

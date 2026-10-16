@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Alert } from "@openai/apps-sdk-ui/components/Alert";
 import { Dialog } from "@base-ui/react/dialog";
 import { useTranslation } from "react-i18next";
 import { ModalLayout } from "../../components/layouts/ModalLayout";
@@ -6,7 +7,9 @@ import { Button } from "../../components/primitives/Button";
 import { Textarea } from "../../components/primitives/Textarea";
 import {
   getMpaCreationConfig,
+  checkMpaCreationName,
   startMpaCreation,
+  listMpaCreations,
   getMpaCreation,
   cancelMpaCreation,
   type MpaCreationInput,
@@ -16,29 +19,47 @@ import {
 } from "../../adk/mpaCreation";
 import "../../components/composites/ModalButton/ModalButton.css";
 import "./MpaCreateDialog.css";
+import "../ProjectPreview.css";
 import { runtimeNameProblem } from "../../create/runtimeName";
 import type { CloudProvider } from "../../adk/cloudProvider";
 import { validOpenViking, validPgTarget } from "../../adk/mpaCreationResources";
+import { ResourcePicker, useDeploymentResourceList } from "../DeploymentResources";
 
 const PG_CONSOLE_URL =
   "https://console.volcengine.com/aidap/region:aidap+cn-beijing/";
 const OPENVIKING_CONSOLE_URL =
   "https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing/ov-6689fabdf032294/context-management?accountId=default&userId=default&projectName=default";
 
-function freshInput(region: string): MpaCreationInput {
+function defaultMaximumInstances(cloudProvider: CloudProvider): number {
+  return cloudProvider === "byteplus" ? 10 : 20;
+}
+
+function freshInput(region: string, cloudProvider: CloudProvider): MpaCreationInput {
   return {
     region,
     requestId: crypto.randomUUID(),
     name: "",
     description: "",
+    maxInstance: defaultMaximumInstances(cloudProvider),
   };
 }
 
 function withoutTosCredentials(input: MpaCreationInput): MpaCreationInput {
-  return { ...input, tosAccessKey: undefined, tosSecretKey: undefined };
+  const clean = { ...input };
+  Reflect.deleteProperty(clean, "tosAccessKey");
+  Reflect.deleteProperty(clean, "tosSecretKey");
+  return clean;
 }
 
-function initial(region: string): {
+function cleanInput(input: MpaCreationInput): MpaCreationInput {
+  const clean = withoutTosCredentials(input);
+  for (const key of Object.keys(clean) as Array<keyof MpaCreationInput>) {
+    if (clean[key] === undefined || clean[key] === "") delete clean[key];
+  }
+  return clean;
+}
+
+function initial(region: string, cloudProvider: CloudProvider): {
   input: MpaCreationInput;
   taskId?: string;
   submitted?: boolean;
@@ -58,6 +79,7 @@ function initial(region: string): {
       const draft: MpaCreationInput = {
         ...saved.input,
         name: typeof saved.input.name === "string" ? saved.input.name : "",
+        maxInstance: saved.input.maxInstance ?? defaultMaximumInstances(cloudProvider),
       };
       delete draft.agentId;
       delete draft.runtimeImage;
@@ -67,7 +89,7 @@ function initial(region: string): {
   } catch {
     /* A fresh form is safe when browser storage is unavailable. */
   }
-  return { input: freshInput(region) };
+  return { input: freshInput(region, cloudProvider) };
 }
 
 export function MpaCreateDialog({
@@ -83,8 +105,23 @@ export function MpaCreateDialog({
 }) {
   const { t } = useTranslation("ui");
   const key = (name: string) => `myAgents.mpaCreate.${name}`;
-  const [saved] = useState(() => initial(region));
+  const defaultMaximum = defaultMaximumInstances(cloudProvider);
+  const [saved] = useState(() => initial(region, cloudProvider));
+  const hasBrowserDraft = Boolean(
+    saved.step ||
+      saved.input.name ||
+      saved.input.description ||
+      saved.input.agentId ||
+      saved.input.pgHost ||
+      saved.input.pgPort ||
+      saved.input.openvikingUrl ||
+      saved.input.openvikingResourceId ||
+      saved.input.tosBucket,
+  );
   const [input, setInput] = useState(saved.input);
+  const [maximumInput, setMaximumInput] = useState(
+    String(saved.input.maxInstance ?? defaultMaximum),
+  );
   const [openvikingApiKey, setOpenvikingApiKey] = useState("");
   const [step, setStep] = useState(
     saved.submitted || saved.taskId
@@ -95,6 +132,8 @@ export function MpaCreateDialog({
   const [submitted, setSubmitted] = useState(
     Boolean(saved.submitted || saved.taskId),
   );
+  const submittedIntent = useRef(submitted);
+  submittedIntent.current = submitted;
   const [task, setTask] = useState<MpaCreationTask | null>(null);
   const [config, setConfig] = useState<MpaCreationConfig | null>(null);
   const [loading, setLoading] = useState(true),
@@ -106,6 +145,7 @@ export function MpaCreateDialog({
     finished = useRef(false),
     alive = useRef(true);
   const action = useRef<AbortController | null>(null);
+  const serverRecoveryAttempted = useRef(false);
   const created = useRef(onCreated);
   created.current = onCreated;
   const running = task?.state === "running" || task?.state === "cancelling";
@@ -117,24 +157,38 @@ export function MpaCreateDialog({
         t(`validation.runtimeName.${problem}`, { ns: "create" }),
       );
   const nameValid = !nameError;
+  const legacyScaling = submitted && input.maxInstance === undefined;
+  const maximumValid =
+    legacyScaling ||
+    (maximumInput.trim() !== "" &&
+      Number.isSafeInteger(Number(maximumInput)) &&
+      Number(maximumInput) >= 1);
   const autoPg = config?.postgresMode === "auto";
+  const aidbPg =
+    (submitted ? input.businessDatabaseName : config?.businessDatabaseName) ===
+    "aidb";
+  const perAgentPg =
+    (submitted
+      ? input.businessWorkspaceMode
+      : config?.businessWorkspaceMode) === "per-agent";
   const pgValid = autoPg
     ? !input.pgHost && !input.pgPort
     : validPgTarget(input.pgHost, input.pgPort);
-  const openvikingValid = validOpenViking(
-    input.openvikingUrl,
-    input.openvikingResourceId,
-    openvikingApiKey,
-  );
-  const tosValues = [
-    input.tosAccessKey,
-    input.tosSecretKey,
-    input.tosBucket,
-  ].map((value) => value?.trim() ?? "");
-  const tosValid =
-    tosValues.every(Boolean) || tosValues.every((value) => !value);
+  const autoOpenviking = input.openvikingMode === "auto";
+  const openvikingValid =
+    autoOpenviking ||
+    validOpenViking(
+      input.openvikingUrl,
+      input.openvikingResourceId,
+      openvikingApiKey,
+    );
+  const tosBucket = input.tosBucket?.trim() ?? "";
+  const tosValid = !tosBucket || (tosBucket.startsWith("agentkit-platform-") && /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/.test(tosBucket));
   const tosLocked =
     busy || (submitted && (!task || running || task.state === "succeeded"));
+  const tosList = useDeploymentResourceList(
+    step === 2 && !tosLocked ? { kind: "tos-bucket", region, namePrefix: "agentkit-platform-" } : null,
+  );
   useEffect(() => {
     if (submitted || taskId) return;
     try {
@@ -161,6 +215,45 @@ export function MpaCreateDialog({
       /* Server identity still makes retries idempotent. */
     }
   }
+  function restoreTask(value: MpaCreationTask) {
+    const restoredInput: MpaCreationInput = cleanInput({
+      requestId: value.requestId,
+      agentId: value.agentId,
+      name: value.name,
+      description: value.description ?? "",
+      maxInstance: value.maxInstance ?? defaultMaximum,
+      region: value.region,
+      runtimeImage: value.runtimeImage,
+      workerImage: value.workerImage,
+      pgHost: value.pgHost,
+      pgPort: value.pgPort,
+      openvikingUrl: value.openvikingUrl,
+      openvikingResourceId: value.openvikingResourceId,
+      openvikingMode: value.openvikingMode,
+      businessWorkspaceMode: value.businessWorkspaceMode,
+      businessDatabaseName: value.businessDatabaseName,
+      tosBucket: value.tosBucket,
+    });
+    setInput(restoredInput);
+    setMaximumInput(String(restoredInput.maxInstance ?? defaultMaximum));
+    setStep(2);
+    setSubmitted(true);
+    setTaskId(value.taskId);
+    setTask(value);
+    try {
+      sessionStorage.setItem(
+        `mpa-create:${region}`,
+        JSON.stringify({
+          input: restoredInput,
+          taskId: value.taskId,
+          submitted: true,
+          step: 2,
+        }),
+      );
+    } catch {
+      /* Server task storage remains the source of truth. */
+    }
+  }
   useEffect(() => {
     alive.current = true;
     return () => {
@@ -168,6 +261,37 @@ export function MpaCreateDialog({
       action.current?.abort();
     };
   }, []);
+  useEffect(() => {
+    if (
+      serverRecoveryAttempted.current ||
+      taskId ||
+      saved.taskId ||
+      (hasBrowserDraft && !submitted && !saved.submitted)
+    )
+      return;
+    serverRecoveryAttempted.current = true;
+    const controller = new AbortController();
+    void listMpaCreations(region, controller.signal)
+      .then((value) => {
+        if (controller.signal.aborted || !alive.current) return;
+        const restored =
+          value.tasks.find((item) => item.requestId === input.requestId) ??
+          value.tasks.find((item) => item.state !== "succeeded");
+        if (restored) restoreTask(restored);
+      })
+      .catch(() => {
+        /* Local task recovery is best-effort; config loading still drives errors. */
+      });
+    return () => controller.abort();
+  }, [
+    hasBrowserDraft,
+    input.requestId,
+    region,
+    saved.submitted,
+    saved.taskId,
+    submitted,
+    taskId,
+  ]);
   useEffect(() => {
     const controller = new AbortController();
     setLoading(true);
@@ -177,12 +301,26 @@ export function MpaCreateDialog({
           setConfig(value);
           if (
             value.configured &&
+            !submittedIntent.current &&
             !saved.submitted &&
             !saved.taskId &&
             !lock.current
           ) {
             setInput((previous) => ({
               ...previous,
+              ...(value.businessDatabaseName === "aidb"
+                ? { businessDatabaseName: "aidb" as const }
+                : {}),
+              ...(value.businessWorkspaceMode === "per-agent"
+                ? { businessWorkspaceMode: "per-agent" as const }
+                : {}),
+              ...(value.openvikingMode === "auto"
+                ? {
+                    openvikingMode: "auto" as const,
+                    openvikingUrl: undefined,
+                    openvikingResourceId: undefined,
+                  }
+                : {}),
               pgHost:
                 value.postgresMode === "auto"
                   ? ""
@@ -202,7 +340,7 @@ export function MpaCreateDialog({
         if (!controller.signal.aborted) setLoading(false);
       });
     return () => controller.abort();
-  }, [region, revision, t]);
+  }, [region, revision, cloudProvider, t]);
   useEffect(() => {
     if (!taskId) return;
     const controller = new AbortController();
@@ -235,11 +373,62 @@ export function MpaCreateDialog({
       clearTimeout(timer);
     };
   }, [taskId, region, revision, t]);
+  function creationError(reason: unknown): string {
+    if (
+      reason instanceof MpaCreationRequestError &&
+      (reason.code === "runtimeNameTaken" ||
+        reason.code === "runtimeNameCheckFailed")
+    )
+      return t(key(reason.code));
+    return reason instanceof Error ? reason.message : t(key("creationFailed"));
+  }
+  function taskErrorKey(value: MpaCreationTask): string {
+    if (value.latestDiagnostic?.category === "configuration_changed")
+      return "configurationChanged";
+    return value.error || "creationFailed";
+  }
+  async function nextStep() {
+    if (lock.current || !nameValid || !maximumValid) return;
+    if (step !== 0 || submitted || input.businessDatabaseName !== "aidb") {
+      setStep((previous) => previous + 1);
+      return;
+    }
+    if (loading || !config?.configured) return;
+    lock.current = true;
+    setBusy(true);
+    setError("");
+    const controller = new AbortController();
+    action.current = controller;
+    try {
+      const result = await checkMpaCreationName(
+        {
+          requestId: input.requestId,
+          agentId: input.agentId,
+          name: input.name?.trim(),
+          region,
+        },
+        controller.signal,
+      );
+      if (!alive.current || controller.signal.aborted) return;
+      if (!result.available) {
+        setError(t(key("runtimeNameTaken")));
+        return;
+      }
+      setStep(1);
+    } catch (reason) {
+      if (alive.current && !controller.signal.aborted)
+        setError(creationError(reason));
+    } finally {
+      lock.current = false;
+      if (alive.current) setBusy(false);
+    }
+  }
   async function submit() {
     if (
       lock.current ||
       !config?.configured ||
       !nameValid ||
+      !maximumValid ||
       !pgValid ||
       !openvikingValid ||
       !tosValid ||
@@ -250,6 +439,7 @@ export function MpaCreateDialog({
       return;
     lock.current = true;
     setBusy(true);
+    const wasSubmitted = submitted;
     setSubmitted(true);
     setError("");
     persist(taskId);
@@ -259,6 +449,7 @@ export function MpaCreateDialog({
       const value = await startMpaCreation(
         {
           ...input,
+          ...(legacyScaling ? {} : { maxInstance: Number(maximumInput) }),
           ...(input.name === undefined ? {} : { name: input.name.trim() }),
           openvikingApiKey,
         },
@@ -273,13 +464,15 @@ export function MpaCreateDialog({
       if (alive.current && !controller.signal.aborted) {
         if (
           reason instanceof MpaCreationRequestError &&
-          (reason.status === 400 || reason.status === 422)
+          (reason.status === 400 ||
+            reason.status === 422 ||
+            (!wasSubmitted &&
+              (reason.code === "runtimeNameTaken" ||
+                reason.code === "runtimeNameCheckFailed")))
         ) {
           setSubmitted(false);
         }
-        setError(
-          reason instanceof Error ? reason.message : t(key("creationFailed")),
-        );
+        setError(creationError(reason));
       }
     } finally {
       lock.current = false;
@@ -306,7 +499,16 @@ export function MpaCreateDialog({
   }
   function startAnotherAgent() {
     const nextInput: MpaCreationInput = {
-      ...freshInput(region),
+      ...freshInput(region, cloudProvider),
+      ...(config?.businessDatabaseName === "aidb"
+        ? { businessDatabaseName: "aidb" as const }
+        : {}),
+      ...(config?.businessWorkspaceMode === "per-agent"
+        ? { businessWorkspaceMode: "per-agent" as const }
+        : {}),
+      ...(config?.openvikingMode === "auto"
+        ? { openvikingMode: "auto" as const }
+        : {}),
       pgHost: autoPg ? "" : (config?.pgHost ?? ""),
       pgPort: autoPg ? "" : (config?.pgPort ?? ""),
     };
@@ -319,6 +521,7 @@ export function MpaCreateDialog({
       /* The new in-memory draft remains usable without browser storage. */
     }
     setInput(nextInput);
+    setMaximumInput(String(defaultMaximum));
     setOpenvikingApiKey("");
     setStep(0);
     setTaskId(undefined);
@@ -372,7 +575,9 @@ export function MpaCreateDialog({
                             busy ||
                             (index > step &&
                               !submitted &&
-                              (!nameValid || (index === 2 && !pgValid)))
+                              (!nameValid ||
+                                !maximumValid ||
+                                (index === 2 && !pgValid)))
                           }
                           onClick={() => setStep(index)}
                         >
@@ -404,9 +609,10 @@ export function MpaCreateDialog({
                         autoComplete="off"
                         aria-invalid={Boolean(nameError)}
                         aria-describedby="mpa-name-help"
-                        onChange={(event) =>
-                          setInput({ ...input, name: event.target.value })
-                        }
+                        onChange={(event) => {
+                          setInput({ ...input, name: event.target.value });
+                          setError("");
+                        }}
                       />
                       <p
                         id="mpa-name-help"
@@ -431,6 +637,42 @@ export function MpaCreateDialog({
                       />
                     </label>
 
+                    {!legacyScaling && (
+                      <label>
+                        {t(key("maxInstance"))}
+                        <input
+                          name="maxInstance"
+                          type="number"
+                          min={1}
+                          max={Number.MAX_SAFE_INTEGER}
+                          step={1}
+                          value={maximumInput}
+                          disabled={busy || submitted}
+                          required
+                          aria-invalid={!maximumValid}
+                          aria-describedby="mpa-maximum-help"
+                          onChange={(event) => {
+                            const value = event.target.value;
+                            setMaximumInput(value);
+                            setInput({ ...input, maxInstance: Number(value) });
+                          }}
+                        />
+                        <p
+                          id="mpa-maximum-help"
+                          role={maximumValid ? undefined : "alert"}
+                        >
+                          {t(
+                            key(
+                              maximumValid
+                                ? "maxInstanceHelp"
+                                : "maxInstanceInvalid",
+                            ),
+                            { maximum: defaultMaximum },
+                          )}
+                        </p>
+                      </label>
+                    )}
+
                     <section
                       className="mpa-create-plan"
                       aria-label={t(key("plan"))}
@@ -450,7 +692,11 @@ export function MpaCreateDialog({
                       {t(
                         key(
                           autoPg
-                            ? "pgAutoDescription"
+                            ? aidbPg
+                              ? "pgAidbDescription"
+                              : perAgentPg
+                                ? "pgPerAgentDescription"
+                                : "pgAutoDescription"
                             : config?.postgresLayout === "split-workspaces"
                               ? "pgSplitDescription"
                               : "pgDescription",
@@ -517,12 +763,24 @@ export function MpaCreateDialog({
                 )}
                 {step === 2 && (
                   <>
-                    <p>{t(key("openvikingDescription"))}</p>
+                    <p>
+                      {t(
+                        key(
+                          autoOpenviking
+                            ? cloudProvider === "byteplus"
+                              ? "openvikingAutoByteplusDescription"
+                              : "openvikingAutoDescription"
+                            : "openvikingDescription",
+                        ),
+                      )}
+                    </p>
                     <a
                       href={
                         cloudProvider === "byteplus"
                           ? "https://console.byteplus.com/vikingdb/"
-                          : OPENVIKING_CONSOLE_URL
+                          : autoOpenviking
+                            ? "https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing/"
+                            : OPENVIKING_CONSOLE_URL
                       }
                       target="_blank"
                       rel="noopener noreferrer"
@@ -535,91 +793,100 @@ export function MpaCreateDialog({
                         ),
                       )}
                     </a>
-                    <label>
-                      {t(key("openvikingUrl"))}
-                      <input
-                        name="openvikingUrl"
-                        value={input.openvikingUrl ?? ""}
-                        maxLength={1024}
-                        disabled={busy || submitted}
-                        autoComplete="off"
-                        spellCheck={false}
-                        aria-invalid={!openvikingValid}
-                        onChange={(event) =>
-                          setInput((previous) => ({
-                            ...previous,
-                            openvikingUrl: event.target.value,
-                          }))
-                        }
-                      />
-                    </label>
-                    <label>
-                      {t(key("openvikingResourceId"))}
-                      <input
-                        name="openvikingResourceId"
-                        value={input.openvikingResourceId ?? ""}
-                        maxLength={128}
-                        disabled={busy || submitted}
-                        autoComplete="off"
-                        spellCheck={false}
-                        aria-invalid={!openvikingValid}
-                        onChange={(event) =>
-                          setInput((previous) => ({
-                            ...previous,
-                            openvikingResourceId: event.target.value,
-                          }))
-                        }
-                      />
-                    </label>
-                    <label>
-                      {t(key("openvikingApiKey"))}
-                      <input
-                        type="password"
-                        name="openvikingApiKey"
-                        value={openvikingApiKey}
-                        maxLength={512}
-                        disabled={
-                          busy || running || task?.state === "succeeded"
-                        }
-                        autoComplete="off"
-                        spellCheck={false}
-                        onChange={(event) =>
-                          setOpenvikingApiKey(event.target.value)
-                        }
-                      />
-                    </label>
-                    {!openvikingValid && (
-                      <p role="alert">{t(key("openvikingInvalid"))}</p>
-                    )}
-                    <p>{t(key("openvikingCredentials"))}</p>
-                    <fieldset className="mpa-create-tos">
-                      <legend>{t(key("tosTitle"))}</legend>
-                      <p>{t(key("tosDescription"))}</p>
-                      {(
-                        ["tosAccessKey", "tosSecretKey", "tosBucket"] as const
-                      ).map((field) => (
-                        <label key={field}>
-                          {t(key(field))}
+                    {autoOpenviking ? (
+                      <p>
+                        {t(
+                          key(
+                            cloudProvider === "byteplus"
+                              ? "openvikingAutoByteplusRequirements"
+                              : "openvikingAutoBilling",
+                          ),
+                        )}
+                      </p>
+                    ) : (
+                      <>
+                        <label>
+                          {t(key("openvikingUrl"))}
                           <input
-                            name={field}
-                            type={field === "tosBucket" ? "text" : "password"}
-                            value={input[field] ?? ""}
-                            maxLength={256}
-                            disabled={tosLocked}
-                            autoComplete={
-                              field === "tosBucket" ? "off" : "new-password"
-                            }
+                            name="openvikingUrl"
+                            value={input.openvikingUrl ?? ""}
+                            maxLength={1024}
+                            disabled={busy || submitted}
+                            autoComplete="off"
                             spellCheck={false}
-                            aria-invalid={!tosValid}
+                            aria-invalid={!openvikingValid}
                             onChange={(event) =>
                               setInput((previous) => ({
                                 ...previous,
-                                [field]: event.target.value,
+                                openvikingUrl: event.target.value,
                               }))
                             }
                           />
                         </label>
-                      ))}
+                        <label>
+                          {t(key("openvikingResourceId"))}
+                          <input
+                            name="openvikingResourceId"
+                            value={input.openvikingResourceId ?? ""}
+                            maxLength={128}
+                            disabled={busy || submitted}
+                            autoComplete="off"
+                            spellCheck={false}
+                            aria-invalid={!openvikingValid}
+                            onChange={(event) =>
+                              setInput((previous) => ({
+                                ...previous,
+                                openvikingResourceId: event.target.value,
+                              }))
+                            }
+                          />
+                        </label>
+                        <label>
+                          {t(key("openvikingApiKey"))}
+                          <input
+                            type="password"
+                            name="openvikingApiKey"
+                            value={openvikingApiKey}
+                            maxLength={512}
+                            disabled={
+                              busy || running || task?.state === "succeeded"
+                            }
+                            autoComplete="off"
+                            spellCheck={false}
+                            onChange={(event) =>
+                              setOpenvikingApiKey(event.target.value)
+                            }
+                          />
+                        </label>
+                        {!openvikingValid && (
+                          <p role="alert">{t(key("openvikingInvalid"))}</p>
+                        )}
+                        <p>{t(key("openvikingCredentials"))}</p>
+                      </>
+                    )}
+                    <fieldset className="mpa-create-tos">
+                      <legend>{t(key("tosTitle"))}</legend>
+                      <p>{t(key("tosDescription"))}</p>
+                      <div>
+                        <span>{t(key("tosBucket"))}</span>
+                        <ResourcePicker
+                          ariaLabel={t(key("tosBucket"))}
+                          value={tosBucket}
+                          valueLabel={tosBucket}
+                          valueField="name"
+                          state={tosList}
+                          disabled={tosLocked}
+                          onChange={(resource) => setInput((previous) => ({
+                            ...previous, tosBucket: resource.name,
+                          }))}
+                        />
+                      </div>
+                      {tosBucket && (
+                        <Button variant="outline" disabled={tosLocked}
+                          onClick={() => setInput((previous) => ({ ...previous, tosBucket: "" }))}>
+                          {t(key("tosDisable"))}
+                        </Button>
+                      )}
                       {!tosValid && <p role="alert">{t(key("tosInvalid"))}</p>}
                       <p>{t(key("tosCredentials"))}</p>
                     </fieldset>
@@ -656,7 +923,15 @@ export function MpaCreateDialog({
                       </p>
                     )}
                     {task.state === "failed" || task.state === "cancelled" ? (
-                      <p>{t(key(task.error || "creationFailed"))}</p>
+                      task.error === "runtimeNameTaken" ? (
+                        <Alert
+                          color="danger"
+                          variant="soft"
+                          description={t(key(task.error))}
+                        />
+                      ) : (
+                        <p>{t(key(taskErrorKey(task)))}</p>
+                      )
                     ) : null}
                     {task.result?.runtime_id && (
                       <p>Runtime ID：{task.result.runtime_id}</p>
@@ -671,7 +946,9 @@ export function MpaCreateDialog({
                 {autoPg && !pgValid && (
                   <p role="alert">{t(key("pgModeChanged"))}</p>
                 )}
-                {error && <p role="alert">{error}</p>}
+                {error && (
+                  <Alert color="danger" variant="soft" description={error} />
+                )}
                 {running && <p>{t(key("background"))}</p>}
                 {submitted && <p>{t(key("newAgentDescription"))}</p>}
                 {confirmCancel ? (
@@ -729,10 +1006,11 @@ export function MpaCreateDialog({
                       <Button
                         disabled={
                           busy ||
-                          (step === 0 && !nameValid) ||
+                          (step === 0 && (!nameValid || !maximumValid)) ||
                           (step === 1 && !pgValid)
                         }
-                        onClick={() => setStep((previous) => previous + 1)}
+                        onClick={() => void nextStep()}
+                        loading={busy}
                       >
                         {t(key("next"))}
                       </Button>
@@ -743,13 +1021,14 @@ export function MpaCreateDialog({
                           loading ||
                           !config?.configured ||
                           !nameValid ||
+                          !maximumValid ||
                           !pgValid ||
                           !openvikingValid ||
                           !tosValid
                         }
                         onClick={() => void submit()}
                       >
-                        {t(key(task ? "retry" : "submit"))}
+                        {t(key(task || submitted ? "retry" : "submit"))}
                       </Button>
                     ) : null}
                   </div>

@@ -47,6 +47,7 @@ import {
   emptyDraft,
 } from "./types";
 import { createT } from "./i18n";
+import { deploymentAgentCategory } from "./agentDraftStorage";
 import {
   HARNESS_SIDECAR_OPTIONS,
   HARNESS_SIDECAR_OPTION_GROUPS,
@@ -3946,6 +3947,7 @@ interface CustomCreateProps extends CreateModeProps {
   /** Existing Runtime target when editing an Agent from the library. */
   deploymentTarget?: {
     runtimeId: string;
+    agentCategory?: "general" | "mpa";
     mpaInstanceId?: string;
     name: string;
     region: string;
@@ -3990,6 +3992,7 @@ export function CustomCreate({
   onDiscard,
 }: CustomCreateProps) {
   const { t } = useTranslation("create");
+  const isMpaDeployment = deploymentAgentCategory(deploymentTarget) === "mpa";
   void onCreate; // outcome is the in-pane project preview, not a navigation
   void onDiscard; // the discard action is intentionally hidden in this flow
   const isVulcanCreation =
@@ -5119,7 +5122,7 @@ export function CustomCreate({
         runtimeId: deploymentTarget?.runtimeId,
         runtimeName: options?.runtimeName ?? deploymentRuntimeName,
         appName: deploymentTarget?.appName,
-        agentCategory: "mpa",
+        agentCategory: deploymentAgentCategory(deploymentTarget),
         editMode: deploymentTarget?.editMode,
         draft:
           deploymentTarget || mcpGatewayManaged ? codegenDraft(draft) : undefined,
@@ -5324,8 +5327,8 @@ export function CustomCreate({
         region: deploymentTarget?.region ?? deployRegion,
         startedAt,
         agentDraft: deploymentDraft,
-        mpaProfile: true,
-        mpaSmoke: !deploymentTarget,
+        mpaProfile: isMpaDeployment,
+        mpaSmoke: isMpaDeployment && !deploymentTarget,
       };
       const initialTask: DeploymentTaskUpdate = {
         ...taskBase,
@@ -5339,7 +5342,7 @@ export function CustomCreate({
       onDeploymentTaskChange?.(initialTask);
       onDeploymentStarted?.(initialTask);
 
-      if (deploymentTarget?.mpaProfileOnly) {
+      if (isMpaDeployment && deploymentTarget?.mpaProfileOnly) {
         latestPhase = "profile_applying";
         latestLabel = t("traditional.deployment.stages.applyMpaProfile");
         latestMessage = t("traditional.deployment.applyingMpaProfile");
@@ -5356,7 +5359,7 @@ export function CustomCreate({
           label: latestLabel,
           message: latestMessage,
           pct: 0,
-          mpaProfile: true,
+          mpaProfile: isMpaDeployment,
           mpaSmoke: false,
         });
         const operationKind = deploymentTarget.etag ? "update" : "create";
@@ -5398,7 +5401,7 @@ export function CustomCreate({
           label: t("traditional.deployment.complete"),
           message: t("traditional.deployment.mpaProfileApplied"),
           pct: 100,
-          mpaProfile: true,
+          mpaProfile: isMpaDeployment,
           mpaSmoke: false,
         });
         await onDeploymentComplete?.({
@@ -5476,7 +5479,7 @@ export function CustomCreate({
       const mpaRegion = result.region || deploymentTarget?.region || deployRegion;
       latestRuntimeId = mpaRuntimeId || latestRuntimeId;
       latestRegion = mpaRegion;
-      if (mpaRuntimeId) {
+      if (isMpaDeployment && mpaRuntimeId) {
         latestPhase = "profile_applying";
         latestLabel = t("traditional.deployment.stages.applyMpaProfile");
         latestMessage = t("traditional.deployment.applyingMpaProfile");
@@ -5496,8 +5499,8 @@ export function CustomCreate({
           label: latestLabel,
           message: latestMessage,
           pct: 0,
-          mpaProfile: true,
-          mpaSmoke: !deploymentTarget,
+          mpaProfile: isMpaDeployment,
+          mpaSmoke: isMpaDeployment && !deploymentTarget,
         });
         const mpaOperation = await applyMpaProfileAfterDeployment({
           draft: deploymentDraft,
@@ -5563,8 +5566,8 @@ export function CustomCreate({
                   : t("traditional.deployment.failed"),
                 message: retried.safeErrorCode || undefined,
                 pct: 100,
-                mpaProfile: true,
-                mpaSmoke: !deploymentTarget,
+                mpaProfile: isMpaDeployment,
+                mpaSmoke: isMpaDeployment && !deploymentTarget,
                 operationId: retried.operationId,
               });
               if (retried.status !== "succeeded") {
@@ -5599,7 +5602,7 @@ export function CustomCreate({
             label: latestLabel,
             message: latestMessage,
             pct: 100,
-            mpaProfile: true,
+            mpaProfile: isMpaDeployment,
             mpaSmoke: true,
           });
           latestPhase = "runnable";
@@ -5633,7 +5636,7 @@ export function CustomCreate({
           ? t("traditional.deployment.mpaReady")
           : completeResult.warnings?.join("；"),
         pct: 100,
-        mpaProfile: true,
+        mpaProfile: isMpaDeployment,
         mpaSmoke: Boolean(completeResult.mpaOperation && !deploymentTarget),
       });
       await onDeploymentComplete?.(completeResult);
@@ -5656,8 +5659,8 @@ export function CustomCreate({
         phase: latestPhase,
         label: t("traditional.deployment.failed"),
         message,
-        mpaProfile: true,
-        mpaSmoke: !deploymentTarget,
+        mpaProfile: isMpaDeployment,
+        mpaSmoke: isMpaDeployment && !deploymentTarget,
         operationId: undefined,
         retry: failedMpaRetry ?? (() => deployFromNewWorkbench(deploymentOptions)),
       };
@@ -5779,7 +5782,7 @@ export function CustomCreate({
         deployRegion={deployRegion}
         runtimeName={deploymentRuntimeName}
         isRuntimeUpdate={Boolean(deploymentTarget)}
-        profileOnly={deploymentTarget?.mpaProfileOnly}
+        profileOnly={isMpaDeployment && deploymentTarget?.mpaProfileOnly}
         deploying={newWorkbenchDeploying}
         deployStage={newWorkbenchDeployStage}
         deployError={newWorkbenchDeployError}
@@ -6865,6 +6868,7 @@ export function CustomCreate({
                 cloudProvider={cloudProvider}
                 project={project}
                 agentDraft={draft}
+                agentCategory={deploymentAgentCategory(deploymentTarget)}
                 agentName={draft.name || t("traditional.basic.unnamedAgent")}
                 agentCount={countDraftAgents(draft)}
                 releaseConfiguration={

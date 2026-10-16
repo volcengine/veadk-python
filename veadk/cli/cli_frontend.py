@@ -111,6 +111,7 @@ from veadk.utils.cloud_provider import (
     default_region,
     default_vefaas_application_template_id,
     normalize_cloud_provider,
+    tag_openapi_host,
 )
 from veadk.utils.logger import get_logger
 
@@ -10061,6 +10062,12 @@ def _run_frontend_server(
             configuration.session_token = token or ""
             configuration.region = region
             configuration.client_side_validation = True
+            if provider == "byteplus":
+                setattr(
+                    configuration,
+                    "host",
+                    f"https://{tag_openapi_host(provider)}",
+                )
             client = volcenginesdktag.TAGApi(volcenginesdkcore.ApiClient(configuration))
             response = client.get_resources(
                 volcenginesdktag.GetResourcesRequest(
@@ -10116,6 +10123,12 @@ def _run_frontend_server(
             configuration.session_token = token or ""
             configuration.region = region
             configuration.client_side_validation = True
+            if provider == "byteplus":
+                setattr(
+                    configuration,
+                    "host",
+                    f"https://{tag_openapi_host(provider)}",
+                )
             client = volcenginesdktag.TAGApi(volcenginesdkcore.ApiClient(configuration))
             request = volcenginesdktag.GetResourcesRequest(
                 max_results=max(1, min(max_results, 100)),
@@ -10778,6 +10791,42 @@ def _run_frontend_server(
             logger.error(f"list my-runtimes failed: {e}", exc_info=True)
             raise HTTPException(status_code=502, detail=str(e))
 
+    from frontend.server.mpa_deletion_status import mount_mpa_deletion_status
+
+    def _mpa_deletion_runtime_page(region: str, token: str) -> dict:
+        from agentkit.sdk.runtime import types as _rt
+        from agentkit.sdk.runtime.client import AgentkitRuntimeClient
+
+        ak, sk, svc_token = _resolve_ve_credentials()
+        client = AgentkitRuntimeClient(
+            access_key=ak, secret_key=sk, session_token=svc_token or "", region=region
+        )
+        response = client.list_runtimes(
+            _rt.ListRuntimesRequest(PageSize=100, NextToken=token or None)
+        )
+        return {
+            "AgentKitRuntimes": [
+                item.model_dump(by_alias=True, exclude_none=True)
+                for item in response.agent_kit_runtimes or []
+            ],
+            "NextToken": response.next_token,
+        }
+
+    def _mpa_deletion_owner(request: Request) -> str:
+        principal = _require_agent_management(request)
+        return str(principal.owner_id if principal is not None else "local")
+
+    remember_mpa_deletion = mount_mpa_deletion_status(
+        app,
+        owner=_mpa_deletion_owner,
+        get_runtime=lambda request, runtime_id, region: _authorized_runtime(
+            request, runtime_id, region, managed_only=True, coded_access_error=True
+        ),
+        list_page=_mpa_deletion_runtime_page,
+        credentials=_resolve_ve_credentials,
+        region=_coerce_cloud_region,
+    )
+
     @app.post("/web/delete-runtime")
     async def _web_delete_runtime(request: Request):
         """Delete an AgentKit runtime by id (used by the '管理 Agent' view)."""
@@ -10797,16 +10846,14 @@ def _run_frontend_server(
             AgentReviewService.require_editable(runtime)
             runtime_tags = _runtime_tags(runtime)
             if _runtime_agent_category(runtime, runtime_tags) == "mpa":
+                remember_mpa_deletion(request, runtime_id, region)
                 await _delete_mpa_runtime_with_preview_guard(
                     request=request,
                     runtime_id=runtime_id,
                     region=region,
                     runtime=runtime,
-                    mpa_instance_id=str(
-                        data.get("mpaInstanceId")
-                        or _runtime_mpa_instance_id(runtime, runtime_tags)
-                        or runtime_id
-                    ),
+                    mpa_instance_id=_runtime_mpa_instance_id(runtime, runtime_tags)
+                    or runtime_id,
                     owner=str(principal.owner_id if principal is not None else "local"),
                 )
                 return {"success": True}
@@ -12309,6 +12356,67 @@ def _run_frontend_server(
         allow_in_memory=dev,
     )
 
+    from contextlib import asynccontextmanager
+
+    from veadk.integrations.mpa.managed.credentials import Credentials
+    from veadk.integrations.mpa.managed.deletion import (
+        ResourceDeletionError,
+        owned_resource_cleanup,
+    )
+    from veadk.integrations.mpa.managed.runtime import RuntimeCloud
+
+    @asynccontextmanager
+    async def _mpa_resource_cleanup(runtime: Any, agent_id: str, region: str):
+        snapshot = {
+            "RuntimeId": str(getattr(runtime, "runtime_id", "") or ""),
+            "ToolId": str(getattr(runtime, "tool_id", "") or ""),
+            "ProjectName": str(getattr(runtime, "project_name", "") or "default"),
+            "Envs": [
+                {"Key": key, "Value": value}
+                for key, value in _runtime_env_map(runtime).items()
+            ],
+        }
+
+        def credentials():
+            ak, sk, token = _resolve_ve_credentials()
+            return Credentials(ak, sk, token or "")
+
+        cloud = RuntimeCloud(
+            region=region,
+            credential_file="",
+            provider=provider,
+            credentials=credentials,
+            cache_identity=True,
+        )
+        try:
+            async with owned_resource_cleanup(
+                runtime=snapshot, agent_id=agent_id, region=region, cloud=cloud
+            ) as cleanup:
+                yield cleanup
+        except (HTTPException, MpaRuntimeError):
+            raise
+        except ResourceDeletionError as error:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "mpa_resource_cleanup_failed",
+                    "message": str(error),
+                    "stage": error.stage,
+                },
+            ) from None
+        except Exception:
+            raise HTTPException(
+                status_code=502,
+                detail={
+                    "code": "mpa_resource_cleanup_failed",
+                    "message": "Unable to verify MPA resource ownership; check registry and cloud permissions, then retry.",
+                },
+            ) from None
+
+    async def _mpa_delete_resources_preview(runtime: Any, agent_id: str, region: str):
+        async with _mpa_resource_cleanup(runtime, agent_id, region) as cleanup:
+            return await cleanup.preview()
+
     async def _delete_mpa_runtime_with_preview_guard(
         *,
         request: Request,
@@ -12333,30 +12441,14 @@ def _run_frontend_server(
             owner,
             mpa_instance_id,
         )
-        profile: dict[str, Any] | None = None
-        sessions: list[Any] = []
+        profile = None
         blockers: list[str] = []
-        try:
-            profile_result = await mpa_runtime_client.profile_status(
-                endpoint=endpoint,
-                mpa_instance_id=mpa_instance_id,
-                bearer_token=runtime_bearer,
-            )
-            profile = (
-                profile_result.model_dump(mode="json", by_alias=True)
-                if hasattr(profile_result, "model_dump")
-                else dict(profile_result)
-            )
-            sessions = await mpa_runtime_client.list_sessions(
-                endpoint=endpoint,
-                bearer_token=runtime_bearer,
-                include_a2a=True,
-            )
-        except MpaRuntimeError as error:
-            if error.status_code == 404:
-                blockers.append("orphan_runtime")
-            else:
-                raise
+        sessions = await mpa_runtime_client.list_sessions(
+            endpoint=endpoint,
+            bearer_token=runtime_bearer,
+            include_a2a=True,
+            user_id=owner,
+        )
         session_payloads = [_session_payload(session) for session in sessions]
         active_sessions = [
             item
@@ -12365,9 +12457,7 @@ def _run_frontend_server(
         ]
         if _operation_blocks_delete(
             active_operation,
-            binding_status=(
-                "orphan_runtime" if "orphan_runtime" in blockers else "bound"
-            ),
+            binding_status="bound",
             profile=profile,
         ):
             blockers.append("active_operation")
@@ -12376,9 +12466,7 @@ def _run_frontend_server(
         if blockers:
             detail = _delete_preview_payload(
                 mpa_instance_id=mpa_instance_id,
-                binding_status=(
-                    "orphan_runtime" if "orphan_runtime" in blockers else "bound"
-                ),
+                binding_status="bound",
                 runtime={
                     "runtimeId": runtime_id,
                     "region": region,
@@ -12394,20 +12482,25 @@ def _run_frontend_server(
                 sessions=sessions,
             )
             raise HTTPException(status_code=409, detail=detail)
-        for item in session_payloads:
-            session_id = item["sessionId"].strip()
-            if not session_id:
-                continue
-            try:
-                await mpa_runtime_client.delete_session(
-                    endpoint=endpoint,
-                    session_id=session_id,
-                    bearer_token=runtime_bearer,
-                )
-            except MpaRuntimeError as error:
-                if error.status_code != 404:
-                    raise
-        _delete_agentkit_runtime(runtime_id, region)
+        async with _mpa_resource_cleanup(runtime, mpa_instance_id, region) as cleanup:
+            await cleanup.preview()
+            for item in session_payloads:
+                session_id = item["sessionId"].strip()
+                if not session_id:
+                    continue
+                try:
+                    await mpa_runtime_client.delete_session(
+                        endpoint=endpoint,
+                        session_id=session_id,
+                        bearer_token=runtime_bearer,
+                        user_id=owner,
+                    )
+                except MpaRuntimeError as error:
+                    if error.status_code != 404:
+                        raise
+            await cleanup.delete_resources()
+            await asyncio.to_thread(_delete_agentkit_runtime, runtime_id, region)
+            await cleanup.mark_runtime_deleted()
 
     mount_mpa_profile_routes(
         app,
@@ -12426,6 +12519,7 @@ def _run_frontend_server(
             else "local"
         ),
         resolve_runtime_bindings=_resolve_mpa_runtime_bindings,
+        resolve_delete_resources=_mpa_delete_resources_preview,
     )
 
     @app.get("/web/runtime-tool-channel/{runtime_id}/capabilities")
@@ -17857,6 +17951,9 @@ def frontend_deploy(
     veadk_environments["AGENTKIT_CLOUD_PROVIDER"] = provider_id
     if provider_id == "byteplus":
         veadk_environments["BYTEPLUS_REGION"] = region
+        veadk_environments["VEADK_MPA_BYTEPLUS_CREDENTIAL_FILE"] = (
+            "/var/run/secrets/iam/credential"
+        )
         veadk_environments["DATABASE_VIKING_REGION"] = (
             DEFAULT_BYTEPLUS_VIKING_MEMORY_REGION
         )

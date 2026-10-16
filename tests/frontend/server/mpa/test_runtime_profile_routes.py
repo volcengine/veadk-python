@@ -22,8 +22,8 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from frontend.server.mpa.routes import MpaRuntimeBinding, mount_mpa_profile_routes
 from frontend.server.mpa.operations import MpaLifecycleOperation, MpaOperationConflict
+from frontend.server.mpa.routes import MpaRuntimeBinding, mount_mpa_profile_routes
 from frontend.server.mpa.runtime_client import MpaRuntimeClient, MpaRuntimeError
 
 
@@ -236,6 +236,7 @@ def _app(
     authorize_error: Exception | None = None,
     operation_service: FakeOperationService | None = None,
     runtime_bindings: list[MpaRuntimeBinding] | None = None,
+    delete_resources=None,
 ) -> TestClient:
     app = FastAPI()
 
@@ -266,6 +267,7 @@ def _app(
         resolve_runtime_bindings=(
             resolve_bindings if runtime_bindings is not None else None
         ),
+        resolve_delete_resources=delete_resources,
     )
     return TestClient(app)
 
@@ -599,19 +601,12 @@ def test_mpa_agent_delete_preview_blocks_active_sessions_and_reports_cleanup_pla
     ]
     assert runtime_client.calls == [
         (
-            "status",
-            {
-                "endpoint": "https://runtime.example",
-                "mpa_instance_id": "mpa-1",
-                "bearer_token": "runtime-secret",
-            },
-        ),
-        (
             "list_sessions",
             {
                 "endpoint": "https://runtime.example",
                 "bearer_token": "runtime-secret",
                 "include_a2a": True,
+                "user_id": "owner-1",
             },
         ),
     ]
@@ -667,7 +662,7 @@ def test_mpa_agent_delete_preview_ignores_recovered_retryable_operation():
     assert body["canDelete"] is True
     assert body["blockers"] == []
     assert body["activeOperation"]["status"] == "failed_retryable"
-    assert body["profile"]["status"] == "applied"
+    assert body["profile"] is None
 
 
 def test_mpa_agent_delete_preview_requires_single_runtime_binding():
@@ -690,30 +685,30 @@ def test_mpa_agent_delete_preview_requires_single_runtime_binding():
     assert body["blockers"] == ["binding_ambiguous"]
 
 
-def test_mpa_agent_delete_preview_marks_orphan_runtime_from_profile_status():
+def test_mpa_agent_delete_preview_does_not_read_missing_profile():
     runtime_client = OrphanRuntimeClient()
     client = _app(runtime_client)
-
     response = client.get(
         "/web/mpa/agents/mpa-1/delete-preview",
         params={"runtimeId": "runtime-1", "region": "cn-beijing"},
     )
-
     assert response.status_code == 200, response.text
-    body = response.json()
-    assert body["bindingStatus"] == "orphan_runtime"
-    assert body["canDelete"] is False
-    assert body["blockers"] == ["orphan_runtime"]
-    assert runtime_client.calls == [
-        (
-            "status",
-            {
-                "endpoint": "https://runtime.example",
-                "mpa_instance_id": "mpa-1",
-                "bearer_token": "runtime-secret",
-            },
-        )
-    ]
+    assert response.json()["canDelete"] is True
+    assert response.json()["profile"] is None
+    assert [call[0] for call in runtime_client.calls] == ["list_sessions"]
+
+
+def test_mpa_delete_preview_propagates_session_auth_failure():
+    class Client(FakeRuntimeClient):
+        async def list_sessions(self, **kwargs):
+            raise MpaRuntimeError("runtime_auth_error", status_code=500)
+
+    response = _app(Client()).get(
+        "/web/mpa/agents/mpa-1/delete-preview",
+        params={"runtimeId": "runtime-1", "region": "cn-beijing"},
+    )
+    assert response.status_code == 500
+    assert "sessionCounts" not in response.json()
 
 
 def test_session_execution_config_routes_forward_runtime_request():
@@ -967,3 +962,57 @@ def test_mpa_agent_operation_route_maps_idempotency_conflict():
 
     assert response.status_code == 409
     assert response.json()["detail"]["code"] == "idempotency_mismatch"
+
+
+def test_delete_preview_includes_owned_and_retained_resource_plan():
+    async def resources(runtime, agent_id, region):
+        assert agent_id == "mpa-1" and region == "cn-beijing"
+        return {
+            "cleanupPlan": [
+                {"stage": "worker_template", "resourceId": "t-one", "count": 1}
+            ],
+            "retainedResources": [
+                {"stage": "skill_space", "resourceId": "ss-shared", "reason": "shared"}
+            ],
+        }
+
+    response = _app(FakeRuntimeClient(), delete_resources=resources).get(
+        "/web/mpa/agents/mpa-1/delete-preview",
+        params={"runtimeId": "runtime-1", "region": "cn-beijing"},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["cleanupPlan"][-2]["resourceId"] == "t-one"
+    assert response.json()["retainedResources"][0]["reason"] == "shared"
+
+
+def test_delete_preview_uses_authenticated_owner_not_browser_header():
+    runtime = FakeRuntimeClient()
+    response = _app(runtime).get(
+        "/web/mpa/agents/mpa-1/delete-preview",
+        params={"runtimeId": "runtime-1", "region": "cn-beijing"},
+        headers={"x-user-id": "forged-user"},
+    )
+    assert response.status_code == 200, response.text
+    assert runtime.calls[0][0] == "list_sessions"
+    assert runtime.calls[0][1]["user_id"] == "owner-1"
+
+
+def test_delete_preview_deadline_is_visible_and_does_not_mutate(monkeypatch):
+    import asyncio
+    from frontend.server.mpa import routes
+
+    monkeypatch.setattr(routes, "MPA_DELETE_PREVIEW_TIMEOUT_SECONDS", 0.001)
+
+    class SlowClient(FakeRuntimeClient):
+        async def list_sessions(self, **kwargs):
+            await asyncio.sleep(10)
+            return []
+
+    runtime = SlowClient()
+    response = _app(runtime).get(
+        "/web/mpa/agents/mpa-1/delete-preview",
+        params={"runtimeId": "runtime-1", "region": "cn-beijing"},
+    )
+    assert response.status_code == 504, response.text
+    assert response.json()["detail"]["code"] == "mpa_delete_preview_timeout"
+    assert not runtime.calls

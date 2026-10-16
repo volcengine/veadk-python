@@ -8,7 +8,7 @@ Studio 管理员通过现有 Runtime 代理管理 MPA 渠道。BFF 移除传入 
 
 GET /api/v1/channels/capabilities 返回 serverSideBinding、bindingReady、bindingError 及诊断支持。能力接口 404 表示不支持。POST /feishu/bindings 创建加密持久绑定；GET /feishu/bindings/{id} 推进状态；POST /feishu/bindings/{id}/retry 重试失败。以上相对路径加 /api/v1/channels 前缀。状态为 PENDING、SCANNED、AUTHORIZED、REGISTERING、BOUND、FAILED、EXPIRED。响应含 id、loginUrl、qrCodeImage、expiresAt、pollAfterSeconds、appId、lastErrorCode、lastErrorMessage，不含凭据。注册租约丢失时报告结果不确定，不盲目重复注册。
 
-GET /feishu/diagnostics 返回实际保存的配置、缺失元数据及观测投递状态。沿用 GET /chat-permissions、POST /chat-permissions、DELETE /chat-permissions?channel=feishu&chat_id=... 管理群。POST 使用 channel、chatId、groupSessionScope（group、group_sender、group_topic、group_topic_sender）。已有根路径 DELETE 使用 channel 和 appId。离开页面取消绑定和轮询请求；错误保留表单，终态停止轮询。不兼容镜像提示升级。没有观测证据时不声称链路连通。
+GET /feishu/diagnostics 返回实际保存的配置、缺失元数据及观测投递状态。沿用 GET /chat-permissions、POST /chat-permissions、DELETE /chat-permissions?channel=feishu&chat_id=... 管理群。POST 支持 channel、chatId 及可选 groupSessionScope（group、group_sender、group_topic、group_topic_sender）；Studio 新增群表单省略 groupSessionScope。已有根路径 DELETE 使用 channel 和 appId。离开页面取消绑定和轮询请求；错误保留表单，终态停止轮询。不兼容镜像提示升级。没有观测证据时不声称链路连通。
 
 数据库边界：每个 MPA/formal-debug 需要独立渠道数据库，启动拒绝不同部署共享。新消息映射包含 Bot 身份，旧会话保留为历史，不自动迁移上下文。新密文不兼容旧镜像，回滚需恢复相应数据库快照。Studio 仅转发受信管理员身份作为绑定 owner，忽略客户端 X-User-Id。Runtime-key 模式事件入口验证 APIG 注入的 Authorization。
 
@@ -46,3 +46,15 @@ CON-15：所有渠道提供互斥的“极速配置 / 手动配置”，挂载�
 CON-16：multiBotChannels 包含 feishu 时启用账号管理。根 GET 返回包含 appId 和 enabled 的 channels，允许多个飞书记录。诊断及群权限 CRUD 前先选择账号，始终转发 appId；权限 POST 带 appId，DELETE 保留 chat_id 并附 appId。PATCH /feishu/accounts/{appId} 设置 enabled；根 DELETE 经确认仅删除目标账号。扫码/手动绑定新增不同 appId 并刷新选择，不替换其他账号。缺少能力声明则沿用单账号流程。账号歧义不等于注册不确定。切换目标取消读取/轮询并忽略迟到结果，写入时禁止切换。密钥处理和管理员代理鉴权不变。
 
 见[设计](../../prd-spec/features/mpa-feishu-multi-bot/2026-10-09-studio-multi-bot.zh.md)。
+
+
+## 群策略默认值由 Runtime 决定（2026-10-12）
+
+CON-17：Studio 新增群表单不提供会话隔离选择器，仅提交 channel、去空白 chatId，以及适用时所选 appId，完全省略 groupSessionScope。最终策略由 Runtime 的默认/继承规则决定。已有群记录及服务端返回策略的展示保持不变；加载、刷新或新增其他群不会迁移或改写既有策略。其他调用方仍可使用可选 API 字段，服务端行为不变。再次添加已有 ID 仍遵循 Runtime 原 upsert 契约。
+
+设计：[server-default-scope](../../prd-spec/bugfixes/channel-group-actions/2026-10-12-server-default-scope.zh.md)。验证：frontend/tests/runtimeChannels.test.tsx（单/多机器人请求体及既有策略展示）；本地浏览器 fixture，不是云上 E2E。
+
+
+## Lark 品牌（2026-10-15）
+
+CON-18（已批准增量）：BytePlus 仅在 `feishuDomains` 包含 `lark` 且声明飞书多账号支持时开放 Lark。复用 `/feishu/bindings` 和 `/feishu/bindings/manual`，传 `domain=lark`；省略仍为飞书。存储/API 的 channel 仍为 `feishu`，以 `config.domain` 区分品牌，缺失为飞书。列表按品牌过滤，账号操作始终带 appId。Runtime 负责固定域名及 Gateway adapter=lark 注册，校验入站 Bot 身份并保留 request/delivery ID。国内已有记录及接口兼容。见[设计](../../prd-spec/features/lark-binding/2026-10-15-lark-binding.zh.md)。

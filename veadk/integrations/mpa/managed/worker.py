@@ -24,7 +24,7 @@ import uuid
 from ..mpa_tool import build_tos_mount_config
 from .config import WORKER_RESERVED_ENV_KEYS, validate_runtime_name
 from .database import DeploymentError, agent_suffix
-from .diagnostics import report, retry_worker
+from .diagnostics import failure_identifiers, report, retry_worker
 
 
 class WorkerCloud:
@@ -57,6 +57,9 @@ class WorkerCloud:
 
     async def get(self, tool_id):
         return await self.call("get_tool", "GetToolRequest", ToolId=tool_id)
+
+    async def delete(self, tool_id):
+        await self.call("delete_tool", "DeleteToolRequest", ToolId=tool_id)
 
     async def create(self, request):
         return (await self.call("create_tool", "CreateToolRequest", **request)).get(
@@ -130,23 +133,27 @@ async def _ensure_worker(
     entry, cloud, options, *, account, region, agent_id, project, runtime_name
 ):
     record = await entry.read()
+    if record.get("state") in {"deleting", "deleted"}:
+        raise DeploymentError("Agent deletion has started; use a new agent ID")
     suffix = agent_suffix(account, region, agent_id)
     owned = {"managed_by": "mpa-deployment", "mpa_agent_key": suffix}
     tool_id = record.get("worker_id") or options.existing_id
     expected_tos = None
-    if options.tos_mount_enabled:
+    tos_mount_disabled = bool(record.get("worker_tos_mount_disabled"))
+    if options.tos_mount_enabled and not tos_mount_disabled:
         expected_tos = build_tos_mount_config(
             tos_access_key=options.tos_access_key,
             tos_secret_key=options.tos_secret_key,
             tos_bucket=options.tos_bucket,
             region=region,
+            tos_credential_type=options.tos_credential_type,
         ).model_dump(by_alias=True, exclude_none=True, mode="json")
         if (
             getattr(getattr(cloud, "runtime", None), "provider", "volcengine")
             == "byteplus"
         ):
             for mount in expected_tos["MountPoints"]:
-                mount["Endpoint"] = f"https://tos-{region}.bytepluses.com"
+                mount["Endpoint"] = f"http://tos-{region}.bytepluses.com"
     if (
         record.get("worker_id")
         and options.existing_id
@@ -197,29 +204,68 @@ async def _ensure_worker(
             json.dumps(request, sort_keys=True).encode()
         ).hexdigest()
         if record.get("worker_hash") and record["worker_hash"] != digest:
-            # Preserve the exact pre-upgrade payload for an unfinished intent.
-            if record.get("worker_name"):
-                raise DeploymentError(
-                    "Unfinished worker configuration changed; resume original inputs"
+            legacy_byteplus_tos = _legacy_byteplus_tos_endpoint_requests(
+                request, region=region
+            )
+            if (
+                legacy_byteplus_tos
+                and not record.get("worker_id")
+                and any(
+                    record["worker_hash"]
+                    == hashlib.sha256(
+                        json.dumps(legacy_request, sort_keys=True).encode()
+                    ).hexdigest()
+                    for legacy_request in legacy_byteplus_tos
                 )
-            for legacy_name in (
-                agent_id.strip().replace("-", "_"),
-                "mpa_worker_" + suffix,
             ):
-                legacy_request = {**request, "Name": legacy_name}
-                legacy_digest = hashlib.sha256(
-                    json.dumps(legacy_request, sort_keys=True).encode()
-                ).hexdigest()
-                if record["worker_hash"] == legacy_digest:
-                    request, digest = legacy_request, legacy_digest
-                    break
-            else:
+                record["worker_hash"] = digest
+                await entry.save(record)
+            elif (
+                not expected_tos
+                and _matches_legacy_byteplus_tos_mount(
+                    request,
+                    record["worker_hash"],
+                    cloud=cloud,
+                    account=account,
+                    region=region,
+                )
+                and not record.get("worker_id")
+            ):
+                record.update(
+                    worker_hash=digest,
+                    worker_tos_mount_disabled=True,
+                    worker_tos_mount_disabled_reason="InvalidParameter.TosEndpoint",
+                )
+                await entry.save(record)
+            elif record.get("worker_name"):
                 raise DeploymentError(
                     "Unfinished worker configuration changed; resume original inputs"
                 )
+            # Preserve the exact pre-upgrade payload for an unfinished intent.
+            else:
+                for legacy_name in (
+                    agent_id.strip().replace("-", "_"),
+                    "mpa_worker_" + suffix,
+                ):
+                    legacy_request = {**request, "Name": legacy_name}
+                    legacy_digest = hashlib.sha256(
+                        json.dumps(legacy_request, sort_keys=True).encode()
+                    ).hexdigest()
+                    if record["worker_hash"] == legacy_digest:
+                        request, digest = legacy_request, legacy_digest
+                        break
+                else:
+                    raise DeploymentError(
+                        "Unfinished worker configuration changed; resume original inputs"
+                    )
+
         matches = await retry_worker("find_worker", lambda: cloud.find(request["Name"]))
         if matches:
             if len(matches) != 1 or not record.get("worker_token"):
+                if record.get("business_database_name") == "aidb":
+                    from .names import NameCheckError
+
+                    raise NameCheckError("runtimeNameTaken")
                 raise DeploymentError(
                     "Worker name collision without a recorded creation intent"
                 )
@@ -232,9 +278,42 @@ async def _ensure_worker(
             record.update(worker_hash=digest, worker_managed=True)
             await entry.save(record)
             create_request = {**request, "ClientToken": record["worker_token"]}
-            tool_id = await retry_worker(
-                "create_worker", lambda: cloud.create(create_request)
-            )
+            try:
+                tool_id = await retry_worker(
+                    "create_worker", lambda: cloud.create(create_request)
+                )
+            except Exception as error:
+                if not _can_fallback_without_tos(cloud, expected_tos, error):
+                    raise
+                report(
+                    "create_worker",
+                    "invalid_request",
+                    outcome="retrying",
+                    error_code="InvalidParameter.TosEndpoint",
+                )
+                fallback_request = {
+                    key: value
+                    for key, value in request.items()
+                    if key != "TosMountConfig"
+                }
+                fallback_digest = hashlib.sha256(
+                    json.dumps(fallback_request, sort_keys=True).encode()
+                ).hexdigest()
+                record.update(
+                    worker_hash=fallback_digest,
+                    worker_managed=True,
+                    worker_tos_mount_disabled=True,
+                    worker_tos_mount_disabled_reason="InvalidParameter.TosEndpoint",
+                    worker_token=str(uuid.uuid4()),
+                )
+                await entry.save(record)
+                tool_id = await retry_worker(
+                    "create_worker",
+                    lambda: cloud.create(
+                        {**fallback_request, "ClientToken": record["worker_token"]}
+                    ),
+                )
+                expected_tos = None
         if not tool_id:
             raise DeploymentError(
                 "Worker creation outcome unknown; resume the same agent"
@@ -260,6 +339,7 @@ async def _ensure_worker(
             agent_id=agent_id,
             managed=bool(record.get("worker_managed")),
             expected_tos=expected_tos,
+            expected_role=options.role_name,
         )
         status = tool.get("Status")
         if status in {"Failed", "Error", "Deleted", "Deleting"}:
@@ -301,14 +381,89 @@ async def _ensure_worker(
         await asyncio.sleep(5)
 
 
+def _legacy_byteplus_tos_endpoint_requests(request, *, region):
+    tos = request.get("TosMountConfig")
+    if not isinstance(tos, dict):
+        return []
+    host = f"tos-{region}.bytepluses.com"
+    legacy_requests = []
+    for endpoint in ("", host, f"https://{host}"):
+        legacy = json.loads(json.dumps(request))
+        mounts = (legacy.get("TosMountConfig") or {}).get("MountPoints") or []
+        changed = False
+        for mount in mounts:
+            if endpoint:
+                mount["Endpoint"] = endpoint
+                changed = True
+            elif mount.pop("Endpoint", None) is not None:
+                changed = True
+        if changed:
+            legacy_requests.append(legacy)
+    return legacy_requests
+
+
+def _can_fallback_without_tos(cloud, expected_tos, error):
+    if not expected_tos:
+        return False
+    if getattr(getattr(cloud, "runtime", None), "provider", "volcengine") != "byteplus":
+        return False
+    error_code, _ = failure_identifiers(error)
+    return error_code == "InvalidParameter.TosEndpoint"
+
+
+def _matches_legacy_byteplus_tos_mount(request, worker_hash, *, cloud, account, region):
+    if getattr(getattr(cloud, "runtime", None), "provider", "volcengine") != "byteplus":
+        return False
+    buckets = [f"agentkit-platform-{account}"]
+    for bucket in buckets:
+        expected_tos = build_tos_mount_config(
+            tos_bucket=bucket,
+            region=region,
+            tos_credential_type="iam_role",
+        ).model_dump(by_alias=True, exclude_none=True, mode="json")
+        for endpoint in (
+            f"http://tos-{region}.bytepluses.com",
+            "",
+            f"tos-{region}.bytepluses.com",
+            f"https://tos-{region}.bytepluses.com",
+        ):
+            candidate = json.loads(json.dumps(request))
+            candidate["TosMountConfig"] = json.loads(json.dumps(expected_tos))
+            for mount in candidate["TosMountConfig"]["MountPoints"]:
+                if endpoint:
+                    mount["Endpoint"] = endpoint
+                else:
+                    mount.pop("Endpoint", None)
+            digest = hashlib.sha256(
+                json.dumps(candidate, sort_keys=True).encode()
+            ).hexdigest()
+            if worker_hash == digest:
+                return True
+    return False
+
+
 def _missing_worker_metadata(
-    tool, *, tool_id, project, owned, agent_id, managed, expected_tos=None
+    tool,
+    *,
+    tool_id,
+    project,
+    owned,
+    agent_id,
+    managed,
+    expected_tos=None,
+    expected_role=None,
 ):
     """Reject any present conflict before considering incomplete metadata."""
     tags = {t["Key"]: t.get("Value") for t in tool.get("Tags") or []}
     env = {t["Key"]: t.get("Value") for t in tool.get("Envs") or []}
     if expected_tos:
         actual = tool.get("TosMountConfig") or {}
+        if expected_tos.get("CredentialType") == "TOS_CREDENTIAL_TYPE_IAM_ROLE" and (
+            actual.get("CredentialType") != "TOS_CREDENTIAL_TYPE_IAM_ROLE"
+            or actual.get("Credentials")
+            or tool.get("RoleName") != expected_role
+        ):
+            raise DeploymentError("Worker TOS IAM role metadata conflicts")
         actual_mounts = actual.get("MountPoints") or []
         expected_mount = expected_tos["MountPoints"][0]
         if not actual.get("EnableTos") or not any(

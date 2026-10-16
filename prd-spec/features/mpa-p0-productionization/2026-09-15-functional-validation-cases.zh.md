@@ -233,7 +233,7 @@
 ### VC-19：兼容、回归与性能
 
 - 前置：S1～S5 的实现和非 live Case 已完成，但 `VC-21` 尚未执行；M0 已写入双方 SHA/image digest/协议版本。先以兼容矩阵 runner 完成发布前 preflight，再执行 VC-21；VC-21 后重跑本 Case 的全量回归/性能部分作为最终门禁。
-- 命令：`scripts/verify-mpa-p0-contract.sh --manifest <redacted-compatibility-json> --matrix contracts/mpa-p0/compatibility-matrix.json`，随后 Runtime `make test && make coverage && make test-postgres`，VeADK `uv run --extra dev pytest -n 2 -m "not codex_smoke and not piagent_smoke" && npm --prefix frontend test && npm --prefix frontend run build && uv run --extra dev pre-commit run --all-files`。性能 runner 为 `scripts/benchmark-mpa-p0.py --warmup 5 --requests 100 --concurrency 10 --list-size 20`。
+- 命令：`scripts/verify-mpa-p0-contract.sh --manifest <redacted-compatibility-json> --matrix frontend/server/mpa/contracts/mpa-p0/compatibility-matrix.json`，随后 Runtime `make test && make coverage && make test-postgres`，VeADK `uv run --extra dev pytest -n 2 -m "not codex_smoke and not piagent_smoke" && npm --prefix frontend test && npm --prefix frontend run build && uv run --extra dev pre-commit run --all-files`。性能 runner 为 `scripts/benchmark-mpa-p0.py --warmup 5 --requests 100 --concurrency 10 --list-size 20`。
 - 输入：PRD 全部兼容组合和固定 fixtures。
 - 预期：矩阵结果吻合；MPA update/release/rollback 写路由在副作用前拒绝不兼容 manifest；Runtime coverage ≥95%；无回归；性能报告含 p50/p95/max/error rate。
 - 原始本地证据：被忽略的 `evidence/contract/<run-id>/VC-19.json`、测试/build/coverage/benchmark 输出。

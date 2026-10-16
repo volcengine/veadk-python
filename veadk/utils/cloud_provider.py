@@ -121,6 +121,13 @@ def identity_openapi_host(region: str, provider: CloudProvider) -> str:
     return "open.volcengineapi.com"
 
 
+def tag_openapi_host(provider: CloudProvider) -> str:
+    """Return the Tag OpenAPI host for a provider."""
+    if provider == "byteplus":
+        return "open.byteplusapi.com"
+    return "open.volcengineapi.com"
+
+
 def configure_openapi_tls(configuration: Any) -> None:
     """Apply explicit TLS settings to a Volcengine generated SDK config.
 

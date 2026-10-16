@@ -382,3 +382,85 @@ def test_channel_key_lookup_never_generates_or_persists_a_new_key(
         engine.dispose.assert_awaited_once()
 
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("nonempty", [False, True])
+def test_initial_aidb_marks_only_an_empty_owned_dedicated_database(
+    db_factory, nonempty
+):
+    async def run():
+        db, engine = db_factory(
+            row={"owner": "agent", "marker": None}, scalars=[nonempty]
+        )
+        db.business_database_name = "aidb"
+        entry = Registry()
+        entry.row = {
+            "business_workspace_mode": "per-agent",
+            "business_workspace_id": "ws-own",
+            "business_database_name": "aidb",
+        }
+        if nonempty:
+            with pytest.raises(mod.DeploymentError):
+                await db.ensure(entry, account="a", region="r", agent_id="i")
+            assert not any(s.startswith("COMMENT") for s, _ in engine.conn.sql)
+        else:
+            assert (
+                await db.ensure(entry, account="a", region="r", agent_id="i") == "aidb"
+            )
+            assert entry.row["database_name"] == "aidb"
+            assert any('COMMENT ON DATABASE "aidb"' in s for s, _ in engine.conn.sql)
+            assert not any(s.startswith("CREATE DATABASE") for s, _ in engine.conn.sql)
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    "row,extra",
+    [
+        (None, {}),
+        ({"owner": "other", "marker": None}, {}),
+        ({"owner": "agent", "marker": "foreign"}, {}),
+        ({"owner": "agent", "marker": None}, {"database_ready": True}),
+        ({"owner": "agent", "marker": None}, {"runtime_id": "r-existing"}),
+    ],
+)
+def test_aidb_never_replaces_or_adopts_an_existing_unproven_database(
+    db_factory, row, extra
+):
+    async def run():
+        db, engine = db_factory(row=row)
+        db.business_database_name = "aidb"
+        entry = Registry()
+        entry.row = {
+            "business_workspace_mode": "per-agent",
+            "business_workspace_id": "ws-own",
+            "business_database_name": "aidb",
+            **extra,
+        }
+        with pytest.raises(mod.DeploymentError):
+            await db.ensure(entry, account="a", region="r", agent_id="i")
+        assert not any(
+            s.startswith(("COMMENT", "CREATE DATABASE")) for s, _ in engine.conn.sql
+        )
+
+    asyncio.run(run())
+
+
+def test_aidb_initialization_failure_closes_transaction_engine(db_factory):
+    async def run():
+        db, engine = db_factory(
+            row={"owner": "agent", "marker": None}, scalars=[asyncio.CancelledError()]
+        )
+        db.business_database_name = "aidb"
+        entry = Registry()
+        entry.row = {
+            "business_workspace_mode": "per-agent",
+            "business_workspace_id": "ws-own",
+            "business_database_name": "aidb",
+        }
+        with pytest.raises(asyncio.CancelledError):
+            await db.ensure(entry, account="a", region="r", agent_id="i")
+        engine.dispose.assert_awaited_once()
+        assert not entry.row.get("database_ready")
+
+    asyncio.run(run())

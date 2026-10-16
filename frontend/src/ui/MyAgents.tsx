@@ -36,7 +36,7 @@ import {
   type SandboxAgentKind,
 } from "../adk/sandbox";
 import { formatRequestError } from "../adk/requestError";
-import type { WorkspaceAgentDraft } from "../create/agentDraftStorage";
+import { deploymentAgentCategory, type WorkspaceAgentDraft } from "../create/agentDraftStorage";
 import { AgentFaceIcon } from "./AgentFaceIcon";
 import { SandboxAgentIcon } from "./icons/SandboxAgentIcons";
 import type { DeploymentTaskUpdate } from "./ProjectPreview";
@@ -292,6 +292,7 @@ function draftToAgent(item: WorkspaceAgentDraft, t: TFunction<"ui">): MyAgentCar
     specification: t("myAgents.currentBrowser"),
     isMine: true,
     region: item.deploymentTarget?.region,
+    agentCategory: deploymentAgentCategory(item.deploymentTarget),
     draft: item,
   };
 }
@@ -318,6 +319,7 @@ function runtimeDetailTargetForCard(
     isMine: true,
     runtime: {
       runtimeId: target.runtimeId,
+      agentCategory: deploymentAgentCategory(target),
       mpaInstanceId: target.mpaInstanceId,
       region: target.region,
       currentVersion: target.currentVersion,
@@ -762,8 +764,10 @@ export function MyAgents({
   }, []);
 
   const draftAgents = useMemo(
-    () => drafts.map((draft) => draftToAgent(draft, t)),
-    [drafts, t],
+    () => drafts
+      .filter((draft) => deploymentAgentCategory(draft.deploymentTarget) === activeType)
+      .map((draft) => draftToAgent(draft, t)),
+    [drafts, activeType, t],
   );
   const activeDeploymentTasks = useMemo(() => {
     const byId = new Map<string, DeploymentTaskUpdate>();

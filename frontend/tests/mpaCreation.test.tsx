@@ -4,18 +4,24 @@ import { createRoot } from "react-dom/client";
 import { beforeEach, afterEach, expect, it, vi } from "vitest";
 import { MpaCreateDialog } from "../src/ui/mpa-create/MpaCreateDialog";
 import * as api from "../src/adk/mpaCreation";
+import { listDeploymentResources } from "../src/adk/client";
+
+vi.mock("../src/adk/client", () => ({ listDeploymentResources: vi.fn() }));
 
 vi.mock("../src/adk/mpaCreation", () => ({
   MpaCreationRequestError: class extends Error {
     constructor(
       readonly status: number,
       message: string,
+      readonly code?: string,
     ) {
       super(message);
     }
   },
   getMpaCreationConfig: vi.fn(),
+  checkMpaCreationName: vi.fn(),
   startMpaCreation: vi.fn(),
+  listMpaCreations: vi.fn(),
   getMpaCreation: vi.fn(),
   cancelMpaCreation: vi.fn(),
 }));
@@ -32,6 +38,14 @@ beforeEach(() => {
   ).IS_REACT_ACT_ENVIRONMENT = true;
   sessionStorage.clear();
   vi.clearAllMocks();
+  vi.mocked(listDeploymentResources).mockResolvedValue({
+    serviceRegion: "cn-beijing", pageNumber: 1, pageSize: 100,
+    totalCount: 2, hasMore: false,
+    items: ["agentkit-platform-output", "agentkit-platform-fresh"].map((name) => ({
+      id: name, name, region: "cn-beijing", status: "",
+    })),
+  });
+  vi.mocked(api.listMpaCreations).mockResolvedValue({ tasks: [] });
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -58,6 +72,17 @@ async function mount(fillName = true) {
   ) {
     await edit("name", "test-agent");
   }
+}
+
+function bucketButton() {
+  return document.querySelector<HTMLButtonElement>('button[aria-label="myAgents.mpaCreate.tosBucket"]')!;
+}
+
+async function selectBucket(name: string) {
+  await act(async () => bucketButton().click());
+  const option = Array.from(document.querySelectorAll<HTMLButtonElement>('[role="option"]'))
+    .find((item) => item.textContent?.includes(name))!;
+  await act(async () => option.click());
 }
 it("explains the separate management workspace only for configured split layouts", async () => {
   vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
@@ -104,6 +129,114 @@ it("persists identity before submission and prevents repeated clicks", async () 
   expect(api.startMpaCreation).toHaveBeenCalledTimes(1);
   expect(sessionStorage.getItem("mpa-create:cn-beijing")).toContain(
     "requestId",
+  );
+});
+
+it("recovers the latest submitted task from local server state", async () => {
+  const recovered: api.MpaCreationTask = {
+    taskId: "server-task",
+    requestId: "11111111-1111-4111-8111-111111111111",
+    name: "restored-agent",
+    description: "restored",
+    maxInstance: 20,
+    region: "cn-beijing",
+    state: "failed",
+    stage: "worker",
+    error: "creationFailed",
+    tosBucket: "agentkit-platform-output",
+    latestDiagnostic: {
+      stage: "worker",
+      operation: "provision",
+      category: "configuration_changed",
+      attempt: 1,
+      outcome: "failed",
+    },
+  };
+  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
+    configured: true,
+    region: "cn-beijing",
+  });
+  vi.mocked(api.listMpaCreations).mockResolvedValue({ tasks: [recovered] });
+  vi.mocked(api.getMpaCreation).mockResolvedValue(recovered);
+  await mount(false);
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+  expect(api.listMpaCreations).toHaveBeenCalledWith(
+    "cn-beijing",
+    expect.any(AbortSignal),
+  );
+  expect(api.getMpaCreation).toHaveBeenCalledWith(
+    "server-task",
+    expect.any(AbortSignal),
+  );
+  const stored = JSON.parse(sessionStorage.getItem("mpa-create:cn-beijing")!);
+  expect(stored.taskId).toBe("server-task");
+  expect(stored.input.name).toBe("restored-agent");
+  expect(stored.input.tosBucket).toBe("agentkit-platform-output");
+  expect(document.body.textContent).toContain(
+    "myAgents.mpaCreate.configurationChanged",
+  );
+});
+
+it("recovers a submitted draft without task id before retrying", async () => {
+  const requestId = "11111111-1111-4111-8111-111111111111";
+  sessionStorage.setItem(
+    "mpa-create:cn-beijing",
+    JSON.stringify({
+      input: {
+        requestId,
+        name: "changed-agent",
+        description: "changed",
+        region: "cn-beijing",
+        tosBucket: "agentkit-platform-new",
+      },
+      submitted: true,
+      step: 2,
+    }),
+  );
+  const recovered: api.MpaCreationTask = {
+    taskId: "server-task",
+    requestId,
+    name: "restored-agent",
+    description: "restored",
+    region: "cn-beijing",
+    state: "failed",
+    stage: "worker",
+    error: "creationFailed",
+    latestDiagnostic: {
+      stage: "worker",
+      operation: "provision",
+      category: "configuration_changed",
+      attempt: 1,
+      outcome: "failed",
+    },
+  };
+  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
+    configured: true,
+    region: "cn-beijing",
+  });
+  vi.mocked(api.listMpaCreations).mockResolvedValue({ tasks: [recovered] });
+  vi.mocked(api.getMpaCreation).mockResolvedValue(recovered);
+  vi.mocked(api.startMpaCreation).mockReturnValue(new Promise(() => {}));
+  await mount(false);
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+  expect(api.listMpaCreations).toHaveBeenCalledTimes(1);
+  expect(button("retry")).toBeDefined();
+  expect(button("submit")).toBeUndefined();
+  await act(async () => button("retry").click());
+  expect(vi.mocked(api.startMpaCreation).mock.calls[0][0]).toMatchObject({
+    requestId,
+    name: "restored-agent",
+    description: "restored",
+    region: "cn-beijing",
+  });
+  expect(vi.mocked(api.startMpaCreation).mock.calls[0][0]).not.toHaveProperty(
+    "tosBucket",
   );
 });
 
@@ -419,7 +552,7 @@ it.each(["uncertain", "running", "cancelling", "unavailable"] as const)(
       });
     }
     await mount();
-    expect(field("tosBucket").disabled).toBe(true);
+    expect(bucketButton().disabled).toBe(true);
     expect(document.body.textContent).toContain(
       "myAgents.mpaCreate.newAgentDescription",
     );
@@ -436,11 +569,11 @@ it.each(["uncertain", "running", "cancelling", "unavailable"] as const)(
     await edit("name", "new-agent");
     await goToFinal();
     expect(field("openvikingUrl").disabled).toBe(false);
-    expect(field("tosAccessKey").disabled).toBe(false);
-    expect(field("tosSecretKey").disabled).toBe(false);
-    expect(field("tosBucket").disabled).toBe(false);
-    await edit("tosBucket", "fresh-bucket");
-    expect(field("tosBucket").value).toBe("fresh-bucket");
+    expect(document.querySelector('[name="tosAccessKey"]')).toBeNull();
+    expect(document.querySelector('[name="tosSecretKey"]')).toBeNull();
+    expect(bucketButton().disabled).toBe(false);
+    await selectBucket("agentkit-platform-fresh");
+    expect(bucketButton().textContent).toContain("agentkit-platform-fresh");
     expect(api.startMpaCreation).not.toHaveBeenCalled();
     expect(api.cancelMpaCreation).not.toHaveBeenCalled();
   },
@@ -627,7 +760,7 @@ it("blocks malformed OpenViking settings before submission", async () => {
   await edit("openvikingApiKey", "test-ov-key");
   expect(submitButton().disabled).toBe(false);
 });
-it("passes complete TOS settings without saving credentials in session storage", async () => {
+it("selects a bucket without collecting or submitting credentials", async () => {
   vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
     configured: true,
     region: "cn-beijing",
@@ -635,25 +768,115 @@ it("passes complete TOS settings without saving credentials in session storage",
   vi.mocked(api.startMpaCreation).mockReturnValue(new Promise(() => {}));
   await mount();
   await goToFinal();
-  await edit("tosAccessKey", "sensitive-ak");
-  expect(submitButton().disabled).toBe(true);
-  await edit("tosSecretKey", "sensitive-sk");
-  await edit("tosBucket", "session-output");
+  expect(document.querySelector('[name="tosAccessKey"]')).toBeNull();
+  expect(document.querySelector('[name="tosSecretKey"]')).toBeNull();
+  await selectBucket("agentkit-platform-output");
   expect(submitButton().disabled).toBe(false);
   await act(async () => submitButton().click());
   expect(vi.mocked(api.startMpaCreation).mock.calls[0][0]).toMatchObject({
-    tosAccessKey: "sensitive-ak",
-    tosSecretKey: "sensitive-sk",
-    tosBucket: "session-output",
+    tosBucket: "agentkit-platform-output",
   });
+  expect(vi.mocked(api.startMpaCreation).mock.calls[0][0]).not.toHaveProperty("tosAccessKey");
+  expect(vi.mocked(api.startMpaCreation).mock.calls[0][0]).not.toHaveProperty("tosSecretKey");
   const saved = sessionStorage.getItem("mpa-create:cn-beijing")!;
   expect(saved).not.toContain("sensitive-ak");
   expect(saved).not.toContain("sensitive-sk");
-  expect(saved).toContain("session-output");
+  expect(saved).toContain("agentkit-platform-output");
+});
+
+it("strips legacy draft keys and can clear an optional bucket", async () => {
+  sessionStorage.setItem("mpa-create:cn-beijing", JSON.stringify({
+    input: { region: "cn-beijing", requestId: crypto.randomUUID(), name: "test-agent", description: "",
+      tosAccessKey: "sensitive-ak", tosSecretKey: "sensitive-sk", tosBucket: "agentkit-platform-output" },
+  }));
+  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({ configured: true, region: "cn-beijing" });
+  vi.mocked(api.startMpaCreation).mockReturnValue(new Promise(() => {}));
+  await mount();
+  await goToFinal();
+  expect(sessionStorage.getItem("mpa-create:cn-beijing")).not.toContain("sensitive-");
+  await act(async () => button("tosDisable").click());
+  expect(bucketButton().textContent).not.toContain("agentkit-platform-output");
+  await act(async () => submitButton().click());
+  const submitted = vi.mocked(api.startMpaCreation).mock.calls[0][0];
+  expect(submitted.tosBucket).toBe("");
+  expect(submitted).not.toHaveProperty("tosAccessKey");
 });
 function submitButton() {
-  return button("submit");
+  return button("submit") ?? button("retry");
 }
+it("rejects an invalid bucket restored from a draft before submission", async () => {
+  sessionStorage.setItem("mpa-create:cn-beijing", JSON.stringify({
+    input: { region: "cn-beijing", requestId: crypto.randomUUID(), name: "test-agent",
+      description: "", tosBucket: "invalid/bucket" },
+  }));
+  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({ configured: true, region: "cn-beijing" });
+  await mount();
+  await goToFinal();
+  expect(document.body.textContent).toContain("myAgents.mpaCreate.tosInvalid");
+  expect(submitButton().disabled).toBe(true);
+  expect(api.startMpaCreation).not.toHaveBeenCalled();
+});
+it.each(["agentkit-demo", "x-agentkit-platform-output"])("rejects out-of-scope bucket drafts: %s", async (bucket) => {
+  sessionStorage.setItem("mpa-create:cn-beijing", JSON.stringify({
+    input: { region: "cn-beijing", requestId: crypto.randomUUID(), name: "test-agent",
+      description: "", tosBucket: bucket },
+  }));
+  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({ configured: true, region: "cn-beijing" });
+  await mount();
+  await goToFinal();
+  expect(document.body.textContent).toContain("myAgents.mpaCreate.tosInvalid");
+  expect(submitButton().disabled).toBe(true);
+  expect(api.startMpaCreation).not.toHaveBeenCalled();
+});
+it("serializes optional bucket prefixes without changing general queries", async () => {
+  const real = await vi.importActual<typeof import("../src/adk/client")>("../src/adk/client");
+  const fetcher = vi.fn(async (..._args: Parameters<typeof fetch>) => Response.json({ serviceRegion: "cn-beijing", items: [],
+    pageNumber: 1, pageSize: 100, totalCount: 0, hasMore: false }));
+  vi.stubGlobal("fetch", fetcher);
+  try {
+    await real.listDeploymentResources({ kind: "tos-bucket", region: "cn-beijing", namePrefix: "agentkit-platform-" });
+    expect(String(fetcher.mock.calls[0][0])).toContain("namePrefix=agentkit-platform-");
+    await real.listDeploymentResources({ kind: "tos-bucket", region: "cn-beijing" });
+    expect(String(fetcher.mock.calls[1][0])).not.toContain("namePrefix");
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
+it("loads bucket resources only on the final step and shows loading", async () => {
+  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({ configured: true, region: "cn-beijing" });
+  vi.mocked(listDeploymentResources).mockReturnValue(new Promise(() => {}));
+  await mount();
+  expect(listDeploymentResources).not.toHaveBeenCalled();
+  await goToFinal();
+  expect(listDeploymentResources).toHaveBeenCalledWith(
+    { kind: "tos-bucket", region: "cn-beijing", namePrefix: "agentkit-platform-", search: "", pageNumber: 1, pageSize: 100 },
+    expect.any(AbortSignal),
+  );
+  expect(document.body.textContent).toContain("deploymentResources.loading");
+});
+it("shows bucket list errors and reloads on retry", async () => {
+  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({ configured: true, region: "cn-beijing" });
+  vi.mocked(listDeploymentResources).mockRejectedValueOnce(new Error("Bucket list unavailable"));
+  await mount();
+  await goToFinal();
+  expect(document.body.textContent).toContain("Bucket list unavailable");
+  expect(bucketButton().disabled).toBe(true);
+  const retry = Array.from(document.querySelectorAll<HTMLButtonElement>("button"))
+    .find((item) => item.textContent === "common.retry")!;
+  await act(async () => retry.click());
+  expect(bucketButton().disabled).toBe(false);
+  await selectBucket("agentkit-platform-fresh");
+  expect(bucketButton().textContent).toContain("agentkit-platform-fresh");
+});
+it("allows creation without a mount when the bucket list is empty", async () => {
+  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({ configured: true, region: "cn-beijing" });
+  vi.mocked(listDeploymentResources).mockResolvedValue({ serviceRegion: "cn-beijing", pageNumber: 1,
+    pageSize: 100, totalCount: 0, hasMore: false, items: [] });
+  await mount();
+  await goToFinal();
+  expect(document.body.textContent).toContain("deploymentResources.noAvailableSentence");
+  expect(submitButton().disabled).toBe(false);
+});
 async function goToFinal() {
   if (field("name") && !field("name").value) await edit("name", "test-agent");
   await act(async () => button("next").click());
@@ -762,7 +985,7 @@ it("preserves submitted PG inputs and blocks retry after switching to automatic 
     postgresMode: "auto",
   });
   await mount();
-  expect(button("submit").disabled).toBe(true);
+  expect(button("retry").disabled).toBe(true);
   expect(sessionStorage.getItem("mpa-create:cn-beijing")).toContain(
     "old.example",
   );
@@ -923,40 +1146,44 @@ it("keeps disabled and loading appearance consistent across shared Button varian
   }
 });
 
-it("preserves the runtime role stage and actionable IAM error for retry", async () => {
-  const input = {
-    region: "cn-beijing",
-    requestId: "12345678-90ab-4cde-8f01-23456789abcd",
-    agentId: "mi-1234567890ab4cde8f012345",
-    description: "",
-  };
-  sessionStorage.setItem(
-    "mpa-create:cn-beijing",
-    JSON.stringify({ input, submitted: true, step: 2, taskId: "iam-task" }),
-  );
-  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
-    configured: true,
-    region: "cn-beijing",
-  });
-  vi.mocked(api.getMpaCreation).mockResolvedValue({
-    ...input,
-    taskId: "iam-task",
-    state: "failed",
-    stage: "iam_role",
-    error: "iamPermissionDenied",
-  });
-  await mount();
-  expect(document.body.textContent).toContain(
-    "myAgents.mpaCreate.stages.iam_role",
-  );
-  expect(document.body.textContent).toContain(
-    "myAgents.mpaCreate.iamPermissionDenied",
-  );
-  expect(button("retry").disabled).toBe(false);
-  expect(
-    JSON.parse(sessionStorage.getItem("mpa-create:cn-beijing")!).input.agentId,
-  ).toBe(input.agentId);
-});
+it.each(["iamPermissionDenied", "iamTemporaryFailure"])(
+  "preserves the runtime role stage and actionable IAM error %s for retry",
+  async (errorKey) => {
+    const input = {
+      region: "cn-beijing",
+      requestId: "12345678-90ab-4cde-8f01-23456789abcd",
+      agentId: "mi-1234567890ab4cde8f012345",
+      description: "",
+    };
+    sessionStorage.setItem(
+      "mpa-create:cn-beijing",
+      JSON.stringify({ input, submitted: true, step: 2, taskId: "iam-task" }),
+    );
+    vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
+      configured: true,
+      region: "cn-beijing",
+    });
+    vi.mocked(api.getMpaCreation).mockResolvedValue({
+      ...input,
+      taskId: "iam-task",
+      state: "failed",
+      stage: "iam_role",
+      error: errorKey,
+    });
+    await mount();
+    expect(document.body.textContent).toContain(
+      "myAgents.mpaCreate.stages.iam_role",
+    );
+    expect(document.body.textContent).toContain(
+      `myAgents.mpaCreate.${errorKey}`,
+    );
+    expect(button("retry").disabled).toBe(false);
+    expect(
+      JSON.parse(sessionStorage.getItem("mpa-create:cn-beijing")!).input
+        .agentId,
+    ).toBe(input.agentId);
+  },
+);
 
 it("uses overseas console links and submits the BytePlus region without browser provider overrides", async () => {
   vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
@@ -1027,4 +1254,662 @@ it("keeps BytePlus preparation errors visible and allows rechecking", async () =
   });
   await act(async () => button("reload").click());
   expect(button("submit").disabled).toBe(false);
+});
+
+it("prepares OpenViking automatically without manual fields and preserves retry mode", async () => {
+  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
+    configured: true,
+    region: "cn-beijing",
+    openvikingMode: "auto",
+  });
+  vi.mocked(api.startMpaCreation).mockRejectedValue(new Error("Response lost"));
+  await mount();
+  await goToFinal();
+  expect(document.querySelector('input[name="openvikingUrl"]')).toBeNull();
+  expect(document.querySelector('input[name="openvikingApiKey"]')).toBeNull();
+  expect(document.body.textContent).toContain(
+    "myAgents.mpaCreate.openvikingAutoDescription",
+  );
+  await act(async () => button("submit").click());
+  expect(api.startMpaCreation).toHaveBeenCalledWith(
+    expect.objectContaining({
+      openvikingMode: "auto",
+      openvikingApiKey: "",
+    }),
+    expect.any(AbortSignal),
+  );
+  const saved = JSON.parse(sessionStorage.getItem("mpa-create:cn-beijing")!);
+  expect(saved.input.openvikingMode).toBe("auto");
+  expect(saved.input.openvikingApiKey).toBeUndefined();
+});
+
+it("new requests pin per-agent PG", async () => {
+  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
+    configured: true,
+    region: "cn-beijing",
+    postgresMode: "auto",
+    businessWorkspaceMode: "per-agent",
+  } as api.MpaCreationConfig);
+  vi.mocked(api.startMpaCreation).mockResolvedValue({
+    requestId: "unused",
+    description: "",
+    region: "cn-beijing",
+    taskId: "pg-task",
+    state: "failed",
+    stage: "business_workspace",
+  });
+  await mount();
+  await act(async () => button("next").click());
+  expect(document.body.textContent).toContain(
+    "myAgents.mpaCreate.pgPerAgentDescription",
+  );
+  await act(async () => button("next").click());
+  await act(async () => submitButton().click());
+  expect(
+    vi.mocked(api.startMpaCreation).mock.calls[0][0].businessWorkspaceMode,
+  ).toBe("per-agent");
+});
+
+it("does not upgrade submitted shared PG requests when new defaults arrive", async () => {
+  sessionStorage.setItem(
+    "mpa-create:cn-beijing",
+    JSON.stringify({
+      input: {
+        requestId: "legacy",
+        agentId: "mi-old",
+        description: "",
+        region: "cn-beijing",
+      },
+      submitted: true,
+      step: 2,
+    }),
+  );
+  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
+    configured: true,
+    region: "cn-beijing",
+    postgresMode: "auto",
+    businessWorkspaceMode: "per-agent",
+  });
+  vi.mocked(api.startMpaCreation).mockReturnValue(new Promise(() => {}));
+  await mount(false);
+  await act(async () => button("previousStep").click());
+  expect(document.body.textContent).toContain(
+    "myAgents.mpaCreate.pgAutoDescription",
+  );
+  expect(document.body.textContent).not.toContain(
+    "myAgents.mpaCreate.pgPerAgentDescription",
+  );
+  await act(async () => button("next").click());
+  await act(async () => submitButton().click());
+  expect(
+    vi.mocked(api.startMpaCreation).mock.calls[0][0].businessWorkspaceMode,
+  ).toBeUndefined();
+});
+
+it.each(["manual", "auto"] as const)(
+  "preserves dedicated lifecycle settings with a Role bucket in %s OpenViking mode",
+  async (openvikingMode) => {
+    vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
+      configured: true,
+      region: "cn-beijing",
+      postgresMode: "auto",
+      businessWorkspaceMode: "per-agent",
+      businessDatabaseName: "aidb",
+      openvikingMode,
+    } as api.MpaCreationConfig);
+    vi.mocked(api.checkMpaCreationName).mockResolvedValue({ available: true });
+    vi.mocked(api.startMpaCreation).mockReturnValue(new Promise(() => {}));
+    await mount();
+    await goToFinal();
+    await selectBucket("agentkit-platform-output");
+    expect(submitButton().disabled).toBe(false);
+    await act(async () => submitButton().click());
+    expect(api.checkMpaCreationName).toHaveBeenCalledTimes(1);
+    expect(api.startMpaCreation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "test-agent",
+        maxInstance: 20,
+        businessWorkspaceMode: "per-agent",
+        businessDatabaseName: "aidb",
+        tosBucket: "agentkit-platform-output",
+      }),
+      expect.any(AbortSignal),
+    );
+    const payload = vi.mocked(api.startMpaCreation).mock.calls[0][0];
+    if (openvikingMode === "auto") {
+      expect(payload.openvikingMode).toBe("auto");
+    } else {
+      expect(payload).not.toHaveProperty("openvikingMode");
+    }
+    expect(payload).not.toHaveProperty("tosAccessKey");
+    expect(payload).not.toHaveProperty("tosSecretKey");
+  },
+);
+
+it("checks a new aidb request name before moving to the database step", async () => {
+  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
+    configured: true,
+    region: "cn-beijing",
+    postgresMode: "auto",
+    businessWorkspaceMode: "per-agent",
+    businessDatabaseName: "aidb",
+  } as api.MpaCreationConfig);
+  vi.mocked(api.checkMpaCreationName).mockRejectedValue(
+    new api.MpaCreationRequestError(409, "collision", "runtimeNameTaken"),
+  );
+  await mount();
+  await act(async () => button("next").click());
+  expect(document.body.textContent).toContain(
+    "myAgents.mpaCreate.runtimeNameTaken",
+  );
+  expect(field("name").disabled).toBe(false);
+  expect(api.startMpaCreation).not.toHaveBeenCalled();
+  expect(document.body.textContent).not.toContain(
+    "myAgents.mpaCreate.pgAidbDescription",
+  );
+  await edit("name", "free-name");
+  vi.mocked(api.checkMpaCreationName).mockResolvedValue({ available: true });
+  await act(async () => button("next").click());
+  expect(document.body.textContent).toContain(
+    "myAgents.mpaCreate.pgAidbDescription",
+  );
+});
+
+it("pins aidb in a new submission and keeps duplicate POST errors editable", async () => {
+  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
+    configured: true,
+    region: "cn-beijing",
+    postgresMode: "auto",
+    businessWorkspaceMode: "per-agent",
+    businessDatabaseName: "aidb",
+  } as api.MpaCreationConfig);
+  vi.mocked(api.checkMpaCreationName).mockResolvedValue({ available: true });
+  vi.mocked(api.startMpaCreation).mockRejectedValue(
+    new api.MpaCreationRequestError(409, "collision", "runtimeNameTaken"),
+  );
+  await mount();
+  await goToFinal();
+  await act(async () => submitButton().click());
+  expect(api.startMpaCreation).toHaveBeenCalledWith(
+    expect.objectContaining({
+      businessDatabaseName: "aidb",
+      businessWorkspaceMode: "per-agent",
+    }),
+    expect.any(AbortSignal),
+  );
+  await act(async () => button("previousStep").click());
+  await act(async () => button("previousStep").click());
+  expect(field("name").disabled).toBe(false);
+});
+
+it("aborts a pending name check and ignores its late result on unmount", async () => {
+  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
+    configured: true,
+    region: "cn-beijing",
+    postgresMode: "auto",
+    businessWorkspaceMode: "per-agent",
+    businessDatabaseName: "aidb",
+  });
+  let resolve!: (value: { available: boolean }) => void;
+  vi.mocked(api.checkMpaCreationName).mockReturnValue(
+    new Promise((callback) => {
+      resolve = callback;
+    }),
+  );
+  await mount();
+  await act(async () => {
+    button("next").click();
+    button("next").click();
+  });
+  expect(api.checkMpaCreationName).toHaveBeenCalledTimes(1);
+  const signal = vi.mocked(api.checkMpaCreationName).mock.calls[0][1]!;
+  expect(signal.aborted).toBe(false);
+  await act(async () => root.render(null));
+  expect(signal.aborted).toBe(true);
+  await act(async () => resolve({ available: true }));
+  expect(host.textContent).toBe("");
+  expect(api.startMpaCreation).not.toHaveBeenCalled();
+});
+
+it("new MPA requests default maximum instances to 20 and submit edits", async () => {
+  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
+    configured: true,
+    region: "cn-beijing",
+  });
+  vi.mocked(api.startMpaCreation).mockResolvedValue({
+    requestId: "fixture",
+    description: "",
+    region: "cn-beijing",
+    taskId: "scaling-task",
+    state: "failed",
+    stage: "worker",
+  });
+  await mount();
+  expect(field("maxInstance").value).toBe("20");
+  await edit("maxInstance", "35");
+  await act(async () => button("next").click());
+  await act(async () => button("previousStep").click());
+  expect(field("maxInstance").value).toBe("35");
+  expect(
+    JSON.parse(sessionStorage.getItem("mpa-create:cn-beijing")!).input
+      .maxInstance,
+  ).toBe(35);
+  await goToFinal();
+  await act(async () => submitButton().click());
+  expect(vi.mocked(api.startMpaCreation).mock.calls[0][0].maxInstance).toBe(35);
+  await act(async () => button("previousStep").click());
+  await act(async () => button("previousStep").click());
+  expect(field("maxInstance").disabled).toBe(true);
+});
+
+async function mountByteplusScaling() {
+  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
+    configured: true,
+    region: "ap-southeast-1",
+    postgresMode: "auto",
+  });
+  vi.mocked(api.startMpaCreation).mockResolvedValue({
+    requestId: "bp-scaling",
+    description: "",
+    region: "ap-southeast-1",
+    taskId: "bp-scaling-task",
+    state: "failed",
+    stage: "worker",
+  });
+  await act(async () => root.render(
+    <MpaCreateDialog region="ap-southeast-1" cloudProvider="byteplus"
+      onClose={() => {}} onCreated={() => {}} />,
+  ));
+}
+
+it("defaults new BytePlus maximum instances to 10 and resets new requests to 10", async () => {
+  await mountByteplusScaling();
+  expect(field("maxInstance").value).toBe("10");
+  await goToFinal();
+  await act(async () => submitButton().click());
+  expect(vi.mocked(api.startMpaCreation).mock.calls[0][0].maxInstance).toBe(10);
+  await act(async () => button("newAgent").click());
+  expect(field("maxInstance").value).toBe("10");
+  expect(field("maxInstance").disabled).toBe(false);
+});
+
+it.each([undefined, 35])("preserves BytePlus editable draft maximum %s", async (maximum) => {
+  sessionStorage.setItem("mpa-create:ap-southeast-1", JSON.stringify({
+    input: { requestId: "bp-draft", region: "ap-southeast-1", name: "bp-draft",
+      description: "", ...(maximum === undefined ? {} : { maxInstance: maximum }) },
+    step: 0,
+  }));
+  await mountByteplusScaling();
+  expect(field("maxInstance").value).toBe(String(maximum ?? 10));
+  await goToFinal();
+  await act(async () => submitButton().click());
+  expect(vi.mocked(api.startMpaCreation).mock.calls[0][0].maxInstance).toBe(maximum ?? 10);
+});
+
+it.each([undefined, 20])("preserves submitted BytePlus maximum %s on retry", async (maximum) => {
+  sessionStorage.setItem("mpa-create:ap-southeast-1", JSON.stringify({
+    input: { requestId: "bp-retry", region: "ap-southeast-1", name: "bp-retry",
+      description: "", ...(maximum === undefined ? {} : { maxInstance: maximum }) },
+    submitted: true,
+    step: 2,
+  }));
+  await mountByteplusScaling();
+  await act(async () => submitButton().click());
+  expect(vi.mocked(api.startMpaCreation).mock.calls[0][0].maxInstance).toBe(maximum);
+});
+
+it.each(["", "0", "-1", "1.5", "9007199254740992"])(
+  "rejects invalid maximum instances %s before Next",
+  async (value) => {
+    vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
+      configured: true,
+      region: "cn-beijing",
+    });
+    await mount();
+    await edit("maxInstance", value);
+    expect(field("maxInstance").getAttribute("aria-invalid")).toBe("true");
+    expect(button("next").disabled).toBe(true);
+    expect(api.startMpaCreation).not.toHaveBeenCalled();
+  },
+);
+
+it("highlights duplicate names using the shared danger Alert", async () => {
+  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
+    configured: true,
+    region: "cn-beijing",
+    businessDatabaseName: "aidb",
+    businessWorkspaceMode: "per-agent",
+    postgresMode: "auto",
+  });
+  vi.mocked(api.checkMpaCreationName).mockRejectedValue(
+    new api.MpaCreationRequestError(409, "collision", "runtimeNameTaken"),
+  );
+  await mount();
+  await act(async () => button("next").click());
+  const alert = document.querySelector(
+    '[role="alert"][data-color="danger"][data-variant="soft"]',
+  );
+  expect(alert?.textContent).toContain("myAgents.mpaCreate.runtimeNameTaken");
+});
+
+it("does not add maximum instances to submitted legacy drafts", async () => {
+  sessionStorage.setItem(
+    "mpa-create:cn-beijing",
+    JSON.stringify({
+      input: {
+        requestId: "legacy",
+        agentId: "mi-old",
+        description: "",
+        region: "cn-beijing",
+      },
+      submitted: true,
+      step: 2,
+    }),
+  );
+  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
+    configured: true,
+    region: "cn-beijing",
+  });
+  vi.mocked(api.startMpaCreation).mockReturnValue(new Promise(() => {}));
+  await mount(false);
+  await act(async () => submitButton().click());
+  expect(
+    vi.mocked(api.startMpaCreation).mock.calls[0][0].maxInstance,
+  ).toBeUndefined();
+});
+
+it("restores the maximum from an editable draft and resets it for a new request", async () => {
+  sessionStorage.setItem(
+    "mpa-create:cn-beijing",
+    JSON.stringify({
+      input: {
+        requestId: "saved-request",
+        name: "saved-name",
+        description: "",
+        region: "cn-beijing",
+        maxInstance: 35,
+      },
+      step: 0,
+    }),
+  );
+  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
+    configured: true,
+    region: "cn-beijing",
+  });
+  vi.mocked(api.startMpaCreation).mockResolvedValue({
+    requestId: "saved-request",
+    description: "",
+    region: "cn-beijing",
+    taskId: "restore-task",
+    state: "failed",
+    stage: "worker",
+    maxInstance: 35,
+  });
+  await mount();
+  expect(field("maxInstance").value).toBe("35");
+  await goToFinal();
+  await act(async () => submitButton().click());
+  await act(async () => button("newAgent").click());
+  expect(field("maxInstance").value).toBe("20");
+  expect(field("maxInstance").disabled).toBe(false);
+});
+
+it("keeps an edited maximum when a late creation config arrives", async () => {
+  let resolve!: (value: api.MpaCreationConfig) => void;
+  vi.mocked(api.getMpaCreationConfig).mockReturnValue(
+    new Promise((callback) => {
+      resolve = callback;
+    }),
+  );
+  await mount();
+  await edit("maxInstance", "35");
+  await act(async () => resolve({ configured: true, region: "cn-beijing" }));
+  expect(field("maxInstance").value).toBe("35");
+});
+
+it("highlights a late task-level duplicate name error", async () => {
+  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
+    configured: true,
+    region: "cn-beijing",
+  });
+  const task: api.MpaCreationTask = {
+    requestId: "fixture",
+    description: "",
+    region: "cn-beijing",
+    taskId: "late-conflict",
+    state: "failed",
+    stage: "worker",
+    error: "runtimeNameTaken",
+  };
+  vi.mocked(api.startMpaCreation).mockResolvedValue(task);
+  vi.mocked(api.getMpaCreation).mockResolvedValue(task);
+  await mount();
+  await goToFinal();
+  await act(async () => submitButton().click());
+  expect(
+    document.querySelector(
+      '[role="alert"][data-color="danger"][data-variant="soft"]',
+    )?.textContent,
+  ).toContain("myAgents.mpaCreate.runtimeNameTaken");
+});
+
+it("automatically prepares BytePlus personal OV and explains Runtime integration", async () => {
+  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
+    configured: true,
+    region: "ap-southeast-1",
+    postgresMode: "auto",
+    openvikingMode: "auto",
+  });
+  vi.mocked(api.startMpaCreation).mockRejectedValue(new Error("Response lost"));
+  await act(async () =>
+    root.render(
+      <MpaCreateDialog
+        region="ap-southeast-1"
+        cloudProvider="byteplus"
+        onClose={() => {}}
+        onCreated={() => {}}
+      />,
+    ),
+  );
+  await edit("name", "overseas-auto-agent");
+  await goToFinal();
+  expect(field("openvikingUrl")).toBeFalsy();
+  expect(field("openvikingApiKey")).toBeFalsy();
+  expect(document.body.textContent).toContain(
+    "myAgents.mpaCreate.openvikingAutoByteplusDescription",
+  );
+  expect(document.body.textContent).toContain(
+    "myAgents.mpaCreate.openvikingAutoByteplusRequirements",
+  );
+  await act(async () => button("submit").click());
+  expect(api.startMpaCreation).toHaveBeenCalledWith(
+    expect.objectContaining({ openvikingMode: "auto" }),
+    expect.any(AbortSignal),
+  );
+  expect(
+    JSON.parse(sessionStorage.getItem("mpa-create:ap-southeast-1")!).input
+      .openvikingMode,
+  ).toBe("auto");
+});
+
+it("restores automatic OV in editable BytePlus drafts without manual values", async () => {
+  sessionStorage.setItem(
+    "mpa-create:ap-southeast-1",
+    JSON.stringify({
+      step: 2,
+      input: {
+        requestId: "bb000000-0000-4000-8000-000000000001",
+        region: "ap-southeast-1",
+        name: "byteplus-no-memory",
+        description: "",
+        openvikingMode: "auto",
+        openvikingUrl: "https://old.example.test",
+        openvikingResourceId: "ov-old",
+      },
+    }),
+  );
+  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
+    configured: true,
+    region: "ap-southeast-1",
+    postgresMode: "auto",
+    openvikingMode: "auto",
+  });
+  vi.mocked(api.startMpaCreation).mockReturnValue(new Promise(() => {}));
+  await act(async () =>
+    root.render(
+      <MpaCreateDialog
+        region="ap-southeast-1"
+        cloudProvider="byteplus"
+        onClose={() => {}}
+        onCreated={() => {}}
+      />,
+    ),
+  );
+  expect(document.body.textContent).toContain(
+    "myAgents.mpaCreate.openvikingAutoByteplusDescription",
+  );
+  expect(field("openvikingUrl")).toBeFalsy();
+  expect(field("openvikingApiKey")).toBeFalsy();
+  await act(async () => button("submit").click());
+  const input = vi.mocked(api.startMpaCreation).mock.calls[0][0];
+  expect(input.openvikingMode).toBe("auto");
+  expect(input.openvikingUrl).toBeUndefined();
+  expect(input.openvikingResourceId).toBeUndefined();
+  expect(input.openvikingApiKey).toBe("");
+  expect(input.requestId).toBe("bb000000-0000-4000-8000-000000000001");
+});
+
+it("preserves submitted BytePlus automatic requests on retry", async () => {
+  const input = {
+    requestId: "bb000000-0000-4000-8000-000000000002",
+    region: "ap-southeast-1",
+    name: "byteplus-old-auto",
+    description: "",
+    openvikingMode: "auto" as const,
+  };
+  sessionStorage.setItem(
+    "mpa-create:ap-southeast-1",
+    JSON.stringify({
+      submitted: true,
+      taskId: "old-byteplus-task",
+      step: 2,
+      input,
+    }),
+  );
+  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
+    configured: true,
+    region: "ap-southeast-1",
+    postgresMode: "auto",
+  });
+  vi.mocked(api.getMpaCreation).mockResolvedValue({
+    ...input,
+    taskId: "old-byteplus-task",
+    state: "failed",
+    stage: "openviking",
+    error: "openvikingCreateUnknown",
+  });
+  vi.mocked(api.startMpaCreation).mockReturnValue(new Promise(() => {}));
+  await act(async () =>
+    root.render(
+      <MpaCreateDialog
+        region="ap-southeast-1"
+        cloudProvider="byteplus"
+        onClose={() => {}}
+        onCreated={() => {}}
+      />,
+    ),
+  );
+  expect(document.body.textContent).toContain(
+    "myAgents.mpaCreate.openvikingAutoByteplusDescription",
+  );
+  await act(async () => button("retry").click());
+  expect(api.startMpaCreation).toHaveBeenCalledWith(
+    expect.objectContaining(input),
+    expect.any(AbortSignal),
+  );
+});
+
+it("keeps a submitted BytePlus OV intent during configuration refresh", async () => {
+  vi.mocked(api.getMpaCreationConfig)
+    .mockResolvedValueOnce({
+      configured: true,
+      region: "ap-southeast-1",
+      postgresMode: "auto",
+      openvikingMode: "auto",
+    })
+    .mockResolvedValue({
+      configured: true,
+      region: "ap-southeast-1",
+      postgresMode: "auto",
+    });
+  vi.mocked(api.startMpaCreation).mockImplementation(async (input) => ({
+    ...input,
+    taskId: "refresh-auto",
+    state: "failed",
+    stage: "openviking",
+    error: "openvikingCreateUnknown",
+  }));
+  vi.mocked(api.getMpaCreation).mockImplementation(async () => ({
+    ...vi.mocked(api.startMpaCreation).mock.calls[0][0],
+    taskId: "refresh-auto",
+    state: "failed",
+    stage: "openviking",
+    error: "openvikingCreateUnknown",
+  }));
+  await act(async () =>
+    root.render(
+      <MpaCreateDialog
+        region="ap-southeast-1"
+        cloudProvider="byteplus"
+        onClose={() => {}}
+        onCreated={() => {}}
+      />,
+    ),
+  );
+  await edit("name", "submitted-auto");
+  await goToFinal();
+  await act(async () => button("submit").click());
+  await act(async () => button("retry").click());
+  expect(vi.mocked(api.startMpaCreation).mock.calls[1][0].openvikingMode).toBe(
+    "auto",
+  );
+});
+
+it("preserves submitted BytePlus no-OV requests after automatic OV is restored", async () => {
+  const input = {
+    requestId: "bb000000-0000-4000-8000-000000000003",
+    region: "ap-southeast-1",
+    name: "byteplus-existing-no-ov",
+    description: "",
+  };
+  sessionStorage.setItem(
+    "mpa-create:ap-southeast-1",
+    JSON.stringify({ submitted: true, taskId: "no-ov-task", step: 2, input }),
+  );
+  vi.mocked(api.getMpaCreationConfig).mockResolvedValue({
+    configured: true,
+    region: "ap-southeast-1",
+    openvikingMode: "auto",
+  });
+  vi.mocked(api.getMpaCreation).mockResolvedValue({
+    ...input,
+    taskId: "no-ov-task",
+    state: "failed",
+    stage: "deploying",
+  });
+  vi.mocked(api.startMpaCreation).mockReturnValue(new Promise(() => {}));
+  await act(async () =>
+    root.render(
+      <MpaCreateDialog
+        region="ap-southeast-1"
+        cloudProvider="byteplus"
+        onClose={() => {}}
+        onCreated={() => {}}
+      />,
+    ),
+  );
+  await act(async () => button("retry").click());
+  const retry = vi.mocked(api.startMpaCreation).mock.calls[0][0];
+  expect(retry.requestId).toBe(input.requestId);
+  expect(retry.openvikingMode).toBeUndefined();
 });

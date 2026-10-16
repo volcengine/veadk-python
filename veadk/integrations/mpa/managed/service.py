@@ -36,13 +36,28 @@ from veadk.integrations.mpa.tags import (
 )
 from veadk.integrations.ve_identity.identity_client import IdentityClient
 
+from .apm_key import ApmKeyError, RUNTIME_APM_KEY, get_runtime_apm_key
 from .config import ConfigurationError, Profile, Runtime, validate_postgres_layout
 from .database import AgentDatabaseProvisioner, AgentDeploymentRegistry, DeploymentError
 from .gateway import SharedAPIGService
 from .gateway_cloud import GatewayCloud
-from .iam import ROLE_NAME, IamCloud, IamError, ensure_runtime_role
+from .iam import (
+    ROLE_NAME,
+    IamCloud,
+    IamError,
+    ensure_runtime_role,
+    ensure_tos_mount_permissions,
+)
 from .model_key import resolve_model_key
+from .names import check_creation_name
 from .network import AccountNetworkProvisioner, NetworkOptions
+from .openviking import (
+    OpenVikingCloud,
+    OpenVikingError,
+    byteplus_model_endpoints,
+    ensure_openviking,
+    supports_auto_openviking,
+)
 from .runtime import AgentRuntimeDeployer, RuntimeCloud, env_map, template_from_runtime
 from .worker import WorkerCloud, ensure_worker
 
@@ -59,6 +74,11 @@ def bind_postgres_workspaces(profile: Profile, record: dict):
     }
     if any(key in record and record[key] != value for key, value in binding.items()):
         raise DeploymentError("Registered Workspace binding differs from configuration")
+    mode = settings.business_workspace_mode
+    if record.get("business_workspace_mode", mode) != mode:
+        raise DeploymentError(
+            "Registered business Workspace mode differs from configuration"
+        )
     business = make_url(profile.admin_url)
     if (
         "database_host" in record
@@ -69,7 +89,17 @@ def bind_postgres_workspaces(profile: Profile, record: dict):
         raise DeploymentError(
             "Registered business database endpoint differs from configuration"
         )
-    record.update(binding)
+    if mode == "per-agent":
+        layout = {
+            "business_workspace_name": settings.business_workspace_name,
+            "business_database_name": settings.business_database_name,
+        }
+        if any(key in record and record[key] != value for key, value in layout.items()):
+            raise DeploymentError(
+                "Registered business Workspace layout differs from configuration"
+            )
+        binding.update(layout)
+    record.update(binding, business_workspace_mode=mode)
 
 
 def fresh_template(profile, agent_id, account):
@@ -193,11 +223,11 @@ def apply_identity_settings(template: dict, values: dict):
     template["Envs"] = [{"Key": key, "Value": value} for key, value in env.items()]
 
 
-def apply_tos_runtime_env(env: dict[str, str], worker) -> None:
+def apply_tos_runtime_env(env: dict[str, str], worker, *, enabled: bool = True) -> None:
     """Set provisioner-owned, non-secret TOS Session mount metadata."""
     env.pop("MPA_CODEX_WORKER_TOS_MOUNT_ENABLED", None)
     env.pop("MPA_CODEX_WORKER_TOS_BUCKET", None)
-    if worker.tos_mount_enabled:
+    if enabled and worker.tos_mount_enabled:
         env["MPA_CODEX_WORKER_TOS_MOUNT_ENABLED"] = "true"
         env["MPA_CODEX_WORKER_TOS_BUCKET"] = worker.tos_bucket
 
@@ -210,6 +240,7 @@ async def provision(
     studio_runtime_owner: str | None = None,
     description: str = "",
     runtime_name: str = "",
+    expected_account: str = "",
     progress=lambda stage: None,
 ):
     if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", agent_id) or not owner:
@@ -227,6 +258,12 @@ async def provision(
         else None
     )
     validate_postgres_layout(profile)
+    ov_model_endpoints = None
+    if profile.managed.openviking.mode == "auto":
+        if not supports_auto_openviking(profile.provider, profile.region):
+            raise OpenVikingError("openvikingConfigurationConflict")
+        if profile.provider == "byteplus":
+            ov_model_endpoints = byteplus_model_endpoints()
     cloud = RuntimeCloud(
         region=profile.region,
         credential_file=profile.managed.credential_file,
@@ -237,7 +274,31 @@ async def provision(
     expected = str(profile.values.get("account_id", ""))
     if expected and account != expected:
         raise DeploymentError("Deployment credentials differ from the expected account")
+    if expected_account and expected_account != account:
+        raise DeploymentError(
+            "Deployment credentials differ from the creation account snapshot"
+        )
+    if (
+        not expected_account
+        and profile.managed.postgres
+        and profile.managed.postgres.business_database_name == "aidb"
+    ):
+        await check_creation_name(
+            profile,
+            cloud,
+            agent_id=agent_id,
+            name=runtime_name or agent_id,
+            owner=studio_runtime_owner or "",
+            verified_creation_account=expected_account,
+        )
     profile = await resolve_model_key(profile, cloud)
+    apm_key = ""
+    if studio_runtime_owner is not None and profile.provider == "byteplus":
+        try:
+            apm_key = await get_runtime_apm_key(profile, cloud)
+        except ApmKeyError:
+            if profile.managed.runtime.env.get(RUNTIME_APM_KEY, ""):
+                raise
     if profile.managed.iam.mode == "auto":
         if (
             profile.managed.runtime.role_name
@@ -246,6 +307,12 @@ async def provision(
             raise IamError(key="iamConfigurationConflict")
         progress("iam_role")
         await ensure_runtime_role(IamCloud(cloud), account)
+    worker = profile.managed.worker
+    if worker.tos_mount_enabled and worker.tos_credential_type == "iam_role":
+        progress("iam_role")
+        await ensure_tos_mount_permissions(
+            IamCloud(cloud), account, worker.tos_bucket, role_name=worker.role_name
+        )
     identity = await ensure_workload_identity(profile, cloud, agent_id)
     if profile.managed.postgres and profile.managed.postgres.mode == "auto":
         from .pg_bootstrap import prepare_postgres
@@ -260,6 +327,8 @@ async def provision(
             ),
             account,
             progress=progress,
+            agent_id=agent_id,
+            runtime_name=runtime_name,
         )
     if profile.managed.from_runtime:
         template = template_from_runtime(
@@ -278,6 +347,8 @@ async def provision(
             studio_runtime_tags,
         )
     env = env_map(template)
+    if apm_key:
+        env[RUNTIME_APM_KEY] = apm_key
     if profile.openviking_enabled is not None:
         selected_openviking = (
             {
@@ -332,7 +403,15 @@ async def provision(
 
     CreateRuntimeRequest.model_validate({**template, "Name": "validation-only"})
     options = NetworkOptions(network.vpc_cidr, network.subnet_prefix, network.zone)
-    databases = AgentDatabaseProvisioner(admin_url=profile.admin_url, runtime_env=env)
+    database_options = {}
+    if (
+        profile.managed.postgres
+        and profile.managed.postgres.business_database_name == "aidb"
+    ):
+        database_options["business_database_name"] = "aidb"
+    databases = AgentDatabaseProvisioner(
+        admin_url=profile.admin_url, runtime_env=env, **database_options
+    )
     registry = AgentDeploymentRegistry(profile.shared_url)
     gateway_cloud = GatewayCloud(cloud)
     try:
@@ -340,6 +419,8 @@ async def provision(
         await registry.initialize()
         async with registry.lock(account, profile.region, agent_id) as entry:
             record = await entry.read()
+            if record.get("state") in {"deleting", "deleted"}:
+                raise DeploymentError("Agent deletion has started; use a new agent ID")
             if record and record.get("studio_owner") != owner:
                 raise DeploymentError(
                     "Agent belongs to another owner; use a new agent ID"
@@ -401,6 +482,29 @@ async def provision(
                 project=template.get("ProjectName") or "default",
                 runtime_name=runtime_name,
             )
+            worker_record = await entry.read()
+            apply_tos_runtime_env(
+                env,
+                profile.managed.worker,
+                enabled=not bool(worker_record.get("worker_tos_mount_disabled")),
+            )
+            if profile.managed.openviking.mode == "auto":
+                env.update(
+                    await ensure_openviking(
+                        entry,
+                        OpenVikingCloud(cloud),
+                        account=account,
+                        region=profile.region,
+                        agent_id=agent_id,
+                        provider=profile.provider,
+                        model_endpoints=ov_model_endpoints,
+                        model_api_key=profile.values.get("model_api_key")
+                        or env.get("MODEL_AGENT_API_KEY", ""),
+                        project=template.get("ProjectName") or "default",
+                        timeout=min(600, profile.managed.timeout_seconds),
+                        progress=progress,
+                    )
+                )
         env.update(AGENTKIT_TOOL_ID=tool_id, AGENTKIT_TOOL_REGION=profile.region)
         template["ToolId"] = tool_id
         template["Envs"] = [{"Key": k, "Value": v} for k, v in env.items()]

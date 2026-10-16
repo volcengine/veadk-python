@@ -62,23 +62,36 @@ def tos_mount_enabled(
 
 
 def build_tos_mount_config(
-    *, tos_access_key: str, tos_secret_key: str, tos_bucket: str, region: str
+    *,
+    tos_access_key: str = "",
+    tos_secret_key: str = "",
+    tos_bucket: str,
+    region: str,
+    tos_credential_type: str = "access_key",
 ) -> Any:
     """Build the Tool-level TOS configuration for per-session output paths."""
     from agentkit.sdk.tools import types as t
+    from agentkit.toolkit.cli.sandbox.tos_config import (
+        DEFAULT_TOS_BUCKET_PATH,
+        normalize_tos_credential_type,
+    )
     from agentkit.toolkit.volcengine.services.tos_service import TOSService
 
+    credential_type = normalize_tos_credential_type(tos_credential_type)
+    iam_role = credential_type == t.CredentialType.TOS_CREDENTIAL_TYPE_IAM_ROLE
     return t.TosMountForCreateTool(
         EnableTos=True,
-        CredentialType=t.CredentialType.TOS_CREDENTIAL_TYPE_ACCESS_KEY,
-        Credentials=t.TosMountCredentialsForCreateTool(
+        CredentialType=credential_type,
+        Credentials=None
+        if iam_role
+        else t.TosMountCredentialsForCreateTool(
             AccessKeyId=tos_access_key.strip(),
             SecretAccessKey=tos_secret_key.strip(),
         ),
         MountPoints=[
             t.TosMountMountPointsItemForCreateTool(
                 BucketName=tos_bucket.strip(),
-                BucketPath=TOS_MOUNT_BASE_PATH,
+                BucketPath=DEFAULT_TOS_BUCKET_PATH if iam_role else TOS_MOUNT_BASE_PATH,
                 Endpoint=TOSService.build_mount_endpoint(region.strip()),
                 LocalMountPath=TOS_MOUNT_LOCAL_PATH,
                 ReadOnly=False,

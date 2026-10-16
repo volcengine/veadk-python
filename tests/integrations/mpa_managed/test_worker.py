@@ -592,6 +592,71 @@ def test_worker_tos_metadata_mismatch_fails_closed():
         )
 
 
+@pytest.mark.parametrize(
+    "mode,role,credentials",
+    [
+        ("TOS_CREDENTIAL_TYPE_ACCESS_KEY", "WorkerRole", None),
+        ("TOS_CREDENTIAL_TYPE_IAM_ROLE", "OtherRole", None),
+        ("TOS_CREDENTIAL_TYPE_IAM_ROLE", "WorkerRole", {"AccessKeyId": "test-key"}),
+        (None, "WorkerRole", None),
+    ],
+)
+def test_iam_mount_reuse_rejects_mode_role_or_credentials_conflict(
+    mode, role, credentials
+):
+    from veadk.integrations.mpa.managed.worker import _missing_worker_metadata
+    from veadk.integrations.mpa.mpa_tool import build_tos_mount_config
+
+    expected = build_tos_mount_config(
+        tos_bucket="session-output", region="cn-beijing", tos_credential_type="iam_role"
+    ).model_dump(by_alias=True, exclude_none=True, mode="json")
+    with pytest.raises(DeploymentError, match="IAM role"):
+        _missing_worker_metadata(
+            {
+                "RoleName": role,
+                "TosMountConfig": {
+                    **expected,
+                    "CredentialType": mode,
+                    "Credentials": credentials,
+                },
+            },
+            tool_id="t-one",
+            project="default",
+            owned={},
+            agent_id="agent",
+            managed=False,
+            expected_tos=expected,
+            expected_role="WorkerRole",
+        )
+
+
+def test_iam_mount_reuse_accepts_exact_worker_role():
+    from veadk.integrations.mpa.managed.worker import _missing_worker_metadata
+    from veadk.integrations.mpa.mpa_tool import build_tos_mount_config
+
+    expected = build_tos_mount_config(
+        tos_bucket="session-output", region="cn-beijing", tos_credential_type="iam_role"
+    ).model_dump(by_alias=True, exclude_none=True, mode="json")
+    assert (
+        _missing_worker_metadata(
+            {
+                "ToolId": "t-one",
+                "ProjectName": "default",
+                "RoleName": "WorkerRole",
+                "TosMountConfig": expected,
+            },
+            tool_id="t-one",
+            project="default",
+            owned={},
+            agent_id="agent",
+            managed=False,
+            expected_tos=expected,
+            expected_role="WorkerRole",
+        )
+        == []
+    )
+
+
 def test_worker_discovery_follows_cursor_even_after_short_page():
     cloud = WorkerCloud(None)
     target = {"Name": "target", "ToolId": "target-id"}

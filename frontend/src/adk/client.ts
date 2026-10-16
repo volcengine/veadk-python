@@ -2650,7 +2650,9 @@ export interface MpaAgentDeletePreview {
     stage: string;
     description: string;
     count: number;
+    resourceId?: string;
   }>;
+  retainedResources?: Array<{ stage: string; resourceId: string; reason: string }>;
 }
 
 export interface MpaRuntimeConsoleRun {
@@ -3264,6 +3266,7 @@ export interface DeploymentResourceQuery {
   namespace?: string;
   workspaceId?: string;
   search?: string;
+  namePrefix?: string;
   pageNumber?: number;
   pageSize?: number;
 }
@@ -3284,6 +3287,7 @@ export async function listDeploymentResources(
   if (query.namespace) params.set("namespace", query.namespace);
   if (query.workspaceId) params.set("workspaceId", query.workspaceId);
   if (query.search) params.set("search", query.search);
+  if (query.namePrefix) params.set("namePrefix", query.namePrefix);
   if (query.pageNumber) params.set("pageNumber", String(query.pageNumber));
   if (query.pageSize) params.set("pageSize", String(query.pageSize));
   const response = await apiFetch(
@@ -5880,16 +5884,42 @@ export async function deleteRuntime(
   region: string,
   opts: { agentCategory?: "general" | "mpa"; mpaInstanceId?: string } = {},
 ): Promise<void> {
-  const res = await apiFetch("/web/delete-runtime", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      runtimeId,
-      region,
-      agentCategory: opts.agentCategory,
-      mpaInstanceId: opts.mpaInstanceId,
-    }),
-  });
+  const isMpa = opts.agentCategory === "mpa";
+  let res: Response;
+  try {
+    res = await apiFetch(
+      "/web/delete-runtime",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          runtimeId,
+          region,
+          agentCategory: opts.agentCategory,
+          mpaInstanceId: opts.mpaInstanceId,
+        }),
+      },
+      {},
+      isMpa ? 180_000 : DEFAULT_REQUEST_TIMEOUT_MS,
+    );
+  } catch (error) {
+    if (!isMpa || !(error instanceof Error) || error.name !== "TimeoutError")
+      throw error;
+    try {
+      const params = new URLSearchParams({ runtimeId, region });
+      const status = await apiFetch(
+        `/web/mpa-runtime-deletion-status?${params.toString()}`,
+        { cache: "no-store" },
+      );
+      if (status.ok) {
+        const result: { deleted?: unknown } | null = await status.json();
+        if (result?.deleted === true) return;
+      }
+    } catch {
+      // An unavailable confirmation must not imply successful deletion.
+    }
+    throw new Error(adkT("client.mpaDeleteUnconfirmed"));
+  }
   if (!res.ok) {
     const t = await res.text().catch(() => "");
     throw new Error(t || adkT("client.deleteFailed", { status: res.status }));
@@ -6566,7 +6596,7 @@ export async function updateSandboxTool(kind: SandboxToolKind): Promise<{
 
 
 export type ChannelScope = "group" | "group_sender" | "group_topic" | "group_topic_sender";
-export interface ChannelCapabilities { channels?: string[]; credentialBindingChannels?: string[]; serverSideBinding: boolean; bindingReady: boolean; bindingError?: string | null; multiBotChannels?: string[]; accountScopedPermissions?: boolean; }
+export interface ChannelCapabilities { feishuDomains?: string[]; channels?: string[]; credentialBindingChannels?: string[]; serverSideBinding: boolean; bindingReady: boolean; bindingError?: string | null; multiBotChannels?: string[]; accountScopedPermissions?: boolean; }
 export interface FeishuBinding {
   id: string;
   status: "PENDING" | "SCANNED" | "AUTHORIZED" | "REGISTERING" | "BOUND" | "FAILED" | "EXPIRED";

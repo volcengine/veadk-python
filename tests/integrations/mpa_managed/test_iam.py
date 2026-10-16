@@ -91,6 +91,276 @@ class FakeIAM:
         return {}
 
 
+class FakeTosIAM(FakeIAM):
+    def __init__(self):
+        super().__init__()
+        self.role = {
+            "RoleName": ROLE_NAME,
+            "Trn": f"trn:iam::123:role/{ROLE_NAME}",
+            "TrustPolicyDocument": copy.deepcopy(TRUST_DOCUMENT),
+        }
+        self.policies = {}
+        self.checked_buckets = []
+
+    async def verify_tos_bucket(self, bucket):
+        self.checked_buckets.append(bucket)
+
+    async def call(self, method, **params):
+        if method not in {"get_policy", "create_policy"}:
+            return await super().call(method, **params)
+        self.calls.append((method, params))
+        if self.fail == method:
+            raise IamError("AccessDenied")
+        name = params["PolicyName"]
+        if method == "get_policy":
+            if name not in self.policies:
+                raise IamError("PolicyNotExist")
+            return {"Policy": {"PolicyDocument": copy.deepcopy(self.policies[name])}}
+        self.policies[name] = json.loads(params["PolicyDocument"])
+        if self.race:
+            raise IamError("PolicyAlreadyExist")
+        return {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("race", [False, True])
+async def test_tos_role_grant_is_scoped_additive_and_repeatable(race):
+    from veadk.integrations.mpa.managed import iam
+
+    cloud = FakeTosIAM()
+    cloud.race = race
+    await iam.ensure_tos_mount_permissions(
+        cloud, "123", "session-output", poll_interval=0
+    )
+    assert cloud.checked_buckets == ["session-output"]
+    assert len(cloud.policies) == 1
+    name, policy = next(iter(cloud.policies.items()))
+    assert cloud.bindings == {("unrelated", "Custom"), (name, "Custom")}
+    assert policy == {
+        "Statement": [
+            {
+                "Effect": "Allow",
+                "Action": ["tos:HeadBucket", "tos:ListBucket"],
+                "Resource": ["trn:tos:::session-output"],
+            },
+            {
+                "Effect": "Allow",
+                "Action": [
+                    "tos:GetObject",
+                    "tos:PutObject",
+                    "tos:AbortMultipartUpload",
+                    "tos:DeleteObject",
+                ],
+                "Resource": ["trn:tos:::session-output/sandbox-session/*"],
+            },
+        ]
+    }
+    cloud.calls.clear()
+    await iam.ensure_tos_mount_permissions(
+        cloud, "123", "session-output", poll_interval=0
+    )
+    assert not any(
+        method.startswith(("create_", "attach_")) for method, _ in cloud.calls
+    )
+    await iam.ensure_tos_mount_permissions(
+        cloud, "123", "other-output", poll_interval=0
+    )
+    assert len(cloud.policies) == 2
+    assert cloud.policies[name] == policy
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("problem", ["account", "trust", "policy", "permission"])
+async def test_tos_role_grant_refuses_conflicts_without_overwriting(problem):
+    from veadk.integrations.mpa.managed import iam
+
+    cloud = FakeTosIAM()
+    await iam.ensure_tos_mount_permissions(
+        cloud, "123", "session-output", poll_interval=0
+    )
+    assert cloud.role is not None
+    if problem == "account":
+        cloud.role["Trn"] = f"trn:iam::456:role/{ROLE_NAME}"
+    elif problem == "trust":
+        cloud.role["TrustPolicyDocument"] = {"Statement": []}
+    elif problem == "policy":
+        next(iter(cloud.policies.values()))["Statement"][1]["Resource"] = ["*"]
+    else:
+        cloud.fail = "get_role"
+    cloud.calls.clear()
+    with pytest.raises(IamError):
+        await iam.ensure_tos_mount_permissions(
+            cloud, "123", "session-output", poll_interval=0
+        )
+    assert all(method.startswith(("get_", "list_")) for method, _ in cloud.calls)
+
+
+@pytest.mark.asyncio
+async def test_tos_role_grant_waits_for_readback_and_preserves_cancellation():
+    from veadk.integrations.mpa.managed import iam
+
+    cloud = FakeTosIAM()
+    cloud.hidden = 3
+    await iam.ensure_tos_mount_permissions(
+        cloud, "123", "session-output", poll_interval=0
+    )
+    cloud.hidden = 100000
+    with pytest.raises(IamError, match="iamVerificationFailed"):
+        await iam.ensure_tos_mount_permissions(
+            cloud, "123", "session-output", timeout=0.01, poll_interval=0.02
+        )
+    task = asyncio.create_task(
+        iam.ensure_tos_mount_permissions(
+            cloud, "123", "session-output", poll_interval=10
+        )
+    )
+    await asyncio.sleep(0.01)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert cloud.policies
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "method", ["get_policy", "create_policy", "attach_role_policy"]
+)
+async def test_tos_role_grant_propagates_provider_permission_errors(method):
+    from veadk.integrations.mpa.managed import iam
+
+    cloud = FakeTosIAM()
+    cloud.fail = method
+    with pytest.raises(IamError, match="iamPermissionDenied"):
+        await iam.ensure_tos_mount_permissions(
+            cloud, "123", "session-output", poll_interval=0
+        )
+    assert not any(name.startswith("update_") for name, _ in cloud.calls)
+
+
+@pytest.mark.asyncio
+async def test_tos_role_grant_transient_deadline_and_actual_worker_role(monkeypatch):
+    from veadk.integrations.mpa.managed import iam
+
+    cloud = FakeTosIAM()
+    assert cloud.role is not None
+    cloud.role.update(RoleName="WorkerRole", Trn="trn:iam::123:role/WorkerRole")
+    call = cloud.call
+    attempts = 0
+
+    async def transient(method, **params):
+        nonlocal attempts
+        if method == "get_policy" and attempts == 0:
+            attempts += 1
+            raise IamError("Throttling")
+        return await call(method, **params)
+
+    cloud.call = transient
+    await iam.ensure_tos_mount_permissions(
+        cloud, "123", "session-output", role_name="WorkerRole", poll_interval=0
+    )
+    assert attempts == 1
+    assert all(
+        params.get("RoleName", "WorkerRole") == "WorkerRole"
+        for _, params in cloud.calls
+    )
+    times = iter([0, 200])
+    monkeypatch.setattr(iam, "time", SimpleNamespace(monotonic=lambda: next(times)))
+    cloud.hidden = 1000
+    with pytest.raises(IamError, match="iamVerificationFailed"):
+        await iam.ensure_tos_mount_permissions(
+            cloud, "123", "session-output", role_name="WorkerRole", poll_interval=0
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bucket", ["", "*", "bad/name"])
+async def test_tos_role_grant_rejects_unsafe_names_before_cloud(bucket):
+    from veadk.integrations.mpa.managed import iam
+    from veadk.integrations.mpa.managed.config import ConfigurationError
+
+    cloud = FakeTosIAM()
+    with pytest.raises((IamError, ConfigurationError)):
+        await iam.ensure_tos_mount_permissions(cloud, "123", bucket)
+    assert not cloud.calls and not cloud.checked_buckets
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "scenario",
+    [
+        "owned",
+        "region",
+        "missing",
+        "permission",
+        "unknown",
+        "constructor",
+        "credentials",
+    ],
+)
+async def test_tos_bucket_check_uses_fresh_credentials_and_closes_client(
+    monkeypatch, scenario
+):
+    import tos
+
+    calls = []
+    closed = []
+
+    def credentials():
+        calls.append("credentials")
+        if scenario == "credentials":
+            raise RuntimeError("private-token")
+        return SimpleNamespace(
+            access_key_id="test-ak",
+            secret_access_key="test-sk",
+            session_token="test-token",
+        )
+
+    class Client:
+        def __init__(self, *args, **kwargs):
+            calls.append((args, kwargs))
+            if scenario == "constructor":
+                raise RuntimeError("private-token")
+
+        def list_buckets(self):
+            if scenario in {"permission", "unknown"}:
+                raise RuntimeError(
+                    "AccessDenied private-token"
+                    if scenario == "permission"
+                    else "private-token"
+                )
+            return SimpleNamespace(
+                buckets=[]
+                if scenario == "missing"
+                else [
+                    SimpleNamespace(
+                        name="session-output",
+                        location="other-region"
+                        if scenario == "region"
+                        else "cn-beijing",
+                    )
+                ]
+            )
+
+        def close(self):
+            closed.append(True)
+
+    monkeypatch.setattr(tos, "TosClientV2", Client)
+    cloud = IamCloud(SimpleNamespace(region="cn-beijing", _credentials=credentials))
+    if scenario == "owned":
+        await cloud.verify_tos_bucket("session-output")
+        await cloud.verify_tos_bucket("session-output")
+        assert calls.count("credentials") == 2
+        assert closed == [True, True]
+        assert calls[1][1]["security_token"] == "test-token"
+    else:
+        with pytest.raises(IamError) as caught:
+            await cloud.verify_tos_bucket("session-output")
+        assert "private-token" not in str(caught.value)
+        if scenario in {"region", "missing"}:
+            assert caught.value.key == "tosBucketUnavailable"
+        assert bool(closed) == (scenario not in {"constructor", "credentials"})
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("race", [False, True])
 async def test_new_role_and_policy_converge_and_retry_is_additive(race):
@@ -168,7 +438,7 @@ async def test_permission_error_does_not_trigger_create():
 async def test_readback_timeout_and_cancellation_keep_resources():
     cloud = FakeIAM()
     cloud.hidden = 100000
-    with pytest.raises(IamError, match="iamVerificationFailed"):
+    with pytest.raises(IamError, match="iamTemporaryFailure"):
         await ensure_runtime_role(cloud, "123", timeout=0.01, poll_interval=0.02)
     assert cloud.role and cloud.policy
     task = asyncio.create_task(ensure_runtime_role(cloud, "123", poll_interval=10))

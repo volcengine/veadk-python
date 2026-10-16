@@ -40,6 +40,8 @@ async def ensure_skill_space(
     if runtime_name:
         runtime_name = validate_runtime_name(runtime_name)
     record = await entry.read()
+    if record.get("state") in {"deleting", "deleted"}:
+        raise DeploymentError("Agent deletion has started; use a new agent ID")
     registered_id = record.get("skill_space_id", "")
     ids = {value for value in (registered_id, configured_id, current_id) if value}
     if len(ids) > 1:

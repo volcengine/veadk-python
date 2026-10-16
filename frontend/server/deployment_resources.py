@@ -20,6 +20,7 @@ import asyncio
 import json
 from collections.abc import Callable, Mapping
 from contextlib import contextmanager
+from types import SimpleNamespace
 from typing import Any, cast
 from urllib.parse import urlsplit
 
@@ -486,6 +487,34 @@ class DeploymentResourceService:
 
     def _tos_client(self):
         if self._tos is None:
+            access_key, secret_key, session_token = self.credentials or ("", "", None)
+            if access_key and secret_key:
+                import tos
+
+                from agentkit.platform import VolcConfiguration
+
+                config = VolcConfiguration(
+                    access_key=access_key,
+                    secret_key=secret_key,
+                    session_token=session_token,
+                    region=self.region,
+                    provider=self.provider,
+                )
+                endpoint = config.get_service_endpoint("tos")
+                # TOSService does not accept explicit credentials. Preserve the
+                # shape consumed by _tos_buckets without SDK rediscovery.
+                self._tos = SimpleNamespace(
+                    client=tos.TosClientV2(
+                        access_key,
+                        secret_key,
+                        endpoint.host,
+                        endpoint.region,
+                        security_token=session_token or "",
+                    ),
+                    actual_region=endpoint.region,
+                )
+                return self._tos
+
             from agentkit.toolkit.volcengine.services.tos_service import (
                 TOSService,
                 TOSServiceConfig,
@@ -543,6 +572,7 @@ class DeploymentResourceService:
         namespace: str = "",
         workspace_id: str = "",
         search: str = "",
+        name_prefix: str = "",
         page_number: int = 1,
         page_size: int = 100,
     ) -> dict[str, Any]:
@@ -562,6 +592,10 @@ class DeploymentResourceService:
                 for item in _tos_buckets(client)
                 if not item.get("Location") or item.get("Location") == service_region
             ]
+            if name_prefix:
+                all_items = [
+                    item for item in all_items if item["name"].startswith(name_prefix)
+                ]
             if search:
                 normalized_search = search.casefold()
                 all_items = [
@@ -988,6 +1022,7 @@ def mount_deployment_resource_routes(
                 namespace=str(request.query_params.get("namespace") or "").strip(),
                 workspace_id=str(request.query_params.get("workspaceId") or "").strip(),
                 search=str(request.query_params.get("search") or "").strip(),
+                name_prefix=str(request.query_params.get("namePrefix") or "").strip(),
                 page_number=page_number,
                 page_size=page_size,
             )

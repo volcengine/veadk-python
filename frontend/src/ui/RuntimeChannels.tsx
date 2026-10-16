@@ -1,7 +1,7 @@
+import type { CloudProvider } from "../adk/cloudProvider";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@openai/apps-sdk-ui/components/Button";
-import { Select } from "../components/primitives/Select/Select";
 import { Radio } from "../components/primitives/Radio/Radio";
 import {
   channelRequest,
@@ -9,7 +9,6 @@ import {
   type ChannelCapabilities,
   type ChannelDiagnostics,
   type ChannelPermission,
-  type ChannelScope,
   type FeishuBinding,
 } from "../adk/client";
 import { TextShimmer } from "./text-shimmer/TextShimmer";
@@ -21,16 +20,20 @@ import { SourceCloseIcon } from "./icons/SourceWorkspaceIcons";
 import { FeishuAccounts, type FeishuAccountPanelProps } from "./FeishuAccounts";
 import "./RuntimeChannels.css";
 
-const providers = ["feishu", "wecom", "dingtalk"] as const;
-type Provider = (typeof providers)[number];
+const allProviders = ["feishu", "lark", "wecom", "dingtalk"] as const;
+type Provider = (typeof allProviders)[number];
 type ConfigurationMethod = "quick" | "manual";
 
 export function RuntimeChannels(props: {
   runtimeId: string;
   region: string;
   showHeader?: boolean;
+  cloudProvider?: CloudProvider;
 }) {
   const { t } = useTranslation("ui");
+  const providers = allProviders.filter(
+    (value) => value !== "lark" || props.cloudProvider === "byteplus",
+  );
   const [provider, setProvider] = useState<Provider>("feishu");
   const id = useId();
   const tabs = useRef<Array<HTMLButtonElement | null>>([]);
@@ -133,12 +136,6 @@ function ChannelStatus({
 }
 
 const terminal = new Set(["BOUND", "FAILED", "EXPIRED"]);
-const scopes: ChannelScope[] = [
-  "group_sender",
-  "group",
-  "group_topic_sender",
-  "group_topic",
-];
 function ProviderChannel({
   runtimeId,
   region,
@@ -154,6 +151,9 @@ function ProviderChannel({
   provider: Provider;
 } & Partial<FeishuAccountPanelProps>) {
   const { t } = useTranslation("ui");
+  const apiProvider = provider === "lark" ? "feishu" : provider;
+  const isFeishu = apiProvider === "feishu";
+  const domain = provider === "lark" ? "lark" : "feishu";
   const ep = useMemo(() => ({ runtimeId, region }), [runtimeId, region]);
   const methodId = useId();
   const [method, setMethod] = useState<ConfigurationMethod>("quick");
@@ -172,7 +172,6 @@ function ProviderChannel({
   const [wecomPairingComplete, setWecomPairingComplete] = useState(false);
   const [uncertain, setUncertain] = useState(false);
   const [chatId, setChatId] = useState("");
-  const [scope, setScope] = useState<ChannelScope>("group_sender");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -183,7 +182,7 @@ function ProviderChannel({
   const authorizationWaiting = useRef(false);
   const storageKey = `mpa-${provider}-binding:${region}:${runtimeId}`;
   const multiBot =
-    provider === "feishu" &&
+    isFeishu &&
     (!!accountMode || !!capability?.multiBotChannels?.includes("feishu"));
   useEffect(() => {
     onBusyChange?.(busy);
@@ -224,12 +223,12 @@ function ProviderChannel({
     const [diag, permissions] = await Promise.all([
       channelRequest<ChannelDiagnostics>(
         ep,
-        `/${provider}/diagnostics${accountQuery}`,
+        `/${apiProvider}/diagnostics${accountQuery}`,
         {
           signal,
         },
       ),
-      provider === "feishu"
+      isFeishu
         ? channelRequest<{ permissions: ChannelPermission[] }>(
             ep,
             `/chat-permissions?channel=feishu${accountId ? `&appId=${encodeURIComponent(accountId)}` : ""}`,
@@ -274,12 +273,15 @@ function ProviderChannel({
         if (controller.signal.aborted) return;
         if (
           !caps.serverSideBinding ||
-          !(caps.channels ?? ["feishu"]).includes(provider)
+          (provider === "lark" &&
+            (!caps.feishuDomains?.includes("lark") ||
+              !caps.multiBotChannels?.includes("feishu"))) ||
+          !(caps.channels ?? ["feishu"]).includes(apiProvider)
         )
           throw new ChannelApiError(404);
         setCapability(caps);
         if (
-          provider === "feishu" &&
+          isFeishu &&
           caps.multiBotChannels?.includes("feishu") &&
           !accountMode
         )
@@ -304,7 +306,7 @@ function ProviderChannel({
       () => {
         void channelRequest<FeishuBinding>(
           ep,
-          `/${provider}/bindings/${encodeURIComponent(binding.id)}`,
+          `/${apiProvider}/bindings/${encodeURIComponent(binding.id)}`,
           { signal: controller.signal },
         )
           .then(async (value) => {
@@ -357,9 +359,13 @@ function ProviderChannel({
       const value = await channelRequest<FeishuBinding>(
         ep,
         retry && binding
-          ? `/${provider}/bindings/${encodeURIComponent(binding.id)}/retry`
-          : `/${provider}/bindings`,
-        { method: "POST", body: "{}", signal },
+          ? `/${apiProvider}/bindings/${encodeURIComponent(binding.id)}/retry`
+          : `/${apiProvider}/bindings`,
+        {
+          method: "POST",
+          body: provider === "lark" ? JSON.stringify({ domain }) : "{}",
+          signal,
+        },
       );
       if (!signal.aborted) {
         setBinding(value);
@@ -404,7 +410,7 @@ function ProviderChannel({
   }
   const manualSupported =
     provider === "wecom" ||
-    !!capability?.credentialBindingChannels?.includes(provider);
+    !!capability?.credentialBindingChannels?.includes(apiProvider);
   const pendingBinding = !!binding && !terminal.has(binding.status);
   const credentialDisabled = busy || loading || uncertain || pendingBinding;
   const methodDisabled = loading || (busy && !authorizing);
@@ -443,11 +449,12 @@ function ProviderChannel({
         runtimeId={runtimeId}
         region={region}
         capability={capability}
+        domain={domain}
         renderPanel={(props) => (
           <ProviderChannel
             runtimeId={runtimeId}
             region={region}
-            provider="feishu"
+            provider={provider}
             {...props}
           />
         )}
@@ -650,16 +657,17 @@ function ProviderChannel({
                         ep,
                         provider === "wecom"
                           ? "/wecom/bindings"
-                          : `/${provider}/bindings/manual`,
+                          : `/${apiProvider}/bindings/manual`,
                         {
                           method: "POST",
                           body: JSON.stringify(
                             provider === "wecom"
                               ? { botId: botId.trim(), secret: secret.trim() }
-                              : provider === "feishu"
+                              : isFeishu
                                 ? {
                                     appId: botId.trim(),
                                     appSecret: secret.trim(),
+                                    ...(provider === "lark" ? { domain } : {}),
                                   }
                                 : {
                                     clientId: botId.trim(),
@@ -682,7 +690,7 @@ function ProviderChannel({
                     {t(
                       provider === "wecom"
                         ? "channels.wecomBotId"
-                        : provider === "feishu"
+                        : isFeishu
                           ? "channels.feishuAppId"
                           : "channels.dingtalkClientId",
                     )}
@@ -690,7 +698,7 @@ function ProviderChannel({
                       name={
                         provider === "wecom"
                           ? "botId"
-                          : provider === "feishu"
+                          : isFeishu
                             ? "appId"
                             : "clientId"
                       }
@@ -713,7 +721,7 @@ function ProviderChannel({
                     {t(
                       provider === "wecom"
                         ? "channels.wecomSecret"
-                        : provider === "feishu"
+                        : isFeishu
                           ? "channels.feishuAppSecret"
                           : "channels.dingtalkClientSecret",
                     )}
@@ -789,7 +797,7 @@ function ProviderChannel({
                     void perform(async (signal) => {
                       await channelRequest(
                         ep,
-                        `?channel=${provider}&appId=${encodeURIComponent(diagnostics.appId || "")}`,
+                        `?channel=${apiProvider}&appId=${encodeURIComponent(diagnostics.appId || "")}`,
                         { method: "DELETE", signal },
                       );
                       if (!signal.aborted) {
@@ -814,12 +822,14 @@ function ProviderChannel({
               aria-live="polite"
             >
               <h3>{t("channels.pairingTitle")}</h3>
-              {provider === "feishu" && (
+              {isFeishu && (
                 <p>
                   {t(
-                    multiBot
-                      ? "channels.multiBotPairingDescription"
-                      : "channels.feishuPairingDescription",
+                    provider === "lark"
+                      ? "channels.larkPairingDescription"
+                      : multiBot
+                        ? "channels.multiBotPairingDescription"
+                        : "channels.feishuPairingDescription",
                   )}
                 </p>
               )}
@@ -882,7 +892,7 @@ function ProviderChannel({
               )}
             </div>
           )}
-          {provider === "feishu" && accountMode !== "add" && (
+          {isFeishu && accountMode !== "add" && (
             <section
               className="runtime-channels-permissions"
               aria-label={t("channels.groupsTitle")}
@@ -901,10 +911,9 @@ function ProviderChannel({
                     await channelRequest(ep, "/chat-permissions", {
                       method: "POST",
                       body: JSON.stringify({
-                        channel: provider,
+                        channel: apiProvider,
                         ...(accountId ? { appId: accountId } : {}),
                         chatId: chatId.trim(),
-                        groupSessionScope: scope,
                       }),
                       signal,
                     });
@@ -930,27 +939,6 @@ function ProviderChannel({
                       )
                         event.preventDefault();
                     }}
-                  />
-                </label>
-                <label>
-                  {t("channels.scope")}
-                  <Select
-                    style={{
-                      width: "100%",
-                      minWidth: 0,
-                      background: "hsl(var(--background))",
-                      color: "hsl(var(--foreground))",
-                      border: "1px solid hsl(var(--border))",
-                    }}
-                    value={scope}
-                    disabled={busy}
-                    options={scopes.map((value) => ({
-                      value,
-                      label: t(`channels.scope_${value}`),
-                    }))}
-                    onChange={(event) =>
-                      setScope(event.target.value as ChannelScope)
-                    }
                   />
                 </label>
                 <Button
@@ -989,7 +977,7 @@ function ProviderChannel({
                         void perform(async (signal) => {
                           await channelRequest(
                             ep,
-                            `/chat-permissions?channel=${provider}&chat_id=${encodeURIComponent(group.chatId)}${accountId ? `&appId=${encodeURIComponent(accountId)}` : ""}`,
+                            `/chat-permissions?channel=${apiProvider}&chat_id=${encodeURIComponent(group.chatId)}${accountId ? `&appId=${encodeURIComponent(accountId)}` : ""}`,
                             { method: "DELETE", signal },
                           );
                           await refresh(signal);

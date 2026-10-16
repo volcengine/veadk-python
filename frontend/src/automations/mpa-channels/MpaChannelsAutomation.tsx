@@ -1,3 +1,4 @@
+import type { CloudProvider } from "../../adk/cloudProvider";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
@@ -16,6 +17,7 @@ import "../../ui/ProjectPreview.css";
 import "./MpaChannelsAutomation.css";
 
 interface MpaChannelsAutomationProps {
+  cloudProvider?: CloudProvider;
   role: StudioRole;
   runtimeScope: RuntimeScope;
   onBack: () => void;
@@ -25,6 +27,7 @@ const runtimeKey = (runtime: CloudRuntime) =>
   `${runtime.region}:${runtime.runtimeId}`;
 
 export function MpaChannelsAutomation({
+  cloudProvider = "volcengine",
   role,
   runtimeScope,
   onBack,
@@ -61,8 +64,9 @@ export function MpaChannelsAutomation({
       <div className="mpa-channels-scroll">
         {authorized ? (
           <MpaChannelSelector
-            key={`${role}:${runtimeScope}`}
+            key={`${role}:${runtimeScope}:${cloudProvider}`}
             runtimeScope={runtimeScope}
+            cloudProvider={cloudProvider}
           />
         ) : (
           <p className="mpa-channels-notice" role="status">
@@ -74,7 +78,13 @@ export function MpaChannelsAutomation({
   );
 }
 
-function MpaChannelSelector({ runtimeScope }: { runtimeScope: RuntimeScope }) {
+function MpaChannelSelector({
+  runtimeScope,
+  cloudProvider,
+}: {
+  runtimeScope: RuntimeScope;
+  cloudProvider: CloudProvider;
+}) {
   const { t, i18n } = useTranslation("automations");
   const [runtimes, setRuntimes] = useState<CloudRuntime[]>([]);
   const [selectedKey, setSelectedKey] = useState("");
@@ -257,6 +267,7 @@ function MpaChannelSelector({ runtimeScope }: { runtimeScope: RuntimeScope }) {
           runtimeId={selected.runtimeId}
           region={selected.region}
           showHeader={false}
+          cloudProvider={cloudProvider}
         />
       ) : loaded && runtimes.length > 0 ? (
         <p className="mpa-channels-notice" role="status">

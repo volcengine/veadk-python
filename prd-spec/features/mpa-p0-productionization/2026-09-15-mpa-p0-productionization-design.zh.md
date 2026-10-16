@@ -294,7 +294,7 @@ M0、S1 至 S5 严格串行通过各自门禁，但允许拆成独立合入和�
 
 当前 Worker 没有独立 capability discovery/version endpoint；M0 的静态兼容基线就是上述 `codex` query、`/health`、`/ready`、session/create、turn/start、event stream 接口集合。若任一接口契约变化，必须先增加 Worker capability/version 协商并单独评审；本 P0 不修改 Worker。
 
-共享兼容性 preflight 实现在 `veadk.cli.mpa_p0_contract`。shell runner `scripts/verify-mpa-p0-contract.sh` 调用同一代码路径，Studio 在 MPA Runtime 写操作前也调用它。接受的 manifest 是脱敏 JSON 对象，包含 `veadkRevision`、`runtimeRevision`、`runtimeImageDigest`、Profile/config schema version、AgentKit SDK version、Runtime execution capability、Worker protocol 和必需 Worker endpoints。检查失败时不会把 manifest 正文回显给浏览器。若传入 manifest 格式非法，或未命中 `contracts/mpa-p0/compatibility-matrix.json`，Studio 返回 `409`，`code=mpa_compatibility_preflight_failed`，且不会调用 AgentKit SDK 或 GitHub mutation helper。
+共享兼容性 preflight 实现在 `veadk.cli.mpa_p0_contract`。shell runner `scripts/verify-mpa-p0-contract.sh` 调用同一代码路径，Studio 在 MPA Runtime 写操作前也调用它。接受的 manifest 是脱敏 JSON 对象，包含 `veadkRevision`、`runtimeRevision`、`runtimeImageDigest`、Profile/config schema version、AgentKit SDK version、Runtime execution capability、Worker protocol 和必需 Worker endpoints。检查失败时不会把 manifest 正文回显给浏览器。若传入 manifest 格式非法，或未命中 `frontend/server/mpa/contracts/mpa-p0/compatibility-matrix.json`，Studio 返回 `409`，`code=mpa_compatibility_preflight_failed`，且不会调用 AgentKit SDK 或 GitHub mutation helper。
 
 本地 Studio 写路径防护中，如果 UI 标记目标为 `agentCategory=mpa` 但未显式提交 manifest，BFF 会使用当前 VeADK git revision，以及可用时的 `VEADK_MPA_RUNTIME_REVISION`、`VEADK_MPA_RUNTIME_IMAGE_DIGEST` 生成最小 P0 manifest；缺失的 runtime artifact 值使用语法合法的全 0 占位。这个默认 manifest 只证明当前操作仍处于已批准的 P0 协议形态内，不作为发布证据。最终 release gate 仍必须由 `S5-10/VC-19` 使用真实固定的 VeADK SHA、Runtime SHA、Runtime image digest 和协议版本执行。
 

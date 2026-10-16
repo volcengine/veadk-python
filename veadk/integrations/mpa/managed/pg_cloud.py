@@ -24,6 +24,7 @@ from typing import Any
 from sqlalchemy.engine import URL
 
 from .database import DeploymentError
+from .diagnostics import CODE_CATEGORIES, report, safe_error_code, safe_request_id
 
 
 def _debug_event(hypothesis: str, location: str, message: str, data: dict) -> None:
@@ -55,8 +56,9 @@ def _debug_event(hypothesis: str, location: str, message: str, data: dict) -> No
 
 
 class PGCloudError(DeploymentError):
-    def __init__(self, method, code):
+    def __init__(self, method, code, *, request_id=""):
         self.code = code
+        self.request_id = request_id
         super().__init__(
             f"AIDAP {method} failed ({code}); check deployment permissions and connectivity"
         )
@@ -64,6 +66,43 @@ class PGCloudError(DeploymentError):
 
 class PGNotReady(DeploymentError):
     """A discovered resource is still being prepared by AIDAP."""
+
+
+METHOD_OPERATIONS = {
+    "describe_workspaces": "aidap_describe_workspaces",
+    "describe_workspace_detail": "aidap_describe_workspace_detail",
+    "create_workspace": "aidap_create_workspace",
+    "describe_branches": "aidap_describe_branches",
+    "describe_computes": "aidap_describe_computes",
+    "describe_workspace_endpoint": "aidap_describe_workspace_endpoint",
+    "describe_db_accounts": "aidap_describe_db_accounts",
+    "describe_databases": "aidap_describe_databases",
+    "describe_db_account_connection": "aidap_describe_db_account_connection",
+}
+TRANSIENT_CATEGORIES = {"connection", "timeout", "throttled", "unavailable"}
+READ_BACKOFF_SECONDS = (1, 2, 4, 8, 16, 30, 30)
+
+
+def _provider_metadata(error: BaseException) -> tuple[str, str]:
+    try:
+        metadata = json.loads(getattr(error, "body", "") or "{}").get(
+            "ResponseMetadata", {}
+        )
+        provider_error = metadata.get("Error", {})
+        code = (
+            provider_error.get("Code", "") if isinstance(provider_error, dict) else ""
+        )
+        return safe_error_code(code), safe_request_id(metadata.get("RequestId"))
+    except (ValueError, TypeError, AttributeError):
+        return "", ""
+
+
+def _category_for_code(code: str) -> str:
+    if code == "CloudRequestFailed":
+        return "unavailable"
+    if code == "InternalServiceTimeout":
+        return "timeout"
+    return CODE_CATEGORIES.get(code, "provider_error")
 
 
 def check_ready(status):
@@ -203,26 +242,47 @@ class PGCloud:
             finally:
                 client.rest_client.pool_manager.clear()
 
-        try:
-            return await asyncio.to_thread(run)
-        except DeploymentError:
-            raise
-        except Exception as exc:  # noqa: BLE001
+        attempts = 1 if method == "create_workspace" else len(READ_BACKOFF_SECONDS) + 1
+        operation = METHOD_OPERATIONS.get(method, "provision")
+        for attempt in range(1, attempts + 1):
             try:
-                code = json.loads(getattr(exc, "body", "") or "{}")["ResponseMetadata"][
-                    "Error"
-                ]["Code"]
-                if not isinstance(code, str) or not code.replace(".", "").isalnum():
-                    raise ValueError
-            except (ValueError, TypeError, KeyError):
-                code = "CloudRequestFailed"
-            _debug_event(
-                "B-C",
-                "pg_cloud.py:call:error",
-                "[DEBUG] AIDAP request failed",
-                {"method": method, "code": code, "errorType": type(exc).__name__},
-            )
-            raise PGCloudError(method, code) from None
+                return await asyncio.to_thread(run)
+            except DeploymentError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                code, request_id = _provider_metadata(exc)
+                if not code:
+                    code = "CloudRequestFailed"
+                category = _category_for_code(code)
+                retrying = (
+                    method != "create_workspace"
+                    and attempt < attempts
+                    and category in TRANSIENT_CATEGORIES
+                )
+                report(
+                    operation,
+                    category,
+                    attempt=attempt,
+                    outcome="retrying" if retrying else "failed",
+                    error_code=code,
+                    request_id=request_id,
+                )
+                _debug_event(
+                    "B-C",
+                    "pg_cloud.py:call:error",
+                    "[DEBUG] AIDAP request failed",
+                    {
+                        "method": method,
+                        "code": code,
+                        "errorType": type(exc).__name__,
+                        "attempt": attempt,
+                        "retrying": retrying,
+                    },
+                )
+                if not retrying:
+                    raise PGCloudError(method, code, request_id=request_id) from None
+                await asyncio.sleep(READ_BACKOFF_SECONDS[attempt - 1])
+        raise AssertionError("AIDAP retry loop exhausted")
 
     async def listing(self, method, request, collection, **params):
         rows = []

@@ -2043,6 +2043,42 @@ def test_byteplus_runtime_list_uses_vefaas_iam_credentials(
     assert calls == [("iam-ak", "iam-sk", "iam-token", "ap-southeast-1")]
 
 
+def test_byteplus_mpa_runtime_list_uses_byteplus_tag_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("BYTEPLUS_ACCESS_KEY", "byte-ak")
+    monkeypatch.setenv("BYTEPLUS_SECRET_KEY", "byte-sk")
+    app = _create_frontend_app(monkeypatch, tmp_path, provider="byteplus")
+    tag_hosts: list[str | None] = []
+
+    class _FakeTagApi:
+        def __init__(self, api_client: Any) -> None:
+            tag_hosts.append(api_client.configuration.host)
+
+        def get_resources(self, _request: Any) -> SimpleNamespace:
+            return SimpleNamespace(
+                resource_tag_mapping_list=[],
+                next_token="",
+            )
+
+    monkeypatch.setattr("volcenginesdktag.TAGApi", _FakeTagApi)
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/web/runtimes",
+            params={
+                "region": "ap-southeast-1",
+                "page_size": 1,
+                "agentCategory": "mpa",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"runtimes": [], "nextToken": ""}
+    assert tag_hosts == ["https://open.byteplusapi.com"]
+
+
 def test_byteplus_runtime_detail_coerces_volcengine_region(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

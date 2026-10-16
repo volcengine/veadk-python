@@ -150,6 +150,64 @@ it("shows unsupported images and allows retry after an error", async () => {
   await click("common.retry");
   expect(host.textContent).toContain("channels.bind");
 });
+it("uses server defaults when adding a group without an isolation selector", async () => {
+  await render();
+  const form = host.querySelector<HTMLFormElement>(
+    ".runtime-channels-permissions form",
+  )!;
+  expect(form.querySelector("select")).toBeNull();
+  expect(form.textContent).not.toContain("channels.scope");
+  const input = form.querySelector<HTMLInputElement>("input")!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      "value",
+    )!.set!.call(input, " group-new ");
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () =>
+    form.dispatchEvent(
+      new Event("submit", { bubbles: true, cancelable: true }),
+    ),
+  );
+  const saves = request.mock.calls.filter(
+    ([, path, init]) => path === "/chat-permissions" && init?.method === "POST",
+  );
+  expect(saves).toHaveLength(1);
+  expect(JSON.parse(String(saves[0][2]?.body))).toEqual({
+    channel: "feishu",
+    chatId: "group-new",
+  });
+});
+
+it.each(["group_sender", "group_topic", "group_topic_sender"])(
+  "preserves existing %s group display without rewriting its configuration",
+  async (groupSessionScope) => {
+    const original = request.getMockImplementation()!;
+    request.mockImplementation(async (ep, path, init) =>
+      path.startsWith("/chat-permissions") && !init?.method
+        ? {
+            permissions: [
+              {
+                channel: "feishu",
+                chatId: "group-existing",
+                chatName: "Existing group",
+                groupSessionScope,
+              },
+            ],
+          }
+        : original(ep, path, init),
+    );
+    await render();
+    expect(host.textContent).toContain(`channels.scope_${groupSessionScope}`);
+    await click("channels.refresh");
+    expect(host.textContent).toContain(`channels.scope_${groupSessionScope}`);
+    expect(
+      request.mock.calls.some(([, , init]) => init?.method === "POST"),
+    ).toBe(false);
+  },
+);
+
 it("keeps the group form after a failed save", async () => {
   await render();
   const input = host.querySelector<HTMLInputElement>(
@@ -1078,7 +1136,8 @@ it("scopes permission writes and deletions to the selected bot", async () => {
     ([, path, init]) => path === "/chat-permissions" && init?.method === "POST",
   );
   expect(saves).toHaveLength(1);
-  expect(JSON.parse(String(saves[0][2]?.body))).toMatchObject({
+  expect(JSON.parse(String(saves[0][2]?.body))).toEqual({
+    channel: "feishu",
     appId: "bot-b",
     chatId: "group-new",
   });
@@ -1303,4 +1362,192 @@ it("adds via QR and selects the returned appId", async () => {
       ?.value,
   ).toBe("bot-b");
   expect(host.textContent).not.toContain("channels.feishuPairingDescription");
+});
+
+it("gates BytePlus Lark binding on explicit Runtime brand capability", async () => {
+  await act(async () =>
+    root.render(
+      <RuntimeChannels
+        runtimeId="runtime-1"
+        region="ap-southeast-1"
+        cloudProvider="byteplus"
+      />,
+    ),
+  );
+  await click("channels.provider_lark");
+  expect(host.textContent).toContain("channels.unsupported");
+  expect(
+    [...host.querySelectorAll("button")].some(
+      (b) => b.textContent === "channels.bind",
+    ),
+  ).toBe(false);
+});
+
+it("keeps domestic channel tabs unchanged", async () => {
+  await render();
+  expect(host.textContent).not.toContain("channels.provider_lark");
+});
+
+function larkFixture() {
+  multiBotFixture();
+  const original = request.getMockImplementation()!;
+  request.mockImplementation(async (ep, path, init) => {
+    if (path === "/capabilities")
+      return {
+        ...(await original(ep, path, init)),
+        feishuDomains: ["feishu", "lark"],
+      };
+    if (path === "")
+      return {
+        channels: [
+          ...botAccounts,
+          {
+            channel: "feishu",
+            appId: "lark-bot",
+            enabled: true,
+            config: { domain: "lark" },
+          },
+        ],
+      };
+    if (path === "/feishu/bindings") return pending;
+    if (
+      path === "/feishu/bindings/manual" ||
+      path.startsWith("/feishu/bindings/")
+    )
+      return { ...pending, status: "BOUND", appId: "lark-bot" };
+    return original(ep, path, init);
+  });
+}
+async function renderLark() {
+  await act(async () =>
+    root.render(
+      <RuntimeChannels
+        runtimeId="runtime-1"
+        region="ap-southeast-1"
+        cloudProvider="byteplus"
+      />,
+    ),
+  );
+  await click("channels.provider_lark");
+}
+it("isolates Lark accounts and scopes disable/unbind without changing Feishu", async () => {
+  larkFixture();
+  vi.stubGlobal("confirm", vi.fn().mockReturnValue(true));
+  await renderLark();
+  expect(host.textContent).toContain("channels.larkAccountsTitle");
+  const options = [...host.querySelectorAll("option")].map((o) => o.value);
+  expect(options).toContain("lark-bot");
+  expect(options).not.toContain("bot-a");
+  await click("channels.disableAccount");
+  expect(request).toHaveBeenCalledWith(
+    expect.anything(),
+    "/feishu/accounts/lark-bot",
+    expect.objectContaining({ method: "PATCH" }),
+  );
+  await click("channels.unbind");
+  expect(request).toHaveBeenCalledWith(
+    expect.anything(),
+    "?channel=feishu&appId=lark-bot",
+    expect.objectContaining({ method: "DELETE" }),
+  );
+  await click("channels.provider_feishu");
+  expect(
+    [...host.querySelectorAll("option")].map((o) => o.value),
+  ).not.toContain("lark-bot");
+});
+it("creates and polls a Lark QR binding using the explicit brand", async () => {
+  vi.useFakeTimers();
+  larkFixture();
+  await renderLark();
+  await click("channels.addAccount");
+  await click("channels.bind");
+  expect(request).toHaveBeenCalledWith(
+    expect.anything(),
+    "/feishu/bindings",
+    expect.objectContaining({ body: '{"domain":"lark"}' }),
+  );
+  await act(async () => vi.advanceTimersByTimeAsync(1000));
+  expect(
+    host.querySelector<HTMLSelectElement>(".runtime-channels-accounts select")
+      ?.value,
+  ).toBe("lark-bot");
+  const count = request.mock.calls.filter(([, path]) =>
+    path.startsWith("/feishu/bindings/"),
+  ).length;
+  await act(async () => vi.advanceTimersByTimeAsync(2000));
+  expect(
+    request.mock.calls.filter(([, path]) =>
+      path.startsWith("/feishu/bindings/"),
+    ),
+  ).toHaveLength(count);
+});
+it("retries Lark manual binding without losing brand or persisting the secret", async () => {
+  larkFixture();
+  await renderLark();
+  await click("channels.addAccount");
+  await selectMethod("manual");
+  await fillCredential("appId", " lark-bot ");
+  await fillCredential("secret", " test-secret ");
+  request.mockRejectedValueOnce(new ChannelApiError(502));
+  await click("channels.bindCredentials");
+  expect(host.textContent).toContain("channels.requestFailed");
+  await click("channels.bindCredentials");
+  const calls = request.mock.calls.filter(
+    ([, path]) => path === "/feishu/bindings/manual",
+  );
+  expect(calls).toHaveLength(2);
+  for (const call of calls)
+    expect(JSON.parse(call[2]!.body as string)).toEqual({
+      appId: "lark-bot",
+      appSecret: "test-secret",
+      domain: "lark",
+    });
+  expect(localStorage.setItem).not.toHaveBeenCalled();
+  expect(JSON.stringify(sessionStorage)).not.toContain("test-secret");
+});
+
+it("blocks Lark IME and duplicate writes and aborts on brand switch", async () => {
+  larkFixture();
+  await renderLark();
+  await click("channels.addAccount");
+  await selectMethod("manual");
+  await fillCredential("appId", "lark-new");
+  await fillCredential("secret", "test-secret");
+  const input = host.querySelector<HTMLInputElement>('input[name="appId"]')!;
+  const event = new KeyboardEvent("keydown", {
+    key: "Enter",
+    isComposing: true,
+    bubbles: true,
+    cancelable: true,
+  });
+  await act(async () => input.dispatchEvent(event));
+  expect(event.defaultPrevented).toBe(true);
+  let finish!: (data: unknown) => void;
+  let signal!: AbortSignal;
+  const original = request.getMockImplementation()!;
+  request.mockImplementation((ep, path, init) =>
+    path === "/feishu/bindings/manual"
+      ? new Promise((done) => {
+          finish = done;
+          signal = init!.signal as AbortSignal;
+        })
+      : original(ep, path, init),
+  );
+  const form = host.querySelector("form[data-channel-binding]")!;
+  await act(async () => {
+    form.dispatchEvent(
+      new Event("submit", { bubbles: true, cancelable: true }),
+    );
+    form.dispatchEvent(
+      new Event("submit", { bubbles: true, cancelable: true }),
+    );
+  });
+  expect(
+    request.mock.calls.filter(([, path]) => path === "/feishu/bindings/manual"),
+  ).toHaveLength(1);
+  await click("channels.provider_feishu");
+  expect(signal.aborted).toBe(true);
+  await act(async () => finish({ status: "BOUND", appId: "lark-new" }));
+  expect(host.textContent).not.toContain("lark-new");
+  expect(host.textContent).toContain("channels.accountsTitle");
 });

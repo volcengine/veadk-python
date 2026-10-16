@@ -131,6 +131,8 @@ type DeleteConfirmTarget =
       confirmLabel: string;
       canConfirm?: boolean;
       agent: AgentEntry;
+      previewLoading?: boolean;
+      previewFailed?: boolean;
     }
   | {
       kind: "draft";
@@ -487,9 +489,20 @@ function MpaDeletePreviewDetails({
               {t(`agentWorkspace.mpaDeleteStage.${stage.stage}`, {
                 count: stage.count,
               })}
+              {stage.resourceId && <span> ({stage.resourceId})</span>}
             </li>
           ))}
         </ol>
+      )}
+      {Boolean(preview.retainedResources?.length) && (
+        <div>
+          <strong>{t("agentWorkspace.mpaDeleteRetained")}</strong>
+          <ul>{preview.retainedResources?.map((item) => (
+            <li key={`${item.stage}:${item.resourceId}`}>
+              {item.resourceId} — {t(`agentWorkspace.mpaDeleteRetainedReason.${item.reason}`, { defaultValue: item.reason })}
+            </li>
+          ))}</ul>
+        </div>
       )}
     </div>
   );
@@ -1945,6 +1958,8 @@ export function AgentWorkspace({
   const [selectedDraftIds, setSelectedDraftIds] = useState<Set<string>>(() => new Set());
   const [deletingAgents, setDeletingAgents] = useState(false);
   const [deleteError, setDeleteError] = useState("");
+  const deletePreviewAbortRef = useRef<AbortController | null>(null);
+  useEffect(() => () => deletePreviewAbortRef.current?.abort(), []);
   const [deleteConfirmTarget, setDeleteConfirmTarget] =
     useState<DeleteConfirmTarget | null>(null);
   const [feedbackCases, setFeedbackCases] = useState<AgentCase[]>([]);
@@ -3808,6 +3823,11 @@ export function AgentWorkspace({
 
   const confirmDeleteTarget = async () => {
     if (!deleteConfirmTarget || deletingAgents) return;
+    if (deleteConfirmTarget.kind === "agent" && deleteConfirmTarget.previewFailed) {
+      await deleteSingleAgent(deleteConfirmTarget.agent);
+      return;
+    }
+    if (deleteConfirmTarget.canConfirm === false) return;
     setDeletingAgents(true);
     setDeleteError("");
     try {
@@ -3848,11 +3868,26 @@ export function AgentWorkspace({
 
   const deleteSingleAgent = async (agent: AgentEntry) => {
     if (!onDeleteAgents || agent.canDelete !== true || deletingAgents) return;
+    deletePreviewAbortRef.current?.abort();
     setDeleteError("");
     let preview: MpaAgentDeletePreview | null = null;
     if (agent.agentCategory === "mpa") {
+      const controller = new AbortController();
+      deletePreviewAbortRef.current = controller;
+      setDeleteConfirmTarget({
+        kind: "agent", agent,
+        title: t("agentWorkspace.deleteAgentTitle"),
+        description: <p role="status">{t("agentWorkspace.mpaDeleteChecking")}</p>,
+        confirmLabel: t("agentWorkspace.mpaDeleteChecking"),
+        canConfirm: false, previewLoading: true,
+      });
       if (!agent.runtimeId || !agent.region) {
         setDeleteError(t("agentWorkspace.errors.loadMpaDeletePreview"));
+        setDeleteConfirmTarget((current) => current?.kind === "agent" ? {
+          ...current, previewLoading: false, previewFailed: true, canConfirm: true,
+          confirmLabel: t("agentWorkspace.mpaDeleteRetryPreview"),
+          description: t("agentWorkspace.errors.loadMpaDeletePreview"),
+        } : current);
         return;
       }
       try {
@@ -3860,9 +3895,17 @@ export function AgentWorkspace({
           mpaInstanceId: agent.mpaInstanceId ?? agent.runtimeId,
           runtimeId: agent.runtimeId,
           region: agent.region,
+          signal: controller.signal,
         });
+        if (controller.signal.aborted || deletePreviewAbortRef.current !== controller) return;
       } catch (cause) {
+        if (controller.signal.aborted || deletePreviewAbortRef.current !== controller) return;
         setDeleteError(cause instanceof Error ? cause.message : String(cause));
+        setDeleteConfirmTarget((current) => current?.kind === "agent" ? {
+          ...current, previewLoading: false, previewFailed: true, canConfirm: true,
+          confirmLabel: t("agentWorkspace.mpaDeleteRetryPreview"),
+          description: t("agentWorkspace.mpaDeletePreviewFailed"),
+        } : current);
         return;
       }
     }
@@ -5334,11 +5377,17 @@ export function AgentWorkspace({
         variant="danger"
         title={deleteConfirmTarget.title}
         description={deleteConfirmTarget.description}
+        error={deleteError || undefined}
         confirmLabel={deletingAgents ? t("common.deleting") : deleteConfirmTarget.confirmLabel}
         closeLabel={t("agentWorkspace.closeDeleteConfirmation")}
         busy={deletingAgents}
         confirmDisabled={deleteConfirmTarget.canConfirm === false}
-        onCancel={() => setDeleteConfirmTarget(null)}
+        onCancel={() => {
+          deletePreviewAbortRef.current?.abort();
+          deletePreviewAbortRef.current = null;
+          setDeleteConfirmTarget(null);
+          setDeleteError("");
+        }}
         onConfirm={() => void confirmDeleteTarget()}
       />
     )}

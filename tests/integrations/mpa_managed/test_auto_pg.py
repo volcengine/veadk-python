@@ -888,6 +888,37 @@ async def test_sdk_uses_refreshed_sts_and_disables_create_retry(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_sdk_create_workspace_failure_does_not_retry(monkeypatch):
+    from types import SimpleNamespace
+    from veadk.integrations.mpa.managed.pg_cloud import PGCloud, PGCloudError
+    import volcenginesdkaidap as sdk
+
+    calls = 0
+
+    def credentials():
+        return SimpleNamespace(
+            access_key_id="fake-ak", secret_access_key="fake-sk", session_token=""
+        )
+
+    class Client:
+        def __init__(self, client):
+            pass
+
+        def create_workspace(self, request, **kw):
+            nonlocal calls
+            calls += 1
+            raise RuntimeError("private transport failure")
+
+    monkeypatch.setattr(sdk, "AIDAPApi", Client)
+    cloud = PGCloud(region="cn-beijing", credentials=credentials)
+    with pytest.raises(PGCloudError, match="CloudRequestFailed"):
+        await cloud.create(
+            "mpa_admin_workspace", "default", {"veadk-pg-purpose": "admin"}
+        )
+    assert calls == 1
+
+
+@pytest.mark.asyncio
 async def test_sdk_connection_and_pagination_contract(monkeypatch):
     from veadk.integrations.mpa.managed.pg_cloud import PGCloud
 
@@ -954,6 +985,176 @@ async def test_sdk_connection_and_pagination_contract(monkeypatch):
         "workspace_id"
     ] == "ws-target"
     assert calls == [0, 100]
+
+
+@pytest.mark.asyncio
+async def test_sdk_read_calls_retry_transient_failures(monkeypatch):
+    from types import SimpleNamespace
+    from veadk.integrations.mpa.managed.diagnostics import diagnostic_scope
+    from veadk.integrations.mpa.managed.pg_cloud import PGCloud
+    import volcenginesdkaidap as sdk
+
+    calls = []
+
+    def credentials():
+        return SimpleNamespace(
+            access_key_id="fake-ak", secret_access_key="fake-sk", session_token=""
+        )
+
+    class TransientError(RuntimeError):
+        body = json.dumps(
+            {
+                "ResponseMetadata": {
+                    "RequestId": "0123456789ABCDEF",
+                    "Error": {"Code": "InternalError", "Message": "private"},
+                }
+            }
+        )
+
+    class Client:
+        def __init__(self, client):
+            pass
+
+        def describe_branches(self, request, **kw):
+            calls.append("describe_branches")
+            if len(calls) < 3:
+                raise TransientError("private")
+            return SimpleNamespace(
+                to_dict=lambda: {
+                    "branches": [
+                        {
+                            "branch_id": "branch",
+                            "branch_name": "main",
+                            "branch_status": "Running",
+                        }
+                    ]
+                }
+            )
+
+        def describe_computes(self, request, **kw):
+            return SimpleNamespace(
+                to_dict=lambda: {
+                    "computes": [{"compute_id": "compute", "compute_status": "Running"}]
+                }
+            )
+
+        def describe_workspace_endpoint(self, request, **kw):
+            return SimpleNamespace(
+                to_dict=lambda: {
+                    "endpoints": [
+                        {
+                            "addresses": [
+                                {"address_type": "Public", "address_id": "address"}
+                            ]
+                        }
+                    ]
+                }
+            )
+
+        def describe_db_accounts(self, request, **kw):
+            return SimpleNamespace(
+                to_dict=lambda: {"accounts": [{"account_name": "user_admin"}]}
+            )
+
+        def describe_databases(self, request, **kw):
+            return SimpleNamespace(
+                to_dict=lambda: {"databases": [{"database_name": "aidb"}]}
+            )
+
+        def describe_db_account_connection(self, request, **kw):
+            return SimpleNamespace(
+                to_dict=lambda: {
+                    "connection_examples": [
+                        {
+                            "connection_type": "Parameters",
+                            "connection_example": "PGHOST=db.example\nPGUSER=user_admin\nPGPASSWORD=fake\nPGDATABASE=aidb",
+                        }
+                    ]
+                }
+            )
+
+    monkeypatch.setattr(sdk, "AIDAPApi", Client)
+    monkeypatch.setattr(
+        "veadk.integrations.mpa.managed.pg_cloud.asyncio.sleep", AsyncMock()
+    )
+    diagnostics = []
+    with diagnostic_scope(diagnostics.append):
+        assert "db.example" in await PGCloud(
+            region="cn-beijing", credentials=credentials
+        ).connection("ws")
+    assert calls == ["describe_branches", "describe_branches", "describe_branches"]
+    assert diagnostics[:2] == [
+        {
+            "operation": "aidap_describe_branches",
+            "category": "unavailable",
+            "attempt": 1,
+            "outcome": "retrying",
+            "errorCode": "InternalError",
+            "requestId": "0123456789ABCDEF",
+        },
+        {
+            "operation": "aidap_describe_branches",
+            "category": "unavailable",
+            "attempt": 2,
+            "outcome": "retrying",
+            "errorCode": "InternalError",
+            "requestId": "0123456789ABCDEF",
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_sdk_read_calls_tolerate_repeated_cross_region_failures(monkeypatch):
+    from types import SimpleNamespace
+    from veadk.integrations.mpa.managed.diagnostics import diagnostic_scope
+    from veadk.integrations.mpa.managed.pg_cloud import PGCloud
+    import volcenginesdkaidap as sdk
+
+    calls = []
+
+    def credentials():
+        return SimpleNamespace(
+            access_key_id="fake-ak", secret_access_key="fake-sk", session_token=""
+        )
+
+    class TransientError(RuntimeError):
+        body = json.dumps(
+            {
+                "ResponseMetadata": {
+                    "RequestId": "0123456789ABCDEF",
+                    "Error": {"Code": "CloudRequestFailed", "Message": "private"},
+                }
+            }
+        )
+
+    class Client:
+        def __init__(self, client):
+            pass
+
+        def describe_db_accounts(self, request, **kw):
+            calls.append("describe_db_accounts")
+            if len(calls) < 6:
+                raise TransientError("private")
+            return SimpleNamespace(
+                to_dict=lambda: {"accounts": [{"account_name": "user_admin"}]}
+            )
+
+    monkeypatch.setattr(sdk, "AIDAPApi", Client)
+    sleep = AsyncMock()
+    monkeypatch.setattr("veadk.integrations.mpa.managed.pg_cloud.asyncio.sleep", sleep)
+    diagnostics = []
+    with diagnostic_scope(diagnostics.append):
+        assert await PGCloud(region="cn-beijing", credentials=credentials).listing(
+            "describe_db_accounts",
+            "DescribeDBAccountsRequest",
+            "accounts",
+            workspace_id="ws",
+            branch_id="branch",
+        ) == [{"account_name": "user_admin"}]
+    assert calls == ["describe_db_accounts"] * 6
+    assert [call.args[0] for call in sleep.call_args_list] == [1, 2, 4, 8, 16]
+    assert [item["attempt"] for item in diagnostics] == [1, 2, 3, 4, 5]
+    assert all(item["outcome"] == "retrying" for item in diagnostics)
 
 
 @pytest.mark.asyncio

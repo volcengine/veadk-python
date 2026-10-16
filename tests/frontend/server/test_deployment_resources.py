@@ -90,6 +90,7 @@ def test_deployment_resource_route_passes_provider_region_and_parents(
                 "namespace": "",
                 "workspace_id": "workspace-id",
                 "search": "",
+                "name_prefix": "",
                 "page_number": 1,
                 "page_size": 100,
             },
@@ -423,6 +424,72 @@ def test_tos_search_filters_before_pagination() -> None:
     assert result["totalCount"] == 2
     assert result["hasMore"] is False
     assert [item["name"] for item in result["items"]] == ["theta"]
+
+
+@pytest.mark.parametrize(
+    "search,page_number,expected,total,has_more",
+    [
+        ("", 1, ["agentkit-platform-alpha"], 3, True),
+        ("TA", 2, ["agentkit-platform-theta"], 2, False),
+        ("not-found", 1, [], 0, False),
+    ],
+)
+def test_tos_name_prefix_filters_before_search_and_pagination(
+    search, page_number, expected, total, has_more
+):
+    service = object.__new__(deployment_resources.DeploymentResourceService)
+    service.provider = "volcengine"
+    service.region = "cn-beijing"
+    service.credentials = None
+    service._tos = cast(
+        Any,
+        SimpleNamespace(
+            actual_region="cn-beijing",
+            list_buckets=lambda: [
+                {"Name": name, "Location": region}
+                for name, region in [
+                    ("agentkit-platform-alpha", "cn-beijing"),
+                    ("agentkit-platform-beta", "cn-beijing"),
+                    ("agentkit-platform-theta", "cn-beijing"),
+                    ("agentkit-demo", "cn-beijing"),
+                    ("x-agentkit-platform-lookalike", "cn-beijing"),
+                    ("Agentkit-platform-case", "cn-beijing"),
+                    ("agentkit-platform-wrong-region", "cn-shanghai"),
+                ]
+            ],
+        ),
+    )
+    result = service.list_resources(
+        "tos-bucket",
+        name_prefix="agentkit-platform-",
+        search=search,
+        page_number=page_number,
+        page_size=1,
+    )
+    assert [item["name"] for item in result["items"]] == expected
+    assert result["totalCount"] == total
+    assert result["hasMore"] is has_more
+
+
+def test_resource_route_forwards_tos_name_prefix(monkeypatch):
+    service = _FakeResourceService("volcengine", "cn-beijing")
+    monkeypatch.setattr(
+        deployment_resources, "DeploymentResourceService", lambda *args: service
+    )
+    app = FastAPI()
+    deployment_resources.mount_deployment_resource_routes(
+        app, authorize=lambda request: None, provider="volcengine"
+    )
+    response = TestClient(app).get(
+        "/web/deployment-resources",
+        params={
+            "kind": "tos-bucket",
+            "region": "cn-beijing",
+            "namePrefix": "agentkit-platform-",
+        },
+    )
+    assert response.status_code == 200
+    assert service.calls[0][1]["name_prefix"] == "agentkit-platform-"
 
 
 def test_cr_search_scans_all_pages_before_paginating_matches() -> None:
@@ -1029,3 +1096,108 @@ def test_all_resource_mode_combinations_map_to_agentkit_config(monkeypatch) -> N
         assert ("cp_workspace_name" in resolved) is (cp_mode != "auto")
         assert ("cp_pipeline_name" in resolved) is (cp_mode != "auto")
         assert ("cp_pipeline_id" in resolved) is (cp_mode == "existing")
+
+
+@pytest.mark.parametrize(
+    ("provider", "region"),
+    [("byteplus", "ap-southeast-1"), ("volcengine", "cn-beijing")],
+)
+@pytest.mark.parametrize("token", [None, "rotating-session-token"])
+def test_tos_explicit_credentials_reach_sdk(monkeypatch, provider, region, token):
+    from agentkit.platform import VolcConfiguration
+
+    calls = []
+
+    def create_client(access_key, secret_key, endpoint, actual_region, **kwargs):
+        calls.append((access_key, secret_key, endpoint, actual_region, kwargs))
+        return SimpleNamespace(
+            list_buckets=lambda: SimpleNamespace(
+                buckets=[SimpleNamespace(name="bucket-a", location=region)]
+            )
+        )
+
+    monkeypatch.setattr("tos.TosClientV2", create_client)
+    monkeypatch.setattr(
+        VolcConfiguration,
+        "_get_global_env_credentials",
+        lambda *_: pytest.fail("Explicit credentials must bypass SDK rediscovery"),
+    )
+    endpoint = VolcConfiguration(provider=provider, region=region).get_service_endpoint(
+        "tos"
+    )
+    service = deployment_resources.DeploymentResourceService(
+        provider, region, ("test-access", "test-secret", token)
+    )
+    assert service.list_resources("tos-bucket")["items"][0]["name"] == "bucket-a"
+    assert (
+        service._require_existing_resource("tos-bucket", resource_id="bucket-a")["name"]
+        == "bucket-a"
+    )
+    assert calls == [
+        (
+            "test-access",
+            "test-secret",
+            endpoint.host,
+            endpoint.region,
+            {"security_token": token or ""},
+        )
+    ]
+
+
+@pytest.mark.parametrize("provider", ["byteplus", "volcengine"])
+def test_tos_without_explicit_credentials_preserves_sdk_fallback(monkeypatch, provider):
+    calls = []
+    expected = SimpleNamespace(actual_region="test-region")
+
+    def create_service(config, *, provider):
+        calls.append((config.bucket, config.region, provider))
+        return expected
+
+    monkeypatch.setattr(
+        "agentkit.toolkit.volcengine.services.tos_service.TOSService", create_service
+    )
+    service = deployment_resources.DeploymentResourceService(provider, "test-region")
+    assert service._tos_client() is expected
+    assert calls == [("", "test-region", provider)]
+
+
+def test_tos_route_refreshes_credentials_and_redacts_sdk_failure(monkeypatch):
+    snapshots = iter(
+        [
+            ("test-access-one", "test-secret-one", "test-token-one"),
+            ("test-access-two", "test-secret-two", "test-token-two"),
+        ]
+    )
+    calls = []
+
+    def create_client(access_key, secret_key, endpoint, region, **kwargs):
+        token = kwargs["security_token"]
+        calls.append((access_key, secret_key, token))
+
+        def list_buckets():
+            if len(calls) == 2:
+                raise RuntimeError(f"TOS failed: {access_key} {secret_key} {token}")
+            return SimpleNamespace(buckets=[])
+
+        return SimpleNamespace(list_buckets=list_buckets)
+
+    monkeypatch.setattr("tos.TosClientV2", create_client)
+    app = FastAPI()
+    deployment_resources.mount_deployment_resource_routes(
+        app,
+        authorize=lambda _: None,
+        provider="byteplus",
+        resolve_credentials=lambda: next(snapshots),
+    )
+    with TestClient(app) as client:
+        params = {"kind": "tos-bucket", "region": "ap-southeast-1"}
+        first = client.get("/web/deployment-resources", params=params)
+        second = client.get("/web/deployment-resources", params=params)
+    assert first.status_code == 200
+    assert first.json()["items"] == []
+    assert second.status_code == 502
+    assert second.json()["detail"] == "TOS failed: *** *** ***"
+    assert calls == [
+        ("test-access-one", "test-secret-one", "test-token-one"),
+        ("test-access-two", "test-secret-two", "test-token-two"),
+    ]

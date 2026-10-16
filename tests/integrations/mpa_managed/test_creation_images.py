@@ -14,7 +14,9 @@
 
 import asyncio
 import json
+import sqlite3
 import sys
+from contextlib import closing
 
 import pytest
 from fastapi import FastAPI
@@ -60,20 +62,17 @@ def test_creation_tos_override_requires_new_worker(tmp_path, monkeypatch):
     )
 
     profile = load_profile(profile_file(tmp_path, monkeypatch))
-    tos = {
-        "tosAccessKey": "tos-ak",
-        "tosSecretKey": "tos-sk",
-        "tosBucket": "session-output",
-    }
+    tos = {"tosBucket": "agentkit-platform-output"}
     with pytest.raises(ConfigurationError):
         with_creation_tos(profile, tos)
 
     selected = with_creation_tos(
         with_creation_images(profile, {"workerImage": "worker:v2"}), tos
     )
-    assert selected.managed.worker.tos_access_key == "tos-ak"
-    assert selected.managed.worker.tos_secret_key == "tos-sk"
-    assert selected.managed.worker.tos_bucket == "session-output"
+    assert selected.managed.worker.tos_credential_type == "iam_role"
+    assert selected.managed.worker.tos_access_key == ""
+    assert selected.managed.worker.tos_secret_key == ""
+    assert selected.managed.worker.tos_bucket == "agentkit-platform-output"
     assert profile.managed.worker.tos_mount_enabled is False
 
 
@@ -136,9 +135,7 @@ def test_authorized_config_returns_defaults_and_task_freezes_them(
         "region": "cn-beijing",
         "runtimeImage": "",
         "workerImage": "registry.example/worker:custom",
-        "tosAccessKey": "sensitive-ak",
-        "tosSecretKey": "sensitive-sk",
-        "tosBucket": "session-output",
+        "tosBucket": "agentkit-platform-output",
     }
     with TestClient(app) as client:
         config = client.get("/web/mpa-creation/config?region=cn-beijing").json()
@@ -149,16 +146,107 @@ def test_authorized_config_returns_defaults_and_task_freezes_them(
             "runtimeImage": config["runtimeImage"],
             "workerImage": "registry.example/worker:custom",
         }
-        assert "sensitive-ak" not in response.text
-        assert "sensitive-sk" not in response.text
-        database = service.path.read_bytes().decode(errors="ignore")
-        assert "sensitive-ak" not in database
-        assert "sensitive-sk" not in database
+        task = response.json()
+        assert task["tosBucket"] == payload["tosBucket"]
+        with closing(sqlite3.connect(service.path)) as database:
+            row = database.execute(
+                "SELECT payload FROM tasks WHERE id = ?", (task["taskId"],)
+            ).fetchone()
+        assert row is not None
+        durable = json.loads(row[0])
+        assert durable["tosBucket"] == payload["tosBucket"]
+        for data in (task, durable):
+            assert "tosAccessKey" not in data and "tosSecretKey" not in data
         rejected = client.post(
             "/web/mpa-creation/tasks",
             json={**payload, "workerImage": "https://repo?token=private"},
         )
         assert rejected.status_code == 422 and "private" not in rejected.text
+
+
+@pytest.mark.parametrize("field", ["tosAccessKey", "tosSecretKey"])
+def test_stale_studio_credentials_are_rejected_without_echo_or_cloud_calls(
+    field, monkeypatch
+):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, Mock
+
+    load = Mock(side_effect=AssertionError("must reject before profile loading"))
+    monkeypatch.setattr(mpa_creation, "load_studio_profile", load)
+    service = SimpleNamespace(start=AsyncMock(), close=AsyncMock())
+    app = FastAPI()
+    mpa_creation.mount_mpa_creation_routes(
+        app, owner=lambda request: "local", service=service
+    )
+    with TestClient(app) as client:
+        response = client.post(
+            "/web/mpa-creation/tasks",
+            json={
+                "requestId": "11111111-1111-4111-8111-111111111111",
+                "agentId": "agent",
+                "region": "cn-beijing",
+                "tosBucket": "agentkit-platform-output",
+                field: "sensitive-legacy-value",
+            },
+        )
+    assert response.status_code == 422
+    assert response.json() == {"detail": "Invalid MPA creation request"}
+    assert "sensitive-legacy-value" not in response.text
+    load.assert_not_called()
+    service.start.assert_not_called()
+    service.close.assert_awaited_once()
+
+
+@pytest.mark.parametrize("openviking_mode", ["manual", "auto"])
+def test_role_bucket_preserves_dedicated_lifecycle_request(
+    openviking_mode, tmp_path, monkeypatch
+):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    monkeypatch.setattr(mpa_creation, "load_volcengine_credentials", lambda *_: None)
+    monkeypatch.setattr(mpa_creation, "RuntimeCloud", lambda **kw: SimpleNamespace())
+    check = AsyncMock(return_value="test-account")
+    monkeypatch.setattr(mpa_creation, "check_creation_name", check)
+    service = CreationTasks(tmp_path / "tasks.db")
+    service.start = AsyncMock(return_value={"taskId": "new-task"})
+    app = FastAPI()
+    mpa_creation.mount_mpa_creation_routes(
+        app, owner=lambda request: "local", service=service
+    )
+    payload = {
+        "requestId": "11111111-1111-4111-8111-111111111111",
+        "region": "cn-beijing",
+        "name": "role-integration",
+        "maxInstance": 20,
+        "businessWorkspaceMode": "per-agent",
+        "businessDatabaseName": "aidb",
+        "openvikingMode": openviking_mode,
+        "tosBucket": "agentkit-platform-output",
+    }
+    with TestClient(app) as client:
+        response = client.post("/web/mpa-creation/tasks", json=payload)
+    assert response.status_code == 202
+    call = service.start.await_args
+    assert call is not None
+    durable = call.args[1]
+    assert durable["maxInstance"] == 20
+    assert durable["businessWorkspaceMode"] == "per-agent"
+    assert durable["businessDatabaseName"] == "aidb"
+    if openviking_mode == "auto":
+        assert durable["openvikingMode"] == "auto"
+    else:
+        assert "openvikingMode" not in durable
+    assert durable["tosBucket"] == payload["tosBucket"]
+    assert "tosAccessKey" not in durable and "tosSecretKey" not in durable
+    assert call.kwargs["tos"] == {"tosBucket": "agentkit-platform-output"}
+    assert call.kwargs["name_scope"] == {
+        "provider": "volcengine",
+        "account": "test-account",
+        "region": "cn-beijing",
+    }
+    check.assert_awaited_once()
+    assert check.await_args.kwargs["agent_id"] == durable["agentId"]
 
 
 def test_blank_retry_keeps_first_image_snapshot_and_runner_receives_it(tmp_path):

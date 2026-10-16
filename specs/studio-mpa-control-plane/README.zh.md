@@ -6,7 +6,7 @@ MPA 智能体详情目前只开放基本信息。其他详情 Tab 及底部 Prof
 
 - Component ID：`studio-mpa-control-plane`
 - 状态：剩余 P0 修订为 `draft`；基线第一期、第二期部分能力以及 P0 Studio 切片至 S5-12 浏览器验证已实现
-- 修订日期：2026-09-20
+- 修订日期：2026-10-14
 - English：[README.md](README.md)
 - PRD：[MPA Studio Turn 控制与资源工作台](../../prd-spec/features/mpa-studio-control-plane/2026-09-13-mpa-studio-control-plane-design.zh.md)
 
@@ -32,7 +32,7 @@ MPA 智能体详情目前只开放基本信息。其他详情 Tab 及底部 Prof
 - `CON-12`：工具活动展示工具特定的安全动作和对象；未知工具展示具体名称，不使用通用完成标签。
 - `CON-13`：已脱敏工具输入/结果可通过显式复制/下载完整获取；预览渲染有界、截断有提示，所有详情路径共享同一脱敏规则。
 - `CON-14`：Turn 模型选择支持搜索和键盘访问，并在非终态 Turn 拥有不可变模型快照期间保持禁用。
-- `CON-15`：Runtime 列表暴露 `agentCategory`，并接受 `agentCategory=general|mpa` 在可见分页前执行服务端分类过滤。MPA 的权威且唯一来源是 Runtime 标签 `veadk:agent-type=mpa`；镜像名和 artifact URL 不参与分类。`agentCategory=mpa` 必须先通过 Volcano Tag 服务正向标签过滤获得候选 Runtime ID，再按 Runtime ID 补齐详情，避免 MPA 结果稀疏时扫描无关 Runtime 页。
+- `CON-15`：Runtime 列表暴露 `agentCategory`，并接受 `agentCategory=general|mpa` 在可见分页前执行服务端分类过滤。MPA 的权威且唯一来源是 Runtime 标签 `veadk:agent-type=mpa`；镜像名和 artifact URL 不参与分类。`agentCategory=mpa` 必须先通过 Tag 服务正向标签过滤获得候选 Runtime ID，再按 Runtime ID 补齐详情，避免 MPA 结果稀疏时扫描无关 Runtime 页。Tag 读取使用服务端选择的 provider endpoint：BytePlus 使用 `open.byteplusapi.com`，火山引擎保留生成 SDK 的 endpoint 解析。浏览器输入不能选择或覆盖该 endpoint。
 - `CON-31`：Studio MPA 列表把 `CON-15` 发现范围收窄到同时带 `veadk:agent-type=mpa` 和 `veadk:managed=true` 的 Runtime；`scope=all` 管理员看到全部 Studio 管理的 MPA Runtime，`scope=mine` 还必须匹配可信 `veadk:owner`。创建时写入 `veadk:provisioner=studio-mpa` 用于未来来源审计，但为兼容已有通用 Studio MPA，当前不把它作为强制条件。Tag 服务失败保持 fail-closed，浏览器参数不能关闭强制 managed 过滤，授权继续独立。由于 Tag 服务可能返回全局映射，补齐详情前必须按 Runtime TRN 地域过滤。provider 明确确认 Runtime 不存在时可把它作为过期标签映射跳过；其他 Runtime 详情补齐失败必须保持错误态，不能渲染为空列表。已由 [Studio 创建的 MPA Runtime 过滤](../../prd-spec/features/studio-mpa-source-filter/2026-09-28-studio-mpa-source-filter.zh.md) 于 2026-09-29 实现并完成本地验证；真实浏览器发现仍是独立的本机验收步骤。
 
 ## 状态与数据
@@ -105,7 +105,7 @@ PRD 第 6 节记录实际 `frontend/src/App.tsx` 与 `frontend/src/ui/MyAgents.t
 - `CON-25`：`GET /web/mpa/agents/{mpaInstanceId}/view` 返回 `MpaAgentView`，合并 scope、MPA instance/current Profile revision、唯一 Runtime binding/version/readiness、活动 operation/stage、capabilities 和 safe error。0 个 Runtime 为 `runtime_missing`；多个为 `binding_ambiguous` 并禁止写。`orphan_runtime` 表示存在一个已授权 Runtime 但尚未应用 Profile：`capabilities.canWrite` 保持为 true，使 Studio 可以执行首次 Profile apply；`canDebug` 保持为 false，Session 配置在 binding 变为 `bound` 前继续阻塞。若 Runtime data plane 仍要求旧 `X-Jwt-Token`，则返回 `runtime_legacy_auth_unsupported`：Studio 继续展示 Runtime binding，但 `canWrite=false`、`canDebug=false`，且 Session 配置在 Runtime 镜像更新前不可用。即使 Runtime 已 bound，只要 lifecycle operation 仍为 `active` 或 `failed_retryable`，`canDebug` 也必须保持 false；只有恢复到安全终态后才能开放 chat/debug。MPA 编辑使用 Studio Profile，Runtime 保存其不可变 revision；Debug 使用隔离 Runtime Session。不复用通用 Python 工程、个人 Sandbox、评测或优化业务逻辑；GitHub delivery 只有经过显式 MPA compatibility preflight 才可复用。S5-02/S5-03/S5-05/S5-08 切片已实现：BFF 探测已配置 Runtime regions，只接受当前用户可见且带 `veadk:agent-type=mpa` 的 binding，返回 0/1/N binding 状态，并在唯一 binding 时通过 Runtime `profile-status` 补齐 Profile 状态；前端消费该 view 并展示 Runtime Console diagnostics。
 - `CON-25a`：AgentKit Studio 是 MPA 的统一管控入口。MPA 详情页提供 Agent 级 `Profile 配置` 分区，展示当前 apply 状态、revision/ETag、模型、系统提示词，以及 Tool/Skill/MCP 摘要。该分区通过类型化 MPA BFF operation 路径应用当前 Studio Profile；MPA Agent 不再探测依赖 `/list-apps` 的通用 Runtime update capability。首次 apply 使用 create 语义和 `If-None-Match: *`；后续 apply 使用 Runtime revision/ETag。浏览器幂等键由 Runtime ID、operation kind 与规范化 Profile 的 SHA-256 确定，因此相同 Profile 重试会重放同一 operation，内容变化会得到新的 key。
 - `CON-29`：MPA Runtime 写路径必须在任何 AgentKit SDK 或 GitHub mutation 前执行共享 P0 compatibility preflight。覆盖 `/web/deploy-agentkit` 直连 Runtime update、`/web/github-delivery/cicd-pipeline` GitHub Actions delivery setup、`/web/github-delivery/init-main` 首次 delivery 分支初始化、`/web/github-cicd/runtime-sync` 已绑定源码同步，以及 `/web/github-delivery/rollback-pr` rollback PR 创建。浏览器用 `agentCategory=mpa` 标记 MPA 流程；显式 `mpaCompatibilityManifest` 或兼容旧字段 `compatibilityManifest` 可覆盖本地生成的协议形态。失败返回安全的 `409` detail，包含 `code=mpa_compatibility_preflight_failed`、`status` 和 `errorCode`；不得回显 manifest 正文或 secret-like 字段。没有 pinned manifest 的本地 UI 路径只做协议形态校验，不作为发布证据；最终 release gate 必须用真实固定的 revision 和 image digest 执行 VC-19。
-- `CON-30`：MPA 删除采用“先预览、再执行”的契约。`GET /web/mpa/agents/{mpaInstanceId}/delete-preview` 解析已授权 Runtime binding，读取 Runtime `profile-status`，调用现有 Runtime `GET /api/v1/sessions?include_a2a=true`，返回 `canDelete`、`blockers`、可见会话计数、活动会话摘要和清理计划。`/web/delete-runtime` 在 MPA 清理前重新检查服务端 Runtime 标签；浏览器传入的 `agentCategory` 只是提示，不能让普通 Runtime 进入 MPA 清理。`active` 状态 lifecycle operation 或状态为 `queued|running|pausing|paused|resuming` 的 active session 会在副作用前返回结构化 `409`。若某条遗留 lifecycle operation 为 `failed_retryable`，但 Runtime binding 已是 `bound` 且 Runtime `profile-status` 证明 Profile 已 `applied`，则不再把它作为删除 blocker；这样可以避免已恢复的 smoke 失败记录永久阻塞清理，同时保留真正 active operation 的保护。没有阻断时，Studio 先通过现有 Runtime `DELETE /api/v1/sessions/{sessionId}` 删除可见 idle/terminal Runtime 会话，再删除 AgentKit Runtime。单个 session `404` 表示已清理，会被忽略以支持安全重试。预览只统计已授权目标 Runtime API 可见的会话；若未来需要跨用户全局 session 状态，必须新增 Runtime/global admin endpoint 后再声明。
+- `CON-30`：MPA 删除预览检查已授权绑定、活动生命周期操作和 Runtime 可见会话，不查询 Profile。活动操作或状态为 `queued|running|pausing|paused|resuming` 的会话在副作用前阻止删除；失败操作本身不阻止删除。会话/资源发现错误必须显示，不得当作空结果。服务端重新检查 Runtime 标签、归属和引用。按可见空闲会话、独占受管沙箱模板、Skill Space、AgentKit Runtime 的顺序清理。共享/导入/归属不明资源、数据库、Workspace、APIG 和网络保留。账号/地域注册库锁和持久清理状态支持部分失败重试，并阻止创建流程重建已删除资源。会话/资源不存在仅在结构化 not-found 错误下视为幂等成功。确认弹窗展示清理 ID、保留原因、加载、错误和重新检查；取消终止预览并忽略晚到结果。会话统计仅代表已认证 Runtime API 的可见会话。
 - `CON-26`: 仅后续：资源库、全局搜索、产物索引/来源 adapter。本期不开发、不验收。会话资源引用和会话结果仍在本期；MPA 模板/专家/审核不属于本方案。
 - `CON-27`: 已有 MPA Runtime 的消息渠道绑定已在主干实现飞书、钉钉和企微，并由 `specs/mpa-channels` 管理，不再属于“代码未开发”的后续项。定时任务产品验收与网站 visitor/A2A 集成仍是独立后续。本 P0 不新增重复渠道 adapter、CLI 等价能力或 provider 专项 live 门禁。
 - `CON-28`：应用/开发者/全局管理页保留非 MPA 语义。限制不兼容 MPA target，不隐藏所有通用功能。MPA runtime admin 不等于平台用户管理 admin。Trace/log/usage/feedback、CLI 示例保持 runtime/worker/Session/Turn 关联与脱敏，不将不支持的 coding/GitHub 自动化改名成 MPA。
@@ -133,3 +133,25 @@ S5-11 真实验证：`VEADK_MPA_P0_LIVE=1 VEADK_MPA_P0_ASYNC_STAGE_TIMEOUT_SECON
 CON-11a 回归验证：会话投影/对账 focused suite 返回 43 passed；完整前端测试返回 1236 passed；TypeScript、i18n、生产构建与 scoped diff 检查均通过。严格真实 Studio 探针在任务完成并额外等待 30 秒后观察到五个有序 `.turn--assistant` 节点，整页重载后仍为相同五个节点。既有可选本地 endpoint 404/503 已单独记录，不影响 transcript 持久展示。
 CON-11b 回归验证：完整前端测试返回 1237 passed；TypeScript、i18n、生产构建与 scoped diff 检查均通过。新的真实 Studio `whoami` 执行观察到父级 `sandbox_task` 和子命令无需刷新即从 running 变为 completed，页面不再有 spinner 或 running activity，最终回答为 `root`；整页刷新后两条终态活动和回答均保持。
 范围修正：上述入口审计中网站/飞书等后续项仅供未来参考，不是本期开发要求。
+
+## 通用部署隔离（2026-10-12）
+
+通用结构化/YAML 创建默认 general。存在草稿或快捷/传统界面模式不代表 MPA 意图。已有目标保存明确的 `agentCategory`；旧 `mpaProfileOnly: true` 是唯一的 MPA 回退依据，明确 general 优先。仅 MPA 执行或报告 Profile/smoke 阶段，包括失败与重试。本地草稿筛选遵循相同规则。托管 MPA 创建保留独立流程。本次前端修复不迁移已有服务端 Runtime 标签。
+
+## MPA 独占资源删除（2026-10-12，已实现）
+
+本变更替代删除契约中的 Profile 前置条件：预览与执行不查询 Profile，仅活动操作和运行会话阻止删除；会话查询失败必须可见。MPA 删除在既有会话清理后，按顺序清理已证明独占的受管沙箱模板、Skill Space，再删除 Runtime。依据为账号/地域注册记录、匹配的资源标签和其他部署/Runtime 引用检查；共享、导入或归属不明资源保留。清理状态持久保存，部分失败可重试；其他资源与通用 Runtime 删除不变。加载、错误、预览重试及取消在详情页确认弹窗可见。详见[设计](../../prd-spec/features/mpa-owned-resource-deletion/2026-10-12-owned-resource-deletion.zh.md)。
+
+删除会话查询和清理使用 Studio 服务端已认证的 `owner_id` 作为 `x-user-id`，与聊天/定时任务保持一致；不使用浏览器传入的身份头。Runtime client 的可选 `user_id` 参数维持旧调用兼容。
+
+删除预览限时 25 秒，超时返回 HTTP 504 / `mpa_delete_preview_timeout`；引用发现最多并发读取 4 个 Runtime 详情。删除请求内相同凭据可复用身份核验，轮换/账号变化必须重新检查；创建流程保持默认逐次核验。
+
+### CON-30a：MPA 删除超时与确认
+
+明确选择的 MPA 浏览器删除最多等待 180 秒；通用删除保持 30 秒。TimeoutError 后，对同一 Runtime ID/地域执行一次已授权、no-store、限时 30 秒的只读确认。仅结构化云端 Runtime NotFound 且完整列表不存在时成功；授权 404、仍在列表、分页不完整和查询失败不能视作成功。无法确认时保留本地化错误及既有重试 UI。不自动重复删除，不改变清理顺序。见[已批准超时修复](../../prd-spec/bugfixes/mpa-delete-timeout/2026-10-13-confirm-delete-outcome.zh.md)。
+
+结果确认仅限服务端已授权的 MPA 删除尝试，须匹配 Studio 用户、Runtime、地域及私有部署凭据指纹。上下文最多 1024 条、一小时到期；重启/轮换/上下文缺失均失败关闭。
+
+## 兼容性资源位置迁移（2026-10-14）
+
+MPA 矩阵及性能报告 schema 移至 `frontend/server/mpa/contracts/mpa-p0/`。共享 `veadk.cli.mpa_p0_contract` 评估器和必填自定义 `--matrix` CLI 参数保持不变，仅默认资源路径和文档示例调整。缺默认文件继续使用内置备用规则，存在但格式错误时仍失败。Python wheel 和 Studio 暂存须包含两个 JSON，默认查找不导入 frontend 组合模块。不改变 manifest 字段、规则、写入前检查或通用智能体行为。见[已批准迁移设计](../../prd-spec/refactors/mpa-contract-location/2026-10-14-studio-owned-resources.zh.md)。
