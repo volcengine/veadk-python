@@ -15,6 +15,7 @@
 """Always-on VeADK Portal metric instrumentation."""
 
 import time
+from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any
 
@@ -144,6 +145,8 @@ class Meters:
     APMPLUS_TOOL_TOKEN_USAGE = "apmplus_tool_token_usage"
     # skill invoke latency
     GEN_AI_SKILL_INVOKE_LATENCY = "gen_ai_skill_invoke_latency"
+    SKILL_DOWNLOAD = "skill_download"
+    SKILL_LOAD = "skill_load"
 
 
 class PortalMetricRecorder:
@@ -233,6 +236,23 @@ class PortalMetricRecorder:
             unit="s",
             explicit_bucket_boundaries_advisory=_GEN_AI_CLIENT_OPERATION_DURATION_BUCKETS,
         )
+
+        self.skill_download_counter = self.meter.create_counter(
+            Meters.SKILL_DOWNLOAD, unit="count"
+        )
+        self.skill_load_counter = self.meter.create_counter(
+            Meters.SKILL_LOAD, unit="count"
+        )
+
+    def record_skill_download(self, attributes: dict[str, str]) -> None:
+        """Count skill download observations without affecting tool results."""
+        with suppress(Exception):
+            self.skill_download_counter.add(1, attributes)
+
+    def record_skill_load(self, attributes: dict[str, str]) -> None:
+        """Count skill load observations without affecting tool results."""
+        with suppress(Exception):
+            self.skill_load_counter.add(1, attributes)
 
     @property
     def provider(self) -> metrics_api.MeterProvider:
