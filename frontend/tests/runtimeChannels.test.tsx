@@ -1551,3 +1551,239 @@ it("blocks Lark IME and duplicate writes and aborts on brand switch", async () =
   expect(host.textContent).not.toContain("lark-new");
   expect(host.textContent).toContain("channels.accountsTitle");
 });
+
+function bindingTypesFixture(
+  types: unknown = ["shared", "private"],
+  lark = false,
+) {
+  if (lark) larkFixture();
+  else multiBotFixture();
+  const original = request.getMockImplementation()!;
+  request.mockImplementation(async (ep, path, init) => {
+    if (path === "/capabilities")
+      return { ...(await original(ep, path, init)), botBindingTypes: types };
+    if (path === "/feishu/bindings") return pending;
+    if (path.endsWith("/retry")) return { ...pending, status: "BOUND", appId: "bot-new" };
+    return original(ep, path, init);
+  });
+}
+const typeInput = (value: string) =>
+  host.querySelector<HTMLInputElement>(`input[type="radio"][value="${value}"]`);
+async function chooseType(value: string) {
+  expect(typeInput(value)).not.toBeNull();
+  await act(async () => typeInput(value)!.click());
+}
+async function submitCredentials() {
+  await selectMethod("manual");
+  await fillCredential("appId", " bot-new ");
+  await fillCredential("secret", "fixture-secret");
+  await act(async () =>
+    host
+      .querySelector("form[data-channel-binding]")!
+      .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })),
+  );
+}
+function lastBody(path: string) {
+  const calls = request.mock.calls.filter(
+    ([, value, init]) => value === path && init?.method === "POST",
+  );
+  expect(calls.length).toBeGreaterThan(0);
+  return JSON.parse(String(calls.at(-1)![2]!.body));
+}
+
+it.each(["shared", "private"])(
+  "sends the selected %s type for QR and manual binding",
+  async (type) => {
+    bindingTypesFixture();
+    await render();
+    await click("channels.addAccount");
+    expect(typeInput("shared")?.checked).toBe(true);
+    await chooseType(type);
+    expect(host.textContent).toContain(`channels.bindingTypeHelp_${type}`);
+    await click("channels.bind");
+    expect(lastBody("/feishu/bindings")).toEqual({ bindingType: type });
+    expect(typeInput("shared")?.disabled).toBe(true);
+    expect(typeInput("private")?.disabled).toBe(true);
+    await submitCredentials();
+    expect(lastBody("/feishu/bindings/manual")).toEqual({
+      appId: "bot-new",
+      appSecret: "fixture-secret",
+      bindingType: type,
+    });
+    expect(localStorage.setItem).not.toHaveBeenCalled();
+  },
+);
+
+it.each([undefined, [], ["future"], null, "private"])(
+  "keeps legacy payloads when types are unsupported: %j",
+  async (types) => {
+    bindingTypesFixture(types === undefined ? [] : types);
+    if (types === undefined) {
+      const original = request.getMockImplementation()!;
+      request.mockImplementation(async (ep, path, init) => {
+        const data = await original(ep, path, init);
+        if (path === "/capabilities") delete data.botBindingTypes;
+        return data;
+      });
+    }
+    await render();
+    await click("channels.addAccount");
+    expect(typeInput("private")).toBeNull();
+    expect(typeInput("shared")).toBeNull();
+    await click("channels.bind");
+    expect(lastBody("/feishu/bindings")).toEqual({});
+    await submitCredentials();
+    expect(lastBody("/feishu/bindings/manual")).toEqual({
+      appId: "bot-new",
+      appSecret: "fixture-secret",
+    });
+  },
+);
+
+it.each([["private"], ["future", "private"], ["private", "private"]])(
+  "only offers advertised known types: %j",
+  async (...types) => {
+    bindingTypesFixture(types);
+    await render();
+    await click("channels.addAccount");
+    expect(typeInput("shared")).toBeNull();
+    expect(typeInput("private")?.checked).toBe(true);
+    expect(host.querySelectorAll('input[value="private"]')).toHaveLength(1);
+    await click("channels.bind");
+    expect(lastBody("/feishu/bindings")).toEqual({ bindingType: "private" });
+  },
+);
+
+it("preserves private type when retrying a durable failed QR binding", async () => {
+  bindingTypesFixture();
+  const original = request.getMockImplementation()!;
+  request.mockImplementation(async (ep, path, init) =>
+    path === "/feishu/bindings"
+      ? { ...pending, status: "FAILED", lastErrorCode: "REGISTRATION_FAILED" }
+      : original(ep, path, init),
+  );
+  await render();
+  await click("channels.addAccount");
+  await chooseType("private");
+  await click("channels.bind");
+  expect(typeInput("shared")?.disabled).toBe(true);
+  await chooseType("shared");
+  expect(typeInput("private")?.checked).toBe(true);
+  await click("common.retry");
+  expect(lastBody("/feishu/bindings/binding-1/retry")).toEqual({
+    bindingType: "private",
+  });
+});
+
+it("locks selection while sending and preserves it after a recoverable error", async () => {
+  bindingTypesFixture();
+  const original = request.getMockImplementation()!;
+  let reject!: (reason: unknown) => void;
+  request.mockImplementation((ep, path, init) =>
+    path === "/feishu/bindings"
+      ? new Promise((_resolve, fail) => {
+          reject = fail;
+        })
+      : original(ep, path, init),
+  );
+  await render();
+  await click("channels.addAccount");
+  await chooseType("private");
+  await click("channels.bind");
+  expect(typeInput("shared")?.disabled).toBe(true);
+  await act(async () => reject(new ChannelApiError(502)));
+  expect(host.textContent).toContain("channels.requestFailed");
+  expect(typeInput("private")?.checked).toBe(true);
+  expect(typeInput("shared")?.disabled).toBe(false);
+});
+
+it("resets type when cancelling Add bot or changing Runtime and ignores late capabilities", async () => {
+  bindingTypesFixture();
+  await render();
+  await click("channels.addAccount");
+  await chooseType("private");
+  await click("channels.cancelAddAccount");
+  await click("channels.addAccount");
+  expect(typeInput("shared")?.checked).toBe(true);
+  await chooseType("private");
+  const original = request.getMockImplementation()!;
+  let finish!: (value: unknown) => void;
+  let signal: AbortSignal | null | undefined;
+  request.mockImplementation((ep, path, init) =>
+    ep.runtimeId === "runtime-slow" && path === "/capabilities"
+      ? new Promise((resolve) => {
+          finish = resolve;
+          signal = init?.signal;
+        })
+      : original(ep, path, init),
+  );
+  await act(async () =>
+    root.render(
+      <RuntimeChannels runtimeId="runtime-slow" region="cn-beijing" />,
+    ),
+  );
+  expect(typeInput("private")).toBeNull();
+  await act(async () =>
+    root.render(
+      <RuntimeChannels runtimeId="runtime-new" region="cn-beijing" />,
+    ),
+  );
+  expect(signal?.aborted).toBe(true);
+  await act(async () =>
+    finish({
+      serverSideBinding: true,
+      bindingReady: true,
+      botBindingTypes: ["private"],
+    }),
+  );
+  await click("channels.addAccount");
+  expect(typeInput("shared")?.checked).toBe(true);
+  expect(
+    request.mock.calls.filter(([, , init]) => init?.method === "POST"),
+  ).toHaveLength(0);
+});
+
+it("does not expose an editable type for existing accounts or other providers", async () => {
+  bindingTypesFixture();
+  await render();
+  await selectBot("bot-a");
+  expect(typeInput("private")).toBeNull();
+  await click("channels.provider_wecom");
+  expect(typeInput("private")).toBeNull();
+  await click("channels.provider_dingtalk");
+  expect(typeInput("private")).toBeNull();
+});
+
+it("retains Lark domain alongside private type in QR, retry and manual requests", async () => {
+  bindingTypesFixture(["shared", "private"], true);
+  const original = request.getMockImplementation()!;
+  request.mockImplementation(async (ep, path, init) =>
+    path === "/feishu/bindings"
+      ? { ...pending, status: "FAILED", lastErrorCode: "REGISTRATION_FAILED" }
+      : original(ep, path, init),
+  );
+  await renderLark();
+  await click("channels.addAccount");
+  await chooseType("private");
+  await click("channels.bind");
+  expect(lastBody("/feishu/bindings")).toEqual({
+    domain: "lark",
+    bindingType: "private",
+  });
+  await click("common.retry");
+  expect(lastBody("/feishu/bindings/binding-1/retry")).toEqual({
+    domain: "lark",
+    bindingType: "private",
+  });
+  // The successful retry closes the add panel; a new binding chooses its own type.
+  await click("channels.addAccount");
+  expect(typeInput("shared")?.checked).toBe(true);
+  await chooseType("private");
+  await submitCredentials();
+  expect(lastBody("/feishu/bindings/manual")).toEqual({
+    appId: "bot-new",
+    appSecret: "fixture-secret",
+    domain: "lark",
+    bindingType: "private",
+  });
+});

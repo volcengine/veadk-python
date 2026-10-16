@@ -58,3 +58,10 @@ CON-17：Studio 新增群表单不提供会话隔离选择器，仅提交 channe
 ## Lark 品牌（2026-10-15）
 
 CON-18（已批准增量）：BytePlus 仅在 `feishuDomains` 包含 `lark` 且声明飞书多账号支持时开放 Lark。复用 `/feishu/bindings` 和 `/feishu/bindings/manual`，传 `domain=lark`；省略仍为飞书。存储/API 的 channel 仍为 `feishu`，以 `config.domain` 区分品牌，缺失为飞书。列表按品牌过滤，账号操作始终带 appId。Runtime 负责固定域名及 Gateway adapter=lark 注册，校验入站 Bot 身份并保留 request/delivery ID。国内已有记录及接口兼容。见[设计](../../prd-spec/features/lark-binding/2026-10-15-lark-binding.zh.md)。
+
+
+## Bot 绑定类型（2026-10-16）
+
+CON-19：可选 botBindingTypes 为飞书及 Lark 声明 shared/private。Studio 添加 Bot 时仅显示已知且声明的类型，优先默认共享；扫码创建、扫码重试和手动绑定均发送 bindingType。Lark 保留 domain=lark。能力缺失／为空／仅含未知值时省略字段，保持旧行为；其他渠道不变。已有账号管理不编辑类型。选择仅保存在内存中，切换 Runtime／渠道或重新打开添加面板时重置；请求中或存在持久扫码绑定时锁定，重试保持原类型。鉴权、类型不可变校验及召回隔离仍由 Runtime 负责。私有类型 UI 说明为“私聊可召回同 Bot 的历史，包括群聊。”
+
+设计：[Bot 绑定类型](../../prd-spec/features/bot-binding-types/2026-10-16-bot-binding-types.zh.md)。

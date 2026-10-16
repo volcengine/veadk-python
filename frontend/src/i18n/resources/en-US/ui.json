@@ -1968,6 +1968,11 @@
     }
   },
   "channels": {
+    "bindingType": "Bot type",
+    "bindingType_shared": "Shared",
+    "bindingType_private": "Private",
+    "bindingTypeHelp_shared": "Sessions are isolated from each other.",
+    "bindingTypeHelp_private": "Private chats can recall this Bot’s history, including group chats.",
     "title": "Feishu channel",
     "refresh": "Refresh",
     "loading": "Loading channel configuration…",
