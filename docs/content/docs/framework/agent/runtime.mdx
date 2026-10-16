@@ -419,7 +419,7 @@ runtime 通过进程的 OpenTelemetry MeterProvider 上报以下指标；未配�
 | `skills_mode` | `codex` 和 `piagent` 在桥接工具时会跳过 VeADK 的 `SkillsToolset`，指令里宣称的 `execute_skills`/`skills_tool` 并未注册。`dsh` 会把 `SkillToolset` 与 legacy skills 物料化到 DSH 原生 skill filesystem provider。 |
 | `enable_skills_checklist` | 依赖 ADK 的 skills toolset before-tool 回调。`dsh` 会让 skills 通过 DSH 原生 loader 可用，但这个 ADK checklist 回调不会在该 loader 内执行；`codex` 和 `piagent` 不桥接 skills toolset。 |
 | `after_model_callback` | 语义不同：每回合在合并后的最终文本上触发一次，而不是每次模型调用触发一次。 |
-| `tracers` | 粒度不同：codex 会补一个**每回合一个**的 `call_llm` span（含 prompt、响应、整轮 token 用量），但内层模型循环跑在外部 harness 里，仍然没有逐次模型调用的 span。 |
+| `tracers` | 粒度不同：codex 和 dsh 会补一个**每回合一个**的 `call_llm` span（含 prompt、响应、整轮 token 用量），但内层模型循环跑在外部 harness 里，仍然没有逐次模型调用的 span。 |
 | `codex_runtime_config`（配合非 codex runtime） | 只对 codex 运行时有效，其他 runtime 完全忽略。 |
 | `deepseek_harness_runtime_config`（配合非 `dsh` runtime） | 只对 DSH runtime 有效，其他 runtime 完全忽略。 |
 | `RunConfig(max_llm_calls=...)` | 对 `piagent` / `dsh` 为粗粒度或尽力而为；内层模型循环在外部 harness 内运行，VeADK 不能在每次真实模型请求前精确扣减。**codex 已支持**：见上方[可观测性](#codex-可观测性)。 |

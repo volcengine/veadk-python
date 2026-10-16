@@ -14,12 +14,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import builtins
 import importlib
 import json
 import logging
 import re
 import sys
+import threading
 import types as py_types
 import urllib.request
 from dataclasses import dataclass
@@ -27,6 +29,7 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 import pytest
+from google.adk.agents.base_agent import BaseAgent
 from google.adk.agents.invocation_context import InvocationContext
 from google.adk.events.event import Event
 from google.adk.models.llm_response import LlmResponse
@@ -57,6 +60,8 @@ class _FakeDeepSeekHarness:
     notification_events: ClassVar[list[dict[str, Any]]] = []
     result_events: ClassVar[list[dict[str, Any]]] = []
     final_response: ClassVar[str | None] = None
+    run_started: ClassVar[threading.Event | None] = None
+    block_until: ClassVar[threading.Event | None] = None
 
     def __init__(self, config: _FakeDeepSeekHarnessConfig) -> None:
         self.config = config
@@ -72,6 +77,10 @@ class _FakeDeepSeekHarness:
         on_notification=None,
     ) -> _FakeRunResult:
         self.calls.append((prompt, session_id))
+        if type(self).run_started is not None:
+            type(self).run_started.set()
+        if type(self).block_until is not None:
+            type(self).block_until.wait(timeout=5)
         if on_notification is not None:
             for event in type(self).notification_events:
                 on_notification(
@@ -114,6 +123,8 @@ def fake_dsh(monkeypatch: pytest.MonkeyPatch):
     _FakeDeepSeekHarness.notification_events = []
     _FakeDeepSeekHarness.result_events = []
     _FakeDeepSeekHarness.final_response = None
+    _FakeDeepSeekHarness.run_started = None
+    _FakeDeepSeekHarness.block_until = None
     monkeypatch.setitem(sys.modules, "deepseek_harness", module)
     _drop_runtime_modules()
     yield _FakeDeepSeekHarness
@@ -379,6 +390,161 @@ async def test_runtime_bridges_adk_function_tools(fake_dsh, caplog) -> None:
     assert "piagent_tool_complete" not in messages
 
 
+def test_schema_to_dsh_value_preserves_default_additional_properties(fake_dsh) -> None:
+    tool_runtime = importlib.import_module(
+        "veadk.runtime.deepseek_harness.tool_runtime"
+    )
+
+    rendered = tool_runtime._schema_to_dsh_value(
+        {
+            "type": "object",
+            "properties": {"value": {"type": "string"}},
+        }
+    )
+    explicit_false = tool_runtime._schema_to_dsh_value(
+        {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        }
+    )
+    schema_additional = tool_runtime._schema_to_dsh_value(
+        {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": {"type": "string"},
+        }
+    )
+
+    assert "additionalProperties" not in rendered
+    assert explicit_false["additionalProperties"] is False
+    assert schema_additional["additionalProperties"] == {"type": "string"}
+
+
+@pytest.mark.asyncio
+async def test_runtime_uses_process_private_tool_plugin_with_persistent_home(
+    fake_dsh,
+    tmp_path,
+) -> None:
+    from google.adk.tools.function_tool import FunctionTool
+
+    def sample_tool(value: str) -> dict[str, str]:
+        return {"echo": value}
+
+    persistent_home = tmp_path / "persistent-dsh-home"
+    fake_dsh.call_tool = {
+        "toolName": "sample_tool",
+        "toolCallId": "call-1",
+        "args": {"value": "from-dsh"},
+    }
+    runtime_module = importlib.import_module("veadk.runtime.deepseek_harness.runtime")
+    runtime = runtime_module.DeepSeekHarnessRuntime()
+    agent = _agent(
+        tools=[FunctionTool(sample_tool)],
+        deepseek_harness_runtime_config={"dsh_home": str(persistent_home)},
+    )
+    ctx = _ctx(agent)
+
+    assert [event async for event in runtime.run_async(agent, ctx)]
+
+    harness = fake_dsh.instances[0]
+    plugin = _plugin_path_from_patch(harness.config.patches[-1])
+    assert harness.config.dsh_home == str(persistent_home.resolve())
+    assert not plugin.is_relative_to(persistent_home)
+    assert "veadk-deepseek-harness-tools-" in str(plugin)
+
+
+@pytest.mark.asyncio
+async def test_persistent_dsh_home_manager_registers_process_cleanup(
+    fake_dsh,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    runtime_module = importlib.import_module("veadk.runtime.deepseek_harness.runtime")
+    registered = []
+
+    monkeypatch.setattr(runtime_module.atexit, "register", registered.append)
+    runtime_module._cleanup_registered = False
+    runtime = runtime_module.DeepSeekHarnessRuntime()
+    agent = _agent(
+        deepseek_harness_runtime_config={"dsh_home": str(tmp_path / "persistent-home")}
+    )
+    ctx = _ctx(agent)
+
+    assert [event async for event in runtime.run_async(agent, ctx)]
+
+    assert registered == [runtime_module._cleanup_runtime_state]
+
+
+@pytest.mark.asyncio
+async def test_runtime_cancellation_does_not_close_shared_manager(fake_dsh) -> None:
+    fake_dsh.run_started = threading.Event()
+    fake_dsh.block_until = threading.Event()
+    runtime = importlib.import_module(
+        "veadk.runtime.deepseek_harness.runtime"
+    ).DeepSeekHarnessRuntime()
+    agent = _agent()
+    ctx = _ctx(agent)
+
+    async def _consume() -> list[Event]:
+        return [event async for event in runtime.run_async(agent, ctx)]
+
+    task = asyncio.create_task(_consume())
+    assert await asyncio.to_thread(fake_dsh.run_started.wait, 5)
+    task.cancel()
+    await asyncio.sleep(0.05)
+
+    assert not fake_dsh.instances[0].closed
+    assert not task.done()
+
+    fake_dsh.block_until.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert not fake_dsh.instances[0].closed
+
+
+@pytest.mark.asyncio
+async def test_runtime_runs_transferred_agent_and_suppresses_dsh_final(
+    fake_dsh,
+) -> None:
+    worker = _TextAgent(name="worker", marker="worker handled it")
+    fake_dsh.call_tool = {
+        "toolName": "transfer_to_agent",
+        "toolCallId": "transfer-1",
+        "args": {"agent_name": "worker"},
+    }
+    fake_dsh.final_response = "root text should not leak"
+    runtime_module = importlib.import_module("veadk.runtime.deepseek_harness.runtime")
+    runtime = runtime_module.DeepSeekHarnessRuntime()
+    agent = _agent(
+        description="Routes specialist work.",
+        instruction="Transfer implementation work to worker.",
+        sub_agents=[worker],
+    )
+    ctx = _ctx(agent)
+
+    events = [event async for event in runtime.run_async(agent, ctx)]
+    function_calls = [
+        part.function_call
+        for event in events
+        for part in (event.content.parts if event.content else [])
+        if part.function_call
+    ]
+    texts = [
+        part.text
+        for event in events
+        for part in (event.content.parts if event.content else [])
+        if part.text
+    ]
+
+    assert [call.name for call in function_calls] == ["transfer_to_agent"]
+    assert any(event.actions.transfer_to_agent == "worker" for event in events)
+    assert any(event.author == "worker" for event in events)
+    assert "worker handled it" in texts
+    assert "root text should not leak" not in texts
+    assert ctx._invocation_cost_manager._number_of_llm_calls == 0
+
+
 @pytest.mark.asyncio
 async def test_runtime_maps_dsh_partial_and_native_tool_events(fake_dsh) -> None:
     fake_dsh.notification_events = [
@@ -576,6 +742,17 @@ def _ctx(
             events=events or [],
         ),
     )
+
+
+class _TextAgent(BaseAgent):
+    marker: str
+
+    async def _run_async_impl(self, ctx: InvocationContext):
+        yield Event(
+            invocation_id=ctx.invocation_id,
+            author=self.name,
+            content=types.ModelContent(parts=[types.Part(text=self.marker)]),
+        )
 
 
 def _drop_runtime_modules() -> None:

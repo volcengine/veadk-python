@@ -451,7 +451,7 @@ The runtime emits the following metrics through the process's OpenTelemetry Mete
 | `skills_mode` | `codex` and `piagent` skip VeADK's `SkillsToolset` when bridging tools, so the `execute_skills`/`skills_tool` the instruction advertises is not registered there. `dsh` materializes `SkillToolset` and legacy skills into DSH's native skill filesystem provider. |
 | `enable_skills_checklist` | Depends on an ADK before-tool callback over the skills toolset. `dsh` makes skills available through DSH's native loader, but this ADK checklist callback is not enforced inside that loader; `codex` and `piagent` do not bridge the skills toolset. |
 | `after_model_callback` | Different semantics: it fires once per turn on the merged final text, not once per LLM call. |
-| `tracers` | Different granularity: codex does add a `call_llm` span (prompt, response, whole-turn token usage), but **one per turn** — the inner model loop runs inside the external harness, so there are still no per-model-call spans. |
+| `tracers` | Different granularity: codex and dsh add a `call_llm` span (prompt, response, whole-turn token usage), but **one per turn** — the inner model loop runs inside the external harness, so there are still no per-model-call spans. |
 | `codex_runtime_config` (with a non-codex runtime) | Codex-only; other runtimes ignore it entirely. |
 | `deepseek_harness_runtime_config` (with a non-`dsh` runtime) | DSH-only; other runtimes ignore it entirely. |
 | `RunConfig(max_llm_calls=...)` | Coarse or best-effort for `piagent` / `dsh`; the inner model loop runs inside the external harness, so VeADK cannot charge every real model request before dispatch. **codex enforces it**; see [Codex observability](#codex-observability) above. |

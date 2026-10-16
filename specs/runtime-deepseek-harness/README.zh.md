@@ -45,11 +45,11 @@
 
 ## 状态与并发
 
-有效 runtime 配置在解析 model、provider、DSH profile、home、路径、timeout、显式环境覆盖、已桥接 DSH tool schema digest 和已物料化 skill 内容 digest 后形成 key。每个 key 拥有一个 `DeepSeekHarness` 实例、适用时生成的 `dsh_home`、存在工具时的长期 tool bridge/plugin patch，以及存在 skills 时的 DSH 原生 skill patch/root。Manager 在进程退出时关闭。
+有效 runtime 配置在解析 model、provider、DSH profile、home、路径、timeout、显式环境覆盖、已桥接 DSH tool schema digest 和已物料化 skill 内容 digest 后形成 key。每个 key 拥有一个 `DeepSeekHarness` 实例、适用时生成的 `dsh_home`、存在工具时的长期 tool bridge/plugin patch，以及存在 skills 时的 DSH 原生 skill patch/root。Tool plugin 文件会写入 manager 私有临时目录，而不是共享的 `dsh_home`，因此持久 home 可以跨进程复用且不会覆盖每个进程自己的 bridge token。Manager 在进程退出时关闭。
 
 共享同一 manager 的 turn 使用 async lock 串行执行。这避免对同一个 SDK stdio client 做未文档化的并发访问。不同 manager key 可以独立运行。
 
-当前同步 SDK 无法可靠地从外层 task 取消一个进行中的 DSH `run()`。组件会在可行时于取消时关闭 manager，但不承诺优雅的 per-turn cancellation。
+当前同步 SDK 无法可靠地从外层 task 取消一个进行中的 DSH `run()`。组件会保留共享 manager，并在同步 SDK 调用返回前继续持有 manager lock，随后再传播 cancellation。它不承诺优雅的 per-turn cancellation。
 
 Tool bridge 只在 manager lock 拥有活跃 turn 时接受调用。缺少 per-manager bearer token 或缺少活跃 ADK tool bundle 的请求会被拒绝。
 
@@ -81,6 +81,8 @@ Tool bridge 只在 manager lock 拥有活跃 turn 时接受调用。缺少 per-m
 
 默认 `profile` 是 `sdk-minimal`，因此 VeADK 可以注入自己负责的精确 DSH tool 和 skill 插件。调用方可以选择 DSH 更完整的 `sdk` profile；此时 VeADK 会 patch 已存在的 skill filesystem plugin 配置，而不是插入重复插件组。
 
+`request_timeout_seconds` 默认是 `None`，即 VeADK 层不限制 SDK run 的时长。生产调用方如果需要硬性 turn 截止时间，应显式设置它。
+
 ## 安全与隔离
 
 生成的 `DSH_HOME` 路径是进程拥有的临时目录。配置的 `dsh_home`、`cwd` 和 `runtime_cwd` 在使用前会 expand 并 resolve。Runtime 只通过 SDK 配置传入 `api_key` 和 `base_url`；DSH 内部脱敏由 DSH 拥有。
@@ -102,7 +104,7 @@ Runtime 以不含密钥的方式记录选中的 model/provider 和 session 身�
 | `CON-1` 至 `CON-4a` | Runtime 调度和配置解析。 | `uv run --extra dev pytest tests/runtime/deepseek_harness` | PRD 验证记录 |
 | `CON-5` 至 `CON-7` | 懒 manager、显式 home、稳定 session ID。 | `uv run --extra dev pytest tests/runtime/deepseek_harness` | PRD 验证记录 |
 | `CON-8` | ADK tools 通过生成式 DSH plugin 和 loopback callback 桥接。 | `uv run --extra dev pytest tests/runtime/deepseek_harness` | PRD 验证记录 |
-| `CON-9` | 子智能体转交使用注入式 transfer tool 路径。 | 源码审查和桥接路径测试 | PRD 验证记录 |
+| `CON-9` | 子智能体转交使用注入式 transfer tool 路径。 | `uv run --extra dev pytest tests/runtime/deepseek_harness` | PRD 验证记录 |
 | `CON-10` | Skills 通过 DSH 原生 skill 插件和隔离物料化 root 桥接。 | `uv run --extra dev pytest tests/runtime/deepseek_harness` | PRD 验证记录 |
 | `CON-11` | DSH partial 与原生 tool events 会成为 ADK events。 | `uv run --extra dev pytest tests/runtime/deepseek_harness` | PRD 验证记录 |
 | `CON-12` | 最终回复成为 ADK event。 | `uv run --extra dev pytest tests/runtime/deepseek_harness` | PRD 验证记录 |

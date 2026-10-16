@@ -45,11 +45,11 @@ It does not own DSH profile behavior, provider authentication semantics inside D
 
 ## State and Concurrency
 
-Effective runtime configurations are keyed after resolving model, provider, DSH profile, homes, paths, timeouts, explicit environment overrides, the bridged DSH tool schema digest, and the materialized skill content digest. Each key owns one `DeepSeekHarness` instance, one generated `dsh_home` when applicable, one long-lived tool bridge/plugin patch when tools are present, and one native DSH skill patch/root when skills are present. Managers are closed at process exit.
+Effective runtime configurations are keyed after resolving model, provider, DSH profile, homes, paths, timeouts, explicit environment overrides, the bridged DSH tool schema digest, and the materialized skill content digest. Each key owns one `DeepSeekHarness` instance, one generated `dsh_home` when applicable, one long-lived tool bridge/plugin patch when tools are present, and one native DSH skill patch/root when skills are present. Tool plugin files are written under a manager-private temporary directory, not under shared `dsh_home`, so persistent homes can be reused across processes without overwriting the per-process bridge token. Managers are closed at process exit.
 
 Turns sharing a manager are serialized with an async lock. This avoids undocumented concurrent access to one SDK stdio client. Multiple different manager keys may run independently.
 
-Cancellation from the surrounding task cannot reliably cancel one in-flight DSH `run()` call through the current synchronous SDK. The component closes the manager on cancellation where possible and does not claim graceful per-turn cancellation.
+Cancellation from the surrounding task cannot reliably cancel one in-flight DSH `run()` call through the current synchronous SDK. The component preserves the shared manager and keeps its lock until the synchronous SDK call returns, then propagates cancellation. It does not claim graceful per-turn cancellation.
 
 Tool bridge calls are accepted only while the manager lock owns an active turn. The bridge rejects calls without the per-manager bearer token or without an active ADK tool bundle.
 
@@ -81,6 +81,8 @@ Environment overrides:
 
 The default `profile` is `sdk-minimal`, so VeADK can inject the exact DSH tool and skill plugins it owns. Callers may opt into DSH's fuller `sdk` profile; in that mode VeADK patches the existing skill filesystem plugin configuration rather than inserting a duplicate plugin set.
 
+`request_timeout_seconds` defaults to `None`, which leaves the SDK run unbounded at the VeADK layer. Production callers should set it when a hard turn deadline is required.
+
 ## Security and Isolation
 
 Generated `DSH_HOME` paths are process-owned temporary directories. Configured `dsh_home`, `cwd`, and `runtime_cwd` are expanded and resolved before use. The runtime passes `api_key` and `base_url` only through SDK config; redaction of DSH internals belongs to DSH.
@@ -102,7 +104,7 @@ The runtime logs selected model/provider and session identity at a non-secret le
 | `CON-1` to `CON-4a` | Runtime dispatch and config resolution. | `uv run --extra dev pytest tests/runtime/deepseek_harness` | PRD verification record |
 | `CON-5` to `CON-7` | Lazy manager, explicit home, stable session IDs. | `uv run --extra dev pytest tests/runtime/deepseek_harness` | PRD verification record |
 | `CON-8` | ADK tools bridge through a generated DSH plugin and loopback callback. | `uv run --extra dev pytest tests/runtime/deepseek_harness` | PRD verification record |
-| `CON-9` | Sub-agent transfer uses the injected transfer tool path. | Source review plus bridge-path tests | PRD verification record |
+| `CON-9` | Sub-agent transfer uses the injected transfer tool path. | `uv run --extra dev pytest tests/runtime/deepseek_harness` | PRD verification record |
 | `CON-10` | Skills bridge through DSH native skill plugins and an isolated materialized root. | `uv run --extra dev pytest tests/runtime/deepseek_harness` | PRD verification record |
 | `CON-11` | DSH partial and native tool events become ADK events. | `uv run --extra dev pytest tests/runtime/deepseek_harness` | PRD verification record |
 | `CON-12` | Final response becomes an ADK event after callbacks. | `uv run --extra dev pytest tests/runtime/deepseek_harness` | PRD verification record |

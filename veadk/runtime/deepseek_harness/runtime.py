@@ -87,6 +87,7 @@ logger = get_logger(__name__)
 
 _MANAGERS: dict[_ManagerKey, _HarnessManager] = {}
 _MANAGERS_LOCK = threading.Lock()
+_cleanup_registered = False
 _DSH_HOME_ROOT_PREFIX = "veadk-dsh-homes-"
 _dsh_home_root: str | None = None
 _dsh_home_root_lock = threading.Lock()
@@ -299,8 +300,6 @@ class DeepSeekHarnessRuntime(BaseRuntime):
                 runtime_call.model_response_event,
             )
         except asyncio.CancelledError:
-            if "manager" in locals():
-                manager.close()
             if "run_task" in locals():
                 run_task.cancel()
                 await asyncio.gather(run_task, return_exceptions=True)
@@ -437,13 +436,22 @@ class _HarnessManager:
                 self._closed = False
             if self._tool_server is not None and tool_bundle is not None:
                 self._tool_server.activate(tool_bundle)
-            try:
-                return await asyncio.to_thread(
+            thread_task = asyncio.create_task(
+                asyncio.to_thread(
                     self._harness.run,
                     prompt,
                     session_id=session_id,
                     on_notification=on_notification,
                 )
+            )
+            try:
+                return await asyncio.shield(thread_task)
+            except asyncio.CancelledError:
+                try:
+                    await asyncio.shield(thread_task)
+                except Exception:  # noqa: BLE001 - preserve caller cancellation
+                    pass
+                raise
             finally:
                 if self._tool_server is not None:
                     self._tool_server.deactivate()
@@ -462,6 +470,7 @@ async def _get_manager(
     tool_registration: DeepSeekHarnessToolRegistration,
     skill_registration: DeepSeekHarnessSkillRegistration,
 ) -> _HarnessManager:
+    _ensure_cleanup_registered()
     key = _manager_key(effective, tool_registration, skill_registration)
     with _MANAGERS_LOCK:
         manager = _MANAGERS.get(key)
@@ -570,15 +579,25 @@ def _ensure_dsh_home_root() -> str:
     with _dsh_home_root_lock:
         if _dsh_home_root is None:
             root = tempfile.mkdtemp(prefix=_DSH_HOME_ROOT_PREFIX)
-            atexit.register(_cleanup_runtime_state)
             _dsh_home_root = root
         return _dsh_home_root
 
 
+def _ensure_cleanup_registered() -> None:
+    global _cleanup_registered
+    with _MANAGERS_LOCK:
+        if _cleanup_registered:
+            return
+        atexit.register(_cleanup_runtime_state)
+        _cleanup_registered = True
+
+
 def _cleanup_runtime_state() -> None:
+    global _cleanup_registered
     with _MANAGERS_LOCK:
         managers = list(_MANAGERS.values())
         _MANAGERS.clear()
+        _cleanup_registered = False
     for manager in managers:
         try:
             manager.close(dispose_tools=True)

@@ -129,7 +129,7 @@ Component contract impact: a new component spec is required because this changes
 | `FR-6` | `T-4`, `T-6` | Runtime passes a non-empty explicit `dsh_home` by default. | `uv run --extra dev pytest tests/runtime/deepseek_harness` | pass, 2026-10-15 |
 | `FR-7` | `T-4`, `T-6` | Final DSH response becomes an ADK final event and callbacks can short-circuit. | `uv run --extra dev pytest tests/runtime/deepseek_harness` | pass, 2026-10-15 |
 | `FR-8` | `T-4`, `T-6` | Fake DSH loads the generated plugin patch and calls an ADK FunctionTool through the localhost bridge. | `uv run --extra dev pytest tests/runtime/deepseek_harness` | pass, 2026-10-15 |
-| `FR-9` | `T-4`, `T-6` | Sub-agent transfer uses the same injected transfer tool path as other external runtimes. | Source review; covered by bridge path tests | pass, 2026-10-15 |
+| `FR-9` | `T-4`, `T-6` | Sub-agent transfer uses the same injected transfer tool path as other external runtimes. | `uv run --extra dev --extra dsh pytest tests/runtime/deepseek_harness -q` | pass, 2026-10-16 |
 | `FR-10` | `T-4`, `T-6` | Fake DSH config includes native DSH skill plugins and a materialized isolated skill root. | `uv run --extra dev pytest tests/runtime/deepseek_harness` | pass, 2026-10-15 |
 | `FR-11` | `T-4`, `T-6` | Fake DSH notifications/events map to ADK partial model events and native function call/response events. | `uv run --extra dev pytest tests/runtime/deepseek_harness` | pass, 2026-10-15 |
 | `FR-12` | `T-4`, `T-6`, `T-7` | Fake DSH receives structured ADK session history and uses the model selected by before-model callbacks. | `uv run --extra dev pytest tests/runtime/deepseek_harness` | pass, 2026-10-15 |
@@ -151,6 +151,12 @@ Additional verification run on 2026-10-15:
 - `uv run --extra dev pytest -n 2 -m "not codex_smoke and not piagent_smoke"` — pass, 7065 passed, 50 skipped, 4 xfailed, 82 warnings. The local metrics exporter reported transient `localhost:8000` unavailable messages after the pytest result, but pytest completed successfully.
 - `npm --prefix docs run lint` — not retained as a release signal for this change. Temporary docs-toolchain and formatting fixes were reverted because they touched site-wide docs files outside the DSH runtime scope.
 - `npm --prefix docs run types:check` — not retained as a release signal for this change for the same scope reason.
+
+Additional review-fix verification run on 2026-10-16:
+
+- `uv run --no-sync --extra dev --extra dsh pytest tests/runtime/deepseek_harness -q` — pass, 20 passed, 1 warning. This covers `additionalProperties` preservation, persistent `dsh_home` cleanup registration, process-private tool plugin paths, cancellation without closing the shared manager, and sub-agent transfer execution.
+- `uv run --no-sync --extra dev --extra dsh pytest tests/runtime/piagent/test_piagent_runtime.py::test_build_executable_tools_custom_runtime_label_controls_logs -q` — pass, 1 passed, 1 warning.
+- `uv run --extra dev pre-commit run --files veadk/runtime/deepseek_harness/tool_runtime.py veadk/runtime/deepseek_harness/runtime.py tests/runtime/deepseek_harness/test_deepseek_harness_runtime.py docs/content/docs/framework/agent/runtime.en.mdx docs/content/docs/framework/agent/runtime.mdx specs/runtime-deepseek-harness/README.md specs/runtime-deepseek-harness/README.zh.md` — pass.
 
 ## Risks and Open Questions
 

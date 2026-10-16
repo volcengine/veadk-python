@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import secrets
 import tempfile
@@ -30,6 +31,7 @@ from veadk.utils.logger import get_logger
 logger = get_logger(__name__)
 
 _MAX_REQUEST_BYTES = 1_000_000
+_REQUEST_READ_TIMEOUT_SECONDS = 10.0
 
 
 @dataclass(frozen=True)
@@ -59,8 +61,6 @@ class DeepSeekHarnessToolRegistration:
             sort_keys=True,
             separators=(",", ":"),
         )
-        import hashlib
-
         return cls(
             specs=specs,
             digest=hashlib.sha256(data.encode("utf-8")).hexdigest(),
@@ -123,7 +123,7 @@ class DeepSeekHarnessToolServer:
             instance._server = server
             instance.url = f"http://{host}:{port}"
             tmpdir = instance._tmpdir
-            plugin_dir = Path(dsh_home) / "profiles" / "node_modules" / "veadk-tools"
+            plugin_dir = Path(tmpdir.name) / "profiles" / "node_modules" / "veadk-tools"
             plugin_dir.mkdir(parents=True, exist_ok=True)
             plugin = plugin_dir / "index.mjs"
             patch = Path(tmpdir.name) / "veadk-dsh-tools.patch.yml"
@@ -213,7 +213,10 @@ class DeepSeekHarnessToolServer:
 
 
 async def _read_http_json(reader: asyncio.StreamReader) -> dict[str, Any]:
-    head = await reader.readuntil(b"\r\n\r\n")
+    head = await asyncio.wait_for(
+        reader.readuntil(b"\r\n\r\n"),
+        timeout=_REQUEST_READ_TIMEOUT_SECONDS,
+    )
     if len(head) > _MAX_REQUEST_BYTES:
         raise ValueError("request headers are too large")
     header_text = head.decode("iso-8859-1")
@@ -229,7 +232,14 @@ async def _read_http_json(reader: asyncio.StreamReader) -> dict[str, Any]:
     length = int(headers.get("content-length", "0") or "0")
     if length > _MAX_REQUEST_BYTES:
         raise ValueError("request body is too large")
-    raw_body = await reader.readexactly(length) if length else b"{}"
+    raw_body = (
+        await asyncio.wait_for(
+            reader.readexactly(length),
+            timeout=_REQUEST_READ_TIMEOUT_SECONDS,
+        )
+        if length
+        else b"{}"
+    )
     try:
         body = json.loads(raw_body.decode("utf-8") or "{}")
     except json.JSONDecodeError as e:
@@ -378,13 +388,18 @@ def _schema_to_dsh_value(schema: Any) -> dict[str, Any]:
             if name in required:
                 prop["required"] = True
             rendered[str(name)] = prop
-        additional = schema.get("additionalProperties")
-        return {
+        result = {
             "type": "object",
             "properties": rendered,
-            "additionalProperties": bool(additional),
             **_annotations(schema),
         }
+        if "additionalProperties" in schema:
+            additional = schema["additionalProperties"]
+            if isinstance(additional, dict):
+                result["additionalProperties"] = _schema_to_dsh_value(additional)
+            else:
+                result["additionalProperties"] = bool(additional)
+        return result
     return {"type": "json", **_annotations(schema)}
 
 

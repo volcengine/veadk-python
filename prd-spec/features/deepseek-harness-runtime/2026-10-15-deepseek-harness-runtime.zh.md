@@ -129,7 +129,7 @@ Provider 处理刻意分成两层。`DeepSeekHarnessRuntimeConfig.provider` 保�
 | `FR-6` | `T-4`, `T-6` | runtime 默认传入非空显式 `dsh_home`。 | `uv run --extra dev pytest tests/runtime/deepseek_harness` | pass，2026-10-15 |
 | `FR-7` | `T-4`, `T-6` | DSH 最终回复成为 ADK final event，callback 可短路。 | `uv run --extra dev pytest tests/runtime/deepseek_harness` | pass，2026-10-15 |
 | `FR-8` | `T-4`, `T-6` | Fake DSH 加载生成的 plugin patch，并通过 localhost bridge 调用 ADK FunctionTool。 | `uv run --extra dev pytest tests/runtime/deepseek_harness` | pass，2026-10-15 |
-| `FR-9` | `T-4`, `T-6` | 子智能体转交使用与其他外部 runtime 相同的注入式 transfer tool 路径。 | 源码审查；由桥接路径测试覆盖 | pass，2026-10-15 |
+| `FR-9` | `T-4`, `T-6` | 子智能体转交使用与其他外部 runtime 相同的注入式 transfer tool 路径。 | `uv run --extra dev --extra dsh pytest tests/runtime/deepseek_harness -q` | pass，2026-10-16 |
 | `FR-10` | `T-4`, `T-6` | Fake DSH config 包含 DSH 原生 skill 插件和已物料化的隔离 skill root。 | `uv run --extra dev pytest tests/runtime/deepseek_harness` | pass，2026-10-15 |
 | `FR-11` | `T-4`, `T-6` | Fake DSH notifications/events 映射为 ADK partial model events 与原生 function call/response events。 | `uv run --extra dev pytest tests/runtime/deepseek_harness` | pass，2026-10-15 |
 | `FR-12` | `T-4`, `T-6`, `T-7` | Fake DSH 收到结构化 ADK session history，并使用 before-model callbacks 选择的模型。 | `uv run --extra dev pytest tests/runtime/deepseek_harness` | pass，2026-10-15 |
@@ -151,6 +151,12 @@ Provider 处理刻意分成两层。`DeepSeekHarnessRuntimeConfig.provider` 保�
 - `uv run --extra dev pytest -n 2 -m "not codex_smoke and not piagent_smoke"` — pass，7065 passed，50 skipped，4 xfailed，82 warnings。pytest 结果输出后，本地 metrics exporter 记录了临时 `localhost:8000` unavailable 信息，但 pytest 已成功完成。
 - `npm --prefix docs run lint` — 不作为本变更的发布信号保留。临时 docs toolchain 与格式化修复已撤回，因为它们触及 DSH runtime 范围外的全站 docs 文件。
 - `npm --prefix docs run types:check` — 同样因范围原因不作为本变更的发布信号保留。
+
+2026-10-16 追加 review 修复验证：
+
+- `uv run --no-sync --extra dev --extra dsh pytest tests/runtime/deepseek_harness -q` — pass，20 passed，1 warning。覆盖 `additionalProperties` 保留、持久 `dsh_home` 清理注册、进程私有 tool plugin 路径、取消时不关闭共享 manager，以及子智能体转交执行。
+- `uv run --no-sync --extra dev --extra dsh pytest tests/runtime/piagent/test_piagent_runtime.py::test_build_executable_tools_custom_runtime_label_controls_logs -q` — pass，1 passed，1 warning。
+- `uv run --extra dev pre-commit run --files veadk/runtime/deepseek_harness/tool_runtime.py veadk/runtime/deepseek_harness/runtime.py tests/runtime/deepseek_harness/test_deepseek_harness_runtime.py docs/content/docs/framework/agent/runtime.en.mdx docs/content/docs/framework/agent/runtime.mdx specs/runtime-deepseek-harness/README.md specs/runtime-deepseek-harness/README.zh.md` — pass。
 
 ## 风险与开放问题
 
