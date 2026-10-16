@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 from veadk.knowledgebase.backends.base_backend import BaseKnowledgebaseBackend
 from veadk.knowledgebase.entry import KnowledgebaseEntry
 from veadk.knowledgebase.types import KnowledgebaseProfile
+from veadk.tracing.retrieval_tracing import retrieval_span
 from veadk.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -264,22 +265,30 @@ class KnowledgeBase(BaseModel):
 
     def search(self, query: str, top_k: int = 0, **kwargs) -> list[KnowledgebaseEntry]:
         """Search knowledge from knowledgebase"""
-        top_k = top_k if top_k != 0 else self.top_k
+        backend = (
+            self.backend
+            if isinstance(self.backend, str)
+            else type(self.backend).__name__
+        )
+        with retrieval_span("veadk.knowledge.search", backend=backend) as operation:
+            top_k = top_k if top_k != 0 else self.top_k
 
-        _entries = self._backend.search(query=query, top_k=top_k, **kwargs)
+            operation.set_attribute("veadk.retrieval.top_k", top_k)
+            _entries = self._backend.search(query=query, top_k=top_k, **kwargs)
 
-        entries = []
-        for entry in _entries:
-            if isinstance(entry, KnowledgebaseEntry):
-                entries.append(entry)
-            elif isinstance(entry, str):
-                entries.append(KnowledgebaseEntry(content=entry))
-            else:
-                logger.error(
-                    f"Unsupported entry type from backend search method: {type(entry)} with {entry}. Expected `KnowledgebaseEntry` or `str`. Skip for this entry."
-                )
+            entries = []
+            for entry in _entries:
+                if isinstance(entry, KnowledgebaseEntry):
+                    entries.append(entry)
+                elif isinstance(entry, str):
+                    entries.append(KnowledgebaseEntry(content=entry))
+                else:
+                    logger.error(
+                        f"Unsupported entry type from backend search method: {type(entry)} with {entry}. Expected `KnowledgebaseEntry` or `str`. Skip for this entry."
+                    )
 
-        return entries
+            operation.set_attribute("veadk.retrieval.result_count", len(entries))
+            return entries
 
     def close(self) -> None:
         """Release backend resources when the backend exposes a close hook."""

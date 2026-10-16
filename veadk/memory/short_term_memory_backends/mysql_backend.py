@@ -17,7 +17,6 @@ from typing import Any
 
 from google.adk.sessions import (
     BaseSessionService,
-    DatabaseSessionService,
 )
 from pydantic import Field
 from typing_extensions import override
@@ -25,6 +24,9 @@ from urllib.parse import quote_plus
 
 import veadk.config  # noqa E401
 from veadk.configs.database_configs import MysqlConfig
+from veadk.memory.short_term_memory_backends.traced_database_service import (
+    TracedDatabaseSessionService as DatabaseSessionService,
+)
 from veadk.memory.short_term_memory_backends.base_backend import (
     BaseShortTermMemoryBackend,
 )
