@@ -37,6 +37,12 @@ pip install lark-oapi
 - `TOOL_FEISHU_CHANNEL_TRANSPORT`：默认 `ws`
 - `TOOL_FEISHU_CHANNEL_STREAMING`：是否开启流式输出，默认 `false`
 - `TOOL_FEISHU_CHANNEL_REACTIONS`：是否在收到消息时回复“收到”表情，默认 `false`
+- `TOOL_FEISHU_CHANNEL_SHOW_THINKING`：是否展示模型提供的思考摘要，默认 `false`
+- `TOOL_FEISHU_CHANNEL_SHOW_TOOL_CALLS`：是否展示工具名称和参数，默认 `false`
+- `TOOL_FEISHU_CHANNEL_SHOW_TOOL_RESULTS`：是否展示工具执行结果，默认 `false`
+- `TOOL_FEISHU_CHANNEL_SEPARATE_TOOL_CALL_CARDS`：每次工具调用及其结果是否使用独立卡片，默认 `false`
+- `TOOL_FEISHU_CHANNEL_SEPARATE_THINKING_CARD`：是否将思考摘要放入独立卡片，默认 `false`
+- `TOOL_FEISHU_CHANNEL_CREATE_TOPIC`：是否围绕用户消息创建话题并将本次回复的所有卡片发送到该话题，默认 `false`
 
 或在 `config.yaml` 中配置：
 
@@ -48,6 +54,12 @@ tool:
     transport: ws
     streaming: true
     reactions: true
+    show_thinking: true
+    show_tool_calls: true
+    show_tool_results: true
+    separate_tool_call_cards: true
+    separate_thinking_card: true
+    create_topic: true
 ```
 
 ## 最小示例
@@ -75,6 +87,10 @@ runner = Runner(
 channel = FeishuChannelExtension(
     runner=runner,
     channel_kwargs={"transport": "ws"},
+    streaming=True,
+    show_thinking=True,
+    show_tool_calls=True,
+    show_tool_results=True,
 )
 
 
@@ -91,3 +107,7 @@ if __name__ == "__main__":
 - 默认使用飞书 `Channel` 的 WebSocket 模式，因此只要机器人已订阅消息事件，即可直接启动连接。
 - 默认回复使用 `reply_to=原消息 message_id`，让 VeADK 的输出挂在当前飞书消息线程下。
 - 你可以通过 `session_id_factory` 与 `user_id_factory` 覆盖默认的身份映射逻辑。
+- Thinking 只展示模型或 Provider 实际返回的思考摘要，不会也无法展示模型未返回的内部思维链。
+- 工具参数和结果中的常见凭证字段会被脱敏，单段详情默认最多展示 4000 个字符。
+- 脱敏匹配结构化字段名称，不移除任意文本内嵌的凭据；仅在载荷适合会话参与者查看时启用工具详情。构造参数 `tool_detail_max_length` 可调整限制，最小 100 个字符。
+- 这些显示控制适用于流式回复；独立卡片需要同时启用对应的 `show_*` 参数。`create_topic` 要求 `reply_in_thread=True` 且有入站消息 ID。

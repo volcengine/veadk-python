@@ -1,0 +1,60 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: managed-agents-worker
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: managed-agents-worker
+  template:
+    metadata:
+      labels:
+        app: managed-agents-worker
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: worker
+          image: example.invalid/managed-agents-worker:replace-me
+          envFrom:
+            - secretRef:
+                name: managed-agents-worker-config
+          ports:
+            - containerPort: 8080
+          readinessProbe:
+            exec:
+              command: ["test", "-s", "/tmp/managed-agent-worker-ready"]
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /ping
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            - name: temporary
+              mountPath: /tmp
+      volumes:
+        - name: workspace
+          emptyDir: {}
+        - name: temporary
+          emptyDir: {}

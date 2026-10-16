@@ -12,21 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import importlib.util
-import subprocess
-from pathlib import Path
 
+import pytest
 
-CLIENT_PATH = (
-    Path(__file__).parents[2]
-    / "examples"
-    / "16_self_host_sandbox"
-    / "sandbox_client.py"
-)
-SPEC = importlib.util.spec_from_file_location("self_host_sandbox_client", CLIENT_PATH)
-assert SPEC and SPEC.loader
-MODULE = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(MODULE)
+from veadk.integrations.mpa import session_client as MODULE
+
 SelfHostSandboxClient = MODULE.SelfHostSandboxClient
 
 
@@ -39,6 +29,20 @@ def _client():
         bearer_token="token",
         remote_bash_tool_name="bash",
     )
+
+
+def test_injected_anthropic_session_id_takes_precedence(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_SESSION_ID", "session-from-work-item")
+    monkeypatch.setenv("SANDBOX_SESSION_ID", "legacy-session")
+
+    client = SelfHostSandboxClient(
+        base_url="https://sandbox.example.com",
+        environment_id="env-123",
+        agent_id="agent-123",
+        bearer_token="token",
+    )
+
+    assert client.session_id == "session-from-work-item"
 
 
 def test_execute_command_posts_agent_tool_use_and_correlates_worker_result(
@@ -89,9 +93,14 @@ def test_execute_command_posts_agent_tool_use_and_correlates_worker_result(
             "input": {
                 "command": "echo hello",
                 "timeout_ms": 5000,
-                "timeout": 5000,
             },
-        }
+        },
+        {
+            "type": "agent.tool_result",
+            "tool_use_id": "call-123",
+            "content": "exit=0\nhello\n",
+            "is_error": False,
+        },
     ]
     assert result == {
         "dispatch_id": "call-123",
@@ -102,6 +111,8 @@ def test_execute_command_posts_agent_tool_use_and_correlates_worker_result(
         "exit_code": 0,
         "stdout": "hello\n",
         "stderr": "",
+        "content": "exit=0\nhello\n",
+        "is_error": False,
     }
 
 
@@ -126,62 +137,65 @@ def test_send_tool_result_uses_payload_shape(monkeypatch):
     ]
 
 
-def test_file_tools_are_converted_to_working_bash_commands(tmp_path):
+@pytest.mark.parametrize(
+    "name,input",
+    [
+        ("read", {"file_path": "a 'quoted' $file.txt", "view_range": [1, -1]}),
+        (
+            "write",
+            {
+                "file_path": "notes.txt",
+                "content": "' \" `$HOME` $(touch nope) &amp;\n中文",
+            },
+        ),
+        (
+            "edit",
+            {
+                "file_path": "notes.txt",
+                "old_string": "old",
+                "new_string": "new",
+                "replace_all": True,
+            },
+        ),
+        ("glob", {"pattern": "**/*.py"}),
+        ("grep", {"pattern": "a.*b", "path": "."}),
+        ("bash", {"restart": True, "timeout_ms": 5000}),
+        ("search_internal_db", {"query": "select 'special'"}),
+    ],
+)
+def test_dispatch_preserves_registered_name_and_json(monkeypatch, name, input):
     client = _client()
-    target = tmp_path / "nested" / "example.txt"
-
-    write_command, _ = client._tool_to_bash(
-        "write_file",
-        {"file_path": str(target), "content": "alpha\nbeta\n"},
+    posted = []
+    result_content = [{"type": "text", "text": "done"}]
+    monkeypatch.setattr(client, "post_events", lambda events: posted.extend(events))
+    monkeypatch.setattr(
+        client,
+        "list_events",
+        lambda **kw: [
+            {
+                "type": "user.tool_result",
+                "tool_use_id": "native-1",
+                "content": result_content,
+                "is_error": False,
+            }
+        ],
     )
-    subprocess.run(write_command, shell=True, check=True)
-    assert target.read_text() == "alpha\nbeta\n"
-
-    edit_command, _ = client._tool_to_bash(
-        "edit_file",
-        {
-            "file_path": str(target),
-            "old_string": "beta",
-            "new_string": "gamma",
-        },
-    )
-    subprocess.run(edit_command, shell=True, check=True)
-    assert target.read_text() == "alpha\ngamma\n"
-
-    read_command, _ = client._tool_to_bash(
-        "read_file",
-        {"file_path": str(target), "offset": 2, "limit": 1},
-    )
-    result = subprocess.run(
-        read_command,
-        shell=True,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    assert result.stdout == "2\tgamma\n"
+    result = client.dispatch_tool(name, input, dispatch_id="native-1")
+    assert posted[0] == {
+        "type": "agent.tool_use",
+        "id": "native-1",
+        "name": name,
+        "input": input,
+    }
+    assert result["content"] == result_content
+    assert posted[1]["content"] == result_content
+    assert not hasattr(client, "tool_to_bash")
 
 
-def test_non_mcp_tools_are_mapped_to_bash_and_unknown_tools_fail():
+def test_bash_command_is_not_html_decoded(monkeypatch):
     client = _client()
-
-    list_command, _ = client._tool_to_bash(
-        "list_files", {"path": "/workspace", "max_depth": 2}
-    )
-    search_command, _ = client._tool_to_bash(
-        "search_files", {"pattern": "needle", "glob": "*.py"}
-    )
-    python_command, _ = client._tool_to_bash(
-        "python", {"code": "print('ok')", "workdir": "/workspace"}
-    )
-
-    assert list_command.startswith("find /workspace")
-    assert "command -v rg" in search_command
-    assert "python3 -c" in python_command
-
-    try:
-        client._tool_to_bash("unknown_tool", {})
-    except ValueError as error:
-        assert "add an explicit bash adapter" in str(error)
-    else:
-        raise AssertionError("unknown non-MCP tools must fail closed")
+    posted = []
+    monkeypatch.setattr(client, "post_events", lambda events: posted.extend(events))
+    monkeypatch.setattr(client, "_wait_for_tool_result", lambda **kw: {})
+    client.execute_command("printf '%s' '&amp;'", timeout=2)
+    assert posted[0]["input"] == {"command": "printf '%s' '&amp;'", "timeout_ms": 2000}

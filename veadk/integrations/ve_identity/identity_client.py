@@ -621,12 +621,19 @@ class IdentityClient:
         )
 
     @refresh_credentials
-    def get_api_key(self, *, provider_name: str, agent_identity_token: str) -> str:
+    def get_api_key(
+        self,
+        *,
+        provider_name: str,
+        agent_identity_token: str,
+        pool_name: Optional[str] = None,
+    ) -> str:
         """Retrieve an API key from the identity service.
 
         Args:
             provider_name: Name of the API key credential provider.
             agent_identity_token: Agent's workload access token for authentication.
+            pool_name: User-owned credential pool; omitted keeps the service default.
 
         Returns:
             The API key string.
@@ -635,6 +642,7 @@ class IdentityClient:
         request = volcenginesdkid.GetResourceApiKeyRequest(
             provider_name=provider_name,
             identity_token=agent_identity_token,
+            pool_name=pool_name,
         )
 
         response: volcenginesdkid.GetResourceApiKeyResponse = (
