@@ -13,6 +13,14 @@ For more details, see our [documents](https://volcengine.github.io/veadk-python/
 
 A [tutorial](https://github.com/volcengine/veadk-python/blob/main/veadk_tutorial.ipynb) is available by Jupyter Notebook, or open it in [Google Colab](https://colab.research.google.com/github/volcengine/veadk-python/blob/main/veadk_tutorial.ipynb) directly.
 
+---
+
+***AgentKit 调研有礼！***
+
+***5分钟聊聊您的真实使用体验，告诉我们哪里好用、哪里卡壳，审核通过可得 <ins>火山引擎 AgentKit</ins> ¥100 代金券【[填写问卷](https://bytedance.larkoffice.com/share/base/shrcnqGlkYuvmisvrmhFRZi9Kx7?prefill_%E6%9D%A5%E6%BA%90=GitHub&hide_%E6%9D%A5%E6%BA%90=1&hide_env=1&hide_region=1)】***
+
+---
+
 ## Installation
 
 ### From PyPI
