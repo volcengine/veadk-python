@@ -85,6 +85,17 @@ codex = [
     "fastapi",
     "uvicorn",
 ]
+dsh = [
+    # The SDK depends on its matching `deepseek-harness-runtime-bin` wheel,
+    # which carries the bundled `dsh` executable for supported platforms.
+    "deepseek-harness-sdk==0.1.5rc1",
+]
+deepseek-harness = [
+    # Backward-compatible extra alias for early DeepSeek Harness runtime users.
+    # The SDK depends on its matching `deepseek-harness-runtime-bin` wheel,
+    # which carries the bundled `dsh` executable for supported platforms.
+    "deepseek-harness-sdk==0.1.5rc1",
+]
 extensions = [
     "redis>=5.0",                                           # For Redis database
     "cozeloop>=0.1.21",                                     # For Cozeloop Prompt manager

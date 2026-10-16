@@ -30,10 +30,11 @@ agent = Agent(name="assistant", runtime="codex")
 | `adk`（默认） | 使用 Google ADK 内置的执行流程，适用于绝大多数场景。 |
 | `codex` | 使用 OpenAI Codex SDK 驱动内层循环，在沙箱中执行命令与文件操作。 |
 | `piagent` | 使用本地 Pi coding agent 二进制（通过其 RPC 模式）驱动内层循环。二进制会在首次运行时自动下载，也可用 `PIAGENT_BINARY` 指定已有路径。 |
+| `dsh` | 使用 DeepSeek Harness SDK 驱动内层循环。`dsh` 二进制通过 Python extra 安装时随 `deepseek-harness-runtime-bin` 获取，运行时懒启动。 |
 
 <Callout type="warn">
-**定位：`codex` / `piagent` 是「沙箱执行运行时」，不是 ADK 执行流程的等价替代品。**
-它们把整个内层循环交给外部 agent harness，因此 ADK 请求/响应处理器（planner、code_executor、example store、知识库注入）、逐次模型调用的回调与 span 不会在这层流程里执行。VeADK 会把 `sub_agents` 桥接成 `transfer_to_agent` 工具，但这些运行时仍更适合「模型需要在受控沙箱里跑命令、改文件」的任务，而不是所有 ADK 能力的透明后端替换。具体差异见下方[支持矩阵](#支持矩阵)。
+**定位：`codex` / `piagent` / `dsh` 是「外部 agent harness 运行时」，不是 ADK 执行流程的等价替代品。**
+它们把整个内层循环交给外部 agent harness，因此 ADK 请求/响应处理器（planner、code_executor、example store、知识库注入）、逐次模型调用的回调与 span 不会在这层流程里执行。`codex`、`piagent` 和 `dsh` 都桥接普通 ADK tools 与 `sub_agents`；`dsh` 还会通过 DSH 原生 skill 插件桥接 VeADK skills，并映射 root session 的 partial stream events。具体差异见下方[支持矩阵](#支持矩阵)。
 </Callout>
 
 使用 Codex runtime 前安装可选依赖：
@@ -41,6 +42,49 @@ agent = Agent(name="assistant", runtime="codex")
 ```bash
 pip install "veadk-python[codex]"
 ```
+
+使用 DSH runtime 前安装可选依赖：
+
+```bash
+pip install "veadk-python[dsh]"
+```
+
+### DeepSeek Harness 安装与运行态
+
+`runtime="dsh"` 采用和 Codex 类似的安装模型，而不是 PiAgent 的首次运行下载模型：
+
+- **安装时获取二进制。** `veadk-python[dsh]` 依赖 `deepseek-harness-sdk`，该 SDK 再依赖匹配版本的 `deepseek-harness-runtime-bin`。`dsh` 可执行文件随 wheel 安装，VeADK 不在首轮运行时下载二进制。
+- **运行时懒启动。** import VeADK 或构造 `Agent(...)` 不启动 DSH；第一次执行到 `DeepSeekHarnessRuntime.run_async` 时，SDK 才拉起 bundled `dsh` 子进程。
+- **长期 sidecar。** 同一有效配置会复用一个 `DeepSeekHarness` SDK 对象和 DSH 子进程；同一 VeADK app/user/session/agent 会映射到稳定的 DSH `session_id`。
+- **VeADK session 作为短期记忆。** 和 Codex 一样，DSH 会在 prompt 中收到结构化的可见 ADK session history。DSH session id 仍然稳定，但短期记忆的事实来源仍是 VeADK/ADK session history。
+- **Callback 选择模型。** Before-model callback 可以更新 `llm_request.model`；DSH 会用最终模型选择 SDK config 和 manager。
+- **原生工具插件桥。** VeADK 会在 DSH run 前展开 ADK function tools 与 ADK/MCP toolsets，生成 DSH `defineTool` plugin patch，并通过带鉴权的 loopback callback server 执行真实工具。`sub_agents` 使用与其他外部 runtime 相同的注入式 `transfer_to_agent` 路径。
+- **原生 skill 桥。** VeADK 会把 ADK `SkillToolset` 和 legacy skills 物料化到隔离 skill root，然后注册 DSH 原生的 `@deepseek-ai/dsh-skill`、`@deepseek-ai/dsh-skill-filesystem` 和 `@deepseek-ai/dsh-tool-skill` 插件。已物料化 skill 内容会参与 runtime manager key。
+- **ADK event 映射。** Root-session DSH assistant stream chunks 会变成 ADK partial model events。DSH 原生 `tool/call` 与 `tool/result` events 会变成 ADK function call/response events，同时会去重 VeADK 已桥接的 Python tool events。
+- **Provider 别名。** 你可以不填 `provider`，也可以按常见 OpenAI-compatible 习惯写 `provider="openai"`，或对 Ark 这类 endpoint 使用 `provider="volcengine"` / `provider="third-party"`。VeADK 会把这些别名映射到当前 DSH adapter 名称，并继续传入你显式配置的 `base_url` 和 `api_key`。DSH 原生的 `deepseek-official` provider 名称也仍然可用。
+- **显式 `DSH_HOME`。** 未配置 `dsh_home` 时，VeADK 会生成进程隔离目录并显式传给 SDK；不会隐式使用 `~/.dsh`。需要跨进程保留 DSH 会话时，可以配置持久 `dsh_home`。
+
+```python title="agent.py"
+import os
+
+from veadk import Agent
+from veadk.runtime.deepseek_harness import DeepSeekHarnessRuntimeConfig
+
+agent = Agent(
+    name="assistant",
+    runtime="dsh",
+    model_name="doubao-seed-2-1-pro-260628",
+    model_api_base="https://ark.cn-beijing.volces.com/api/v3",
+    model_api_key=os.environ["MODEL_AGENT_API_KEY"],
+    deepseek_harness_runtime_config=DeepSeekHarnessRuntimeConfig(
+        provider="volcengine",
+        profile="sdk-minimal",
+        # dsh_home="/var/lib/my-app/dsh",  # 需要持久化时显式配置
+    ),
+)
+```
+
+DeepSeek Harness 会输出 ADK partial stream events、桥接 Python tools 与 DSH 原生 skill/tool events 的 ADK tool call/response events，并在非转交 turn 完成后输出一个最终 model event。`enable_skills_checklist` 不会在 DSH 原生 skill loader 内执行；descendant DSH subagent session notifications 也尚未投影为一等 child-session UI events。
 
 ### 什么时候该用 codex 运行时
 
@@ -345,7 +389,7 @@ runtime 通过进程的 OpenTelemetry MeterProvider 上报以下指标；未配�
 
 ## 支持矩阵
 
-`runtime="codex"` 和 `runtime="piagent"` 会替换整个 ADK LLM 流程，因此 `Agent` 上相当一部分配置不会生效。VeADK 会在智能体构造时以及每次调用前检查这些配置：**产生错误结果的配置直接报错（`ValueError`）**，**只是被忽略的配置记录一次警告**。
+`runtime="codex"`、`runtime="piagent"` 和 `runtime="dsh"` 会替换整个 ADK LLM 流程，因此 `Agent` 上相当一部分配置不会生效。VeADK 会在智能体构造时以及每次调用前检查这些配置：**产生错误结果的配置直接报错（`ValueError`）**，**只是被忽略的配置记录一次警告**。
 
 ### 报错：直接拒绝运行
 
@@ -359,7 +403,7 @@ runtime 通过进程的 OpenTelemetry MeterProvider 上报以下指标；未配�
 | `enable_supervisor=True` | 监督流程挂在 ADK LLM flow 上，而该流程已被替换，不会有任何监督生效。 |
 
 <Callout type="info">
-`runtime="codex"` 和 `runtime="piagent"` 都支持 `sub_agents`：VeADK 会注入一个 `transfer_to_agent` 工具供外部 agent 调用。把一个 `runtime="codex"` 智能体放进 `SequentialAgent` / `ParallelAgent` 的 `sub_agents` 中也支持——这种场景由父级负责调度。
+`runtime="codex"`、`runtime="piagent"` 和 `runtime="dsh"` 都支持 `sub_agents`：VeADK 会注入一个 `transfer_to_agent` 工具供外部 agent 调用。把一个外部 runtime 智能体放进 `SequentialAgent` / `ParallelAgent` 的 `sub_agents` 中也支持——这种场景由父级负责调度。
 </Callout>
 
 ### 警告：被忽略但仍可运行
@@ -367,17 +411,18 @@ runtime 通过进程的 OpenTelemetry MeterProvider 上报以下指标；未配�
 | 配置 | 行为 |
 | :--- | :--- |
 | `model_name=[主, 备...]` | 只使用第一个模型，fallback 链不生效。 |
-| `model_provider`（非 `openai`） | 运行时始终以 OpenAI 兼容协议访问 `model_api_base`。 |
-| `model_extra_config` | 仅对 `piagent` 成立。**codex 会转发它**：`extra_headers` 与 `extra_body`（含 VeADK 默认的请求加密与 prompt 缓存配置）由 shim 原样带到后端请求上，与 `adk` 路径一致。`direct` 传输只转发 `extra_headers`；含非空 `extra_body` 时 `auto` 会留在 `shim`，见 [Codex 执行参数](#codex-执行参数)。 |
+| `model_provider`（非 `openai`） | 外部 runtime 不使用 LiteLLM provider 前缀；`dsh` 请用自身配置的 `provider` / endpoint，其他 runtime 请按各自文档配置。 |
+| `model_extra_config` | 对 `piagent` / `dsh` 成立。**codex 会转发它**：`extra_headers` 与 `extra_body`（含 VeADK 默认的请求加密与 prompt 缓存配置）由 shim 原样带到后端请求上，与 `adk` 路径一致。`direct` 传输只转发 `extra_headers`；含非空 `extra_body` 时 `auto` 会留在 `shim`，见 [Codex 执行参数](#codex-执行参数)。 |
 | `enable_responses` / `enable_responses_cache` | 不使用 Ark Responses API，`previous_response_id` 续接与响应缓存均不生效。 |
 | `example_store` | 由 `ExampleTool.process_llm_request` 注入，外部运行时不调用该钩子，few-shot 示例不会进入 prompt。 |
 | `knowledgebase` | **知识库被静默禁用。** 同样由 `LoadKnowledgebaseTool.process_llm_request` 注入使用说明，外部运行时不调用，模型不知道知识库的存在，检索不会被触发。 |
-| `skills_mode` | 外部运行时在桥接工具时会跳过 VeADK 的 `SkillsToolset`，指令里宣称的 `execute_skills`/`skills_tool` 并未注册。 |
-| `enable_skills_checklist` | 依赖 ADK 的 before-tool 回调与 skills 工具集，两者都不生效。 |
+| `skills_mode` | `codex` 和 `piagent` 在桥接工具时会跳过 VeADK 的 `SkillsToolset`，指令里宣称的 `execute_skills`/`skills_tool` 并未注册。`dsh` 会把 `SkillToolset` 与 legacy skills 物料化到 DSH 原生 skill filesystem provider。 |
+| `enable_skills_checklist` | 依赖 ADK 的 skills toolset before-tool 回调。`dsh` 会让 skills 通过 DSH 原生 loader 可用，但这个 ADK checklist 回调不会在该 loader 内执行；`codex` 和 `piagent` 不桥接 skills toolset。 |
 | `after_model_callback` | 语义不同：每回合在合并后的最终文本上触发一次，而不是每次模型调用触发一次。 |
 | `tracers` | 粒度不同：codex 会补一个**每回合一个**的 `call_llm` span（含 prompt、响应、整轮 token 用量），但内层模型循环跑在外部 harness 里，仍然没有逐次模型调用的 span。 |
-| `codex_runtime_config`（配合 `runtime="piagent"`） | 只对 codex 运行时有效，piagent 完全忽略。 |
-| `RunConfig(max_llm_calls=...)` | 仅对 `piagent` 成立——它的模型循环在 harness 内部自行计数，不受该配额约束。**codex 已支持**：见上方[可观测性](#codex-可观测性)。 |
+| `codex_runtime_config`（配合非 codex runtime） | 只对 codex 运行时有效，其他 runtime 完全忽略。 |
+| `deepseek_harness_runtime_config`（配合非 `dsh` runtime） | 只对 DSH runtime 有效，其他 runtime 完全忽略。 |
+| `RunConfig(max_llm_calls=...)` | 对 `piagent` / `dsh` 为粗粒度或尽力而为；内层模型循环在外部 harness 内运行，VeADK 不能在每次真实模型请求前精确扣减。**codex 已支持**：见上方[可观测性](#codex-可观测性)。 |
 
 ### 不支持 `run_live`
 

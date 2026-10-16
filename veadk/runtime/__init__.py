@@ -20,6 +20,7 @@
   :class:`veadk.agent.Agent`, no runtime object).
 - ``"codex"``: the OpenAI Codex SDK as the agent harness.
 - ``"piagent"``: a local Pi coding agent binary as the agent harness.
+- ``"dsh"``: the DeepSeek Harness SDK and bundled ``dsh`` runtime.
 """
 
 from __future__ import annotations
@@ -64,6 +65,22 @@ def get_runtime(name: str) -> BaseRuntime:
         from veadk.runtime.piagent import PiAgentRuntime
 
         return PiAgentRuntime()
+
+    if name == "dsh":
+        try:
+            from veadk.runtime.deepseek_harness import DeepSeekHarnessRuntime
+        except ModuleNotFoundError as e:
+            if e.name and e.name.startswith("deepseek_harness"):
+                raise ImportError(
+                    "The 'dsh' runtime requires optional "
+                    "dependencies. Install them with: "
+                    'pip install "veadk-python[dsh]" '
+                    "(the DeepSeek Harness SDK depends on its matching "
+                    "deepseek-harness-runtime-bin package)."
+                ) from e
+            raise
+
+        return DeepSeekHarnessRuntime()
 
     raise ValueError(f"Unknown runtime: {name!r}")
 
