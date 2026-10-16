@@ -164,6 +164,10 @@ def _load_execute_skills_module(
         assert spec.loader is not None
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
+        module.time = types.SimpleNamespace(
+            monotonic=module.time.monotonic,
+            sleep=module.time.sleep,
+        )
         return module
 
 
