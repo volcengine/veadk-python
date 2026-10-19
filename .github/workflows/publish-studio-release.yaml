@@ -33,6 +33,9 @@ on:
       - 'veadk/**'
       - 'pyproject.toml'
       - 'uv.lock'
+      - 'tests/test_studio_release_cold_start.py'
+      - 'tests/test_studio_release_workflow.py'
+      - 'tests/test_studio_release_lock_contract.py'
       - 'README.md'
       - 'LICENSE'
 
@@ -103,6 +106,13 @@ jobs:
       - name: Validate frozen Studio runtime lock
         run: uv lock --check
 
+      - name: Validate cold-start and thin release contracts
+        run: >-
+          uv run --frozen --group dev python -m pytest -q
+          tests/test_studio_release_cold_start.py
+          tests/test_studio_release_workflow.py
+          tests/test_studio_release_lock_contract.py
+
       - name: Build and validate Studio bundle
         run: |
           set -euo pipefail
@@ -124,7 +134,7 @@ jobs:
               STUDIO_DEPENDENCY_SOURCES,
           )
           from veadk.cli.studio_package import build_frontend_assets
-          from veadk.cli.studio_release import build_studio_release
+          from frontend.service.studio_release_server.publisher import build_studio_release
 
 
           def prepare_dependency(dependency, destination):
@@ -187,6 +197,9 @@ jobs:
               changelog=changelog,
               frontend_assets=frontend_assets,
               dependency_wheels=dependency_inputs,
+              env=dict(os.environ),
+              thin=True,
+              provider="volcengine",
           )
           print(f"Bundle built in {time.monotonic() - started:.1f}s", flush=True)
           print(
@@ -201,11 +214,14 @@ jobs:
               )
           )
           PY
-          bundles=("$output_dir"/studio-bundle-*.zip)
+          bundles=("$output_dir"/studio-bundle-??????????????.zip)
+          thin_bundles=("$output_dir"/studio-bundle-??????????????-thin.zip)
           manifests=("$output_dir"/manifest-*.json)
           test "${#bundles[@]}" -eq 1
+          test "${#thin_bundles[@]}" -eq 1
           test "${#manifests[@]}" -eq 1
           unzip -t "${bundles[0]}"
+          unzip -t "${thin_bundles[0]}"
 
       - name: Simulate customer update and smoke-test Studio
         env:
@@ -220,7 +236,7 @@ jobs:
           test "$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')" = "3.12"
           COLD_START_DEADLINE_SECONDS=60
           STUDIO_MAX_BUNDLE_BYTES=$((256 * 1024 * 1024))
-          bundle=("$RUNNER_TEMP"/studio-release-output/studio-bundle-*.zip)
+          bundle=("$RUNNER_TEMP"/studio-release-output/studio-bundle-??????????????.zip)
           test "${#bundle[@]}" -eq 1
           test "$(stat -c %s "${bundle[0]}")" -lt "$STUDIO_MAX_BUNDLE_BYTES"
 
@@ -278,7 +294,7 @@ jobs:
             runtime_venv="$RUNNER_TEMP/studio-release-runtime-${provider}"
             log="$RUNNER_TEMP/studio-${provider}.log"
             response="$RUNNER_TEMP/studio-${provider}-ui-config.json"
-            export package_dir
+            export package_dir bundle_path="${bundle[0]}"
             test ! -e "$package_dir"
             test ! -e "$runtime_venv"
             uv run --frozen --group dev python - <<'PY'
@@ -287,8 +303,7 @@ jobs:
 
           from veadk.cli.studio_self_update import extract_studio_bundle
 
-          output_dir = Path(os.environ["RUNNER_TEMP"]) / "studio-release-output"
-          bundle = next(output_dir.glob("studio-bundle-*.zip"))
+          bundle = Path(os.environ["bundle_path"])
           extract_studio_bundle(bundle, Path(os.environ["package_dir"]))
           PY
             uv venv --python 3.12 "$runtime_venv"

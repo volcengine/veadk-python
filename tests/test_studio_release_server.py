@@ -856,6 +856,8 @@ def test_standalone_publisher_builds_bundle_from_source_files(
             "dependency==1.0\n",
             encoding="utf-8",
         )
+        if _kwargs.get("thin_package_dir") is not None:
+            shutil.copytree(package_dir, _kwargs["thin_package_dir"])
         return (
             "--no-index\n"
             "--require-hashes\n"
