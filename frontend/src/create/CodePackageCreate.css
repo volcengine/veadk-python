@@ -134,6 +134,18 @@
   line-height: 1.5;
 }
 
+.package-create-warning {
+  flex: 0 0 auto;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid hsl(42 87% 48% / 0.24);
+  border-radius: 8px;
+  background: hsl(42 87% 48% / 0.09);
+  color: hsl(32 90% 28%);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 @media (max-width: 860px) {
   .package-dropzone {
     min-height: 140px;

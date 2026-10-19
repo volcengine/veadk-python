@@ -134,6 +134,9 @@
     "dropHint": "Select or drop a .zip file up to 50 MB. Use app.py or declare an entry point in agentkit.yaml.",
     "viewFiles": "View files",
     "chooseFile": "Choose code package",
+    "warnings": {
+      "missingRuntimeListener": "No service listening on 0.0.0.0:8000 was detected. AgentKit Runtime needs the container service to listen on 0.0.0.0:8000; otherwise the Runtime may start but remain unreachable. Use HOST=0.0.0.0 in the startup entry and listen on PORT with 8000 as the default. For example: uvicorn.run(app, host=\"0.0.0.0\", port=int(os.getenv(\"PORT\", \"8000\")))."
+    },
     "errors": {
       "invalidFormat": "Choose a .zip code package.",
       "tooLarge": "The code package must be 50 MB or smaller.",
@@ -141,6 +144,9 @@
       "empty": "The archive does not contain any deployable files.",
       "tooManyFiles": "A code package cannot contain more than {{count}} files.",
       "duplicateFile": "The code package contains a duplicate file: {{path}}",
+      "binaryOrCacheFile": "The code package contains a Python cache or binary file: {{path}}. Studio reads uploaded code packages as text source, so these files can make the package unreadable or pollute the deployment. Remove __pycache__/, *.pyc, and binary build artifacts from the archive; upload only source code, configuration, and dependency declaration files.",
+      "missingDefaultApp": "The code package is missing app.py. When no Dockerfile is provided, Studio starts the service with python -m app, so deployment will not find the app module. Move the startup entry to root app.py, or add a Dockerfile with the correct CMD/ENTRYPOINT.",
+      "missingDefaultRequirements": "The code package is missing requirements.txt. When no Dockerfile is provided, Studio installs requirements.txt by default, so the cloud build will fail if it is missing. Add requirements.txt at the package root, or add a custom Dockerfile that installs dependencies.",
       "manifestParse": "Could not parse agentkit.yaml: {{detail}}",
       "manifestRoot": "The root of agentkit.yaml must be an object.",
       "manifestCommon": "common in agentkit.yaml must be an object.",

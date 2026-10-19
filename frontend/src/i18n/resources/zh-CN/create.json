@@ -134,6 +134,9 @@
     "dropHint": "点击或拖拽上传，支持 .zip 格式，最大 50 MB；可使用 app.py，或由 agentkit.yaml 声明入口",
     "viewFiles": "查看文件",
     "chooseFile": "选择代码包",
+    "warnings": {
+      "missingRuntimeListener": "未检测到服务监听 0.0.0.0:8000。AgentKit Runtime 需要容器内服务对外监听 0.0.0.0:8000，否则 Runtime 可能启动成功但无法访问。请在启动入口中使用 HOST=0.0.0.0，并监听 PORT，默认 8000。例如：uvicorn.run(app, host=\"0.0.0.0\", port=int(os.getenv(\"PORT\", \"8000\")))。"
+    },
     "errors": {
       "invalidFormat": "请选择 .zip 格式的代码包。",
       "tooLarge": "代码包不能超过 50 MB。",
@@ -141,6 +144,9 @@
       "empty": "压缩包中没有可部署的文件。",
       "tooManyFiles": "代码包文件数不能超过 {{count}} 个。",
       "duplicateFile": "代码包包含重复文件：{{path}}",
+      "binaryOrCacheFile": "代码包包含 Python 缓存或二进制文件：{{path}}。Studio 上传代码包按文本源码处理，这些文件可能导致读取失败或污染部署内容。请从压缩包中移除 __pycache__/、*.pyc 和二进制产物，只上传源码、配置和依赖声明文件。",
+      "missingDefaultApp": "代码包缺少 app.py。未提供 Dockerfile 时，Studio 默认使用 python -m app 启动，部署后会找不到 app 模块。请将启动入口改为根目录 app.py，或添加 Dockerfile 并在其中声明正确的 CMD/ENTRYPOINT。",
+      "missingDefaultRequirements": "代码包缺少 requirements.txt。未提供 Dockerfile 时，Studio 默认会安装 requirements.txt，缺失会导致云构建失败。请在根目录添加 requirements.txt，或添加自定义 Dockerfile 处理依赖安装。",
       "manifestParse": "agentkit.yaml 无法解析：{{detail}}",
       "manifestRoot": "agentkit.yaml 根节点必须是对象。",
       "manifestCommon": "agentkit.yaml 的 common 必须是对象。",

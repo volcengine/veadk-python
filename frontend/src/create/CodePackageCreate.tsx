@@ -28,6 +28,7 @@ import "./CodePackageCreate.css";
 const MAX_PACKAGE_BYTES = 50 * 1024 * 1024;
 const MAX_PROJECT_FILES = 800;
 const EMPTY_PACKAGE_PROJECT: AgentProject = { name: "code_package", files: [] };
+const BINARY_TEXT_MARKERS = ["\0", "\uFFFD"];
 
 interface CodePackageCreateProps {
   onBack: () => void;
@@ -159,6 +160,42 @@ export function resolvePackageEntryPoint(
   return entryPoint;
 }
 
+export function validatePackageDeployability(
+  files: ProjectFile[],
+  t: CreateTranslator | typeof defaultPackageTranslation = defaultPackageTranslation,
+): string[] {
+  const paths = new Set(files.map((file) => file.path));
+  const hasDockerfile = paths.has("Dockerfile");
+
+  for (const file of files) {
+    const parts = file.path.split("/");
+    const fileName = parts[parts.length - 1] ?? "";
+    const isPythonCache =
+      parts.includes("__pycache__") || fileName.toLowerCase().endsWith(".pyc");
+    const isBinaryLike = BINARY_TEXT_MARKERS.some((marker) => file.content.includes(marker));
+    if (isPythonCache || isBinaryLike) {
+      throw new Error(t("codePackage.errors.binaryOrCacheFile", { path: file.path }));
+    }
+  }
+
+  if (!hasDockerfile) {
+    if (!paths.has("app.py")) {
+      throw new Error(t("codePackage.errors.missingDefaultApp"));
+    }
+    if (!paths.has("requirements.txt")) {
+      throw new Error(t("codePackage.errors.missingDefaultRequirements"));
+    }
+  }
+
+  const combinedSource = files.map((file) => file.content).join("\n");
+  const hasHostBinding = combinedSource.includes("0.0.0.0");
+  const hasRuntimePort = /\b8000\b/.test(combinedSource) || /\bPORT\b/.test(combinedSource);
+  if (!hasHostBinding || !hasRuntimePort) {
+    return [t("codePackage.warnings.missingRuntimeListener")];
+  }
+  return [];
+}
+
 export function CodePackageCreate({
   onBack,
   onAgentAdded,
@@ -177,6 +214,7 @@ export function CodePackageCreate({
   const [reading, setReading] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [error, setError] = useState("");
+  const [warning, setWarning] = useState("");
   const [deployRegion, setDeployRegion] = useState(initialDeployRegion);
   const [network, setNetwork] = useState<NetworkConfig | undefined>();
 
@@ -190,6 +228,7 @@ export function CodePackageCreate({
   async function loadPackage(file: File) {
     const run = ++loadRunRef.current;
     setError("");
+    setWarning("");
     if (!file.name.toLowerCase().endsWith(".zip")) {
       setError(t("codePackage.errors.invalidFormat"));
       return;
@@ -206,13 +245,16 @@ export function CodePackageCreate({
         maxUncompressedBytes: MAX_PACKAGE_BYTES,
       });
       const files = normalizePackageEntries(entries, t);
+      const warnings = validatePackageDeployability(files, t);
       if (run !== loadRunRef.current) return;
       setUploadedFileName(file.name);
       setProject({ name: packageProjectName(file.name), files });
+      setWarning(warnings.join("\n"));
     } catch (cause) {
       if (run !== loadRunRef.current) return;
       setUploadedFileName("");
       setProject(null);
+      setWarning("");
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       if (run === loadRunRef.current) setReading(false);
@@ -345,6 +387,7 @@ export function CodePackageCreate({
               />
             </div>
             {error && <div className="package-create-error" role="alert">{error}</div>}
+            {warning && !error && <div className="package-create-warning" role="status">{warning}</div>}
           </section>
         }
       />
