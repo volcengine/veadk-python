@@ -30,7 +30,12 @@ from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from .archive import SkillArchive
-from .consts import SHARED_SOURCE_VERSION_TAG, SKILL_SPACE_DISPLAY_NAME_TAG
+from .consts import (
+    SHARED_SOURCE_VERSION_TAG,
+    SKILL_SPACE_DISPLAY_NAME_TAG,
+    SKILL_VISIBILITY_SHARED,
+    SKILL_VISIBILITY_TAG,
+)
 from .space_names import skill_space_display_name
 
 if TYPE_CHECKING:
@@ -44,6 +49,50 @@ class SkillSpaceListResult:
     items: tuple[dict[str, object], ...]
     total_count: int
     degraded: bool = False
+
+
+def _tags(value: Any) -> dict[str, str]:
+    return {
+        str(getattr(tag, "key", "") or ""): str(getattr(tag, "value", "") or "")
+        for tag in (getattr(value, "tags", None) or [])
+    }
+
+
+def skill_space_visible_to_author(
+    space: Any, *, author: str, is_admin: bool = False
+) -> bool:
+    from .system_spaces import is_shared_space
+
+    if is_admin:
+        return True
+    return is_shared_space(space) or _tags(space).get("author") == author
+
+
+def require_space_read(
+    client: Any,
+    skills_types: Any,
+    *,
+    space_id: str,
+    author: str,
+    is_admin: bool = False,
+) -> None:
+    from .system_spaces import is_review_space, is_shared_space
+
+    if is_admin:
+        return
+    space = client.get_skill_space(skills_types.GetSkillSpaceRequest(Id=space_id))
+    if is_shared_space(space):
+        return
+    if is_review_space(space):
+        raise SkillRepositoryError(
+            "SKILL_REVIEW_FORBIDDEN", "仅管理员可以查看审核申请", status_code=403
+        )
+    if _tags(space).get("author") != author:
+        raise SkillRepositoryError(
+            "SKILL_SPACE_READ_FORBIDDEN",
+            "只能查看自己创建的 Skill 空间",
+            status_code=403,
+        )
 
 
 def _is_missing_skill_relation(error: BaseException) -> bool:
@@ -65,18 +114,24 @@ def list_skill_space_items(
 ) -> SkillSpaceListResult:
     """List authoritative relations, recovering readable names only on one 404."""
 
-    try:
-        response = client.list_skills_by_skill_space(
+    def load_space() -> Any:
+        return client.get_skill_space(skills_types.GetSkillSpaceRequest(Id=space_id))
+
+    def list_relations(request_page: int, request_page_size: int) -> Any:
+        return client.list_skills_by_skill_space(
             skills_types.ListSkillsBySkillSpaceRequest(
                 SkillSpaceId=space_id,
-                PageNumber=page,
-                PageSize=page_size,
+                PageNumber=request_page,
+                PageSize=request_page_size,
             )
         )
+
+    try:
+        response = list_relations(page, page_size)
     except Exception as relation_error:
         if not _is_missing_skill_relation(relation_error):
             raise
-        space = client.get_skill_space(skills_types.GetSkillSpaceRequest(Id=space_id))
+        space = load_space()
         space_name = str(getattr(space, "name", "") or "").strip()
         if not space_name:
             raise relation_error
@@ -126,19 +181,18 @@ def list_skill_space_items(
         )
 
     raw_items = list(getattr(response, "items", None) or [])
+    space = None
     metadata: dict[str, dict[str, str]] = {}
     if include_display_metadata and raw_items:
         from .system_spaces import is_shared_space
 
-        space = client.get_skill_space(skills_types.GetSkillSpaceRequest(Id=space_id))
+        space = space or load_space()
         if is_shared_space(space):
             for item in raw_items:
                 skill_id = str(getattr(item, "skill_id", "") or "")
                 if skill_id and skill_id not in metadata:
                     skill = client.get_skill(skills_types.GetSkillRequest(Id=skill_id))
-                    tags = {
-                        tag.key: tag.value for tag in getattr(skill, "tags", None) or []
-                    }
+                    tags = _tags(skill)
                     metadata[skill_id] = {
                         "author": tags.get("author", ""),
                         "sourceVersion": tags.get(SHARED_SOURCE_VERSION_TAG, ""),
@@ -155,11 +209,9 @@ def list_skill_space_items(
             }
             for item in raw_items
         ),
-        total_count=(
-            int(response.total_count)
-            if getattr(response, "total_count", None) is not None
-            else len(raw_items)
-        ),
+        total_count=int(response.total_count)
+        if getattr(response, "total_count", None) is not None
+        else len(raw_items),
     )
 
 
@@ -285,6 +337,24 @@ class AgentKitSkillRepository:
             self._client_factory(region), space_id, skill_id=skill_id, is_admin=is_admin
         )
 
+    def require_space_read(
+        self,
+        *,
+        region: str,
+        space_id: str,
+        author: str,
+        is_admin: bool,
+    ) -> None:
+        from agentkit.sdk.skills import types as skills_types
+
+        require_space_read(
+            self._client_factory(region),
+            skills_types,
+            space_id=space_id,
+            author=author,
+            is_admin=is_admin,
+        )
+
     def ensure_shared_space(self, *, region: str) -> dict[str, object]:
         from .consts import SHARE_SPACE
 
@@ -317,27 +387,61 @@ class AgentKitSkillRepository:
     ) -> dict[str, object]:
         from agentkit.sdk.skills import types as skills_types
 
+        from .system_spaces import is_review_space, is_shared_space
+
         tag_filters = None
         if author:
             tag_filters = [
                 skills_types.TagFilterForSkill(Key="author", Values=[author])
             ]
-        response = self._client_factory(region).list_skill_spaces(
-            skills_types.ListSkillSpacesRequest(
-                PageNumber=page,
-                PageSize=page_size,
-                ProjectName=project_name,
-                TagFilters=tag_filters,
+
+        def list_page(request_page: int, request_page_size: int) -> Any:
+            return self._client_factory(region).list_skill_spaces(
+                skills_types.ListSkillSpacesRequest(
+                    PageNumber=request_page,
+                    PageSize=request_page_size,
+                    ProjectName=project_name,
+                    TagFilters=tag_filters,
+                )
             )
-        )
-        from .system_spaces import is_review_space
+
+        def visible(item: Any) -> bool:
+            if is_review_space(item) or is_shared_space(item):
+                return False
+            return author is None or _tags(item).get("author") == author
+
+        if author:
+            visible_items: list[Any] = []
+            scanned = 0
+            request_page = 1
+            request_page_size = 100
+            while True:
+                response = list_page(request_page, request_page_size)
+                items = list(response.items or [])
+                scanned += len(items)
+                visible_items.extend(item for item in items if visible(item))
+                total = response.total_count
+                if len(items) < request_page_size or (
+                    total is not None and scanned >= total
+                ):
+                    break
+                request_page += 1
+            start = (page - 1) * page_size
+            page_items = visible_items[start : start + page_size]
+            return {
+                "items": [self._space_item(item, region) for item in page_items],
+                "scannedCount": len(page_items),
+                "totalCount": len(visible_items),
+                "page": page,
+                "pageSize": page_size,
+            }
+
+        response = list_page(page, page_size)
 
         items = list(response.items or [])
         return {
             "items": [
-                self._space_item(item, region)
-                for item in items
-                if not is_review_space(item)
+                self._space_item(item, region) for item in items if visible(item)
             ],
             "scannedCount": len(items),
             "totalCount": response.total_count
@@ -694,7 +798,11 @@ class AgentKitSkillRepository:
                 ProjectName=project_name,
                 Tags=[skills_types.TagForSkill(Key="author", Value=author)]
                 + (
-                    [skills_types.TagForSkill(Key="veadk:visibility", Value="shared")]
+                    [
+                        skills_types.TagForSkill(
+                            Key=SKILL_VISIBILITY_TAG, Value=SKILL_VISIBILITY_SHARED
+                        )
+                    ]
                     if shared
                     else []
                 ),
@@ -798,4 +906,6 @@ __all__ = [
     "SkillRepositoryError",
     "SkillSpaceListResult",
     "list_skill_space_items",
+    "require_space_read",
+    "skill_space_visible_to_author",
 ]
