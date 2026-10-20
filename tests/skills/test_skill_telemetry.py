@@ -88,7 +88,7 @@ def test_download_cache_and_corruption(observation, remote, tmp_path):
         "skill_space_id": "sp-one",
         "outcome": "success",
     }
-    assert points(observation[0], "skill_download") == [(labels, 3)]
+    assert points(observation[0], "gen_ai_skill_download") == [(labels, 3)]
     spans = observation[1].get_finished_spans()
     assert [s.attributes["cache_hit"] for s in spans] == [False, True, False]
     assert all(
@@ -109,7 +109,7 @@ def test_download_error_does_not_export_exception_text(
     monkeypatch.setattr(materializer, "download_skillhub_skill", fail)
     with pytest.raises(RuntimeError, match="DO_NOT_EXPORT"):
         materializer.materialize_remote_skill(skill, cache_dir=tmp_path)
-    assert points(observation[0], "skill_download")[0][0]["outcome"] == "error"
+    assert points(observation[0], "gen_ai_skill_download")[0][0]["outcome"] == "error"
     span = observation[1].get_finished_spans()[0]
     assert span.status.is_ok is False
     assert span.attributes["error.type"] == "RuntimeError"
@@ -143,7 +143,7 @@ async def test_real_adk_cached_loads_keep_identity_and_count_each_response(
         with trace.get_tracer("test").start_as_current_span("execute_tool load_skill"):
             telemetry.trace_tool_call(tool, {"skill_name": "demo"}, event)
     assert remote[1] == ["s-demo"]
-    assert points(observation[0], "skill_load") == [
+    assert points(observation[0], "gen_ai_skill_load") == [
         (
             {
                 "skill_source": "skillhub_skill_space",
@@ -154,7 +154,7 @@ async def test_real_adk_cached_loads_keep_identity_and_count_each_response(
             2,
         )
     ]
-    assert points(observation[0], "skill_download")[0][1] == 1
+    assert points(observation[0], "gen_ai_skill_download")[0][1] == 1
     loads = [
         s
         for s in observation[1].get_finished_spans()
@@ -185,7 +185,7 @@ def test_failed_or_incomplete_load_never_counts(
         registry=registry.VeSkillRegistry(skill_source_id="sp-one", cache_dir=tmp_path)
     )
     skill_telemetry.record_adk_load(LoadSkillTool(toolset), event)
-    assert not points(observation[0], "skill_load")
+    assert not points(observation[0], "gen_ai_skill_load")
 
 
 def test_unknown_local_identity_and_legacy_version():
@@ -228,7 +228,7 @@ async def test_cancelled_registry_wait_does_not_load(
             args={"skill_name": "demo"},
             tool_context=SimpleNamespace(invocation_id="turn"),
         )
-    assert not points(observation[0], "skill_load")
+    assert not points(observation[0], "gen_ai_skill_load")
     await toolset.close()
 
 
@@ -237,7 +237,9 @@ def test_recording_failure_preserves_download_result(remote, tmp_path, monkeypat
         raise RuntimeError("provider unavailable")
 
     monkeypatch.setattr(
-        portal_metrics.portal_metric_recorder.skill_download_counter, "add", broken
+        portal_metrics.portal_metric_recorder.skill_download_counter,
+        "add",
+        broken,
     )
     monkeypatch.setattr(trace, "get_tracer", broken)
     assert (
@@ -264,7 +266,7 @@ def test_non_load_tool_cannot_count_forged_response(observation, remote):
         )
     )
     skill_telemetry.record_adk_load(SimpleNamespace(name="load_skill_resource"), event)
-    assert not points(observation[0], "skill_load")
+    assert not points(observation[0], "gen_ai_skill_load")
 
 
 def test_default_proxy_instruments_are_bounded_and_support_late_provider():
@@ -304,9 +306,9 @@ def test_default_proxy_instruments_are_bounded_and_support_late_provider():
             data = reader.get_metrics_data()
             values = {m.name: [(dict(p.attributes), p.value) for p in m.data.data_points]
                       for r in data.resource_metrics for s in r.scope_metrics for m in s.metrics}
-            assert {s.scope.name for r in data.resource_metrics for s in r.scope_metrics for m in s.metrics if m.name in {"skill_load", "skill_download"}} == {"veadk_portal"}
-            assert values["skill_load"] == [(labels, 3)], values
-            assert values["skill_download"] == [({**labels, "outcome": "success"}, 3)], values
+            assert {s.scope.name for r in data.resource_metrics for s in r.scope_metrics for m in s.metrics if m.name in {"gen_ai_skill_load", "gen_ai_skill_download"}} == {"veadk_portal"}
+            assert values["gen_ai_skill_load"] == [(labels, 3)], values
+            assert values["gen_ai_skill_download"] == [({**labels, "outcome": "success"}, 3)], values
         finally:
             provider.shutdown()
     """)
@@ -325,7 +327,7 @@ def test_default_proxy_instruments_are_bounded_and_support_late_provider():
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-@pytest.mark.parametrize("metric_name", ["skill_load", "skill_download"])
+@pytest.mark.parametrize("metric_name", ["gen_ai_skill_load", "gen_ai_skill_download"])
 def test_recording_failure_does_not_escape(monkeypatch, metric_name):
     from unittest.mock import Mock
 
@@ -333,12 +335,12 @@ def test_recording_failure_does_not_escape(monkeypatch, metric_name):
     recorder = portal_metrics.portal_metric_recorder
     counter = (
         recorder.skill_download_counter
-        if metric_name == "skill_download"
+        if metric_name == "gen_ai_skill_download"
         else recorder.skill_load_counter
     )
     record = (
         recorder.record_skill_download
-        if metric_name == "skill_download"
+        if metric_name == "gen_ai_skill_download"
         else recorder.record_skill_load
     )
     monkeypatch.setattr(counter, "add", broken_add)
@@ -348,7 +350,7 @@ def test_recording_failure_does_not_escape(monkeypatch, metric_name):
         "skill_version": "",
         "skill_space_id": "",
     }
-    if metric_name == "skill_download":
+    if metric_name == "gen_ai_skill_download":
         labels["outcome"] = "success"
     record(labels)
     broken_add.assert_called_once_with(1, labels)

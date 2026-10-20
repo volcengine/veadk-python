@@ -15,8 +15,8 @@
 
 ## 需求与场景
 
-- FR-1：已识别来源的远端技能包获取结束时记录一次 `skill_download`，覆盖验证成功的磁盘缓存恢复和失败。无效缓存后重新下载属于一次获取，`cache_hit=false`。
-- FR-2：成功返回指令时记录一次 `skill_load`。同一 invocation 两次成功 `load_skill` 计两次，即使 ADK 只获取一次。未知技能、读取失败和取消不计成功加载。
+- FR-1：已识别来源的远端技能包获取结束时记录一次 `gen_ai_skill_download`，覆盖验证成功的磁盘缓存恢复和失败。无效缓存后重新下载属于一次获取，`cache_hit=false`。
+- FR-2：成功返回指令时记录一次 `gen_ai_skill_load`。同一 invocation 两次成功 `load_skill` 计两次，即使 ADK 只获取一次。未知技能、读取失败和取消不计成功加载。
 - FR-3：云端身份在转换/缓存后保留。Sandbox Python 区分内置技能、SkillHub slug、显式 AgentKit ID 和两类空间；Go 保留既有四类来源支持。来源不明的本地技能不猜测成内置技能。
 - FR-4：使用既有进程级 OTEL provider；Sandbox 仅在未配置 provider 时安装周期 OTLP metric exporter。trace 与 metric 禁用开关独立。导出失败不影响对话；退出 flush 有时间上限。
 - FR-5：新增遥测不记录包 URL、凭据、指令正文、路径或原始异常消息。既有内容遥测策略保持不变。

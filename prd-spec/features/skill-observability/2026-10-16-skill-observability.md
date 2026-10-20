@@ -15,8 +15,8 @@ Count package acquisition and successful instruction delivery with the exact sou
 
 ## Requirements and scenarios
 
-- FR-1: A recognized remote package acquisition emits one `skill_download` observation on completion, including validated disk-cache restoration and failure. Invalid cache followed by download is one attempt, with `cache_hit=false`.
-- FR-2: A successful instruction response emits one `skill_load`. Two successful `load_skill` calls in one invocation count twice even when ADK fetches once. Unknown skills, read failures and cancellation never count as successful loads.
+- FR-1: A recognized remote package acquisition emits one `gen_ai_skill_download` observation on completion, including validated disk-cache restoration and failure. Invalid cache followed by download is one attempt, with `cache_hit=false`.
+- FR-2: A successful instruction response emits one `gen_ai_skill_load`. Two successful `load_skill` calls in one invocation count twice even when ADK fetches once. Unknown skills, read failures and cancellation never count as successful loads.
 - FR-3: Cloud identity survives conversion/cache. Sandbox Python distinguishes built-ins, SkillHub slugs, explicit AgentKit IDs and both space kinds. Go retains its existing four-source support. Unattributable local skills are not guessed to be built-ins.
 - FR-4: Use existing process-global OTEL providers; sandbox installs a periodic OTLP metric exporter only when no provider exists. Trace and metric disable switches are independent. Export failures do not affect conversations; shutdown flush is bounded.
 - FR-5: New telemetry never records archive URLs, credentials, instruction bodies, paths or raw exception messages. Existing content telemetry policy remains unchanged.

@@ -11,8 +11,8 @@ VeADK 在 `veadk/skills/` 与 `veadk/tracing/telemetry/telemetry.py` 负责 Runt
 
 ## 契约
 
-- CON-1：`skill_download` 是 OTEL counter，单位 `count`；维度严格为 `skill_source`、`skill_id`、`skill_version`、`skill_space_id`、`outcome`。`outcome` 为 `success` 或 `error`（含取消）。每次获取结束加一，包含缓存恢复。单纯发现或本地软链接创建不产生事件。
-- CON-2：`skill_load` 是 OTEL counter，单位 `count`；维度严格为上述四个身份字段。每次成功返回指令加一，ADK invocation 缓存命中仍计数。失败、取消、转发、资源/脚本访问不计数。
+- CON-1：`gen_ai_skill_download` 是 OTEL counter，单位 `count`；维度严格为 `skill_source`、`skill_id`、`skill_version`、`skill_space_id`、`outcome`。`outcome` 为 `success` 或 `error`（含取消）。每次获取结束加一，包含缓存恢复。单纯发现或本地软链接创建不产生事件。
+- CON-2：`gen_ai_skill_load` 是 OTEL counter，单位 `count`；维度严格为上述四个身份字段。每次成功返回指令加一，ADK invocation 缓存命中仍计数。失败、取消、转发、资源/脚本访问不计数。
 - CON-3：下载 Span `skill_download` 包含 `skill.source`、`skill.id`、`skill.version`、`skill.space_id`、`outcome`、`cache_hit`、`consumer`。失败增加 `error.type` 和安全的静态 `error.description`，状态为 ERROR。成功加载在既有工具 Span 上添加四个点分身份字段和 `consumer`。consumer 为 `runtime` 或 `skill_sandbox`。Span 耗时为总获取时间。consumer/cache/错误文本不放入 metric 标签。
 - CON-4：身份遵循下表。缺失版本/空间用空字符串，不使用生成的缓存 hash。缺少可信 ID 的远端技能和无法分类的本地技能不采集。遥测身份以 Registry 元数据为准，覆盖技能包同名 metadata。SkillHub 安装时随实际安装包记录 slug，不能仅依赖当前期望配置。
 

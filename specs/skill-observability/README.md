@@ -11,8 +11,8 @@ VeADK owns Runtime package acquisition and ADK instruction-load instrumentation 
 
 ## Contracts
 
-- CON-1: `skill_download` is an OTEL counter, unit `count`; dimensions are exactly `skill_source`, `skill_id`, `skill_version`, `skill_space_id`, `outcome`. `outcome` is `success` or `error` (including cancellation). One acquisition completion, including cache restore, adds one. No event for mere discovery or local symlink creation.
-- CON-2: `skill_load` is an OTEL counter, unit `count`; dimensions are exactly the four identity fields above. One successful instruction response adds one. ADK invocation-cache hits still count. Errors, cancellation, forwarding and resource/script access do not.
+- CON-1: `gen_ai_skill_download` is an OTEL counter, unit `count`; dimensions are exactly `skill_source`, `skill_id`, `skill_version`, `skill_space_id`, `outcome`. `outcome` is `success` or `error` (including cancellation). One acquisition completion, including cache restore, adds one. No event for mere discovery or local symlink creation.
+- CON-2: `gen_ai_skill_load` is an OTEL counter, unit `count`; dimensions are exactly the four identity fields above. One successful instruction response adds one. ADK invocation-cache hits still count. Errors, cancellation, forwarding and resource/script access do not.
 - CON-3: Download Span `skill_download` has `skill.source`, `skill.id`, `skill.version`, `skill.space_id`, `outcome`, `cache_hit`, `consumer`. Failures add `error.type` and a safe static `error.description`, with ERROR status. Successful load annotates the existing tool Span with the four dotted identity fields and `consumer`. Consumer is `runtime` or `skill_sandbox`. Span duration is total acquisition time. Never add consumer/cache/error text to metric labels.
 - CON-4: Identity follows the table. Missing version/space is the empty string, never a synthesized cache hash. Remote skills without a trustworthy ID and unclassified local skills are excluded. Registry-owned metadata overrides archive metadata for telemetry identity. SkillHub installation records the slug with the installed package, not just the current desired configuration.
 
